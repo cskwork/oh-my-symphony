@@ -2161,27 +2161,39 @@ class Orchestrator:
         # Forward phase transitions unset SYMPHONY_REWIND_SCOPE; rewinds
         # set it to the JSON of the latest finding rows.
         self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=is_rewind)
-        await new_client.start()
-        await new_client.initialize()
-        first_prompt, _ = build_first_turn_prompt(
-            prompt_template=cfg.prompt_template_for_state(issue.state),
-            issue=issue,
-            attempt=attempt,
-            language=doc_language,
-            max_turns=cfg.agent.max_turns,
-            max_attempts=cfg.agent.max_attempts,
-            is_rewind=is_rewind,
-            auto_merge_on_done=cfg.agent.auto_merge_on_done,
-            token_ema=self._token_ema_for_state(issue.state),
-            token_budget=self._token_budget_for_state(cfg, issue.state),
-            rewind_scope=(
-                _parse_findings_rows(issue.description) if is_rewind else None
-            ),
-        )
-        await new_client.start_session(
-            initial_prompt=first_prompt,
-            issue_title=f"{issue.identifier}: {issue.title}",
-        )
+        try:
+            await new_client.start()
+            await new_client.initialize()
+            first_prompt, _ = build_first_turn_prompt(
+                prompt_template=cfg.prompt_template_for_state(issue.state),
+                issue=issue,
+                attempt=attempt,
+                language=doc_language,
+                max_turns=cfg.agent.max_turns,
+                max_attempts=cfg.agent.max_attempts,
+                is_rewind=is_rewind,
+                auto_merge_on_done=cfg.agent.auto_merge_on_done,
+                token_ema=self._token_ema_for_state(issue.state),
+                token_budget=self._token_budget_for_state(cfg, issue.state),
+                rewind_scope=(
+                    _parse_findings_rows(issue.description) if is_rewind else None
+                ),
+            )
+            await new_client.start_session(
+                initial_prompt=first_prompt,
+                issue_title=f"{issue.identifier}: {issue.title}",
+            )
+        except BaseException:
+            try:
+                await new_client.stop()
+            except Exception as stop_exc:
+                log.warning(
+                    "phase_transition_new_stop_failed",
+                    issue_id=issue.id,
+                    identifier=issue.identifier,
+                    error=str(stop_exc),
+                )
+            raise
         return new_client, first_prompt
 
     async def _refresh_issue_state(
