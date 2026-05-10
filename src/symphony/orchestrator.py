@@ -1085,7 +1085,9 @@ class Orchestrator:
                 hook_env=_branch_hook_env(cfg),
             )
         elif self._workspace_manager is not None:
-            self._workspace_manager.update_hooks(cfg.hooks)
+            self._workspace_manager.update_hooks(
+                cfg.hooks, workflow_dir=cfg.workflow_path.parent
+            )
             self._workspace_manager.update_reuse_policy(cfg.workspace_reuse_policy)
             self._workspace_manager.update_hook_env(_branch_hook_env(cfg))
 
