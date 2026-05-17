@@ -420,6 +420,50 @@ def test_phase_transition_stops_new_backend_when_rebuild_initialize_fails(
     assert second_calls == ["factory", "start", "initialize", "stop"]
 
 
+def test_phase_transition_stops_new_backend_when_rebuild_start_session_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PR #21 regression: the `_rebuild_backend_for_phase` try/except must
+    # wrap `start_session()` too, not only `initialize()`. If a later
+    # refactor moves `start_session` outside the try block, the new backend
+    # leaks and this test fails.
+    cfg = _make_config(max_turns=5)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+    async def _start_session(
+        self_inst: _FakeBackend, *, initial_prompt: str, issue_title: str
+    ) -> None:
+        self_inst.calls.append(
+            (
+                "start_session",
+                {
+                    "initial_prompt": initial_prompt,
+                    "issue_title": issue_title,
+                },
+            )
+        )
+        if self_inst.init_id == 1:
+            raise RuntimeError("second backend start_session failed")
+
+    monkeypatch.setattr(_FakeBackend, "start_session", _start_session)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert len(instances) == 2
+    second_calls = [name for name, _ in instances[1].calls]
+    assert second_calls == [
+        "factory",
+        "start",
+        "initialize",
+        "start_session",
+        "stop",
+    ]
+
+
 def test_same_phase_does_not_restart_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
