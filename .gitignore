@@ -8,6 +8,10 @@ dist/
 .coverage
 htmlcov/
 /tmp_workspaces/
+.claude/
+.omx/
+.playwright-mcp/
+.symphony/
 
 # Local secrets — `.env.example` is the committed template
 /.env
