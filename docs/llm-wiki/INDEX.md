@@ -8,6 +8,7 @@ before any new ticket; Learn writes back to them after QA passes.
 |------------|---------|--------------|
 | production-pipeline | Eight-stage pipeline + non-LLM Todo auto-triage + docs/<id>/<stage>/ artefact convention + WORKFLOW/PIPELINE sync invariant | 2026-05-17 (Todo auto-triage) |
 | orchestrator-phase-transition | `_rebuild_backend_for_phase` try/except envelope + `_install_fake_backend` factory pattern + WorkspaceManager hot-reload three-setter contract | 2026-05-17 (SMA-24) |
+| workspace-auto-commit-excludes | Opt-in `symphony.autocommitExclude` git-config pathspec exclusions for final auto-commits, including base-squash safety and quoted pathspec handling | 2026-05-17 (SMA-25) |
 | agent-observability | Headless event log signal set + cache token split + stall signatures + cross-refs to orchestrator/doctor/workspace | 2026-05-17 |
 | board-viewer-theming | CSS variable token surface + `:root[data-theme="..."]` override pattern + UI Zoom micro-pattern mirrored for theme persistence | 2026-05-17 (SMA-23) |
 | session-persistence | Per-workspace `.symphony-session.json` + load on dispatch + save on session_started + per-backend honor-points + codex `thread/resume` fallback | 2026-05-10 (SMA-20) |
