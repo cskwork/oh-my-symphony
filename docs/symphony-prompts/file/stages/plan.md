@@ -35,9 +35,8 @@ execute by reading only `## Plan`. Do not write production code in this stage.
    - `reuse_from`: a `path:line` from `reuse-inventory.md`, or `none`.
    - `observability`: `add`, `change`, or `none` — declares whether this
      candidate adds, modifies, or skips logs/metrics/traces.
-   - Live agent demo (2026-05-17) showed bullets silently dropping
-     both columns; the explicit header above is non-optional so Plan
-     Rationale and Learn can rely on the columns existing.
+   - The table header (not a bullet list) is mandatory — Plan Rationale
+     and Learn depend on those two columns existing.
 5. Append `## Acceptance Tests` — one bullet per AC, each a runnable test
    signature (e.g. `tests/test_foo.py::test_bar` or
    `pytest -k "expr"` / `npm test -- --grep "..."`). Empty list is invalid:

@@ -58,17 +58,12 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    **Last updated:** YYYY-MM-DD by <issue.identifier>.
    ```
 
-   `## 감 잡기` 작성 규칙 (강제):
-   - 전문용어를 앞쪽에 쏟지 말 것. 꼭 써야 하면 같은 줄에 짧은 괄호 설명을 붙인다.
-   - 사전식 정의 금지. "X는 ~을 의미한다" 대신 "X는 마치 ~처럼 동작한다" 또는 "X를 쓰면 ~이 된다".
-   - 비유는 쓰되 유치하지 않게. 독자가 이미 아는 비즈니스 도메인 비유가 우선.
-   - 핵심 흐름 화살표는 3-5단계. 7개면 감이 아니라 스펙이 된다.
-   - 용어 표는 정확히 5개. 더 적으면 부족, 더 많으면 초보자 단계가 아님.
-   - 엣지 케이스·내부 구현·성능 트레이드오프는 빼고 마지막 줄 "나중에 배울 내용"으로 미룬다.
-   - 문장은 짧고 명확하게. 한 문장에 한 가지만.
-   - "이것만 기억하면 된다"는 정확히 한 문장. 두 문장이면 핵심이 둘 → 쪼개라.
+   `## 감 잡기` 작성 규칙:
+   - 사전식 정의 금지. "X는 마치 ~처럼 동작한다" 또는 "X를 쓰면 ~이 된다"로 풀어쓴다.
+   - 화살표 3-5단계, 용어 표 정확히 5개, takeaway 정확히 한 문장 — 위 template이 이미 강제.
+   - 비즈니스 도메인 비유 우선. 엣지 케이스·내부 구현은 "나중에 배울 내용"으로 미룬다.
 
-   기존 엔트리에 `## 감 잡기`가 없으면 이번 Learn에서 추가한다. 이미 있다면, 이번 티켓이 비유나 핵심 흐름을 무너뜨렸을 때만 손본다 (사소한 wording 변경 금지 — Decision log row로 충분).
+   기존 엔트리에 `## 감 잡기`가 없으면 이번 Learn에서 추가. 있다면 이번 티켓이 비유나 핵심 흐름을 무너뜨렸을 때만 손본다 (사소한 wording 변경은 Decision log row로 충분).
 {% else %}
    ```
    # <Topic Title>
@@ -120,16 +115,11 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    ```
 
    Hard rules for the `## Getting the Feel` block:
-   - Do not front-load jargon. If a domain term is unavoidable, attach a short parenthetical on the same line.
    - No dictionary definitions. Write "X behaves like ..." or "you use X when ...", never "X is defined as ...".
-   - Analogies welcome but not childish. Prefer business-domain analogies the reader already lives in.
-   - Arrow flow stays at 3-5 steps. Seven steps stop being a "feel" — they're a spec.
-   - Exactly five terms in the table. Fewer = under-explained; more = no longer beginner level.
-   - Defer edge cases, internal implementation, performance trade-offs — push them under "ready to go deeper".
-   - Short, clear sentences. One idea per sentence.
-   - "Just remember this" must be exactly one sentence. Two sentences = two takeaways → split the topic.
+   - Arrow flow 3-5 steps, table exactly 5 terms, "Just remember this" exactly one sentence — the template above already enforces shape.
+   - Prefer business-domain analogies the reader lives in. Defer edge cases / internals to "ready to go deeper".
 
-   If the entry has no `## Getting the Feel` section, add one this turn. If it already exists, touch it only when this ticket invalidated the analogy or core flow — small wording tweaks are out of scope (a Decision log row is enough).
+   Add the block if absent. If present, touch it only when this ticket invalidated the analogy or core flow — small wording tweaks belong in the Decision log.
 {% endif %}
 
 4. Wiki integrity sweep before transitioning:

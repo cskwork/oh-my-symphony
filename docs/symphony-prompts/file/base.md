@@ -41,9 +41,8 @@ entry per topic plus an `INDEX.md`. Explore reads it before new work;
 Learn writes back after QA passes. Treat it as living memory future
 tickets depend on. The first Learn stage creates the directory if missing.
 Plan turns Explore's candidates into a single executable `## Plan`; In
-Progress must read that plan before editing code.
-After Learn writes back, merge the ticket's `symphony/{{ issue.identifier }}`
-feature branch into the target branch before marking the ticket `Done`.
+Progress must read that plan before editing code. Learn's Merge Gate
+handles feature-branch integration before `Done`.
 
 `docs/{{ issue.identifier }}/` is this ticket's evidence root — see Hard rules below for the artefact policy. Learn writes to `${LLM_WIKI_PATH:-./docs/llm-wiki}/<topic>.md`, a sibling under the same `docs/` root.
 
