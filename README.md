@@ -3,10 +3,60 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
 [![Tests](https://github.com/cskwork/symphony-multi-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/symphony-multi-agent/actions/workflows/tests.yml)
+[![GitHub stars](https://img.shields.io/github/stars/cskwork/symphony-multi-agent?style=social)](https://github.com/cskwork/symphony-multi-agent/stargazers)
 
-> Drive any coding-agent CLI — Codex, Claude Code, Gemini, or Pi — from one
-> orchestrator, with a Jira-style Kanban board rendered straight in your
-> terminal.
+> One terminal. One Kanban board. Four AI coding agents
+> (**Codex**, **Claude Code**, **Gemini**, **Pi**) — pick per ticket, run in
+> parallel, watch live.
+
+**Stop juggling AI coding CLIs.** Symphony hands each Kanban ticket to the
+agent you want, runs them concurrently in isolated `git worktree` workspaces,
+and shows live progress — turn counts, token usage, rate-limit headroom — in
+a Jira-style TUI you never have to leave your terminal for.
+
+[**Try it in 60 seconds, no AI CLI required →**](#try-it-in-60-seconds-no-agent-cli-required)
+
+## Why Symphony?
+
+- **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ Pi with one
+  YAML line, or mix backends per ticket. New agents (Ollama, local models,
+  anything with a CLI) drop in behind a thin `AgentBackend` Protocol — four
+  steps, no orchestrator changes.
+- **See what your agents are actually doing.** Live Kanban shows turn count,
+  last event, accumulated tokens, and rate-limit headroom for every running
+  card. No more "is it stuck or just thinking?" — and no SaaS dashboard to
+  log into.
+- **Run dozens of tickets in parallel, unattended.** Concurrency is built in:
+  every ticket gets its own `git worktree` workspace, so agents can't step on
+  each other. Headless mode mirrors progress to a Markdown file you can
+  `tail -F` in any editor; macOS keep-awake stops the lock screen from
+  killing overnight pipelines.
+- **No SaaS, no API key, no signup to try.** File-based Markdown Kanban
+  means tickets live in `git` next to your code. Linear is supported as a
+  drop-in tracker; you don't need it.
+- **Battle-tested core.** Forked from
+  [OpenAI's official Symphony reference implementation](https://github.com/openai/symphony).
+  The orchestrator, scheduler, retry policy, workspace lifecycle, and prompt
+  renderer are all upstream — this fork is a thin layer that adds the four
+  backends and the TUI.
+- **Operator-grade tooling out of the box.** `symphony doctor` catches the
+  five most common first-run failures (port collisions, missing CLIs,
+  placeholder URLs, unwritable workspaces) in one pass. `symphony service
+  start/stop/restart/logs` runs the orchestrator as a managed background
+  service. A web viewer adds **Pause / Resume** for running cards and a real
+  branch-picker for feature / merge branches.
+
+## Who is this for?
+
+- **Solo devs** running unattended overnight refactors across dozens of
+  tickets while they sleep.
+- **Teams** parallelizing bug fixes, doc updates, or migration tickets across
+  multiple coding agents simultaneously.
+- **Researchers and reviewers** comparing how Codex, Claude Code, Gemini, and
+  Pi tackle the same task side by side, with identical prompts and
+  workspaces.
+- **Anyone** who hit the "one chat window per agent" ceiling and wants a
+  real orchestrator with a Kanban they can read at a glance.
 
 ## What it looks like
 
