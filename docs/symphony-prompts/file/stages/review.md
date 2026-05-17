@@ -16,14 +16,12 @@ You are the reviewer. Find issues; do not fix them.
 3. Apply the checklist: clarity, naming, error handling, security,
    performance, simplicity, no dead code, no debug prints, no secrets.
    Then scan `git log --format=%s $(git config symphony.basesha)..HEAD`
-   for `[no-test]` commit-subject markers (Symphony's `after_run` hook
-   prefixes wip commits that changed production code without a paired
-   test). Each `[no-test]` marker becomes a HIGH severity row in
-   `## Review Findings` (file: the unpaired production path; fix: "add a
-   test exercising this change") UNLESS the In Progress turn was
-   documentation-only (only `docs/`, `kanban/`, `.symphony/` paths
-   changed in that commit). Note the exemption in `## Review` if you
-   apply it.
+   for `[no-test]` markers (Symphony's `after_run` hook prefixes wip
+   commits that changed prod code without a paired test). Each marker
+   = HIGH row in `## Review Findings` (file = unpaired prod path; fix =
+   "add a test exercising this change"). Exempt: commit changed only
+   `docs/` / `kanban/` / `.symphony/` paths — note the exemption in
+   `## Review` if applied.
 4. Use live HTTP proof only when this ticket changed runtime API behavior
    or its acceptance criteria explicitly require endpoint execution. For
    docs-only API mapping / scenario-definition tickets, verify against
