@@ -680,6 +680,40 @@ async def test_commit_workspace_on_done_squashes_to_recorded_base(
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
+async def test_commit_workspace_on_done_excludes_paths_from_prior_wip_commit(
+    tmp_path, monkeypatch
+):
+    """Excluded paths staged by earlier per-turn commits must not leak into
+    the final squash commit."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "seed.txt").write_text("base")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base commit")
+
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "config", "symphony.basesha", base_sha)
+    _git(repo, "config", "--add", "symphony.autocommitExclude", "vendor")
+
+    (repo / "vendor").mkdir()
+    (repo / "vendor" / "secret.txt").write_text("do not ship")
+    (repo / "work.txt").write_text("ticket work")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wip: turn 1")
+    (repo / "more.txt").write_text("more ticket work")
+
+    await commit_workspace_on_done(repo, identifier="OLV-EX", title="exclude vendor")
+
+    files = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    assert "work.txt" in files
+    assert "more.txt" in files
+    assert "vendor/secret.txt" not in files
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
 async def test_commit_workspace_on_done_no_base_falls_back_to_plain_commit(
     tmp_path, monkeypatch
 ):
