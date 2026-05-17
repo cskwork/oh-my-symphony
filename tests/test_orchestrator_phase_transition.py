@@ -9,7 +9,7 @@ the ticket body — never via accumulated backend conversation context.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +57,7 @@ class _FakeBackend:
     async def start_session(
         self, *, initial_prompt: str, issue_title: str
     ) -> None:
+        self.session_id = f"fake-session-{self.init_id}"
         self.calls.append(
             (
                 "start_session",
@@ -329,6 +330,44 @@ def test_phase_transition_rebuilds_backend_with_fresh_first_prompt(
     # And the prompt sent on that run_turn equals the freshly rendered
     # first-turn prompt (not a build_continuation_prompt body).
     assert second_run[0][1]["prompt"] == first_prompts[1]
+
+
+@pytest.mark.parametrize("agent_kind", ["claude", "gemini", "pi"])
+def test_non_codex_explore_to_plan_rebuilds_fresh_backend_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_kind: str
+) -> None:
+    base_cfg = _make_config(max_turns=5)
+    cfg = replace(
+        base_cfg,
+        agent=replace(base_cfg.agent, kind=agent_kind),
+        tracker=replace(
+            base_cfg.tracker,
+            active_states=("Todo", "Explore", "Plan", "In Progress", "Review"),
+        ),
+    )
+    issue = _make_issue(state="Explore")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["Plan", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert [inst.calls[0] for inst in instances] == [
+        ("factory", {"agent_kind": agent_kind}),
+        ("factory", {"agent_kind": agent_kind}),
+    ]
+    first_sessions = [
+        inst.session_id
+        for inst in instances
+        for call in inst.calls
+        if call[0] == "start_session"
+    ]
+    assert first_sessions == ["fake-session-0", "fake-session-1"]
+    assert first_sessions[0] != first_sessions[1]
+    second_run = [c for c in instances[1].calls if c[0] == "run_turn"]
+    assert len(second_run) == 1
+    assert second_run[0][1]["is_continuation"] is False
 
 
 @pytest.mark.parametrize("agent_kind", sorted(SUPPORTED_AGENT_KINDS))

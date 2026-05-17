@@ -9,12 +9,15 @@ real-integration runs since CI cannot guarantee those binaries.
 from __future__ import annotations
 
 import asyncio
+import json
 import shlex
+import uuid
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import symphony.backends.claude_code as claude_module
 import symphony.backends.codex as codex_module
 import symphony.backends.gemini as gemini_module
 import symphony.backends.pi as pi_module
@@ -138,6 +141,83 @@ class _FakeProcess:
 
     async def wait(self) -> int:
         raise AssertionError("raw proc.wait() should not be used")
+
+
+class _FakeStdin:
+    def __init__(self) -> None:
+        self.data = b""
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.data += data
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeStream:
+    def __init__(self, *, lines: list[bytes] | None = None, blob: bytes | None = None) -> None:
+        self._lines = list(lines or [])
+        self._blob = blob if blob is not None else b"".join(self._lines)
+
+    async def readline(self) -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        return b""
+
+    async def read(self) -> bytes:
+        blob = self._blob
+        self._blob = b""
+        return blob
+
+
+class _FakeSubprocess:
+    pid = 98765
+
+    def __init__(
+        self,
+        *,
+        stdout_lines: list[bytes] | None = None,
+        stdout_blob: bytes | None = None,
+        stderr_blob: bytes = b"",
+        returncode: int = 0,
+    ) -> None:
+        self.stdin = _FakeStdin()
+        self.stdout = _FakeStream(lines=stdout_lines, blob=stdout_blob)
+        self.stderr = _FakeStream(lines=stderr_blob.splitlines(keepends=True), blob=stderr_blob)
+        self.returncode = returncode
+        self.terminated = False
+        self.killed = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def _install_subprocess_double(
+    monkeypatch: pytest.MonkeyPatch,
+    module: object,
+    processes: list[_FakeSubprocess],
+) -> list[str]:
+    commands: list[str] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN001
+        del kwargs
+        commands.append(str(args[2]))
+        return processes.pop(0)
+
+    async def fake_safe_proc_wait(proc, *, timeout=None):  # noqa: ANN001
+        del timeout
+        return proc.returncode
+
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+    return commands
 
 
 def test_factory_returns_codex_backend(tmp_path: Path) -> None:
@@ -351,19 +431,267 @@ def test_claude_success_result_with_string_false_is_not_failure() -> None:
     assert _is_error_result({"type": "result", "is_error": "true"}) is True
 
 
-def test_gemini_session_id_synthesized(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_claude_same_state_continuation_adds_resume_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    commands = _install_subprocess_double(
+        monkeypatch,
+        claude_module,
+        [
+            _FakeSubprocess(
+                stdout_lines=[
+                    b'{"type":"system","subtype":"init","session_id":"claude-s1"}\n',
+                    b'{"type":"result","subtype":"success","is_error":false,'
+                    b'"result":"one","session_id":"claude-s1","usage":{}}\n',
+                ]
+            ),
+            _FakeSubprocess(
+                stdout_lines=[
+                    b'{"type":"result","subtype":"success","is_error":false,'
+                    b'"result":"two","session_id":"claude-s1","usage":{}}\n',
+                ]
+            ),
+        ],
+    )
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    await backend.run_turn(prompt="first", is_continuation=False)
+    await backend.run_turn(prompt="second", is_continuation=True)
+
+    assert "--resume" not in commands[0]
+    assert f"--resume {shlex.quote('claude-s1')}" in commands[1]
+
+
+@pytest.mark.asyncio
+async def test_claude_fresh_backend_first_turn_does_not_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    commands = _install_subprocess_double(
+        monkeypatch,
+        claude_module,
+        [
+            _FakeSubprocess(
+                stdout_lines=[
+                    b'{"type":"system","subtype":"init","session_id":"claude-new"}\n',
+                    b'{"type":"result","subtype":"success","is_error":false,'
+                    b'"result":"fresh","session_id":"claude-new","usage":{}}\n',
+                ]
+            )
+        ],
+    )
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="phase prompt", issue_title="Fix login")
+    await backend.run_turn(prompt="phase prompt", is_continuation=False)
+
+    assert "--resume" not in commands[0]
+
+
+@pytest.mark.asyncio
+async def test_pi_same_state_continuation_adds_session_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    commands = _install_subprocess_double(
+        monkeypatch,
+        pi_module,
+        [
+            _FakeSubprocess(
+                stdout_lines=[
+                    b'{"type":"session","version":3,"id":"pi-s1"}\n',
+                    b'{"type":"agent_end","messages":[]}\n',
+                ]
+            ),
+            _FakeSubprocess(
+                stdout_lines=[
+                    b'{"type":"session","version":3,"id":"pi-s1"}\n',
+                    b'{"type":"agent_end","messages":[]}\n',
+                ]
+            ),
+        ],
+    )
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    await backend.run_turn(prompt="first", is_continuation=False)
+    await backend.run_turn(prompt="second", is_continuation=True)
+
+    assert "--session" not in commands[0]
+    assert f"--session {shlex.quote('pi-s1')}" in commands[1]
+
+
+@pytest.mark.asyncio
+async def test_pi_fresh_backend_first_turn_does_not_reuse_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    commands = _install_subprocess_double(
+        monkeypatch,
+        pi_module,
+        [
+            _FakeSubprocess(
+                stdout_lines=[
+                    b'{"type":"session","version":3,"id":"pi-new"}\n',
+                    b'{"type":"agent_end","messages":[]}\n',
+                ]
+            )
+        ],
+    )
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="phase prompt", issue_title="Fix login")
+    await backend.run_turn(prompt="phase prompt", is_continuation=False)
+
+    assert "--session" not in commands[0]
+
+
+@pytest.mark.asyncio
+async def test_gemini_session_id_is_minted_locally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cfg = _make_cfg("gemini", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
     cwd.mkdir()
     backend = GeminiBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
-    asyncio.run(
-        backend.start_session(initial_prompt="hi", issue_title="Fix login")
+
+    sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    assert uuid.UUID(sid)
+
+    commands = _install_subprocess_double(
+        monkeypatch,
+        gemini_module,
+        [
+            _FakeSubprocess(
+                stdout_blob=json.dumps(
+                    {"session_id": sid, "response": "hello", "stats": {"models": {}}}
+                ).encode("utf-8")
+            )
+        ],
     )
-    sid = backend.session_id
-    assert sid is not None
-    assert sid.startswith("gemini-")
+
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert backend.session_id == sid
+    assert result.turn_id == sid
+    assert result.last_message == "hello"
+    assert "--skip-trust" in commands[0]
+    assert "--output-format json" in commands[0]
+    assert f"--session-id {shlex.quote(sid)}" in commands[0]
+    assert "--resume" not in commands[0]
+
+
+@pytest.mark.asyncio
+async def test_gemini_parses_token_stats_from_json_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("gemini", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = GeminiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    _install_subprocess_double(
+        monkeypatch,
+        gemini_module,
+        [
+            _FakeSubprocess(
+                stdout_blob=json.dumps(
+                    {
+                        "session_id": sid,
+                        "response": "done",
+                        "stats": {
+                            "models": {
+                                "gemini-a": {
+                                    "tokens": {
+                                        "input": 100,
+                                        "cached": 7,
+                                        "candidates": 11,
+                                        "thoughts": 13,
+                                        "tool": 17,
+                                    }
+                                },
+                                "gemini-b": {
+                                    "tokens": {
+                                        "input": 3,
+                                        "candidates": 5,
+                                        "thoughts": 0,
+                                        "tool": 2,
+                                    }
+                                },
+                            }
+                        },
+                    }
+                ).encode("utf-8")
+            )
+        ],
+    )
+
+    await backend.run_turn(prompt="first", is_continuation=False)
+
+    usage = backend.latest_usage
+    assert usage["input_tokens"] == 110
+    assert usage["output_tokens"] == 48
+    assert usage["total_tokens"] == 158
+
+
+@pytest.mark.asyncio
+async def test_gemini_resume_across_turns_reuses_session_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("gemini", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = GeminiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    commands = _install_subprocess_double(
+        monkeypatch,
+        gemini_module,
+        [
+            _FakeSubprocess(
+                stdout_blob=json.dumps(
+                    {"session_id": sid, "response": "one", "stats": {"models": {}}}
+                ).encode("utf-8")
+            ),
+            _FakeSubprocess(
+                stdout_blob=json.dumps(
+                    {"session_id": sid, "response": "two", "stats": {"models": {}}}
+                ).encode("utf-8")
+            ),
+        ],
+    )
+
+    await backend.run_turn(prompt="first", is_continuation=False)
+    await backend.run_turn(prompt="second", is_continuation=True)
+
+    assert backend.session_id == sid
+    assert f"--session-id {shlex.quote(sid)}" in commands[0]
+    assert f"--resume {shlex.quote(sid)}" in commands[1]
+    assert "--session-id" not in commands[1]
 
 
 def test_workflow_config_validates_kind(tmp_path: Path) -> None:
@@ -1089,6 +1417,32 @@ pi:
     cfg = build_service_config(wf)
     assert "--no-session" in cfg.pi.command
     assert cfg.pi.resume_across_turns is False
+
+
+def test_gemini_workflow_config_defaults_and_honors_resume(tmp_path: Path) -> None:
+    from symphony.workflow import build_service_config, parse_workflow_text
+
+    default_text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: gemini}
+---
+prompt body
+"""
+    wf = parse_workflow_text(default_text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert cfg.gemini.resume_across_turns is True
+
+    custom_text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: gemini}
+gemini:
+  resume_across_turns: false
+---
+prompt body
+"""
+    wf = parse_workflow_text(custom_text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert cfg.gemini.resume_across_turns is False
 
 
 # --- stderr ring buffer + compaction event surfacing (improve/observability) ---

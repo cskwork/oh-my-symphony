@@ -43,6 +43,12 @@ input. Symphony exposes that as `cache_input_tokens` in logs and
 `/api/v1/state` so a large cached context does not look like fresh input burn;
 `total_tokens` still includes fresh input + cache input + output.
 
+Gemini reports JSON `stats.models.*.tokens`; Symphony folds `input + cached`
+into `input_tokens`, `candidates + thoughts + tool` into `output_tokens`, and
+sets `total_tokens` to that sum. Same-state continuation uses Gemini
+`--resume`, but phase transitions rebuild the backend and mint a new session
+UUID.
+
 Pi-only events that may interleave at any point:
 
 - `agent_compaction phase=start` / `phase=end tokens_before=N` — context

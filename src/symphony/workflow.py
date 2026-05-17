@@ -321,12 +321,17 @@ class ClaudeConfig:
 
 @dataclass(frozen=True)
 class GeminiConfig:
-    """`agent.kind: gemini` — driving Gemini CLI as one-shot per turn."""
+    """`agent.kind: gemini` — driving Gemini CLI in JSON/session mode."""
 
     command: str
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
+    # When True, turns 2+ within one worker attempt add `--resume <id>` so
+    # Gemini rejoins the session UUID minted at start_session. Cross-attempt
+    # and cross-phase resume is intentionally not supported because those
+    # paths build a new backend instance.
+    resume_across_turns: bool = True
 
 
 @dataclass(frozen=True)
@@ -871,6 +876,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         stall_timeout_ms=_validated_positive_or_default(
             gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="gemini.stall_timeout_ms"
         ),
+        resume_across_turns=bool(gemini_raw.get("resume_across_turns", True)),
     )
 
     pi_raw = cfg.get("pi") or {}
