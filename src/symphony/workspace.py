@@ -88,9 +88,13 @@ class WorkspaceManager:
     def root(self) -> Path:
         return self._root
 
-    def update_hooks(self, hooks: HooksConfig) -> None:
+    def update_hooks(
+        self, hooks: HooksConfig, *, workflow_dir: Path | None = None
+    ) -> None:
         # §6.2 — apply reloaded hooks to future executions.
         self._hooks = hooks
+        if workflow_dir is not None:
+            self._workflow_dir = workflow_dir
 
     def update_reuse_policy(self, reuse_policy: str) -> None:
         self._reuse_policy = reuse_policy
@@ -359,7 +363,11 @@ async def commit_workspace_on_done(
         '  git init -q || exit 41\n'
         'fi\n'
         'BASE="$(git config --get symphony.basesha 2>/dev/null || true)"\n'
-        'git add -A . || exit 42\n'
+        'ADD_PATHS=(.)\n'
+        'while IFS= read -r exclude_path; do\n'
+        '  [ -n "$exclude_path" ] && ADD_PATHS+=(":(exclude)$exclude_path")\n'
+        'done < <(git config --get-all symphony.autocommitExclude 2>/dev/null || true)\n'
+        'git add -A -- "${ADD_PATHS[@]}" || exit 42\n'
         'HAS_STAGED=1\n'
         'git diff --cached --quiet -- . && HAS_STAGED=0\n'
         'HAS_NEW_COMMITS=0\n'

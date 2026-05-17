@@ -11,6 +11,7 @@ import pytest
 
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import Orchestrator, RunningEntry, _IssueDebug, _sort_for_dispatch_fifo
+from symphony.workspace import WorkspaceManager
 from symphony.workflow import (
     AgentConfig,
     ClaudeConfig,
@@ -33,11 +34,14 @@ def _make_config(
     terminal_states: tuple[str, ...] = ("Done", "Cancelled"),
     tracker_kind: str = "linear",
     auto_triage_actionable_todo: bool = True,
+    workflow_path: Path = Path("/tmp/WORKFLOW.md"),
+    workspace_root: Path = Path("/tmp/ws"),
+    hooks: HooksConfig | None = None,
 ) -> ServiceConfig:
     return ServiceConfig(
-        workflow_path=Path("/tmp/WORKFLOW.md"),
+        workflow_path=workflow_path,
         poll_interval_ms=30_000,
-        workspace_root=Path("/tmp/ws"),
+        workspace_root=workspace_root,
         tracker=TrackerConfig(
             kind=tracker_kind,
             endpoint="https://api.linear.app/graphql",
@@ -47,7 +51,7 @@ def _make_config(
             terminal_states=terminal_states,
             board_root=Path("/tmp/kanban") if tracker_kind == "file" else None,
         ),
-        hooks=HooksConfig(None, None, None, None, 60_000),
+        hooks=hooks or HooksConfig(None, None, None, None, 60_000),
         agent=AgentConfig(
             kind="codex",
             max_concurrent_agents=max_concurrent,
@@ -2938,3 +2942,54 @@ def test_apply_dispatch_env_empty_list_when_findings_missing(monkeypatch):
         "not omit the env var entirely"
     )
     monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)
+
+
+def test_sort_for_dispatch_ties_by_identifier():
+    a = _issue("MT-2", priority=1)
+    b = _issue("MT-1", priority=1)
+    out = [i.identifier for i in sort_for_dispatch([a, b])]
+    assert out == ["MT-1", "MT-2"]
+
+
+@pytest.mark.asyncio
+async def test_reload_refreshes_workflow_dir_for_existing_workspace_manager(
+    tmp_path, monkeypatch
+):
+    workspace_root = tmp_path / "ws"
+    old_cfg = _make_config(
+        workflow_path=tmp_path / "old" / "WORKFLOW.md",
+        workspace_root=workspace_root,
+    )
+    new_cfg = _make_config(
+        workflow_path=tmp_path / "new" / "WORKFLOW.md",
+        workspace_root=workspace_root,
+        hooks=HooksConfig(
+            after_create='echo "$SYMPHONY_WORKFLOW_DIR" > wfdir',
+            before_run=None,
+            after_run=None,
+            before_remove=None,
+            timeout_ms=30_000,
+        ),
+    )
+    state = WorkflowState(tmp_path / "unused.md")
+    monkeypatch.setattr(state, "reload", lambda: (new_cfg, None))
+
+    orch = Orchestrator(state)
+    orch._workspace_manager = WorkspaceManager(
+        old_cfg.workspace_root,
+        old_cfg.hooks,
+        workflow_dir=old_cfg.workflow_path.parent,
+    )
+
+    async def no_candidates(_cfg):
+        return []
+
+    monkeypatch.setattr(orch, "_fetch_candidates", no_candidates)
+
+    await orch._on_tick()
+
+    assert orch._workspace_manager is not None
+    ws = await orch._workspace_manager.create_or_reuse("MT-WFDIR")
+    assert (ws.path / "wfdir").read_text().strip() == str(
+        new_cfg.workflow_path.parent
+    )
