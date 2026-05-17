@@ -1,0 +1,1 @@
+test(orchestrator): pin PR #19 + PR #21 regression paths (SMA-24)

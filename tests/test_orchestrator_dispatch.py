@@ -2993,3 +2993,84 @@ async def test_reload_refreshes_workflow_dir_for_existing_workspace_manager(
     assert (ws.path / "wfdir").read_text().strip() == str(
         new_cfg.workflow_path.parent
     )
+
+
+@pytest.mark.asyncio
+async def test_reload_refreshes_reuse_policy_and_hook_env_alongside_workflow_dir(
+    tmp_path, monkeypatch
+):
+    # PR #19 regression: a single `_on_tick` reload must propagate ALL
+    # three workspace-manager updates — workflow_dir, reuse_policy, and
+    # hook_env (feature_base_branch / merge_target_branch). Dropping any
+    # one of `update_hooks`, `update_reuse_policy`, or `update_hook_env`
+    # in `_on_tick` would leave the manager half-refreshed; this test
+    # observes all three at once via a single `after_create` hook.
+    workspace_root = tmp_path / "ws"
+    snapshot = tmp_path / "snapshot"
+    after_create = (
+        f'echo "$SYMPHONY_WORKFLOW_DIR|'
+        f'$SYMPHONY_FEATURE_BASE_BRANCH|'
+        f'$SYMPHONY_MERGE_TARGET_BRANCH" >> {snapshot}'
+    )
+    old_cfg = _make_config(
+        workflow_path=tmp_path / "old" / "WORKFLOW.md",
+        workspace_root=workspace_root,
+    )
+    new_agent = replace(
+        old_cfg.agent,
+        feature_base_branch="develop",
+        auto_merge_target_branch="main",
+    )
+    new_cfg = replace(
+        _make_config(
+            workflow_path=tmp_path / "new" / "WORKFLOW.md",
+            workspace_root=workspace_root,
+            hooks=HooksConfig(
+                after_create=after_create,
+                before_run=None,
+                after_run=None,
+                before_remove=None,
+                timeout_ms=30_000,
+            ),
+        ),
+        agent=new_agent,
+        workspace_reuse_policy="refresh",
+    )
+    state = WorkflowState(tmp_path / "unused.md")
+    monkeypatch.setattr(state, "reload", lambda: (new_cfg, None))
+
+    orch = Orchestrator(state)
+    orch._workspace_manager = WorkspaceManager(
+        old_cfg.workspace_root,
+        old_cfg.hooks,
+        workflow_dir=old_cfg.workflow_path.parent,
+        reuse_policy=old_cfg.workspace_reuse_policy,
+        hook_env={
+            "SYMPHONY_FEATURE_BASE_BRANCH": "",
+            "SYMPHONY_MERGE_TARGET_BRANCH": "",
+        },
+    )
+
+    async def no_candidates(_cfg):
+        return []
+
+    monkeypatch.setattr(orch, "_fetch_candidates", no_candidates)
+
+    await orch._on_tick()
+
+    # First create runs after_create regardless of reuse policy.
+    await orch._workspace_manager.create_or_reuse("MT-WFDIR")
+    expected_line = (
+        f"{new_cfg.workflow_path.parent}|"
+        f"{new_cfg.agent.feature_base_branch}|"
+        f"{new_cfg.agent.auto_merge_target_branch}"
+    )
+    first_lines = snapshot.read_text().splitlines()
+    assert first_lines == [expected_line]
+
+    # Second create re-fires after_create only because reuse_policy is now
+    # "refresh". Under the previous "preserve" policy the file would still
+    # contain a single line — that is the bug this regression test pins.
+    await orch._workspace_manager.create_or_reuse("MT-WFDIR")
+    second_lines = snapshot.read_text().splitlines()
+    assert second_lines == [expected_line, expected_line]
