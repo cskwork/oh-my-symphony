@@ -288,7 +288,14 @@ claude:
   stall_timeout_ms: 300000
 
 codex:
-  command: codex app-server
+  # `-c model=...` forces a valid model at thread/start time. The user
+  # ~/.codex/config.toml here pins `gpt-5.5` which is not a valid model
+  # name in codex 0.130; without the override, `thread/start` hangs
+  # silently (no JSON-RPC error response) and Symphony eventually surfaces
+  # this as `port_exit: subprocess stdout closed` after the subprocess
+  # times out. Override keeps the codex backend usable while leaving the
+  # user-level config untouched.
+  command: codex app-server -c model=gpt-5-codex
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy: workspace-write

@@ -248,10 +248,24 @@ class WorkspaceManager:
             env.update(extra_env)
 
         def _do_run() -> subprocess.CompletedProcess[bytes]:
+            # `stdin=DEVNULL` is mandatory, not cosmetic. When Symphony is
+            # launched in the background (e.g. `nohup ... &` or systemd
+            # without a TTY), the orchestrator process inherits a closed or
+            # half-broken fd 0. Without an explicit redirect here, the hook
+            # script — and any grandchild it spawns (e.g.
+            # `python -m venv .venv` inside `after_create`) — inherits the
+            # same broken fd. CPython then aborts at startup with
+            #   Fatal Python error: init_sys_streams: can't initialize sys
+            #   standard streams / OSError: [Errno 9] Bad file descriptor
+            # and the hook fails with returncode 1, surfacing as a
+            # confusing `hook after_create exited 1`. Pinning stdin to
+            # /dev/null guarantees a usable fd 0 for the hook regardless
+            # of how the parent was started.
             return subprocess.run(
                 [resolve_bash(), "-lc", script],
                 cwd=str(cwd),
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 timeout=timeout_s if timeout_s > 0 else None,
                 env=env,
                 check=False,
