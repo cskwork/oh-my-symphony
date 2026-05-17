@@ -259,8 +259,9 @@ claude:
 
 gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass `""`
-  # so the prompt comes purely from stdin.
+  # so the prompt comes purely from stdin. Symphony appends JSON/session flags.
   command: 'gemini -p ""'
+  resume_across_turns: true
 
 pi:
   # `pi --mode json` emits JSONL events; stdin carries the prompt.

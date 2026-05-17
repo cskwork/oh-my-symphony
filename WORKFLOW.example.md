@@ -261,8 +261,10 @@ claude:
 
 gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass an
-  # empty `""` so the prompt comes purely from stdin.
+  # empty `""` so the prompt comes purely from stdin. Symphony appends
+  # `--skip-trust --output-format json` plus `--session-id` / `--resume`.
   command: 'gemini -p ""'
+  resume_across_turns: true
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000

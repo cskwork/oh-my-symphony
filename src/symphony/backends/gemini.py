@@ -1,28 +1,21 @@
 """Gemini CLI backend.
 
-Drives `gemini -p` once per turn. Gemini's headless mode does not expose a
-persistent session protocol or structured event stream — the prompt comes
-from stdin and the model's final response goes to stdout. This backend wraps
-that one-shot model into the AgentBackend contract.
-
-Behavior summary:
-- `start_session` returns a synthetic session id (timestamp-based) and emits
-  `session_started` immediately.
-- `run_turn` pipes the prompt to `gemini -p`'s stdin, waits for the process
-  to exit, and emits a single `turn_completed` (or `turn_failed`) event with
-  the captured stdout as the last message.
-- Token usage is unavailable from the CLI in stable form, so totals stay at
-  zero. Rate limits are likewise unavailable.
-
-Multi-turn continuity is not supported: each `run_turn` is independent.
+Drives `gemini -p "" --output-format json` once per turn. Symphony mints a
+session UUID at `start_session`; turn 1 passes it via `--session-id`, and
+same-state continuation turns resume it via `--resume`. The orchestrator
+rebuilds backends on phase transitions, so Explore → Plan and other state
+changes naturally get a fresh Gemini session.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import shlex
 import time
 import uuid
+from collections import deque
 from typing import Any
 
 from .._shell import resolve_bash, safe_proc_wait
@@ -58,7 +51,7 @@ def _utc_iso() -> str:
 
 
 class GeminiBackend(BaseAgentBackend):
-    """One subprocess per turn; captures stdout as the turn result."""
+    """One subprocess per turn; parses Gemini JSON output."""
 
     def __init__(self, init: BackendInit) -> None:
         validate_agent_cwd(init.cwd, init.workspace_root)
@@ -73,6 +66,7 @@ class GeminiBackend(BaseAgentBackend):
             "output_tokens": 0,
             "total_tokens": 0,
         }
+        self._stderr_tail: deque[str] = deque(maxlen=20)
 
     # ------------------------------------------------------------------
     # AgentBackend lifecycle
@@ -122,7 +116,7 @@ class GeminiBackend(BaseAgentBackend):
         self, *, initial_prompt: str, issue_title: str | None
     ) -> str:
         del initial_prompt, issue_title
-        self._session_id = f"gemini-{uuid.uuid4().hex[:12]}"
+        self._session_id = str(uuid.uuid4())
         await self._emit(
             EVENT_SESSION_STARTED,
             {"session_id": self._session_id, "thread_id": self._session_id},
@@ -132,13 +126,12 @@ class GeminiBackend(BaseAgentBackend):
     async def run_turn(self, *, prompt: str, is_continuation: bool) -> TurnResult:
         if self._closed:
             raise ResponseError("backend is closed")
-        del is_continuation  # gemini -p is stateless; flag is informational
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 resolve_bash(),
                 "-lc",
-                self._gemini.command,
+                self._command_for_turn(is_continuation=is_continuation),
                 cwd=str(self._cwd),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
@@ -185,32 +178,65 @@ class GeminiBackend(BaseAgentBackend):
                 raise TurnTimeout("gemini turn timed out") from exc
 
             rc = safe_rc if safe_rc is not None else (proc.returncode or 0)
+            self._capture_stderr(stderr or b"")
             if rc != 0:
-                err_msg = (stderr or b"").decode("utf-8", errors="replace").strip()[:400]
+                err_msg = self._stderr_blob()
                 # Standardize on `stderr_tail` (list[str]) so orchestrator /
                 # operator grep handles every backend the same way; keep the
                 # legacy `stderr` key for back-compat with anything that read
                 # the previous shape.
-                tail = [s for s in err_msg.splitlines() if s][-20:]
                 payload = {
                     "reason": f"gemini exit {rc}" + (f"; stderr: {err_msg}" if err_msg else ""),
-                    "stderr_tail": tail,
+                    "stderr_tail": list(self._stderr_tail),
                     "stderr": err_msg,
                 }
                 await self._emit(EVENT_TURN_FAILED, payload)
                 raise TurnFailed(err_msg or f"gemini failed with exit {rc}")
 
             result_text = (stdout or b"").decode("utf-8", errors="replace").strip()
+            try:
+                parsed = json.loads(result_text)
+            except json.JSONDecodeError as exc:
+                payload = {
+                    "reason": "gemini emitted malformed JSON",
+                    "stdout": result_text[:400],
+                    "stderr_tail": list(self._stderr_tail),
+                }
+                await self._emit(EVENT_TURN_FAILED, payload)
+                raise TurnFailed("gemini emitted malformed JSON") from exc
+            if not isinstance(parsed, dict):
+                payload = {
+                    "reason": "gemini JSON output was not an object",
+                    "stdout": result_text[:400],
+                    "stderr_tail": list(self._stderr_tail),
+                }
+                await self._emit(EVENT_TURN_FAILED, payload)
+                raise TurnFailed("gemini JSON output was not an object")
+
+            sid = parsed.get("session_id")
+            if isinstance(sid, str) and sid:
+                old_sid = self._session_id
+                self._session_id = sid
+                if sid != old_sid:
+                    await self._emit(
+                        EVENT_SESSION_STARTED,
+                        {"session_id": sid, "thread_id": sid},
+                    )
+            response = parsed.get("response")
+            last_message = response if isinstance(response, str) else ""
+            self._update_usage_from_stats(parsed.get("stats"))
             payload = {
-                "result": result_text,
+                "result": last_message,
+                "response": last_message,
                 "session_id": self._session_id,
+                "stats": parsed.get("stats") if isinstance(parsed.get("stats"), dict) else {},
                 "exit_code": rc,
             }
             await self._emit(EVENT_TURN_COMPLETED, payload)
             return TurnResult(
                 status=EVENT_TURN_COMPLETED,
                 turn_id=self._session_id,
-                last_message=result_text[:400],
+                last_message=last_message[:400],
             )
         finally:
             self._active_proc = None
@@ -218,6 +244,51 @@ class GeminiBackend(BaseAgentBackend):
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
+
+    def _command_for_turn(self, *, is_continuation: bool) -> str:
+        cmd = f"{self._gemini.command} --skip-trust --output-format json"
+        if not self._session_id:
+            return cmd
+        if is_continuation:
+            if self._gemini.resume_across_turns:
+                return f"{cmd} --resume {shlex.quote(self._session_id)}"
+            return cmd
+        return f"{cmd} --session-id {shlex.quote(self._session_id)}"
+
+    def _capture_stderr(self, stderr: bytes) -> None:
+        text = stderr.decode("utf-8", errors="replace")
+        for line in text.splitlines():
+            if line:
+                self._stderr_tail.append(line)
+
+    def _stderr_blob(self) -> str:
+        if not self._stderr_tail:
+            return ""
+        joined = " | ".join(self._stderr_tail)
+        return joined if len(joined) <= 400 else joined[-400:]
+
+    def _update_usage_from_stats(self, stats: Any) -> None:
+        if not isinstance(stats, dict):
+            return
+        models = stats.get("models")
+        if not isinstance(models, dict):
+            return
+        input_tokens = 0
+        output_tokens = 0
+        for model in models.values():
+            if not isinstance(model, dict):
+                continue
+            tokens = model.get("tokens")
+            if not isinstance(tokens, dict):
+                continue
+            input_tokens += int(tokens.get("input") or 0)
+            input_tokens += int(tokens.get("cached") or 0)
+            output_tokens += int(tokens.get("candidates") or 0)
+            output_tokens += int(tokens.get("thoughts") or 0)
+            output_tokens += int(tokens.get("tool") or 0)
+        self._latest_usage["input_tokens"] += input_tokens
+        self._latest_usage["output_tokens"] += output_tokens
+        self._latest_usage["total_tokens"] += input_tokens + output_tokens
 
     async def _reap(self, proc: asyncio.subprocess.Process) -> None:
         """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""
