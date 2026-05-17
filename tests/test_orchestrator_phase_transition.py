@@ -417,7 +417,7 @@ def test_phase_transition_stops_new_backend_when_rebuild_initialize_fails(
 
     assert len(instances) == 2
     second_calls = [name for name, _ in instances[1].calls]
-    assert second_calls == ["start", "initialize", "stop"]
+    assert second_calls == ["factory", "start", "initialize", "stop"]
 
 
 def test_same_phase_does_not_restart_backend(
