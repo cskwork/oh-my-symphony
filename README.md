@@ -9,6 +9,10 @@
 > (**Codex**, **Claude Code**, **Gemini**, **Pi**) — pick per ticket, run in
 > parallel, watch live.
 
+![symphony tui screenshot](docs/tui-screenshot.svg)
+
+<sub>`symphony tui ./WORKFLOW.md` — columns are your tracker's states; cards show the active agent, turn count, last event, and accumulated tokens. Live indicators: ● running, ↻ retry queued, ✓ done.</sub>
+
 **Stop juggling AI coding CLIs.** Symphony hands each Kanban ticket to the
 agent you want, runs them concurrently in isolated `git worktree` workspaces,
 and shows live progress — turn counts, token usage, rate-limit headroom — in
@@ -58,16 +62,10 @@ a Jira-style TUI you never have to leave your terminal for.
 - **Anyone** who hit the "one chat window per agent" ceiling and wants a
   real orchestrator with a Kanban they can read at a glance.
 
-## What it looks like
-
-`symphony tui ./WORKFLOW.md` opens a full-terminal Kanban board. Columns are
-your tracker's states; cards show the active agent, turn count, last event,
-and accumulated tokens. Live indicators: ● running, ↻ retry queued, ✓ done.
-
-![symphony tui screenshot](docs/tui-screenshot.svg)
+## How it works
 
 <details>
-<summary>Plain-text version (for terminals viewing raw README)</summary>
+<summary>Plain-text version of the TUI (for terminals viewing raw README)</summary>
 
 ```text
   agent=codex  tracker=linear  workflow=WORKFLOW.md  lang=en   running=2  retrying=1   │  tokens in=84,200 out=27,640 total=111,840
