@@ -146,21 +146,35 @@ def _sandbox_uses_workspace_write(*values: Any) -> bool:
 
 
 def _scan_workspace_symlinks(*roots: Path) -> list[str]:
-    """Return realpath targets of top-level symlinks in workspace roots.
+    """Return realpath targets of top-level symlinks AND git-worktree gitdirs.
 
-    Codex with ``sandbox_mode=workspace-write`` resolves symlinks via realpath
+    Codex with ``sandbox_mode=workspace-write`` resolves paths via realpath
     and refuses to write through paths whose target falls outside the
-    workspace root. When ``after_create`` symlinks host repo directories
-    (kanban/, prompt/, ...) into the workspace, stage-transition
-    commits silently fail and the worker burns turns repeating "쓰기 불가".
+    workspace root. Two failure modes are auto-fixed here:
 
-    This scan returns the resolved targets so the backend can pass them to
-    codex as ``sandbox_workspace_write.writable_roots`` — keeping the safer
-    workspace-write default while letting writes succeed through symlinks.
+    1. ``after_create`` symlinks host repo directories (kanban/, prompt/,
+       ...) into the workspace — without this, stage-transition commits
+       silently fail and the worker burns turns repeating "쓰기 불가".
 
-    Top-level only by design — after_create hooks symlink leaf dirs at the
-    workspace root, and recursing would slow start() materially on large
-    repos.
+    2. ``after_create`` attaches the workspace as a git worktree of the host
+       repo (the default Symphony hook), which stores the worktree's
+       admin state in ``<host_repo>/.git/worktrees/<ID>/``. The worktree's
+       ``.git`` file is a one-liner pointer (``gitdir: <abspath>``), not a
+       directory. Every ``git`` invocation inside the worktree writes
+       ``index.lock``, ``HEAD.lock``, etc. under that admin dir, and the
+       merge-gate's ``git merge-tree`` writes objects to it too. Without
+       the gitdir in ``writable_roots`` the merge gate dies with
+       ``unable to create temporary file: Operation not permitted`` and
+       Symphony surfaces the worker as ``Blocked``.
+
+    The scan returns resolved targets that the backend passes to codex as
+    ``sandbox_workspace_write.writable_roots``, preserving the safer
+    workspace-write default while letting writes succeed through symlinks
+    and worktree-attached git admin dirs.
+
+    Top-level only for the symlink scan — after_create hooks symlink leaf
+    dirs at the workspace root, and recursing would slow start() materially
+    on large repos.
     """
     seen: set[str] = set()
     for root in roots:
@@ -176,6 +190,22 @@ def _scan_workspace_symlinks(*roots: Path) -> list[str]:
             except OSError:
                 continue
             seen.add(str(target))
+        # Git-worktree pointer file. Resolving the gitdir target by reading
+        # `.git` is safe: the file is plain text owned by the same user that
+        # ran `git worktree add`, and the worst case is a missing/garbled
+        # pointer (treated as "no extra writable root").
+        git_file = root / ".git"
+        try:
+            if git_file.is_file():
+                content = git_file.read_text(encoding="utf-8", errors="replace")
+                for line in content.splitlines():
+                    if line.startswith("gitdir:"):
+                        target = line[len("gitdir:"):].strip()
+                        if target:
+                            seen.add(target)
+                        break
+        except OSError:
+            pass
     return sorted(seen)
 
 

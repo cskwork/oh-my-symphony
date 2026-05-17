@@ -532,6 +532,40 @@ def test_scan_workspace_symlinks_tolerates_missing_root(tmp_path: Path) -> None:
     assert _scan_workspace_symlinks(missing) == []
 
 
+def test_scan_workspace_symlinks_includes_worktree_gitdir(tmp_path: Path) -> None:
+    """A git-worktree's `.git` pointer file must contribute its gitdir target
+    to writable_roots so codex's sandbox does not block index.lock writes
+    or merge-tree temp files (SMA-25 root cause)."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    gitdir = tmp_path / "host_repo" / ".git" / "worktrees" / "SMA-25"
+    gitdir.mkdir(parents=True)
+    (workspace / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+
+    roots = _scan_workspace_symlinks(workspace)
+
+    assert str(gitdir) in roots
+
+
+def test_scan_workspace_symlinks_tolerates_garbled_git_pointer(tmp_path: Path) -> None:
+    """A `.git` file without a `gitdir:` line must not raise — fall back to
+    treating the workspace as if no extra writable root were needed."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / ".git").write_text("garbage without gitdir line\n", encoding="utf-8")
+
+    assert _scan_workspace_symlinks(workspace) == []
+
+
+def test_scan_workspace_symlinks_skips_directory_dot_git(tmp_path: Path) -> None:
+    """A normal (non-worktree) repo has `.git` as a directory — must be
+    ignored by the worktree-pointer branch."""
+    workspace = tmp_path / "ws"
+    (workspace / ".git").mkdir(parents=True)
+
+    assert _scan_workspace_symlinks(workspace) == []
+
+
 def test_inject_writable_roots_modifies_direct_codex_command() -> None:
     out = _inject_writable_roots("codex app-server", ["/a", "/b"])
     assert out == (
