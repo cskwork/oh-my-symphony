@@ -519,10 +519,11 @@ symphony ./WORKFLOW.md --tui
 
 #### Recommended default: TUI + JSON API together
 
-There is no HTML dashboard in this fork, so the TUI is the operator view
-and the JSON API is the programmatic / curl-friendly view. Run both in
-one process by pinning `server.port` in `WORKFLOW.md` and launching with
-`--tui`:
+The TUI is the primary operator view and the JSON API is the
+programmatic / curl-friendly view. Run both in one process by pinning
+`server.port` in `WORKFLOW.md` and launching with `--tui`
+(`tools/board-viewer/` remains available as an optional in-browser
+kanban, see below):
 
 ```yaml
 # WORKFLOW.md
