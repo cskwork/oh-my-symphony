@@ -174,10 +174,10 @@ hooks:
 agent:
   kind: codex          # codex | claude | gemini | pi
   max_concurrent_agents: 1
-  max_turns: 20
+  max_turns: 100
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.
-  max_total_turns: 60
+  max_total_turns: 200
   # Hard token ceiling by workflow state. The global cap is the default for
   # Review/Learn; In Progress and QA get larger build/verification budgets.
   max_total_tokens: 100000000

@@ -584,7 +584,7 @@ def test_invalid_max_turns_fails_validation(tmp_path):
         build_service_config(load_workflow(path))
 
 
-def test_default_max_total_turns_is_sixty(tmp_path):
+def test_default_max_total_turns_is_two_hundred(tmp_path):
     path = _write(
         tmp_path,
         textwrap.dedent(
@@ -599,7 +599,7 @@ def test_default_max_total_turns_is_sixty(tmp_path):
 
     cfg = build_service_config(load_workflow(path))
 
-    assert cfg.agent.max_total_turns == 60
+    assert cfg.agent.max_total_turns == 200
 
 
 # --- positive-int validation tightened in improve/observability-and-doctor ---

@@ -235,7 +235,7 @@ hooks:
 agent:
   kind: claude
   max_concurrent_agents: 1
-  max_turns: 20
+  max_turns: 100
   max_retry_backoff_ms: 300000
   # Soft cap on stage rewinds (Review→In Progress + QA→In Progress
   # combined). Symphony increments this counter at phase-transition time;

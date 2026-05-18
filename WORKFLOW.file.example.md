@@ -191,10 +191,10 @@ hooks:
 agent:
   kind: codex          # codex | claude | gemini | pi
   max_concurrent_agents: 1
-  max_turns: 20
+  max_turns: 100
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.
-  max_total_turns: 60
+  max_total_turns: 200
   max_total_tokens: 100000000
   max_total_tokens_by_state:
     "In Progress": 500000000
