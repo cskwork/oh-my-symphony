@@ -72,6 +72,30 @@ class LinearMissingEndCursor(SymphonyError):
     code = "linear_missing_end_cursor"
 
 
+class JiraApiRequestError(SymphonyError):
+    code = "jira_api_request"
+
+
+class JiraApiStatusError(SymphonyError):
+    code = "jira_api_status"
+
+
+class JiraUnknownPayload(SymphonyError):
+    code = "jira_unknown_payload"
+
+
+class JiraTransitionNotFound(SymphonyError):
+    code = "jira_transition_not_found"
+
+
+class MissingTrackerEmail(SymphonyError):
+    code = "missing_tracker_email"
+
+
+class MissingTrackerEndpoint(SymphonyError):
+    code = "missing_tracker_endpoint"
+
+
 # §10.6
 class CodexNotFound(SymphonyError):
     code = "codex_not_found"

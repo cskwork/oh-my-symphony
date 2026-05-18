@@ -15,6 +15,8 @@ import yaml
 from .errors import (
     ConfigValidationError,
     MissingTrackerApiKey,
+    MissingTrackerEmail,
+    MissingTrackerEndpoint,
     MissingTrackerProjectSlug,
     MissingWorkflowFile,
     UnsupportedTrackerKind,
@@ -24,9 +26,13 @@ from .errors import (
 from .notifications import NotificationsConfig, build_notifications_config
 
 
-SUPPORTED_TRACKER_KINDS = {"linear", "file"}
+SUPPORTED_TRACKER_KINDS = {"linear", "file", "jira"}
 LINEAR_DEFAULT_ENDPOINT = "https://api.linear.app/graphql"
 LINEAR_API_KEY_ENV = "LINEAR_API_KEY"
+# Jira Cloud Basic Auth uses (account email, API token).
+# Tokens are minted at id.atlassian.com → "Manage account" → "Security".
+JIRA_API_TOKEN_ENV = "JIRA_API_TOKEN"
+JIRA_EMAIL_ENV = "JIRA_EMAIL"
 
 DEFAULT_ACTIVE_STATES = ("Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn")
 DEFAULT_TERMINAL_STATES = ("Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Archive")
@@ -190,6 +196,11 @@ class TrackerConfig:
     # name must also appear in `terminal_states` so the lane renders.
     archive_state: str = "Archive"
     archive_after_days: int = 30
+    # tracker.kind=jira: Atlassian account email paired with `api_key` (the
+    # API token) for Basic Auth against Jira Cloud. Linear/file adapters
+    # ignore this field. Defaults to empty so existing callers stay
+    # source-compatible.
+    email: str = ""
 
 
 @dataclass(frozen=True)
@@ -633,7 +644,14 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     if raw_api_key is None and tracker_kind == "linear":
         # Canonical env when literal not provided.
         raw_api_key = "$" + LINEAR_API_KEY_ENV
+    if raw_api_key is None and tracker_kind == "jira":
+        raw_api_key = "$" + JIRA_API_TOKEN_ENV
     tracker_api_key = _as_str(resolve_var_indirection(raw_api_key))
+
+    raw_email = tracker_raw.get("email")
+    if raw_email is None and tracker_kind == "jira":
+        raw_email = "$" + JIRA_EMAIL_ENV
+    tracker_email = _as_str(resolve_var_indirection(raw_email))
 
     tracker_project_slug = _as_str(resolve_var_indirection(tracker_raw.get("project_slug")))
 
@@ -695,6 +713,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         ),
         archive_state=archive_state,
         archive_after_days=archive_after_days,
+        email=tracker_email,
     )
 
     polling_raw = cfg.get("polling") or {}
@@ -1115,6 +1134,24 @@ def validate_for_dispatch(config: ServiceConfig) -> None:
         if config.tracker.board_root is None:
             raise ConfigValidationError(
                 "tracker.board_root is required when tracker.kind=file"
+            )
+    if config.tracker.kind == "jira":
+        if not config.tracker.endpoint:
+            raise MissingTrackerEndpoint(
+                "tracker.endpoint required for jira tracker "
+                "(e.g., https://your-domain.atlassian.net)"
+            )
+        if not config.tracker.email:
+            raise MissingTrackerEmail(
+                "tracker.email missing or empty after $VAR resolution"
+            )
+        if not config.tracker.api_key:
+            raise MissingTrackerApiKey(
+                "tracker.api_key missing or empty after $VAR resolution"
+            )
+        if not config.tracker.project_slug:
+            raise MissingTrackerProjectSlug(
+                "tracker.project_slug required for jira tracker (the project key, e.g., PROJ)"
             )
     kind = config.agent.kind
     if kind == "codex":

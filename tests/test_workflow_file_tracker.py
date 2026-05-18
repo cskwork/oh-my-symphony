@@ -89,7 +89,7 @@ def test_unsupported_kind_still_rejected(tmp_path):
             """\
             ---
             tracker:
-              kind: jira
+              kind: unknown_tracker
             ---
             body
             """
