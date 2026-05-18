@@ -26,7 +26,7 @@ No tag-triggered CI workflow exists. The tag push and the GitHub Release are two
 ## Test Gate
 
 - Command: `python -m pytest -q`
-- CI job: `.github/workflows/tests.yml` → `pytest` (matrix: Python 3.10 / 3.11 / 3.12 on ubuntu-latest)
+- CI job: `.github/workflows/tests.yml` → `pytest` (Python 3.12 on ubuntu-latest)
 - Triggers on `push` and `pull_request` to `main` and `dev` branches, plus `workflow_dispatch`.
 - Tests are required to be green pre-release; no bypass flag in CI.
 - Prior release (v0.6.2) noted "Full pytest suite: 538 passed, 5 skipped, 0 failed" as evidence in commit body.

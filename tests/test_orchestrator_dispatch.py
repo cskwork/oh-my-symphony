@@ -1254,13 +1254,9 @@ def test_max_total_tokens_cap_cancels_worker(monkeypatch):
             assert entry.cancelled_at is not None, (
                 "breaching max_total_tokens must record cancelled_at"
             )
-            # Task.cancelling() is 3.11+; fall back to .cancelled() so the
-            # assertion compiles on the 3.10 floor declared in pyproject.toml.
-            _cancelling = getattr(worker_task, "cancelling", None)
-            cancel_observed = worker_task.cancelled() or (
-                _cancelling is not None and _cancelling() > 0
+            assert worker_task.cancelled() or worker_task.cancelling() > 0, (
+                "worker_task.cancel() must have been called"
             )
-            assert cancel_observed, "worker_task.cancel() must have been called"
             debug = orch._issue_debug.get(issue.id)
             assert debug is not None
             assert "token budget exceeded" in (debug.last_error or "")

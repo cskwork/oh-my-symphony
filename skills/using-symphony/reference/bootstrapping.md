@@ -30,7 +30,7 @@ If the target project has no virtualenv, either install Symphony globally or
 prepare a local one so the launcher can find it:
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -e <oh-my-symphony>
 ```
 
