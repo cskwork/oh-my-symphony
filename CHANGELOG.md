@@ -10,6 +10,75 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-18 — Monorepo bootstrap, multi-orchestrator board, bigger turn budget
+
+Quality-of-life release on top of v0.6.2. Three feature additions (none
+breaking), two reliability fixes, and a README rewrite aimed at first-time
+visitors. No signature changes; no migration required.
+
+### Added
+- **`symphony-monorepo` bootstrap skill** — generic recipe that wires
+  Symphony into an existing monorepo (or polyrepo): each ticket lands in
+  an isolated git worktree under `.symphony/workspaces/<id>`, the
+  upstream 7-stage prompts are installed, and Claude Code permissions
+  are wired bidirectionally between host repo and worktree. Companion
+  to `using-symphony` (operator-level) and `symphony-oneshot`
+  (one-shot dispatch). Files: `skills/symphony-monorepo/SKILL.md`,
+  `references/workflow-template.md`, `scripts/setup-monorepo.sh`.
+- **board-viewer aggregates multiple orchestrators** —
+  `tools/board-viewer/` now accepts multiple `--symphony URL` values
+  and surfaces them as named, per-source toggleable pills in the UI.
+  CLI accepts `--symphony URL1,URL2` (auto names `s1`, `s2`) or
+  `--symphony api=URL1,web=URL2` (explicit names); same syntax works
+  via `SYMPHONY_BASE`. New endpoints:
+  `GET /api/symphony/sources`, source-routed
+  `GET /api/symphony/<id>` and pause/resume, `POST /api/symphony/refresh`
+  fan-out. Single-URL invocations remain backward compatible; toggle
+  state persists in `localStorage` under `boardViewer.sourceToggles`.
+
+### Changed
+- **Default per-ticket turn budget raised 5×** — `DEFAULT_MAX_TURNS`
+  20 → 100, `DEFAULT_MAX_TOTAL_TURNS` 60 → 200. Long QA / Learn phases
+  on sandboxed build tooling were budget-exhausting before the worker
+  could resolve transient blockers. `WORKFLOW.md`, `WORKFLOW.example.md`,
+  and `WORKFLOW.file.example.md` updated so freshly copied workflows
+  inherit the new ceiling; `WORKFLOW.smoke.md` keeps its intentionally
+  small budget (3 / 6) to exercise the budget-exhaustion path in tests.
+
+### Fixed
+- **Claude `--add-dir` widened to project root** — narrowing
+  `--add-dir` to a sub-path (e.g. `./kanban`) let state transitions
+  write back but silently blocked Read/Grep into sibling directories
+  under the project root, so Claude agents could not verify
+  cross-service code and stalled in `Blocked`. The flag now points at
+  `$SYMPHONY_WORKFLOW_DIR` so reads (any sibling) and writes (kanban)
+  both work. Codex (workspace-write), Gemini (`--skip-trust`), and Pi
+  already permit reads outside cwd; an inline comment documents that
+  to prevent the same narrowing in other backends.
+- **Backend session boundaries** — session cleanup at backend
+  teardown no longer leaks across orchestrator restarts.
+
+### Docs
+- **README intro restructured for first-time visitors** (#40, #41):
+  punchier tagline, "Stop juggling AI coding CLIs" value-prop paragraph,
+  CTA to the 60-second mock demo, "Why Symphony?" with six concrete
+  benefits, "Who is this for?" self-identification block, GitHub stars
+  badge for social proof, and TUI screenshot moved above the fold with
+  a one-line caption. No structural changes below the fold.
+- **TUI + JSON API combined startup recipe documented** —
+  this fork's TUI is the operator view and the JSON API is the
+  programmatic view. README now shows the recommended single-process
+  launch (`--tui` + `server.port` pinned in `WORKFLOW.md`) plus
+  override notes (`--port`, dropping the `server` block).
+- **Removed inaccurate "no HTML dashboard" claim** —
+  `tools/board-viewer/` is the in-browser kanban (separate from the
+  upstream server-rendered `/` route, which was removed). README now
+  points readers at board-viewer instead of asserting no dashboard
+  exists.
+
+### Internal
+- `.gitignore` housekeeping.
+
 ## [0.6.0] — 2026-05-17 — Workflow accuracy + harness upgrade
 
 Eleven coordinated changes across the agent prompts and the orchestrator
