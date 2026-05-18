@@ -517,6 +517,27 @@ symphony tui ./WORKFLOW.md
 symphony ./WORKFLOW.md --tui
 ```
 
+#### Recommended default: TUI + JSON API together
+
+There is no HTML dashboard in this fork, so the TUI is the operator view
+and the JSON API is the programmatic / curl-friendly view. Run both in
+one process by pinning `server.port` in `WORKFLOW.md` and launching with
+`--tui`:
+
+```yaml
+# WORKFLOW.md
+server: { port: 8765 }
+```
+
+```bash
+symphony --tui ./WORKFLOW.md
+# kanban renders in the terminal, JSON API listens on 127.0.0.1:8765
+curl -s http://127.0.0.1:8765/api/v1/state | jq
+```
+
+Use `--port N` on the CLI to override the workflow value, or drop the
+`server` block to disable the HTTP API entirely.
+
 Columns are tracker states (`active_states` first, then `terminal_states`).
 Cards display issue identifier + title, priority, labels (or blockers), and a
 runtime indicator:
