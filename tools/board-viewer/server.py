@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""Symphony Board Viewer — 정적 HTML 서버 + Symphony API 프록시.
+"""Symphony Board Viewer — 정적 HTML 서버 + Symphony API 프록시 (multi-source).
 
 역할:
   1. 정적 파일 serving (이 디렉토리 / index.html, src/*)
-  2. Symphony API 프록시:
-       GET  /api/symphony/state            — 보드 스냅샷
-       GET  /api/symphony/<ID>             — 단일 이슈 디버그
-       POST /api/symphony/refresh          — 즉시 reconcile/poll
-       POST /api/symphony/<ID>/pause       — 다음 turn 경계에서 일시정지
-       POST /api/symphony/<ID>/resume      — 일시정지 해제
+  2. Symphony API 프록시 (단일/다중 orchestrator 모두 지원):
+       GET  /api/symphony/state            — 모든 source 스냅샷을 통합 반환
+       GET  /api/symphony/sources          — source 목록 + 각 source 의 alive 여부
+       GET  /api/symphony/<ID>             — 단일 이슈 디버그 (source 자동 라우팅)
+       POST /api/symphony/refresh          — 모든 source 에 fan-out
+       POST /api/symphony/<ID>/pause       — 해당 issue 가 속한 source 에 라우팅
+       POST /api/symphony/<ID>/resume      — 해당 issue 가 속한 source 에 라우팅
        POST /api/kanban/<ID>/archive       — Done 티켓을 Archive 상태로 이동
   3. Kanban 파일 인덱스/원본: /api/kanban/index, /api/kanban/<ID>.md
+
+Multi-source CLI:
+  --symphony http://127.0.0.1:9999                          (단일 source, 자동 이름 "default")
+  --symphony http://127.0.0.1:9999,http://127.0.0.1:9998    (자동 이름 s1, s2)
+  --symphony api=http://127.0.0.1:9999,web=http://127.0.0.1:9998  (명시 이름)
+환경변수 SYMPHONY_BASE 도 동일 문법을 받는다.
 
 설계 원칙:
   - stdlib 만 사용 (Python 3.11+)
@@ -18,17 +25,20 @@
     allowlist로 제한한다. 그 외 GET 전부.
   - 127.0.0.1 바인딩 + CORS `*` — 같은 origin 보험
   - Symphony가 죽어도 board file 인덱스는 동작해야 함 (degraded mode)
+  - source 가 모두 down 이어도 server 자체는 살아 있어야 한다.
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 from datetime import datetime, timezone
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,9 +50,62 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 ROOT_DIR = Path(__file__).resolve().parent
-SYMPHONY_BASE = os.environ.get("SYMPHONY_BASE", "http://127.0.0.1:9999")
+DEFAULT_SYMPHONY_URL = "http://127.0.0.1:9999"
 PORT = int(os.environ.get("BOARD_VIEWER_PORT", "8765"))
 SYMPHONY_TIMEOUT = 2.0  # seconds
+
+
+def parse_symphony_arg(raw: str | None) -> list[dict[str, str]]:
+    """`--symphony` / $SYMPHONY_BASE 문자열을 source 리스트로 파싱.
+
+    지원 문법:
+      ""                                          → [DEFAULT_SYMPHONY_URL] (이름 "default")
+      "http://h1:9999"                            → [default → h1:9999]
+      "http://h1,http://h2"                       → [s1 → h1, s2 → h2]
+      "api=http://h1,web=http://h2"               → [api → h1, web → h2]
+      이름은 [a-z0-9_-] 으로 정규화, 충돌 시 suffix `-2` 추가.
+    """
+    if not raw or not raw.strip():
+        return [{"name": "default", "url": DEFAULT_SYMPHONY_URL}]
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        return [{"name": "default", "url": DEFAULT_SYMPHONY_URL}]
+    out: list[dict[str, str]] = []
+    used: set[str] = set()
+    for idx, part in enumerate(parts):
+        if "=" in part:
+            name, url = part.split("=", 1)
+            name = _safe_source_name(name) or f"s{idx + 1}"
+        else:
+            url = part
+            name = "default" if len(parts) == 1 else f"s{idx + 1}"
+        url = url.strip().rstrip("/")
+        if not re.match(r"^https?://", url):
+            raise ValueError(f"--symphony entry must start with http(s)://: {part!r}")
+        # 이름 충돌 → suffix 추가
+        base_name = name
+        suffix = 2
+        while name in used:
+            name = f"{base_name}-{suffix}"
+            suffix += 1
+        used.add(name)
+        out.append({"name": name, "url": url})
+    return out
+
+
+def _safe_source_name(raw: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9_\-]", "-", raw.strip())
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s.lower()
+
+
+# 부팅 시 결정 — main()에서 갱신.
+SOURCES: list[dict[str, str]] = parse_symphony_arg(os.environ.get("SYMPHONY_BASE"))
+
+# 마지막 poll 결과의 issue → source name 매핑. pause/resume 라우팅에 사용.
+# ThreadingHTTPServer 가 핸들러를 동시 실행하므로 lock 필수.
+_SOURCE_INDEX_LOCK = threading.Lock()
+_SOURCE_INDEX: dict[str, str] = {}
 
 
 def _resolve_kanban_dir(cli_path: str | None) -> Path:
@@ -703,15 +766,22 @@ def write_settings(config: dict[str, Any]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # Symphony API 호출 — GET은 자유, POST는 화이트리스트로만 통과
+# multi-source: 모든 호출은 source name 으로 라우팅한다.
 # ---------------------------------------------------------------------------
 
 
-def _symphony_request(method: str, path: str) -> tuple[int, bytes, str]:
-    """Symphony API 단일 호출. 반환: (status, body_bytes, content_type).
+def _source_by_name(name: str) -> dict[str, str] | None:
+    for s in SOURCES:
+        if s["name"] == name:
+            return s
+    return None
 
-    네트워크 실패는 (599, b'{"error":...}', 'application/json') 으로 매핑.
+
+def _symphony_request_to(source: dict[str, str], method: str, path: str) -> tuple[int, bytes, str]:
+    """단일 source 에 요청. 반환: (status, body_bytes, content_type).
+    네트워크 실패는 (599, …) 으로 매핑.
     """
-    url = f"{SYMPHONY_BASE.rstrip('/')}{path}"
+    url = f"{source['url'].rstrip('/')}{path}"
     try:
         req = urllib.request.Request(url, method=method)
         with urllib.request.urlopen(req, timeout=SYMPHONY_TIMEOUT) as resp:
@@ -727,17 +797,119 @@ def _symphony_request(method: str, path: str) -> tuple[int, bytes, str]:
         return e.code, payload, ct
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
         msg = json.dumps(
-            {"error": {"code": "symphony_unreachable", "message": str(e)}}
+            {"error": {"code": "symphony_unreachable", "source": source["name"], "message": str(e)}}
         ).encode("utf-8")
         return 599, msg, "application/json"
 
 
-def symphony_get(path: str) -> tuple[int, bytes, str]:
-    return _symphony_request("GET", path)
+def symphony_get_from(source_name: str, path: str) -> tuple[int, bytes, str]:
+    src = _source_by_name(source_name)
+    if src is None:
+        return 404, json.dumps({"error": "unknown_source", "source": source_name}).encode("utf-8"), "application/json"
+    return _symphony_request_to(src, "GET", path)
 
 
-def symphony_post(path: str) -> tuple[int, bytes, str]:
-    return _symphony_request("POST", path)
+def symphony_post_to(source_name: str, path: str) -> tuple[int, bytes, str]:
+    src = _source_by_name(source_name)
+    if src is None:
+        return 404, json.dumps({"error": "unknown_source", "source": source_name}).encode("utf-8"), "application/json"
+    return _symphony_request_to(src, "POST", path)
+
+
+def _record_source_index(source_name: str, running: Any) -> None:
+    """aggregator 가 본 running 목록을 기준으로 issue → source 매핑을 갱신."""
+    if not isinstance(running, list):
+        return
+    with _SOURCE_INDEX_LOCK:
+        for entry in running:
+            if not isinstance(entry, dict):
+                continue
+            ident = entry.get("issue_identifier") or entry.get("issue_id")
+            if isinstance(ident, str) and ident:
+                _SOURCE_INDEX[ident] = source_name
+
+
+def _lookup_source_for_issue(identifier: str) -> str | None:
+    with _SOURCE_INDEX_LOCK:
+        return _SOURCE_INDEX.get(identifier)
+
+
+def aggregate_symphony_state() -> tuple[int, dict[str, Any]]:
+    """모든 source 의 /api/v1/state 를 parallel 호출 → 통합.
+
+    반환: (http_status, body_dict)
+      - http_status: 200 if 최소 1개 source alive 또는 source 가 0개; 그 외 207.
+      - body_dict:
+          {
+            "running": [...annotated with `source`],
+            "workflow": {…},  # 첫 alive source 의 workflow (있다면)
+            "sources": [{name, url, alive, error?, count}],
+          }
+    """
+    if not SOURCES:
+        return 200, {"running": [], "workflow": {}, "sources": []}
+
+    def fetch_one(src: dict[str, str]) -> dict[str, Any]:
+        status, body, _ct = _symphony_request_to(src, "GET", "/api/v1/state")
+        result: dict[str, Any] = {"source": src, "status": status, "raw": body}
+        try:
+            result["data"] = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            result["data"] = None
+        return result
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(SOURCES), 1)) as pool:
+        results = list(pool.map(fetch_one, SOURCES))
+
+    aggregated_running: list[dict[str, Any]] = []
+    workflow: dict[str, Any] = {}
+    sources_meta: list[dict[str, Any]] = []
+    any_alive = False
+
+    for r in results:
+        src = r["source"]
+        status = r["status"]
+        data = r.get("data")
+        alive = isinstance(data, dict) and 200 <= status < 300
+        meta: dict[str, Any] = {
+            "name": src["name"],
+            "url": src["url"],
+            "alive": alive,
+            "status": status,
+            "count": 0,
+        }
+        if alive:
+            any_alive = True
+            running = data.get("running") if isinstance(data, dict) else None
+            if isinstance(running, list):
+                for entry in running:
+                    if isinstance(entry, dict):
+                        # source label 주입 — 카드/필터링이 쓴다.
+                        tagged = dict(entry)
+                        tagged["source"] = src["name"]
+                        aggregated_running.append(tagged)
+                meta["count"] = len(running)
+                _record_source_index(src["name"], running)
+            wf = data.get("workflow") if isinstance(data, dict) else None
+            if isinstance(wf, dict) and not workflow:
+                workflow = dict(wf)
+        else:
+            try:
+                err = json.loads(r["raw"].decode("utf-8")) if r["raw"] else None
+            except Exception:
+                err = None
+            if isinstance(err, dict):
+                meta["error"] = err
+        sources_meta.append(meta)
+
+    body = {
+        "running": aggregated_running,
+        "workflow": workflow,
+        "sources": sources_meta,
+    }
+    # 모두 down 이어도 200 으로 내려야 client 가 sources 메타를 받아 표시한다.
+    _ = any_alive  # any_alive 는 향후 multi-status 전환 여지를 두고 유지.
+    return 200, body
 
 
 # ---------------------------------------------------------------------------
@@ -1043,26 +1215,54 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, **result})
             return
 
-        # refresh — payload 없는 단순 트리거
+        # refresh — payload 없는 단순 트리거. 모든 source 에 fan-out.
         if path == "/api/symphony/refresh":
             # 클라이언트 body는 무시(stdlib http 서버는 close-notify까지 안 해도 됨).
             # 단, Content-Length가 와 있으면 소비해서 keepalive 흐름을 깨끗하게.
             self._drain_request_body()
-            status, body, ct = symphony_post("/api/v1/refresh")
-            self._send(status, body, ct)
+            if not SOURCES:
+                self._send_json(200, {"ok": True, "sources": []})
+                return
+            results: list[dict[str, Any]] = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(SOURCES), 1)) as pool:
+                future_to_src = {
+                    pool.submit(_symphony_request_to, s, "POST", "/api/v1/refresh"): s
+                    for s in SOURCES
+                }
+                for future in concurrent.futures.as_completed(future_to_src):
+                    src = future_to_src[future]
+                    status, body, _ct = future.result()
+                    results.append({
+                        "source": src["name"],
+                        "status": status,
+                        "ok": 200 <= status < 300,
+                    })
+            any_ok = any(r["ok"] for r in results)
+            self._send_json(200 if any_ok else 502, {"ok": any_ok, "sources": results})
             return
 
-        # pause / resume — {identifier} 화이트리스트
+        # pause / resume — {identifier} 화이트리스트.
+        # 라우팅: 최근 poll 의 source_index 에서 issue 의 source 를 찾는다.
+        # 없으면 모든 source 에 순차 시도 → 첫 2xx 채택.
         m = re.fullmatch(
             r"/api/symphony/([A-Za-z0-9_\-]+)/(pause|resume)", path
         )
         if m:
             self._drain_request_body()
             identifier, action = m.group(1), m.group(2)
-            status, body, ct = symphony_post(
-                f"/api/v1/{identifier}/{action}"
-            )
-            self._send(status, body, ct)
+            preferred = _lookup_source_for_issue(identifier)
+            order = []
+            if preferred:
+                order.append(preferred)
+            for s in SOURCES:
+                if s["name"] not in order:
+                    order.append(s["name"])
+            last: tuple[int, bytes, str] = (599, b'{"error":"no_sources"}', "application/json")
+            for source_name in order:
+                last = symphony_post_to(source_name, f"/api/v1/{identifier}/{action}")
+                if 200 <= last[0] < 300:
+                    break
+            self._send(*last)
             return
 
         self._send_json(
@@ -1105,10 +1305,21 @@ class BoardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
 
-        # API: Symphony state 프록시
+        # API: Symphony state 프록시 (multi-source aggregator)
         if path == "/api/symphony/state":
-            status, body, ct = symphony_get("/api/v1/state")
-            self._send(status, body, ct)
+            status, body = aggregate_symphony_state()
+            self._send_json(status, body)
+            return
+
+        # API: source 메타 (UI 토글용)
+        if path == "/api/symphony/sources":
+            self._send_json(
+                200,
+                {
+                    "sources": [{"name": s["name"], "url": s["url"]} for s in SOURCES],
+                    "count": len(SOURCES),
+                },
+            )
             return
 
         # API: Settings (current config.yaml + computed .env preview)
@@ -1131,11 +1342,26 @@ class BoardHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # API: 개별 issue 프록시 (read-only)
+        # API: 개별 issue 프록시 (read-only).
+        # source 라우팅: 최근 poll 결과에 잡힌 source 가 있으면 그 source 만 호출.
+        # 없으면 모든 source 를 순회하며 첫 200 응답을 채택 (cold-start 라우팅).
         m = re.fullmatch(r"/api/symphony/([A-Za-z0-9_\-]+)", path)
         if m:
-            status, body, ct = symphony_get(f"/api/v1/{m.group(1)}")
-            self._send(status, body, ct)
+            ident = m.group(1)
+            preferred = _lookup_source_for_issue(ident)
+            order = []
+            if preferred:
+                order.append(preferred)
+            for s in SOURCES:
+                if s["name"] not in order:
+                    order.append(s["name"])
+            last: tuple[int, bytes, str] = (599, b'{"error":"no_sources"}', "application/json")
+            for source_name in order:
+                last = symphony_get_from(source_name, f"/api/v1/{ident}")
+                if 200 <= last[0] < 300:
+                    _record_source_index(source_name, [{"issue_identifier": ident}])
+                    break
+            self._send(*last)
             return
 
         # API: 칸반 인덱스
@@ -1218,9 +1444,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--symphony",
-        metavar="URL",
+        metavar="URL_OR_LIST",
         default=None,
-        help="Symphony orchestrator base URL (생략 시: $SYMPHONY_BASE 또는 http://127.0.0.1:9999)",
+        help=(
+            "Symphony orchestrator URL. "
+            "단일: 'http://h:9999', 다중: 'http://a,http://b', 명시 이름: 'api=http://a,web=http://b'. "
+            "생략 시 $SYMPHONY_BASE 또는 'http://127.0.0.1:9999'."
+        ),
     )
     parser.add_argument(
         "--workflow",
@@ -1237,18 +1467,23 @@ def main() -> None:
     args = parser.parse_args()
 
     # 전역 set — BoardHandler 내부에서 참조하는 모듈 글로벌을 갱신
-    global KANBAN_DIR, PORT, SYMPHONY_BASE, WORKFLOW_PATH, PROJECT_ROOT
+    global KANBAN_DIR, PORT, SOURCES, WORKFLOW_PATH, PROJECT_ROOT
     KANBAN_DIR = _resolve_kanban_dir(args.kanban)
     WORKFLOW_PATH = _resolve_workflow_path(args.workflow)
     PROJECT_ROOT = _resolve_project_root(args.project_root, KANBAN_DIR)
     if args.port is not None:
         PORT = args.port
     if args.symphony is not None:
-        SYMPHONY_BASE = args.symphony
+        try:
+            SOURCES = parse_symphony_arg(args.symphony)
+        except ValueError as exc:
+            sys.stderr.write(f"error: {exc}\n")
+            sys.exit(2)
 
     addr = ("127.0.0.1", PORT)
     httpd = ThreadingHTTPServer(addr, BoardHandler)
     url = f"http://{addr[0]}:{addr[1]}/"
+    sources_summary = ", ".join(f"{s['name']}={s['url']}" for s in SOURCES) or "(none)"
     sys.stdout.write(
         f"""
 Symphony Board Viewer
@@ -1260,7 +1495,7 @@ Symphony Board Viewer
   project   : {PROJECT_ROOT}
   config    : {_config_yaml_path()}{" (missing)" if not _config_yaml_path().exists() else ""}
   env       : {_env_path()}{" (missing)" if not _env_path().exists() else ""}
-  symphony  : {SYMPHONY_BASE}
+  symphony  : {sources_summary}
   종료      : Ctrl-C
 """
     )

@@ -27,6 +27,16 @@ export async function fetchSymphonyState() {
   }
 }
 
+export async function fetchSymphonySources() {
+  try {
+    const r = await fetchWithTimeout("/api/symphony/sources");
+    if (!r.ok) return { ok: false, status: r.status };
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, status: 0, error: { message: String(e) } };
+  }
+}
+
 export async function fetchKanbanIndex() {
   try {
     const r = await fetchWithTimeout("/api/kanban/index");

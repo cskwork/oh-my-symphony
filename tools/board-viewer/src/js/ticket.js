@@ -121,6 +121,23 @@ export function renderCard(ticket, runningInfo, handlers, options = {}) {
       ? el("span", { class: "card-priority", dataset: { p: String(priority) } }, `P${priority}`)
       : null;
 
+  // multi-source: source 이름을 안정적인 hue 로 변환해 작은 badge 로 그린다.
+  // 단일 source 환경에서는 옵션으로 숨김.
+  const sourceName = options.sourceName || "";
+  const sourceBadge =
+    options.showSourceBadge && sourceName
+      ? el(
+          "span",
+          {
+            class: "source-badge",
+            dataset: { source: sourceName },
+            style: `--source-hue:${sourceHue(sourceName)}`,
+            title: `source: ${sourceName}`,
+          },
+          sourceName,
+        )
+      : null;
+
   const labels = (ticket.labels || []).slice(0, 6).map((l) =>
     el("span", { class: "label-chip" }, String(l))
   );
@@ -176,14 +193,15 @@ export function renderCard(ticket, runningInfo, handlers, options = {}) {
       tabindex: "0",
       role: "button",
       "aria-label": `${id}: ${ticket.title}`,
-      dataset: { id, state: ticket.state || "Todo" },
+      dataset: { id, state: ticket.state || "Todo", source: sourceName },
     },
     runningBadge,
     el(
       "div",
       { class: "card-head" },
       el("span", { class: "card-id" }, id),
-      priorityNode
+      priorityNode,
+      sourceBadge,
     ),
     el("div", { class: "card-title" }, ticket.title || ""),
     renderAgentBadges(ticket, runningInfo, options),
@@ -192,6 +210,15 @@ export function renderCard(ticket, runningInfo, handlers, options = {}) {
   );
 
   return card;
+}
+
+// source 이름 → 360deg 색상환 위치. 같은 이름은 항상 같은 hue.
+function sourceHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return h % 360;
 }
 
 function makeActionBtn(label, cls, onClick) {

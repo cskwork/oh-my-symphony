@@ -13,6 +13,102 @@ import {
 } from "./api.js";
 import { renderCard, openTicketDetail, closeTicketDetail } from "./ticket.js";
 
+// ---- Source toggles ---------------------------------------------------
+// 다중 symphony source 가 있을 때만 의미가 있다. 단일 source 면
+// pill row 자체를 숨긴다. 토글 상태는 localStorage 에 source name → bool
+// 으로 영속화. 새 source 는 default-on.
+const SOURCE_TOGGLE_STORAGE_KEY = "boardViewer.sourceToggles";
+const sourceToggleState = new Map(); // name -> bool (true=show)
+let knownSourceNames = [];
+
+function readSourceToggles() {
+  try {
+    const raw = localStorage.getItem(SOURCE_TOGGLE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistSourceToggles() {
+  try {
+    const obj = {};
+    for (const [k, v] of sourceToggleState) obj[k] = !!v;
+    localStorage.setItem(SOURCE_TOGGLE_STORAGE_KEY, JSON.stringify(obj));
+  } catch {
+    /* persistence 실패는 무시 */
+  }
+}
+
+function syncToggleStateFromSources(sources) {
+  // 신규 source 는 saved 값을 우선하되 없으면 default-on.
+  const saved = readSourceToggles();
+  const names = sources.map((s) => s.name);
+  // 알 수 없는 source 는 보관(다음 세션 복귀를 위해) 하지만 표시는 안 함.
+  for (const name of names) {
+    if (!sourceToggleState.has(name)) {
+      const fromSaved = Object.prototype.hasOwnProperty.call(saved, name)
+        ? !!saved[name]
+        : true;
+      sourceToggleState.set(name, fromSaved);
+    }
+  }
+  knownSourceNames = names;
+}
+
+function isSourceEnabled(name) {
+  if (!name) return true; // 라벨이 없으면 통과 (단일 source / legacy)
+  if (!sourceToggleState.has(name)) return true;
+  return sourceToggleState.get(name) !== false;
+}
+
+function renderSourceToggles(sources) {
+  const host = document.getElementById("source-toggles");
+  if (!host) return;
+  if (!sources || sources.length <= 1) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = "";
+  host.appendChild(el("span", { class: "source-toggles-label" }, "sources:"));
+  for (const src of sources) {
+    const enabled = isSourceEnabled(src.name);
+    const alive = src.alive !== false;
+    const count = typeof src.count === "number" ? src.count : 0;
+    const pill = el(
+      "button",
+      {
+        type: "button",
+        class: "source-pill",
+        dataset: {
+          source: src.name,
+          enabled: enabled ? "true" : "false",
+          alive: alive ? "true" : "false",
+        },
+        title: src.url || src.name,
+        "aria-pressed": enabled ? "true" : "false",
+      },
+      el("span", { class: "source-pill-dot", "aria-hidden": "true" }),
+      el("span", { class: "source-pill-name" }, src.name),
+      el("span", { class: "source-pill-count" }, alive ? `${count}` : "down"),
+    );
+    pill.addEventListener("click", () => {
+      const next = !isSourceEnabled(src.name);
+      sourceToggleState.set(src.name, next);
+      persistSourceToggles();
+      pill.dataset.enabled = next ? "true" : "false";
+      pill.setAttribute("aria-pressed", next ? "true" : "false");
+      renderBoard();
+      updateStatus();
+    });
+    host.appendChild(pill);
+  }
+}
+
 const POLL_INTERVAL_MS = 5000;
 const FALLBACK_STATES = [
   "Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn",
@@ -128,7 +224,9 @@ const state = {
   states: [],
   active_states: [],
   terminal_states: [],
-  runningById: new Map(), // ticket_id -> running info
+  runningById: new Map(), // ticket_id -> running info (가시 source 만)
+  sourceByTicket: new Map(), // ticket_id -> source name (모든 source 포함)
+  sources: [], // [{name, url, alive, count, status}, ...]
   defaultAgentKind: "",
   branchPolicy: null,
   symphonyAlive: false,
@@ -253,8 +351,11 @@ function renderBoard() {
     } else {
       for (const t of tickets) {
         const running = state.runningById.get(t.id) || null;
+        const sourceName = state.sourceByTicket.get(t.id) || running?.source || "";
         const card = renderCard(t, running, cardHandlers, {
           defaultAgentKind: state.defaultAgentKind,
+          sourceName,
+          showSourceBadge: state.sources.length > 1,
         });
         if (filter && !cardMatches(t, filter)) {
           card.classList.add("hidden");
@@ -447,16 +548,30 @@ async function pollOnce() {
   }
 
   state.runningById.clear();
+  state.sourceByTicket.clear();
   if (symRes.ok && symRes.data) {
-    state.symphonyAlive = true;
+    const sources = Array.isArray(symRes.data.sources) ? symRes.data.sources : [];
+    state.sources = sources;
+    syncToggleStateFromSources(sources);
+    renderSourceToggles(sources);
+    // alive 한 source 가 하나라도 있으면 symphonyAlive=true.
+    // 단, 토글로 모두 꺼두면 화면상 down 으로 보이지 않게 사용자 의도를 존중.
+    const anyAlive = sources.some((s) => s.alive !== false);
+    const anyVisibleAlive = sources.some((s) => s.alive !== false && isSourceEnabled(s.name));
+    state.symphonyAlive = anyAlive && (sources.length === 0 || anyVisibleAlive);
     state.defaultAgentKind = symRes.data.workflow?.default_agent_kind || "";
     state.branchPolicy = symRes.data.workflow?.branch_policy || null;
     const running = symRes.data.running || [];
     for (const r of running) {
       const id = r.issue_identifier || r.issue_id;
-      if (id) state.runningById.set(id, r);
+      if (!id) continue;
+      // source 매핑은 토글과 무관하게 항상 기록 (badge / 라우팅용)
+      if (r.source) state.sourceByTicket.set(id, r.source);
+      // runningById 는 토글 적용 — 꺼진 source 의 running 정보는 카드에 띄우지 않는다.
+      if (isSourceEnabled(r.source)) state.runningById.set(id, r);
     }
-    // running 상태로 ticket의 state도 갱신 (orchestrator가 더 최신)
+    // running 상태로 ticket 의 state 도 갱신 (orchestrator 가 더 최신).
+    // 토글이 꺼진 source 라도 state 동기화는 유지 — 카드 위치는 일관되게.
     for (const r of running) {
       const id = r.issue_identifier || r.issue_id;
       const t = state.tickets.find((x) => x.id === id || x.identifier === id);
@@ -466,6 +581,8 @@ async function pollOnce() {
     state.symphonyAlive = false;
     state.defaultAgentKind = "";
     state.branchPolicy = null;
+    state.sources = [];
+    renderSourceToggles([]);
   }
 
   state.lastPollAt = new Date().toISOString();
