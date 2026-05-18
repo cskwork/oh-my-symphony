@@ -1217,6 +1217,10 @@ class BoardHandler(BaseHTTPRequestHandler):
 
         # refresh — payload 없는 단순 트리거. 모든 source 에 fan-out.
         if path == "/api/symphony/refresh":
+            if not self._local_origin_allowed():
+                self._drain_request_body()
+                self._send_json(403, {"error": "forbidden_origin"})
+                return
             # 클라이언트 body는 무시(stdlib http 서버는 close-notify까지 안 해도 됨).
             # 단, Content-Length가 와 있으면 소비해서 keepalive 흐름을 깨끗하게.
             self._drain_request_body()
@@ -1248,6 +1252,10 @@ class BoardHandler(BaseHTTPRequestHandler):
             r"/api/symphony/([A-Za-z0-9_\-]+)/(pause|resume)", path
         )
         if m:
+            if not self._local_origin_allowed():
+                self._drain_request_body()
+                self._send_json(403, {"error": "forbidden_origin"})
+                return
             self._drain_request_body()
             identifier, action = m.group(1), m.group(2)
             preferred = _lookup_source_for_issue(identifier)

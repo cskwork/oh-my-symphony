@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from http.server import ThreadingHTTPServer
 import importlib.util
 from pathlib import Path
+import threading
+import urllib.error
+import urllib.request
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -16,6 +21,36 @@ def _load_server_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@contextmanager
+def _running_board_server(server):
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.BoardHandler)
+    old_port = server.PORT
+    server.PORT = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.PORT}"
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=2)
+        httpd.server_close()
+        server.PORT = old_port
+
+
+def _post(base_url: str, path: str, *, origin: str) -> tuple[int, bytes]:
+    req = urllib.request.Request(
+        f"{base_url}{path}",
+        data=b"",
+        headers={"Origin": origin},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
 
 
 def test_header_has_branch_controls_without_summary_slot() -> None:
@@ -180,6 +215,35 @@ body
         raise AssertionError("expected active ticket archive to fail")
     front, _body = server.parse_frontmatter(ticket.read_text(encoding="utf-8"))
     assert front["state"] == "Todo"
+
+
+def test_symphony_mutations_reject_nonlocal_origin(monkeypatch) -> None:
+    server = _load_server_module()
+    calls = []
+
+    def fake_request(source, method, path):  # noqa: ANN001
+        calls.append((source, method, path))
+        return 200, b'{"ok": true}', "application/json"
+
+    monkeypatch.setattr(
+        server,
+        "SOURCES",
+        [{"name": "default", "url": "http://127.0.0.1:9999"}],
+    )
+    monkeypatch.setattr(server, "_symphony_request_to", fake_request)
+    server._SOURCE_INDEX.clear()
+
+    with _running_board_server(server) as base_url:
+        for path in (
+            "/api/symphony/refresh",
+            "/api/symphony/TASK-1/pause",
+            "/api/symphony/TASK-1/resume",
+        ):
+            status, body = _post(base_url, path, origin="https://evil.example")
+            assert status == 403
+            assert b"forbidden_origin" in body
+
+    assert calls == []
 
 
 def test_workflow_branch_policy_update_preserves_body(tmp_path, monkeypatch) -> None:
