@@ -26,7 +26,7 @@ from .orchestrator import Orchestrator
 log = get_logger()
 
 ROOT_HINT = (
-    "symphony-multi-agent JSON API.\n"
+    "oh-my-symphony JSON API.\n"
     "The HTML dashboard was replaced by a CLI Kanban — run `symphony tui`.\n"
     "API: GET /api/v1/state, GET /api/v1/<identifier>, POST /api/v1/refresh,\n"
     "     POST /api/v1/<identifier>/pause, POST /api/v1/<identifier>/resume\n"

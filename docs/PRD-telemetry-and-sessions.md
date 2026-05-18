@@ -6,7 +6,7 @@ do not depend on each other and may be dispatched in parallel
 already shipped on `main` separately; this PRD covers the remaining
 candidates from that round.
 
-> **Working repo**: `cskwork/symphony-multi-agent`, branch off `main`.
+> **Working repo**: `cskwork/oh-my-symphony`, branch off `main`.
 > All tickets must keep `pytest -q` green (191 → ≥ 191) and pass real-CLI
 > e2e smoke for the affected backend before transitioning to `Done`.
 

@@ -33,7 +33,7 @@ No tag-triggered CI workflow exists. The tag push and the GitHub Release are two
 
 ## Registry / Distribution
 
-- No PyPI publish step in CI. The package is not currently published to PyPI; distribution is git-tag + GitHub Release only. Install path is `pip install -e .` from a clone or `pip install git+https://github.com/cskwork/symphony-multi-agent@vX.Y.Z`.
+- No PyPI publish step in CI. The package is not currently published to PyPI; distribution is git-tag + GitHub Release only. Install path is `pip install -e .` from a clone or `pip install git+https://github.com/cskwork/oh-my-symphony@vX.Y.Z`.
 - No Dockerfile, no npm package, no Cargo crate.
 
 ## Release Notes Strategy

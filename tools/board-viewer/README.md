@@ -21,7 +21,7 @@ run-state 파일로 막습니다.
 
 ```bash
 # 프로젝트 루트(./kanban 이 있는 디렉토리)에서:
-/path/to/symphony-multi-agent/tools/board-viewer/board-viewer-open.sh
+/path/to/oh-my-symphony/tools/board-viewer/board-viewer-open.sh
 # 또는 dograh-demo 내부 사본:
 ./tools/board-viewer/board-viewer-open.sh
 ```
@@ -127,7 +127,7 @@ tools/board-viewer/
 이 도구는 Symphony multi-agent의 기본 셋업 일부로 동봉할 것을 권장합니다.
 
 ```
-symphony-multi-agent/
+oh-my-symphony/
 ├── tui-open.sh
 ├── tui-open.bat
 ├── WORKFLOW.example.md

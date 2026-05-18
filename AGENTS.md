@@ -24,7 +24,7 @@ when the SKILL.md decision table tells you to.
 ### `using-symphony`
 
 > Use when the user wants to dispatch coding agents (Codex / Claude Code /
-> Gemini / Pi) against a Kanban board via this `symphony-multi-agent` repo
+> Gemini / Pi) against a Kanban board via this `oh-my-symphony` repo
 > — adding/listing/transitioning tickets, launching the TUI, inspecting
 > orchestrator state, customizing the workflow (lanes, per-state prompts),
 > delegating sub-tasks to free up context, or diagnosing dispatch failures.

@@ -949,7 +949,7 @@ class KanbanApp(App):
     # ----- lifecycle ---------------------------------------------------
 
     def on_mount(self) -> None:
-        self.title = "symphony-multi-agent"
+        self.title = "oh-my-symphony"
         cfg = self._ws.current()
         if cfg is not None:
             self.sub_title = f"{cfg.agent.kind} · {cfg.tracker.kind}"

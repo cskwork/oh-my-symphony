@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to symphony-multi-agent are documented in this file.
+All notable changes to oh-my-symphony are documented in this file.
 Full release notes (with verification steps and per-commit detail) live on
-the [GitHub Releases page](https://github.com/cskwork/symphony-multi-agent/releases);
+the [GitHub Releases page](https://github.com/cskwork/oh-my-symphony/releases);
 this file is the in-repo summary.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
@@ -480,14 +480,14 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/symphony-multi-agent/compare/v0.4.8...HEAD
-[0.4.8]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.8
-[0.4.7]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.7
-[0.4.3]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.3
-[0.4.2]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.2
-[0.4.1]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.1
-[0.4.0]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.0
-[0.3.4]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.3.4
-[0.3.3]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.3.3
-[0.3.0]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.3.0
-[0.1.0]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.1.0
+[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.8
+[0.4.7]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.7
+[0.4.3]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.3
+[0.4.2]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.2
+[0.4.1]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.1
+[0.4.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.0
+[0.3.4]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.3.4
+[0.3.3]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.3.3
+[0.3.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.3.0
+[0.1.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.1.0

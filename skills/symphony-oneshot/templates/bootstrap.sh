@@ -23,15 +23,15 @@ PROJECT_ROOT="$(pwd)"
 
 # Stricter repo detection — match the actual symphony package, not any pyproject
 if ! { [ -f "$PROJECT_ROOT/src/symphony/cli.py" ] || \
-       grep -q '^name = "symphony' "$PROJECT_ROOT/pyproject.toml" 2>/dev/null; }; then
-  echo "warn: $PROJECT_ROOT does not look like the symphony-multi-agent repo." >&2
+       grep -qE '^name = "(oh-my-)?symphony' "$PROJECT_ROOT/pyproject.toml" 2>/dev/null; }; then
+  echo "warn: $PROJECT_ROOT does not look like the oh-my-symphony repo." >&2
   echo "       (no src/symphony/cli.py and pyproject.toml doesn't name 'symphony')" >&2
   echo "       Vault will be created at $PROJECT_ROOT/.oneshot/ anyway." >&2
 fi
 
 if ! command -v symphony >/dev/null 2>&1; then
   echo "error: 'symphony' CLI not on PATH." >&2
-  echo "       Install: pip install -e \".[dev]\" from the symphony-multi-agent repo." >&2
+  echo "       Install: pip install -e \".[dev]\" from the oh-my-symphony repo." >&2
   exit 1
 fi
 

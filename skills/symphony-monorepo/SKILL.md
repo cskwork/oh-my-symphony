@@ -29,7 +29,7 @@ For operator-level usage (creating tickets, running TUI, triaging failures) see 
 ## 1. Bootstrap
 
 ```bash
-SYMPHONY_HOME=/path/to/symphony-multi-agent \
+SYMPHONY_HOME=/path/to/oh-my-symphony \
 WORKSPACE_ROOT=/path/to/your/monorepo \
   bash "$SYMPHONY_HOME/skills/symphony-monorepo/scripts/setup-monorepo.sh"
 ```

@@ -5,7 +5,7 @@ standard operator bundle.
 
 ## Copy the full operator bundle
 
-From inside the `symphony-multi-agent` checkout:
+From inside the `oh-my-symphony` checkout:
 
 ```bash
 TARGET=/path/to/target-project
@@ -31,7 +31,7 @@ prepare a local one so the launcher can find it:
 
 ```bash
 python3.11 -m venv .venv
-.venv/bin/pip install -e <symphony-multi-agent>
+.venv/bin/pip install -e <oh-my-symphony>
 ```
 
 ## Why these files matter

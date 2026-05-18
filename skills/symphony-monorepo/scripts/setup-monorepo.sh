@@ -2,7 +2,7 @@
 # Symphony monorepo bootstrap (idempotent).
 #
 # Required env:
-#   SYMPHONY_HOME   absolute path to this symphony-multi-agent clone
+#   SYMPHONY_HOME   absolute path to this oh-my-symphony clone
 #   WORKSPACE_ROOT  absolute path to the target monorepo
 #
 # What it does:
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-: "${SYMPHONY_HOME:?must export SYMPHONY_HOME=/path/to/symphony-multi-agent}"
+: "${SYMPHONY_HOME:?must export SYMPHONY_HOME=/path/to/oh-my-symphony}"
 : "${WORKSPACE_ROOT:?must export WORKSPACE_ROOT=/path/to/your/monorepo}"
 
 if [[ ! -d "$SYMPHONY_HOME" ]]; then

@@ -225,7 +225,7 @@ class AgentConfig:
     auto_triage_actionable_todo: bool = True
     # When a ticket reaches the Done state cleanly, snapshot the workspace
     # into a single git commit (`git init` if no enclosing repo found).
-    # Default ON so a fresh `pip install symphony-multi-agent` plus a
+    # Default ON so a fresh `pip install oh-my-symphony` plus a
     # WORKFLOW.md is enough to get a per-ticket commit trail without
     # wiring an after_run hook. Set to false in WORKFLOW.md when the
     # workspace is e.g. an existing repo with strict commit-style rules.

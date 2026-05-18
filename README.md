@@ -1,9 +1,9 @@
-# symphony-multi-agent
+# oh-my-symphony
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
-[![Tests](https://github.com/cskwork/symphony-multi-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/symphony-multi-agent/actions/workflows/tests.yml)
-[![GitHub stars](https://img.shields.io/github/stars/cskwork/symphony-multi-agent?style=social)](https://github.com/cskwork/symphony-multi-agent/stargazers)
+[![Tests](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml)
+[![GitHub stars](https://img.shields.io/github/stars/cskwork/oh-my-symphony?style=social)](https://github.com/cskwork/oh-my-symphony/stargazers)
 
 > One terminal. One Kanban board. Four AI coding agents
 > (**Codex**, **Claude Code**, **Gemini**, **Pi**) — pick per ticket, run in
@@ -181,8 +181,8 @@ protocol as Codex but does no real work, just simulates turns and emits
 token-usage ticks.
 
 ```bash
-git clone https://github.com/cskwork/symphony-multi-agent.git
-cd symphony-multi-agent
+git clone https://github.com/cskwork/oh-my-symphony.git
+cd oh-my-symphony
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 

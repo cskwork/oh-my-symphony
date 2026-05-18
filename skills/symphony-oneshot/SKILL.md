@@ -13,7 +13,7 @@ not close without proof.
 
 ## Preconditions
 
-- Work from the `symphony-multi-agent` repo, or a project that intentionally
+- Work from the `oh-my-symphony` repo, or a project that intentionally
   vendors this skill and its templates.
 - If `which symphony` fails or no `WORKFLOW.md` is available, set up
   `using-symphony` first.
