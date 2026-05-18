@@ -274,14 +274,18 @@ agent:
     - kanban
 
 claude:
-  # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` extends Claude
-  # Code's write scope to the host directories that after_create
-  # junctioned into the worktree. Without these, the agent silently
-  # fails to flip ticket state to Done because the resolved path lands
-  # outside its cwd, and Symphony's tracker keeps re-dispatching it.
-  # Symphony injects SYMPHONY_WORKFLOW_DIR before spawning each turn
-  # (see Orchestrator.start).
-  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"'
+  # `--add-dir "$SYMPHONY_WORKFLOW_DIR"` extends Claude Code's scope
+  # from the per-ticket worktree cwd up to the host project root so the
+  # agent can (a) write back into kanban/ for state transitions and
+  # (b) Read/Grep any sibling directory under the project root.
+  # Narrowing this to a sub-path (e.g. `/kanban`) keeps state
+  # transitions working but silently blocks reads into adjacent
+  # directories — agents then guess instead of verifying and tickets
+  # stall in Blocked. Other backends (codex workspace-write, gemini
+  # --skip-trust, pi) already permit reads outside cwd, so this flag
+  # is Claude-specific. Symphony injects SYMPHONY_WORKFLOW_DIR before
+  # spawning each turn (see Orchestrator.start).
+  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR"'
   resume_across_turns: true
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
