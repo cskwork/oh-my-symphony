@@ -405,7 +405,7 @@ def terminate_process(pid: int | None, *, force: bool = False) -> bool:
 def _run_doctor_or_print(cfg: Any, *, host: str, port: int) -> bool:
     from dataclasses import replace
 
-    from .doctor import format_results, run_checks
+    from .cli.doctor import format_results, run_checks
 
     checked_cfg = replace(cfg, server=ServerConfig(port=port))
     results = run_checks(checked_cfg, host=host)

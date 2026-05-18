@@ -17,14 +17,14 @@ import signal
 import sys
 from pathlib import Path
 
-from .errors import SymphonyError
-from .utils import wiki_sweep as wiki_sweep
-from .utils.keep_awake import KeepAwake
-from .logging import configure_logging
-from .orchestrator import Orchestrator
-from .progress_md import ProgressFileWriter
-from .server import build_app, run_server
-from .workflow import WorkflowState, resolve_workflow_path
+from ..errors import SymphonyError
+from ..utils import wiki_sweep as wiki_sweep
+from ..utils.keep_awake import KeepAwake
+from ..logging import configure_logging
+from ..orchestrator import Orchestrator
+from ..progress_md import ProgressFileWriter
+from ..server import build_app, run_server
+from ..workflow import WorkflowState, resolve_workflow_path
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -244,15 +244,15 @@ def _wiki_sweep_main(argv: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     if raw_argv and raw_argv[0] == "board":
-        from . import board_cli
+        from . import board
 
-        return board_cli.main(raw_argv[1:])
+        return board.main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "doctor":
         from . import doctor
 
         return doctor.main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "service":
-        from . import service
+        from .. import service
 
         return service.main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "wiki-sweep":

@@ -6,7 +6,7 @@ import socket
 import textwrap
 from pathlib import Path
 
-from symphony.doctor import (
+from symphony.cli.doctor import (
     check_after_create_hook,
     check_agent_cli,
     check_pi_auth,
@@ -261,7 +261,7 @@ def test_pi_auth_passes_when_present(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_format_results_includes_all_statuses() -> None:
-    from symphony.doctor import CheckResult
+    from symphony.cli.doctor import CheckResult
 
     text = format_results(
         [

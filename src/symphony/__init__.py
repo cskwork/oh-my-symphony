@@ -27,11 +27,12 @@ Layout (see ``AGENTS.md`` for full SPEC references):
     - ``service``       — ``symphony service`` persistence
 
 * User interfaces
-    - ``cli``           — ``symphony`` CLI entry point
-    - ``board_cli``     — ``symphony board ...`` helper
+    - ``cli``           — ``symphony`` CLI subpackage
+        - ``cli.main``    — root entry (``symphony [WORKFLOW]``, dispatches subcommands)
+        - ``cli.board``   — ``symphony board ...`` file-tracker helper
+        - ``cli.doctor``  — ``symphony doctor`` WORKFLOW.md preflight checks
     - ``tui``           — Textual Kanban TUI
     - ``server``        — optional HTTP JSON API
-    - ``doctor``        — WORKFLOW.md preflight checks (``symphony doctor``)
 
 * Utilities (``symphony.utils``)
     - ``utils.archive``     — auto-archive helpers

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from symphony import board_cli
+from symphony.cli import board as board_cli
 from symphony.workflow import SUPPORTED_AGENT_KINDS
 
 

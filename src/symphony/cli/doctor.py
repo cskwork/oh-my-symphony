@@ -31,9 +31,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
 
-from ._shell import _is_wsl_launcher, resolve_bash
-from .errors import SymphonyError
-from .workflow import (
+from .._shell import _is_wsl_launcher, resolve_bash
+from ..errors import SymphonyError
+from ..workflow import (
     ServiceConfig,
     build_service_config,
     load_workflow,
