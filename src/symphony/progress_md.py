@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import tracker as tracker_module
+from . import trackers as tracker_module
 from .issue import Issue, normalize_state
 from .logging import get_logger
 from .workflow import ServiceConfig, WorkflowState
@@ -227,7 +227,7 @@ def render_progress_md(
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    """Mirror tracker_file.write_ticket_atomic — temp + os.replace."""
+    """Mirror trackers.file.write_ticket_atomic — temp + os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".tmp-progress-", suffix=".md", dir=path.parent)
     try:

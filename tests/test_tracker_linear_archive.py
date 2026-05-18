@@ -14,7 +14,7 @@ import pytest
 
 from symphony.errors import LinearUnknownPayload
 from symphony.issue import Issue
-from symphony.tracker_linear import LinearClient
+from symphony.trackers.linear import LinearClient
 from symphony.workflow import TrackerConfig
 
 

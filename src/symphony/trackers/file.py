@@ -42,8 +42,8 @@ from typing import Any, Iterable
 
 import yaml
 
-from .errors import LinearUnknownPayload, SymphonyError
-from .issue import (
+from ..errors import LinearUnknownPayload, SymphonyError
+from ..issue import (
     BlockerRef,
     Issue,
     coerce_priority,
@@ -51,7 +51,7 @@ from .issue import (
     normalize_state,
     parse_iso_timestamp,
 )
-from .workflow import TrackerConfig
+from ..workflow import TrackerConfig
 
 
 _FRONT_MATTER_DELIM = "---"

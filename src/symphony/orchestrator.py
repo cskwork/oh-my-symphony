@@ -48,7 +48,7 @@ from .errors import (
 from .issue import Issue, normalize_state, sort_for_dispatch
 from .logging import get_logger
 from .prompt import build_continuation_prompt, build_first_turn_prompt
-from .tracker import build_tracker_client
+from .trackers import build_tracker_client
 from .wiki_sweep import sweep as _wiki_sweep_run
 from .workflow import (
     ServiceConfig,

@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from .errors import SymphonyError
-from .tracker_file import FileBoardTracker, parse_ticket_file
+from .trackers.file import FileBoardTracker, parse_ticket_file
 from .workflow import (
     DEFAULT_BOARD_ROOT_NAME,
     SUPPORTED_AGENT_KINDS,

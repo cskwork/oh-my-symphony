@@ -6,21 +6,21 @@ from typing import Any, Iterable
 
 import httpx
 
-from .errors import (
+from ..errors import (
     LinearApiRequestError,
     LinearApiStatusError,
     LinearGraphQLErrors,
     LinearMissingEndCursor,
     LinearUnknownPayload,
 )
-from .issue import (
+from ..issue import (
     BlockerRef,
     Issue,
     coerce_priority,
     normalize_labels,
     parse_iso_timestamp,
 )
-from .workflow import TrackerConfig
+from ..workflow import TrackerConfig
 
 
 PAGE_SIZE = 50  # §11.2

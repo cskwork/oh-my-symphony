@@ -1,16 +1,21 @@
 """SPEC §11.1 — tracker adapter contract and factory.
 
-Every tracker adapter MUST implement these three operations and return
-normalized `Issue` objects (§4.1.1). Transport details are adapter-defined.
+Every tracker adapter MUST implement these operations and return normalized
+`Issue` objects (§4.1.1). Transport details are adapter-defined.
+
+Adapters live as submodules:
+
+    symphony.trackers.file    -> FileBoardTracker  (Markdown ticket files)
+    symphony.trackers.linear  -> LinearClient      (Linear GraphQL)
 """
 
 from __future__ import annotations
 
 from typing import Iterable, Protocol, runtime_checkable
 
-from .errors import UnsupportedTrackerKind
-from .issue import Issue
-from .workflow import ServiceConfig, TrackerConfig
+from ..errors import UnsupportedTrackerKind
+from ..issue import Issue
+from ..workflow import ServiceConfig, TrackerConfig
 
 
 @runtime_checkable
@@ -42,11 +47,11 @@ def build_tracker_client(cfg: ServiceConfig) -> TrackerClient:
     """Return the adapter selected by `tracker.kind`."""
     kind = cfg.tracker.kind
     if kind == "linear":
-        from .tracker_linear import LinearClient
+        from .linear import LinearClient
 
         return LinearClient(cfg.tracker)
     if kind == "file":
-        from .tracker_file import FileBoardTracker
+        from .file import FileBoardTracker
 
         return FileBoardTracker(cfg.tracker)
     raise UnsupportedTrackerKind("tracker kind not supported", kind=kind)
@@ -67,3 +72,10 @@ def context_manager(cfg: ServiceConfig):
                 pass
 
     return _Wrapper()
+
+
+__all__ = [
+    "TrackerClient",
+    "build_tracker_client",
+    "context_manager",
+]

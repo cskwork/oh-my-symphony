@@ -35,7 +35,7 @@ from .i18n import SUPPORTED_LANGUAGES, t
 from .issue import Issue, normalize_state, registration_order_key
 from .logging import get_logger
 from .orchestrator import Orchestrator
-from .tracker import build_tracker_client
+from .trackers import build_tracker_client
 from .workflow import ServiceConfig, WorkflowState
 
 

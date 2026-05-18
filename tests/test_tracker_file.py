@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from symphony.errors import SymphonyError
-from symphony.tracker_file import (
+from symphony.trackers.file import (
     FileBoardTracker,
     issue_from_file,
     parse_ticket_file,
