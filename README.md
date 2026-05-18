@@ -636,15 +636,30 @@ src/symphony/
     claude_code.py     Claude Code stream-json backend
     gemini.py          Gemini one-shot backend
     pi.py              Pi --mode json backend (per-turn subprocess, --session resume)
+  trackers/
+    __init__.py        TrackerClient Protocol + factory
+    file.py            FileBoardTracker (Markdown ticket files)
+    linear.py          LinearClient (Linear GraphQL)
+  cli/
+    __init__.py        re-exports `main` for the `symphony` console_script
+    __main__.py        keeps `python -m symphony.cli ...` working for service.py
+    main.py            root dispatch + `symphony [WORKFLOW]`
+    board.py           `symphony board ...` file-tracker helper
+    doctor.py          `symphony doctor` WORKFLOW.md preflight checks
+  utils/
+    archive.py         auto-archive selector
+    auto_merge.py      symphony/<ID> branch → host repo merge
+    keep_awake.py      macOS caffeinate wrapper (no-op on other platforms)
+    wiki_sweep.py      Learn-prompt wiki integrity sweep
   agent.py             back-compat shim re-exporting backends.* symbols
   workflow.py          typed config — adds AgentConfig.kind + Claude/Gemini/Pi configs
-  orchestrator.py      unchanged scheduler; uses build_backend() factory
+  orchestrator.py      scheduler; uses build_backend() + build_tracker_client() factories
   tui.py               Textual Kanban TUI (replaces server.py dashboard)
   server.py            JSON API only (HTML root removed)
-  cli.py               adds `tui` subcommand / `--tui` flag
+  service.py           `symphony service` background lifecycle
+  mock_codex.py        runnable via `python -m symphony.mock_codex` for demos/tests
 tui-open.sh            cross-platform launcher (macOS / Linux): doctor preflight + open TUI in a new terminal window
 tui-open.bat           Windows equivalent
-  ...
 ```
 
 ## Tests

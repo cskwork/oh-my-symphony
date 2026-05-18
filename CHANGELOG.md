@@ -10,6 +10,42 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-05-18 — Package reorganization (no behavior change)
+
+Pure structural cleanup of the `symphony` package on top of v0.6.3. No
+signature, behavior, or CLI surface changes; the published console script,
+`python -m symphony`, `python -m symphony.cli`, and
+`python -m symphony.mock_codex` entry points all resolve unchanged. No
+migration required.
+
+### Changed
+- **`trackers/` subpackage** — `tracker.py`, `tracker_file.py`, and
+  `tracker_linear.py` consolidated into `symphony.trackers.{__init__,
+  file, linear}`, mirroring the existing `backends/` layout. Callers and
+  tests now import from the canonical `symphony.trackers.*` path.
+- **`utils/` subpackage** — four self-contained helpers grouped under
+  `symphony.utils`: `archive`, `auto_merge`, `keep_awake`, `wiki_sweep`.
+  Each module is functionally unchanged; only its dotted path moved.
+- **`cli/` subpackage** — `cli.py`, `board_cli.py`, and `doctor.py`
+  consolidated into `symphony.cli.{main, board, doctor}`. New
+  `cli/__init__.py` re-exports `main` so the
+  `symphony = "symphony.cli:main"` console script keeps resolving; new
+  `cli/__main__.py` preserves `python -m symphony.cli`, which
+  `symphony.service` launches as a managed subprocess.
+- **Package `__init__.py` module index** — top-level docstring now lists
+  every module / subpackage with a one-line role, so the layout is
+  greppable from the package root.
+
+### Notes
+- Test imports under `tests/` updated to the new paths;
+  `tests/test_keep_awake.py` `monkeypatch.setattr` dotted-path strings
+  also migrated to `symphony.utils.keep_awake.*`.
+- Full pytest suite stays at 525 passed / 15 pre-existing Windows
+  symlink failures — identical pre/post on the same host.
+- Cross-platform: the move is purely Python module structure; no
+  platform-specific code (`sys.platform`, `_shell`, symlink logic) was
+  touched.
+
 ## [0.6.3] — 2026-05-18 — Monorepo bootstrap, multi-orchestrator board, bigger turn budget
 
 Quality-of-life release on top of v0.6.2. Three feature additions (none
