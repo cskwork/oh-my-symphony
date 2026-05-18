@@ -23,8 +23,6 @@ Layout (see ``AGENTS.md`` for full SPEC references):
 
 * Orchestration
     - ``orchestrator``  — state machine (SPEC §7,8,16)
-    - ``archive``       — auto-archive helpers
-    - ``auto_merge``    — symphony branch → host repo merge
     - ``progress_md``   — WORKFLOW-PROGRESS.md mirror
     - ``service``       — ``symphony service`` persistence
 
@@ -33,12 +31,16 @@ Layout (see ``AGENTS.md`` for full SPEC references):
     - ``board_cli``     — ``symphony board ...`` helper
     - ``tui``           — Textual Kanban TUI
     - ``server``        — optional HTTP JSON API
+    - ``doctor``        — WORKFLOW.md preflight checks (``symphony doctor``)
 
-* Utilities
-    - ``doctor``        — WORKFLOW.md preflight checks
-    - ``keep_awake``    — OS sleep prevention
-    - ``wiki_sweep``    — wiki integrity sweep
-    - ``mock_codex``    — mock Codex app-server for demos/tests
+* Utilities (``symphony.utils``)
+    - ``utils.archive``     — auto-archive helpers
+    - ``utils.auto_merge``  — symphony branch → host repo merge
+    - ``utils.keep_awake``  — OS sleep prevention
+    - ``utils.wiki_sweep``  — wiki integrity sweep
+
+* Demo / fixtures
+    - ``mock_codex``    — mock Codex app-server, runnable as ``python -m symphony.mock_codex``
 """
 
 __version__ = "0.6.3"

@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from symphony._shell import resolve_bash
-from symphony.auto_merge import auto_merge_on_done_best_effort, _build_script
+from symphony.utils.auto_merge import auto_merge_on_done_best_effort, _build_script
 
 
 def _git(cwd: Path, *args: str) -> None:

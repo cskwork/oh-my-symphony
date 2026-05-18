@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from symphony.keep_awake import KeepAwake
+from symphony.utils.keep_awake import KeepAwake
 from symphony.workflow import build_service_config, parse_workflow_text
 
 
@@ -37,9 +37,9 @@ class _FakePopen:
 
 
 def test_keep_awake_noop_on_non_darwin(monkeypatch):
-    monkeypatch.setattr("symphony.keep_awake.sys.platform", "linux")
+    monkeypatch.setattr("symphony.utils.keep_awake.sys.platform", "linux")
     monkeypatch.setattr(
-        "symphony.keep_awake.subprocess.Popen",
+        "symphony.utils.keep_awake.subprocess.Popen",
         lambda *a, **k: pytest.fail("Popen should not run on linux"),
     )
 
@@ -50,10 +50,10 @@ def test_keep_awake_noop_on_non_darwin(monkeypatch):
 
 
 def test_keep_awake_noop_when_caffeinate_missing(monkeypatch):
-    monkeypatch.setattr("symphony.keep_awake.sys.platform", "darwin")
-    monkeypatch.setattr("symphony.keep_awake.shutil.which", lambda name: None)
+    monkeypatch.setattr("symphony.utils.keep_awake.sys.platform", "darwin")
+    monkeypatch.setattr("symphony.utils.keep_awake.shutil.which", lambda name: None)
     monkeypatch.setattr(
-        "symphony.keep_awake.subprocess.Popen",
+        "symphony.utils.keep_awake.subprocess.Popen",
         lambda *a, **k: pytest.fail("Popen should not run when caffeinate is missing"),
     )
 
@@ -63,9 +63,9 @@ def test_keep_awake_noop_when_caffeinate_missing(monkeypatch):
 
 
 def test_keep_awake_spawns_caffeinate_on_darwin(monkeypatch):
-    monkeypatch.setattr("symphony.keep_awake.sys.platform", "darwin")
+    monkeypatch.setattr("symphony.utils.keep_awake.sys.platform", "darwin")
     monkeypatch.setattr(
-        "symphony.keep_awake.shutil.which", lambda name: "/usr/bin/caffeinate"
+        "symphony.utils.keep_awake.shutil.which", lambda name: "/usr/bin/caffeinate"
     )
     recorded: dict[str, object] = {}
     fake = _FakePopen()
@@ -75,7 +75,7 @@ def test_keep_awake_spawns_caffeinate_on_darwin(monkeypatch):
         recorded["kwargs"] = kwargs
         return fake
 
-    monkeypatch.setattr("symphony.keep_awake.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("symphony.utils.keep_awake.subprocess.Popen", fake_popen)
 
     awake = KeepAwake(watch_pid=4242)
     assert awake.start() is True
@@ -96,9 +96,9 @@ def test_keep_awake_spawns_caffeinate_on_darwin(monkeypatch):
 
 
 def test_keep_awake_force_kills_on_terminate_timeout(monkeypatch):
-    monkeypatch.setattr("symphony.keep_awake.sys.platform", "darwin")
+    monkeypatch.setattr("symphony.utils.keep_awake.sys.platform", "darwin")
     monkeypatch.setattr(
-        "symphony.keep_awake.shutil.which", lambda name: "/usr/bin/caffeinate"
+        "symphony.utils.keep_awake.shutil.which", lambda name: "/usr/bin/caffeinate"
     )
 
     class _SlowPopen(_FakePopen):
@@ -108,7 +108,7 @@ def test_keep_awake_force_kills_on_terminate_timeout(monkeypatch):
 
     slow = _SlowPopen()
     monkeypatch.setattr(
-        "symphony.keep_awake.subprocess.Popen", lambda *a, **k: slow
+        "symphony.utils.keep_awake.subprocess.Popen", lambda *a, **k: slow
     )
 
     awake = KeepAwake()
@@ -119,15 +119,15 @@ def test_keep_awake_force_kills_on_terminate_timeout(monkeypatch):
 
 
 def test_keep_awake_start_swallows_oserror(monkeypatch):
-    monkeypatch.setattr("symphony.keep_awake.sys.platform", "darwin")
+    monkeypatch.setattr("symphony.utils.keep_awake.sys.platform", "darwin")
     monkeypatch.setattr(
-        "symphony.keep_awake.shutil.which", lambda name: "/usr/bin/caffeinate"
+        "symphony.utils.keep_awake.shutil.which", lambda name: "/usr/bin/caffeinate"
     )
 
     def boom(*a, **k):
         raise OSError("no fork for you")
 
-    monkeypatch.setattr("symphony.keep_awake.subprocess.Popen", boom)
+    monkeypatch.setattr("symphony.utils.keep_awake.subprocess.Popen", boom)
 
     awake = KeepAwake()
     assert awake.start() is False

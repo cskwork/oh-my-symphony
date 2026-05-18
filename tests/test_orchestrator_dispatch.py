@@ -1692,7 +1692,7 @@ def test_auto_merge_failure_blocks_done_ticket_and_preserves_workspace(monkeypat
         _stub_workflow_state_returning(orch, cfg, monkeypatch)
 
         import symphony.orchestrator as _orch_mod
-        from symphony.auto_merge import AutoMergeResult
+        from symphony.utils.auto_merge import AutoMergeResult
 
         async def _merge_fails(**_kwargs):
             return AutoMergeResult(

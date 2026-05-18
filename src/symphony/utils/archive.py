@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
-from .issue import Issue, normalize_state
+from ..issue import Issue, normalize_state
 
 
 def select_archivable(

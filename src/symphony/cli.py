@@ -17,9 +17,9 @@ import signal
 import sys
 from pathlib import Path
 
-from . import wiki_sweep as wiki_sweep
 from .errors import SymphonyError
-from .keep_awake import KeepAwake
+from .utils import wiki_sweep as wiki_sweep
+from .utils.keep_awake import KeepAwake
 from .logging import configure_logging
 from .orchestrator import Orchestrator
 from .progress_md import ProgressFileWriter

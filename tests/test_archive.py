@@ -1,10 +1,10 @@
-"""Unit tests for `symphony.archive.select_archivable`."""
+"""Unit tests for `symphony.utils.archive.select_archivable`."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from symphony.archive import select_archivable
+from symphony.utils.archive import select_archivable
 from symphony.issue import Issue
 
 

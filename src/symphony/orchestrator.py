@@ -35,7 +35,7 @@ from .backends import (
     BackendInit,
     build_backend,
 )
-from .archive import select_archivable
+from .utils.archive import select_archivable
 from .backends.codex import linear_graphql_tool
 from .errors import (
     ConfigValidationError,
@@ -49,14 +49,14 @@ from .issue import Issue, normalize_state, sort_for_dispatch
 from .logging import get_logger
 from .prompt import build_continuation_prompt, build_first_turn_prompt
 from .trackers import build_tracker_client
-from .wiki_sweep import sweep as _wiki_sweep_run
+from .utils.wiki_sweep import sweep as _wiki_sweep_run
 from .workflow import (
     ServiceConfig,
     SUPPORTED_AGENT_KINDS,
     WorkflowState,
     validate_for_dispatch,
 )
-from .auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
+from .utils.auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
 from .workspace import WorkspaceManager, commit_workspace_on_done
 
 

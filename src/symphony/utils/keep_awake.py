@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 
-from .logging import get_logger
+from ..logging import get_logger
 
 log = get_logger()
 

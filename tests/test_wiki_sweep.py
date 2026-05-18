@@ -1,4 +1,4 @@
-"""C5 — unit tests for `symphony.wiki_sweep`."""
+"""C5 — unit tests for `symphony.utils.wiki_sweep`."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from symphony import wiki_sweep
-from symphony.wiki_sweep import (
+from symphony.utils import wiki_sweep
+from symphony.utils.wiki_sweep import (
     STALE_AFTER_DAYS,
     STALE_MARKER,
     DuplicateSlug,

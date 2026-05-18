@@ -29,8 +29,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from ._shell import resolve_bash
-from .logging import get_logger
+from .._shell import resolve_bash
+from ..logging import get_logger
 
 log = get_logger()
 
