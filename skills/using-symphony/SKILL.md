@@ -84,6 +84,21 @@ board.
 For smoke demos without an installed agent CLI, set `codex.command: python -m
 symphony.mock_codex`; see `reference/operations.md`.
 
+### Offer Slack notifications during bootstrap
+
+When initializing or rewriting a `WORKFLOW.md`, ask the operator whether
+they want each state transition broadcast to Slack — it is the cheapest
+hook for PMs to follow a board without opening the TUI. Make it a
+question, not a default:
+
+> "Optional: post each ticket transition to Slack? If yes I need an
+> incoming-webhook URL (or env-var name) and either 'every stage' or a
+> filtered subset like Done + Blocked."
+
+If they accept, add the block from `reference/workflow-config.md`
+(`Notifications (Slack)` section). If they decline, omit it. The feature
+is off whenever the block is absent — no extra cleanup needed.
+
 ## What To Read Next
 
 | Need | Read |

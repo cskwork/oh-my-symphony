@@ -47,6 +47,7 @@ from .errors import (
 )
 from .issue import Issue, normalize_state, sort_for_dispatch
 from .logging import get_logger
+from .notifications import NotificationEvent, dispatch_notification
 from .prompt import build_continuation_prompt, build_first_turn_prompt
 from .trackers import build_tracker_client
 from .utils.wiki_sweep import sweep as _wiki_sweep_run
@@ -1183,6 +1184,11 @@ class Orchestrator:
             client.update_state(issue, target_state)
         finally:
             client.close()
+        # Notifications fire after the tracker write succeeds. If the write
+        # raised, we never reach here — operators see the failure in logs
+        # instead of a misleading "moved to X" Slack ping. Lenient by
+        # design: dispatch_notification swallows network errors.
+        _notify_state_transition(cfg, issue, target_state)
 
     @staticmethod
     def _tracker_call_append_note(
@@ -3263,6 +3269,37 @@ def _max_turns_exhausted_target_state(cfg: ServiceConfig) -> str:
         if normalize_state(state) == "blocked":
             return state
     return ""
+
+
+def _notify_state_transition(
+    cfg: ServiceConfig, issue: Issue, target_state: str
+) -> None:
+    """Fire-and-forget Slack (or future channel) ping for one transition.
+
+    Lives at module scope so the static ``_tracker_call_update_state`` can
+    call it without an instance reference. Errors from the dispatcher are
+    already swallowed; this wrapper only guards the lookup itself so a
+    malformed config or a hot reload-mid-transition can't take down the
+    tracker write path.
+    """
+    if not cfg.notifications.has_any():
+        return
+    try:
+        event = NotificationEvent(
+            identifier=issue.identifier,
+            title=issue.title,
+            prev_state=issue.state,
+            next_state=target_state,
+            workflow=cfg.workflow_path.parent.name,
+        )
+        dispatch_notification(cfg.notifications, event)
+    except Exception as exc:
+        log.warning(
+            "notification_emit_failed",
+            identifier=issue.identifier,
+            target=target_state,
+            error=str(exc),
+        )
 
 
 def _task_debug(task: asyncio.Task[Any] | None) -> dict[str, Any] | None:

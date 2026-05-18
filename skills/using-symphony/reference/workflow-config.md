@@ -401,3 +401,57 @@ SYMPHONY_LANG=ko symphony tui ./WORKFLOW.md
 Per-lane scrolling, mouse wheel, focus traversal, and ticket-detail
 modals are handled by the Textual framework — there is nothing to
 configure for them.
+
+## Notifications (Slack)
+
+Opt-in. When the orchestrator successfully writes a state transition to
+the tracker, it can post a one-line message to a Slack channel via an
+incoming-webhook URL. Omit the block entirely and nothing is sent — the
+feature stays dormant.
+
+```yaml
+notifications:
+  slack:
+    webhook_url: $SLACK_WEBHOOK_URL    # required; $VAR resolution at load time
+    enabled: true                       # default true when webhook_url is set
+    notify_on_states: []                # empty = every transition
+    templates:                          # optional per-target-state override
+      Done: "✅ ${identifier} ${title}"
+      Blocked: "🚧 ${identifier} blocked — ${title}"
+    username: Symphony
+    icon_emoji: ":robot_face:"
+    channel: ""                         # optional override; webhook default usually wins
+    timeout_ms: 5000
+```
+
+Placeholders inside templates use `string.Template`:
+`${identifier}` `${title}` `${prev_state}` `${next_state}` `${workflow}`
+`${reason}`. Unknown keys render literally (safe_substitute) — they never
+raise.
+
+Default behaviour when `notify_on_states` is empty is to ping on every
+tracker state transition. Populate it (case-insensitive) to subscribe a
+PM-friendly subset, e.g. `["Done", "Blocked"]`.
+
+Failure modes:
+- Missing webhook → silent disable (treated as opt-out, not error).
+- Non-2xx response → logged `slack_notify_non_2xx`, the transition still
+  succeeds; the next event tries again.
+- Network error → logged `slack_notify_network_error`, no retry.
+
+This boundary is deliberate: Slack is a side channel; correctness of the
+tracker write must not depend on it.
+
+### Asking the operator to wire it up
+
+When bootstrapping a new board, offer the Slack block alongside the rest
+of `WORKFLOW.md` — but make it a question, not a default. A reasonable
+script:
+
+> "Optional: do you want Symphony to post each ticket transition to
+> Slack? If yes, give me an incoming-webhook URL (or an env var name to
+> resolve from) and the channels/states you care about — Done only, or
+> every stage."
+
+If the operator declines, omit the block. If they want only "Done"
+events, set `notify_on_states: [Done]` and skip templates.

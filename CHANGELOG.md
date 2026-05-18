@@ -10,6 +10,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-05-18 — Slack notifications on state transitions
+
+Opt-in notification channel for tracker state transitions. The orchestrator
+posts one Slack message per successful state write when a webhook URL is
+configured; omit the new `notifications.slack` block and the feature stays
+dormant. No behavior change for existing workflows.
+
+### Added
+- **Slack notifications on tracker state transitions** — opt-in via a new
+  `notifications.slack` block in `WORKFLOW.md`. When configured, every
+  successful tracker write fires one message to the supplied incoming-webhook
+  URL. Default behaviour with the block present is to notify on every
+  transition; populate `notify_on_states` to subscribe selectively (e.g.
+  `[Done, Blocked]` for PMs). Per-state `templates` override the default
+  message; placeholders include `${identifier} ${title} ${prev_state}
+  ${next_state} ${workflow}`. Webhook URL accepts `$VAR` indirection so
+  secrets stay out of the workflow file. Network/HTTP failures are logged
+  and never block the orchestrator's transition path. Module:
+  `src/symphony/notifications/`. Tests: `tests/test_notifications.py`
+  (19 new tests). Docs: README, `WORKFLOW.example.md`,
+  `skills/using-symphony/reference/workflow-config.md`.
+
 ## [0.6.4] — 2026-05-18 — Package reorganization (no behavior change)
 
 Pure structural cleanup of the `symphony` package on top of v0.6.3. No

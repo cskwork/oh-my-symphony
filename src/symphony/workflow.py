@@ -21,6 +21,7 @@ from .errors import (
     WorkflowFrontMatterNotAMap,
     WorkflowParseError,
 )
+from .notifications import NotificationsConfig, build_notifications_config
 
 
 SUPPORTED_TRACKER_KINDS = {"linear", "file"}
@@ -452,6 +453,7 @@ class ServiceConfig:
     system: SystemConfig = field(default_factory=SystemConfig)
     prompts: PromptConfig = field(default_factory=PromptConfig)
     wiki: WikiConfig = field(default_factory=WikiConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
     workspace_reuse_policy: str = DEFAULT_WORKSPACE_REUSE_POLICY
@@ -1009,6 +1011,11 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         wiki_path = (base_dir / "docs" / "llm-wiki").resolve()
     wiki = WikiConfig(sweep_every_n=sweep_every_n, root=wiki_path)
 
+    notifications = build_notifications_config(
+        cfg.get("notifications"),
+        resolve_var=resolve_var_indirection,
+    )
+
     return ServiceConfig(
         workflow_path=workflow.source_path,
         poll_interval_ms=poll_interval_ms,
@@ -1026,6 +1033,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         system=system,
         prompts=prompts,
         wiki=wiki,
+        notifications=notifications,
         raw=dict(cfg),
         prompt_template=prompt_template,
         workspace_reuse_policy=workspace_reuse_policy,

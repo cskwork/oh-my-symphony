@@ -416,6 +416,32 @@ system:
 
 Non-macOS hosts log `keep_awake_skipped` and continue without a wake-lock.
 
+#### Slack notifications (optional)
+
+Opt in by setting a Slack incoming-webhook URL. With the block below in
+`WORKFLOW.md`, Symphony posts one message per tracker state transition.
+Omit the block and nothing is sent — the feature is fully off by default.
+
+```yaml
+notifications:
+  slack:
+    webhook_url: $SLACK_WEBHOOK_URL    # required; $VAR resolved at load time
+    enabled: true                       # default true when webhook is set
+    notify_on_states: []                # empty = every transition; or e.g. [Done, Blocked]
+    templates:                          # optional per-state overrides
+      Done: "✅ ${identifier} ${title} (${workflow})"
+      Blocked: "🚧 ${identifier} blocked — ${title}"
+    username: Symphony
+    icon_emoji: ":robot_face:"
+    timeout_ms: 5000
+```
+
+Template placeholders: `${identifier}` `${title}` `${prev_state}`
+`${next_state}` `${workflow}` `${reason}`. Bad templates render the unknown
+key literally — they never raise. Network errors are caught and logged
+(`slack_notify_network_error`) so a Slack outage cannot block the
+orchestrator's transition path.
+
 ### 5. Inspect the result
 
 ```bash

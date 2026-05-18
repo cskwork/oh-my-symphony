@@ -284,6 +284,28 @@ pi:
 server:
   port: 9999            # optional JSON API; the primary UI is `symphony tui`
 
+# Slack (or future channels) notifications. Entirely opt-in: omit this whole
+# block and no messages are sent. The webhook URL is the only required field;
+# resolve it from an env var with `$NAME` so secrets stay out of the workflow.
+#
+# Default behaviour when enabled: one message per tracker state transition.
+# Set `notify_on_states` to a non-empty list to subscribe selectively (e.g.
+# PMs may only want Done / Blocked pings). Custom per-state templates use
+# `string.Template` placeholders: ${identifier} ${title} ${prev_state}
+# ${next_state} ${workflow} ${reason}.
+#
+# notifications:
+#   slack:
+#     webhook_url: $SLACK_WEBHOOK_URL
+#     enabled: true
+#     notify_on_states: []           # empty = every transition
+#     templates:
+#       Done: "✅ ${identifier} ${title} (${workflow})"
+#       Blocked: "🚧 ${identifier} blocked — ${title}"
+#     username: Symphony
+#     icon_emoji: ":robot_face:"
+#     timeout_ms: 5000
+
 tui:
   language: en               # `en` (default) or `ko`. SYMPHONY_LANG env overrides.
                              # Also drives artefact language: every prompt is
