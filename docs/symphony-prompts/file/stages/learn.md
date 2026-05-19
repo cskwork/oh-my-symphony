@@ -1,5 +1,12 @@
 ### LEARN  -- when state is `Learn`
-
+{% for label in issue.labels %}{% if label == "chore" %}
+**Chore short-circuit.** This ticket carries the `chore` label. Skip the full Learn contract — chore tickets do not produce new domain knowledge worth filing in the wiki:
+1. Append a one-line `## Learnings` ("chore — metadata-only change, no new invariants captured").
+2. Append a one-line `## Wiki Updates` ("none — chore short-circuit").
+3. Skip the wiki Decision-log row, the beginner / Technical Reference block, the `INDEX.md` refresh, and the integrity sweep.
+4. Then **run the Merge Gate clause below exactly as written** (the merge-tree probe + the conflict-vs-clean branch under step 7 if `agent.auto_merge_on_done`). The Merge Gate is non-negotiable even for chores — it is the last gate that catches a bad merge before Done.
+5. Set state to `Done` after the Merge Gate succeeds (or `Blocked` if it reports a conflict, exactly as the standard flow specifies).
+{% endif %}{% endfor %}
 Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wiki/` so **both developers and non-developers** can learn from it.
 
 1. Read `docs/{{ issue.identifier }}/{explore,plan,work,qa}/` and prior sections (`## Recommendation`, `## Plan`, `## Implementation`, `## QA Evidence`) end-to-end.
