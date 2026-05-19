@@ -4,8 +4,8 @@
 1. Append a one-line `## Learnings` ("chore — metadata-only change, no new invariants captured").
 2. Append a one-line `## Wiki Updates` ("none — chore short-circuit").
 3. Skip the wiki Decision-log row, the beginner / Technical Reference block, the `INDEX.md` refresh, and the integrity sweep.
-4. Then **run the Merge Gate clause below exactly as written** (the merge-tree probe + the conflict-vs-clean branch under step 7 if `agent.auto_merge_on_done`). The Merge Gate is non-negotiable even for chores — it is the last gate that catches a bad merge before Done.
-5. Set state to `Done` after the Merge Gate succeeds (or `Blocked` if it reports a conflict, exactly as the standard flow specifies).
+4. Then **run whichever Merge Gate clause step 7 below renders**, exactly as written — the chore short-circuit cannot bypass it. Under `agent.auto_merge_on_done=true` step 7 is the merge-tree probe + conflict-vs-clean branch; under `agent.auto_merge_on_done=false` step 7 is the disabled-gate clause that appends `## Merge Status` and leaves integration to the operator. Honor whichever the prompt renders.
+5. Set state to `Done` per step 8 (or `Blocked` if step 7's merge-tree probe reported a committed conflict, exactly as the standard flow specifies).
 {% endif %}{% endfor %}
 Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wiki/` so **both developers and non-developers** can learn from it.
 
