@@ -70,6 +70,7 @@ from .constants import (
     STALL_FORCE_EJECT_GRACE_S,
     _TOKEN_EMA_ALPHA,
 )
+from .contracts import evaluate_contract
 from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
 from .helpers import (
     _branch_hook_env,
@@ -1439,6 +1440,11 @@ class Orchestrator:
                 # through the markdown artefacts under
                 # `docs/<identifier>/<stage>/` plus the ticket body.
                 prev_phase_state = normalize_state(issue.state)
+                # Canonical-cased mirror of `prev_phase_state`. Trackers
+                # like Linear and Jira match state names case-sensitively
+                # on writes, so a contract-failure rewind needs the
+                # original casing rather than the lowercased form.
+                prev_phase_state_raw = issue.state or ""
 
                 while True:
                     # Operator pause gate — `pause_worker` clears the event,
@@ -1497,6 +1503,57 @@ class Orchestrator:
                             is_rewind = _is_rewind_transition(
                                 prev_phase_state, current_state
                             )
+                            # v0.6.7 — contract validator. When the agent
+                            # moved forward (not a rewind), check that
+                            # the producing stage actually wrote the
+                            # sections its prompt promised. On failure:
+                            # write the tracker state back to the
+                            # producing stage, append a ## Contract
+                            # Failure note, and treat the situation as
+                            # a forced rewind so the rebuild + budget
+                            # bookkeeping below still apply.
+                            if not is_rewind:
+                                contract = evaluate_contract(
+                                    producing_state=prev_phase_state,
+                                    ticket_body=issue.description or "",
+                                    identifier=issue.identifier,
+                                    docs_root=workspace.path,
+                                )
+                                if not contract.passed:
+                                    log.warning(
+                                        "stage_contract_failed",
+                                        issue_id=issue.id,
+                                        identifier=issue.identifier,
+                                        producing_state=prev_phase_state,
+                                        advanced_to=current_state,
+                                        missing=contract.missing,
+                                    )
+                                    await asyncio.to_thread(
+                                        self._tracker_call_append_note,
+                                        cfg,
+                                        issue,
+                                        contract.note_heading,
+                                        contract.note_body,
+                                    )
+                                    await asyncio.to_thread(
+                                        self._tracker_call_update_state,
+                                        cfg,
+                                        issue,
+                                        prev_phase_state_raw
+                                        or prev_phase_state,
+                                    )
+                                    refreshed = await self._refresh_issue_state(
+                                        cfg, running_issue_id
+                                    )
+                                    if refreshed is not None:
+                                        issue = refreshed
+                                        running_entry = self._running.get(
+                                            running_issue_id
+                                        )
+                                        if running_entry is not None:
+                                            running_entry.issue = issue
+                                    current_state = normalize_state(issue.state)
+                                    is_rewind = True
                             if is_rewind:
                                 debug = self._issue_debug.setdefault(
                                     running_issue_id, _IssueDebug()
@@ -1664,6 +1721,9 @@ class Orchestrator:
                     # next iteration can detect a phase transition against
                     # the freshly refreshed state below.
                     prev_phase_state = current_state
+                    prev_phase_state_raw = (
+                        running.issue.state if running is not None else issue.state
+                    ) or ""
 
                     # Refresh issue state.
                     refreshed = await self._refresh_issue_state(cfg, running_issue_id)
