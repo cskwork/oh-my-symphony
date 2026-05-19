@@ -367,6 +367,21 @@ class FileBoardTracker:
                 )
         return out
 
+    def fetch_issue_full_by_id(self, issue_id: str) -> Issue | None:
+        """Return the ticket with full markdown body for ``issue_id``.
+
+        Used by the stage-contract validator — the minimal `fetch_issue_
+        states_by_ids` strips description, which would make every contract
+        evaluation see an empty body. `_scan_all` already returns issues
+        hydrated by `issue_from_file`, so this method is cheap on top.
+        """
+        if not issue_id:
+            return None
+        for issue in self._scan_all():
+            if issue.id == issue_id:
+                return issue
+        return None
+
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------

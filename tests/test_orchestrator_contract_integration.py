@@ -50,6 +50,7 @@ the same source the validator depends on.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,20 @@ from symphony.workflow import (
 # ---------------------------------------------------------------------------
 # Plan-stage body fixtures
 # ---------------------------------------------------------------------------
+
+
+_CONTRACT_FAILURE_HEADING_RE = re.compile(r"^##\s+Contract\s+Failure\s*$", re.MULTILINE)
+
+
+def _has_contract_failure_heading(body: str) -> bool:
+    """True when a `## Contract Failure` HEADING anchors a line.
+
+    Substring matches inside Plan / Acceptance Tests prose (e.g. the
+    fixture bodies in this file) do not count — only a column-zero
+    markdown heading does. Mirrors how `FileBoardTracker.append_note`
+    persists orchestrator-authored notes.
+    """
+    return _CONTRACT_FAILURE_HEADING_RE.search(body) is not None
 
 
 _PLAN_BODY_COMPLETE = """## Plan
@@ -369,22 +384,6 @@ def _install_file_tracker_backend(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Production bug — fails on current main. The 365e67b hotfix calls "
-        "Orchestrator._refresh_issue_state before evaluate_contract, but "
-        "TrackerClient.fetch_issue_states_by_ids returns a *minimal* Issue "
-        "with description=None for all three trackers (file/Linear/Jira). "
-        "The refresh overwrites the in-memory full description with None, "
-        "so evaluate_contract sees ticket_body='' and fails every forward "
-        "transition out of Plan/Review/QA/Done. The pre-release CI tests "
-        "monkeypatched _refresh_issue_state to return a hydrated body, "
-        "so the regression slipped past 587 green tests. Flip this xfail "
-        "to a plain test once the production refresh helper hydrates the "
-        "description for contract-validation callers."
-    ),
-)
 def test_contract_passes_when_disk_has_required_sections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -425,9 +424,13 @@ def test_contract_passes_when_disk_has_required_sections(
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
     final_front, final_body = parse_ticket_file(ticket_path)
-    assert "## Contract Failure" not in final_body, (
-        "False ## Contract Failure note appended despite ticket containing "
-        f"all required Plan sections. Body was:\n{final_body}"
+    # The orchestrator writes a `## Contract Failure` HEADING at column 0,
+    # so anchor the substring search to the start of a line. The fixture
+    # bodies above intentionally mention the phrase in prose to verify
+    # this anchoring guard.
+    assert not _has_contract_failure_heading(final_body), (
+        "False ## Contract Failure heading appended despite ticket "
+        f"containing all required Plan sections. Body was:\n{final_body}"
     )
     # State must have advanced — the contract guard, when working, does
     # NOT rewind back to Plan.
@@ -474,9 +477,9 @@ def test_contract_fails_when_disk_missing_sections(
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
     final_front, final_body = parse_ticket_file(ticket_path)
-    assert "## Contract Failure" in final_body, (
-        "Contract guard did not append a ## Contract Failure note even "
-        "though `## Done Signals` was absent. Body was:\n" + final_body
+    assert _has_contract_failure_heading(final_body), (
+        "Contract guard did not append a ## Contract Failure heading "
+        "even though `## Done Signals` was absent. Body was:\n" + final_body
     )
     assert final_front["state"] == "Plan", (
         "Contract guard did not rewind the ticket back to Plan after a "
