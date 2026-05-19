@@ -1513,6 +1513,25 @@ class Orchestrator:
                             # a forced rewind so the rebuild + budget
                             # bookkeeping below still apply.
                             if not is_rewind:
+                                if prev_phase_state in {
+                                    "plan",
+                                    "review",
+                                    "qa",
+                                    "done",
+                                }:
+                                    refreshed_for_contract = (
+                                        await self._refresh_issue_state(
+                                            cfg, running_issue_id
+                                        )
+                                    )
+                                    if refreshed_for_contract is not None:
+                                        issue = refreshed_for_contract
+                                        running_entry = self._running.get(
+                                            running_issue_id
+                                        )
+                                        if running_entry is not None:
+                                            running_entry.issue = issue
+                                        current_state = normalize_state(issue.state)
                                 contract = evaluate_contract(
                                     producing_state=prev_phase_state,
                                     ticket_body=issue.description or "",
@@ -1547,11 +1566,18 @@ class Orchestrator:
                                     )
                                     if refreshed is not None:
                                         issue = refreshed
-                                        running_entry = self._running.get(
-                                            running_issue_id
-                                        )
-                                        if running_entry is not None:
-                                            running_entry.issue = issue
+                                    issue = replace(
+                                        issue,
+                                        state=(
+                                            prev_phase_state_raw
+                                            or prev_phase_state
+                                        ),
+                                    )
+                                    running_entry = self._running.get(
+                                        running_issue_id
+                                    )
+                                    if running_entry is not None:
+                                        running_entry.issue = issue
                                     current_state = normalize_state(issue.state)
                                     is_rewind = True
                             if is_rewind:
