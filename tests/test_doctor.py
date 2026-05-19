@@ -9,6 +9,7 @@ from pathlib import Path
 from symphony.cli.doctor import (
     check_after_create_hook,
     check_agent_cli,
+    check_board_viewer,
     check_pi_auth,
     check_port,
     check_tracker,
@@ -191,13 +192,14 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
         """,
     )
     results = run_checks(cfg)
-    # port + shell + agent + pi_auth + after_create + workspace + tracker = 7
-    assert len(results) == 7
+    # port + shell + agent + pi_auth + after_create + workspace + tracker + viewer = 8
+    assert len(results) == 8
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",
         "workspace",
         "tracker",
+        "viewer",
     }
 
 
@@ -272,3 +274,38 @@ def test_format_results_includes_all_statuses() -> None:
         color=False,
     )
     assert "PASS" in text and "WARN" in text and "FAIL" in text
+
+
+def test_board_viewer_pass_when_script_present(tmp_path: Path) -> None:
+    """WARN downgrades to PASS once `tools/board-viewer/server.py` exists."""
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    viewer = tmp_path / "tools" / "board-viewer" / "server.py"
+    viewer.parent.mkdir(parents=True)
+    viewer.write_text("# stub viewer\n")
+
+    result = check_board_viewer(cfg)
+    assert result.status == "pass"
+    assert "server.py" in result.message
+
+
+def test_board_viewer_warns_when_script_missing(tmp_path: Path) -> None:
+    """WARN (not FAIL) so the orchestrator can still launch headless."""
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    result = check_board_viewer(cfg)
+    assert result.status == "warn"
+    assert "tools/board-viewer/server.py" in result.message
+    assert "no-op" in result.message
