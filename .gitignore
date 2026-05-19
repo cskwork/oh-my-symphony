@@ -9,9 +9,13 @@ dist/
 htmlcov/
 /tmp_workspaces/
 .claude/
+.omc/
 .omx/
 .playwright-mcp/
 .symphony/
+
+# Auto-generated kanban mirror (regenerated on every TUI launch)
+/WORKFLOW-PROGRESS.md
 
 # Local secrets — `.env.example` is the committed template
 /.env

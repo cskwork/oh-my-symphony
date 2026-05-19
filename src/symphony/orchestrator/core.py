@@ -1,4 +1,4 @@
-"""SPEC §7, §8, §16 — orchestrator state machine.
+"""SPEC §7, §8, §16 — Orchestrator class (state machine + worker driver).
 
 The orchestrator is the single authority for scheduling state. All worker
 outcomes are reported back through asyncio queues and converted into
@@ -8,6 +8,13 @@ Concurrency model:
 - One asyncio event loop owns mutation of `running`, `claimed`, and
   `retry_attempts`. Workers run as tasks; tracker calls run in a thread
   executor; codex events arrive via async callbacks routed through a queue.
+
+Three names — ``build_backend``, ``commit_workspace_on_done``, and
+``auto_merge_on_done_best_effort`` — are looked up via the parent
+package (``_pkg.<name>``) at call time so tests that
+``monkeypatch.setattr("symphony.orchestrator.<name>", stub)`` see the
+patch reach this code path. A direct local import would bind the
+function at module load and ignore the patch.
 """
 
 from __future__ import annotations
@@ -15,16 +22,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
-import subprocess
-import time
+import sys
 import traceback
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from .backends import (
+from ..backends import (
     EVENT_AGENT_RETRY,
     EVENT_COMPACTION,
     EVENT_OTHER_MESSAGE,
@@ -33,433 +38,65 @@ from .backends import (
     EVENT_TURN_COMPLETED,
     AgentBackend,
     BackendInit,
-    build_backend,
 )
-from .utils.archive import select_archivable
-from .backends.codex import linear_graphql_tool
-from .errors import (
-    ConfigValidationError,
+from ..utils.archive import select_archivable
+from ..backends.codex import linear_graphql_tool
+from ..errors import (
     SymphonyError,
     TurnFailed,
     TurnInputRequired,
     TurnTimeout,
     TurnCancelled,
 )
-from .issue import Issue, normalize_state, sort_for_dispatch
-from .logging import get_logger
-from .notifications import NotificationEvent, dispatch_notification
-from .prompt import build_continuation_prompt, build_first_turn_prompt
-from .trackers import build_tracker_client
-from .utils.wiki_sweep import sweep as _wiki_sweep_run
-from .workflow import (
+from ..issue import Issue, normalize_state
+from ..logging import get_logger
+from ..prompt import build_continuation_prompt, build_first_turn_prompt
+from ..trackers import build_tracker_client
+from ..utils.wiki_sweep import sweep as _wiki_sweep_run
+from ..workflow import (
     ServiceConfig,
     SUPPORTED_AGENT_KINDS,
     WorkflowState,
     validate_for_dispatch,
 )
-from .utils.auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
-from .workspace import WorkspaceManager, commit_workspace_on_done
+from ..utils.auto_merge import AutoMergeResult
+from ..workspace import WorkspaceManager
+from .constants import (
+    AUTO_TRIAGE_NOTE,
+    AUTO_TRIAGE_TARGET_STATE,
+    CONTINUATION_RETRY_DELAY_MS,
+    PAUSED_RETRY_HOLD_MS,
+    RETRY_BASE_MS,
+    STALL_FORCE_EJECT_GRACE_S,
+    _TOKEN_EMA_ALPHA,
+)
+from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
+from .helpers import (
+    _branch_hook_env,
+    _branch_already_merged_into_target,
+    _config_for_issue_agent,
+    _from_monotonic_to_iso,
+    _is_auto_triage_todo_candidate,
+    _is_rewind_transition,
+    _max_turns_exhausted_target_state,
+    _notify_state_transition,
+    _requested_agent_kind,
+    _sort_for_dispatch_fifo,
+    _task_debug,
+    _to_iso,
+    _utc_iso_z,
+)
+from .parsing import _parse_findings_rows, _parse_touched_files
+
+
+# Parent-package indirection. ``_pkg.build_backend`` (and the two other
+# entries below) re-resolve at call time so test monkeypatches on
+# ``symphony.orchestrator.<name>`` reach the orchestrator's call sites.
+# The package __init__ binds these names before importing this module.
+_pkg = sys.modules[__package__]
 
 
 log = get_logger()
-
-AUTO_TRIAGE_TARGET_STATE = "Explore"
-AUTO_TRIAGE_NOTE = "Ticket is actionable; routing to Explore."
-_AUTO_TRIAGE_ACCEPTANCE_RE = re.compile(r"\bacceptance\s+criteria\b", re.IGNORECASE)
-_AUTO_TRIAGE_TRIAGE_RE = re.compile(r"^##\s+Triage\b", re.IGNORECASE | re.MULTILINE)
-
-
-CONTINUATION_RETRY_DELAY_MS = 1_000  # §7.1
-PAUSED_RETRY_HOLD_MS = 5_000  # operator-pause re-park cadence (orchestrator.py:_on_retry_timer)
-RETRY_BASE_MS = 10_000  # §8.4
-
-# Grace window after `worker_task.cancel()` before we forcibly remove the
-# entry from `_running`. A worker stuck on a non-cancellable await (e.g. a
-# fork that never returns, a DNS lookup, a misbehaving subprocess) would
-# otherwise hold its concurrency slot forever and starve the rest of the
-# board. The cancel is still issued; this just stops the slot from leaking.
-STALL_FORCE_EJECT_GRACE_S = 30.0
-
-
-# Backward stage transitions that count against the rewind budget.
-# `normalize_state` lowercases its input, so compare in lowercase.
-_REWIND_TRANSITIONS = frozenset(
-    {
-        ("review", "in progress"),
-        ("qa", "in progress"),
-        ("in progress", "plan"),
-    }
-)
-
-
-def _is_rewind_transition(prev_state: str, current_state: str) -> bool:
-    """True when a phase transition is moving backwards in the pipeline.
-
-    `Review → In Progress`, `QA → In Progress`, and the Plan-missing
-    `In Progress → Plan` correction all rewind by design — see WORKFLOW.md
-    hard rules. The agent re-entering a prior stage this way needs an
-    explicit template cue: dispatch-level `attempt` only fires on full
-    worker re-dispatch, so an in-flight rewind inside a single worker run
-    would otherwise have no signal beyond the markdown trail itself.
-    """
-    return (prev_state, current_state) in _REWIND_TRANSITIONS
-
-
-# Adaptive token-budget EMA — C3 (workflow-v0.5.2.md).
-# Alpha=0.3 weights recent turns ~70% by the third sample, fast enough to
-# track stage-cost drift without single-turn whiplash. Persisted to disk so
-# the soft budget survives orchestrator restarts.
-_TOKEN_EMA_ALPHA = 0.3
-
-# Section heading patterns parsed out of ticket markdown bodies.
-# These are intentionally permissive: leading/trailing whitespace, optional
-# trailing colon, and content up to the next `## ` heading or end-of-body.
-_TOUCHED_FILES_HEADING_RE = re.compile(
-    r"^##\s+Touched\s+Files\s*:?\s*$", re.IGNORECASE | re.MULTILINE
-)
-_REVIEW_FINDINGS_HEADING_RE = re.compile(
-    r"^##\s+Review\s+Findings\s*:?\s*$", re.IGNORECASE | re.MULTILINE
-)
-_QA_FAILURE_HEADING_RE = re.compile(
-    r"^##\s+QA\s+Failure\s*:?\s*$", re.IGNORECASE | re.MULTILINE
-)
-_NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
-# Bullet list rows: `- path/to/file.py` (optionally with surrounding backticks).
-# Two forms, tried in order:
-#   1. `- \`path with spaces/foo.py\` <anything>`  (backticks delimit; spaces OK
-#      inside; ANY trailing annotation like `(new)`, `(deleted)`, `— note`
-#      after the closing backtick is accepted and ignored)
-#   2. `- path/to/file.py <anything>`              (no backticks; first token only)
-#
-# The lenient trailing-content match is intentional — real agent output
-# routinely uses `(new)`, `(deleted)`, `(M)`, `- modified` and similar
-# annotations after the path. A strict `$` anchor would silently drop
-# real entries from the conflict pre-check (verified live 2026-05-17).
-_BULLET_PATH_BACKTICK_RE = re.compile(
-    r"^\s*[-*]\s+`(?P<path>[^`]+)`"
-)
-_BULLET_PATH_PLAIN_RE = re.compile(
-    r"^\s*[-*]\s+(?P<path>[^\s`]+)"
-)
-
-
-def _section_body(text: str, heading_re: re.Pattern[str]) -> str | None:
-    """Return the body between `heading_re` and the next `## ` heading.
-
-    Returns None when the heading is absent. Returns "" when the heading is
-    present but the body is empty.
-    """
-    if not text:
-        return None
-    matches = list(heading_re.finditer(text))
-    if not matches:
-        return None
-    # Use the LAST occurrence so re-issued findings (e.g. Review→IP→Review)
-    # win over older sections in the same ticket body.
-    match = matches[-1]
-    after = text[match.end() :]
-    next_heading = _NEXT_HEADING_RE.search(after)
-    body = after if next_heading is None else after[: next_heading.start()]
-    return body.strip("\n")
-
-
-def _parse_touched_files(text: str | None) -> set[str]:
-    """Extract repo-relative paths from the `## Touched Files` bullet list.
-
-    Returns an empty set when the section is missing or contains no
-    bullet rows. Tolerant of trailing comments after the path (anything
-    after the first whitespace following a backticked path is ignored)."""
-    if not text:
-        return set()
-    body = _section_body(text, _TOUCHED_FILES_HEADING_RE)
-    if body is None:
-        return set()
-    out: set[str] = set()
-    for line in body.splitlines():
-        m = _BULLET_PATH_BACKTICK_RE.match(line) or _BULLET_PATH_PLAIN_RE.match(line)
-        if not m:
-            continue
-        path = m.group("path").strip()
-        if path:
-            out.add(path)
-    return out
-
-
-def _parse_findings_rows(text: str | None) -> list[dict[str, Any]]:
-    """Best-effort parse of `## Review Findings` / `## QA Failure` bullets.
-
-    Returns a list of `{severity, file, line, fix}` dicts. Unrecognised
-    bullets are skipped silently — the env var is informational, not
-    contractual, so the agent prompt must already tolerate empty rows.
-
-    Heuristics (bullet variants we have seen in WORKFLOW prompts):
-      - ``- HIGH: src/foo.py:42 — refactor to use shared helper``
-      - ``- [CRITICAL] src/foo.py:42 fix XSS``
-      - ``- src/foo.py:42 fix XSS`` (severity defaults to empty string)
-    """
-    if not text:
-        return []
-    # Prefer Review Findings if both sections are present; QA Failure is a
-    # fallback because QA-stage tickets emit it instead.
-    body = _section_body(text, _REVIEW_FINDINGS_HEADING_RE)
-    if body is None:
-        body = _section_body(text, _QA_FAILURE_HEADING_RE)
-    if not body:
-        return []
-
-    severity_re = re.compile(
-        r"^\s*[-*]\s+"
-        r"(?:\[(?P<sev_b>[A-Za-z]+)\]\s*|"
-        r"(?P<sev_a>CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*[:\-—]?\s*)?"
-        r"(?P<rest>.+)$",
-        re.IGNORECASE,
-    )
-    path_line_re = re.compile(
-        r"`?(?P<file>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)`?"
-        r"(?::(?P<line>\d+))?"
-    )
-
-    rows: list[dict[str, Any]] = []
-    for raw in body.splitlines():
-        m = severity_re.match(raw)
-        if not m:
-            continue
-        rest = (m.group("rest") or "").strip()
-        if not rest:
-            continue
-        severity = (m.group("sev_a") or m.group("sev_b") or "").upper()
-        pm = path_line_re.search(rest)
-        file_path = pm.group("file") if pm else ""
-        try:
-            line_no = int(pm.group("line")) if pm and pm.group("line") else 0
-        except ValueError:
-            line_no = 0
-        # `fix` = the trailing free-text after the path (or the whole rest
-        # when no path was found). Strip common dash separators so the
-        # downstream prompt isn't fed `— foo`.
-        fix_text = rest
-        if pm:
-            fix_text = (rest[pm.end() :] or "").strip(" -—:\t")
-        rows.append(
-            {
-                "severity": severity,
-                "file": file_path,
-                "line": line_no,
-                "fix": fix_text,
-            }
-        )
-    return rows
-
-
-def _branch_hook_env(cfg: ServiceConfig) -> dict[str, str]:
-    """Env consumed by the default worktree hook when creating a feature branch."""
-    return {
-        "SYMPHONY_FEATURE_BASE_BRANCH": cfg.agent.feature_base_branch or "",
-        "SYMPHONY_MERGE_TARGET_BRANCH": cfg.agent.auto_merge_target_branch or "",
-    }
-
-
-async def _branch_already_merged_into_target(
-    workflow_dir: Path, *, branch: str, target_branch: str
-) -> bool:
-    """True when `branch` is already contained by the merge target.
-
-    Startup cleanup uses this before it snapshots lingering Done workspaces:
-    if an operator has already merged the branch into the target, a restart
-    must not create a fresh commit on the old feature branch and re-open the
-    merge gate.
-    """
-    target = (target_branch or "HEAD").strip() or "HEAD"
-
-    def _check() -> bool:
-        verify_branch = subprocess.run(
-            ["git", "rev-parse", "--verify", branch],
-            cwd=str(workflow_dir),
-            capture_output=True,
-            check=False,
-        )
-        if verify_branch.returncode != 0:
-            return False
-        verify_target = subprocess.run(
-            ["git", "rev-parse", "--verify", target],
-            cwd=str(workflow_dir),
-            capture_output=True,
-            check=False,
-        )
-        if verify_target.returncode != 0:
-            return False
-        merged = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", branch, target],
-            cwd=str(workflow_dir),
-            capture_output=True,
-            check=False,
-        )
-        return merged.returncode == 0
-
-    try:
-        return await asyncio.to_thread(_check)
-    except Exception:
-        return False
-
-
-def _requested_agent_kind(issue: Issue) -> str | None:
-    if not issue.agent_kind:
-        return None
-    kind = issue.agent_kind.strip().lower()
-    return kind or None
-
-
-def _is_auto_triage_todo_candidate(issue: Issue, cfg: ServiceConfig) -> bool:
-    if not cfg.agent.auto_triage_actionable_todo:
-        return False
-    if cfg.tracker.kind != "file":
-        return False
-    if normalize_state(issue.state) != "todo":
-        return False
-    if not any(normalize_state(s) == "explore" for s in cfg.tracker.active_states):
-        return False
-    if issue.blocked_by:
-        return False
-    if any(label.strip().lower() == "bug" for label in issue.labels):
-        return False
-    description = issue.description or ""
-    if not description.strip():
-        return False
-    if _AUTO_TRIAGE_TRIAGE_RE.search(description):
-        return False
-    return bool(_AUTO_TRIAGE_ACCEPTANCE_RE.search(description))
-
-
-def _config_for_issue_agent(cfg: ServiceConfig, issue: Issue) -> ServiceConfig:
-    """Return a per-worker config with the ticket's backend override applied."""
-    kind = _requested_agent_kind(issue)
-    if kind is None or kind == cfg.agent.kind:
-        return cfg
-    if kind not in SUPPORTED_AGENT_KINDS:
-        raise ConfigValidationError(
-            f"ticket agent.kind must be one of {sorted(SUPPORTED_AGENT_KINDS)}",
-            value=kind,
-            issue=issue.identifier,
-        )
-    return replace(cfg, agent=replace(cfg.agent, kind=kind))
-
-
-# ---------------------------------------------------------------------------
-# Runtime data structures
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class RunningEntry:
-    issue: Issue
-    started_at: datetime
-    retry_attempt: int | None
-    worker_task: asyncio.Task[None] | None
-    workspace_path: Path
-    attempt_kind: str = "initial"
-    agent_kind: str = ""
-    # Live backend driver for this attempt. Populated by `_run_agent_attempt`
-    # immediately after `build_backend(...)` so `_on_codex_event` can route
-    # the stall-progress predicate through `backend.is_progress_event(...)`
-    # without re-implementing per-backend filters inside the orchestrator.
-    client: AgentBackend | None = None
-    session_id: str | None = None
-    thread_id: str | None = None
-    turn_id: str | None = None
-    turn_count: int = 0
-    last_codex_event: str | None = None
-    last_codex_message: str = ""
-    last_codex_timestamp: datetime | None = None
-    # Updated only on events that signify the agent is actually advancing
-    # the turn (model output, lifecycle events, token deltas) — NOT on
-    # passthrough EVENT_OTHER_MESSAGE for tool_result echoes or stream
-    # keepalive. Stall detection reads this; UI keeps last_codex_timestamp
-    # to show "any activity at all". See _on_codex_event for the predicate.
-    last_progress_timestamp: datetime | None = None
-    codex_input_tokens: int = 0
-    codex_cache_input_tokens: int = 0
-    codex_output_tokens: int = 0
-    codex_total_tokens: int = 0
-    codex_state_input_tokens: int = 0
-    codex_state_cache_input_tokens: int = 0
-    codex_state_output_tokens: int = 0
-    codex_state_total_tokens: int = 0
-    last_reported_input_tokens: int = 0
-    last_reported_cache_input_tokens: int = 0
-    last_reported_output_tokens: int = 0
-    last_reported_total_tokens: int = 0
-    # Cumulative state-local total tokens at the close of the previous
-    # turn — used by the EMA updater to derive per-turn deltas. Reset to
-    # 0 alongside `codex_state_total_tokens` on phase transitions so the
-    # EMA samples turn-cost-within-stage, not cross-stage history.
-    last_ema_state_total_tokens: int = 0
-    # The state the current turn STARTED in. Captured at worker_turn_started
-    # so the EMA samples the stage that actually consumed the tokens. Without
-    # this, `_update_token_ema` reads `entry.issue.state` at
-    # EVENT_TURN_COMPLETED time — but the agent may already have flipped
-    # `state:` in the ticket body before the turn ends, so the sample would
-    # land under the destination state, not the source. Live claude demo
-    # 2026-05-17 reproduced this: Explore turn cost recorded under "plan",
-    # Plan turn cost under "in progress", etc.
-    state_at_turn_start: str = ""
-    codex_app_server_pid: int | None = None
-    last_error: str | None = None
-    # Set to `now` the first time stall detection cancels this worker. Used
-    # by the next reconcile tick to escalate from "cancel sent" to "force
-    # eject" if the worker is stuck on a non-cancellable await.
-    cancelled_at: datetime | None = None
-    # Set when the worker's own `finally` starts exit cleanup. The task done
-    # callback is only a fallback for workers that never reached this point.
-    exit_started_at: datetime | None = None
-    # Set when the per-attempt `max_turns` ceiling halted the worker without
-    # the ticket having reached a terminal state. Treated as an explicit
-    # non-success outcome in `_on_worker_exit`: no automatic continuation is
-    # scheduled. The operator must transition the ticket or resume manually.
-    hit_max_turns: bool = False
-    # Set when the current state's `agent.max_total_tokens` budget is
-    # crossed. Worker exit refreshes the ticket: a stage change continues,
-    # unchanged state is budget-blocked.
-    hit_token_budget: bool = False
-    token_budget_cap: int = 0
-
-
-@dataclass
-class RetryEntry:
-    issue_id: str
-    identifier: str
-    attempt: int
-    due_at_ms: float
-    timer_handle: asyncio.TimerHandle
-    error: str | None = None
-    kind: str = "retry"
-
-
-@dataclass
-class _CodexTotals:
-    input_tokens: int = 0
-    cache_input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-    seconds_running: float = 0.0
-
-
-# Keep snapshot of recent events for §13.7 issue endpoint.
-@dataclass
-class _IssueDebug:
-    restart_count: int = 0
-    current_retry_attempt: int = 0
-    current_attempt_kind: str | None = None
-    completed_turn_count: int = 0
-    rewind_count: int = 0
-    last_workspace: Path | None = None
-    last_error: str | None = None
-    recent_events: list[dict[str, Any]] = field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
-
 
 class Orchestrator:
     def __init__(
@@ -1028,7 +665,7 @@ class Orchestrator:
     ) -> bool:
         if not cfg.agent.auto_merge_on_done:
             return True
-        result = await auto_merge_on_done_best_effort(
+        result = await _pkg.auto_merge_on_done_best_effort(
             workflow_dir=cfg.workflow_path.parent,
             branch=f"symphony/{issue.identifier}",
             identifier=issue.identifier,
@@ -1750,7 +1387,7 @@ class Orchestrator:
             if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
                 tools.append(linear_graphql_tool())
 
-            client = build_backend(
+            client = _pkg.build_backend(
                 BackendInit(
                     cfg=cfg,
                     cwd=workspace.path,
@@ -2152,7 +1789,7 @@ class Orchestrator:
         tools: list[Any] = []
         if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
             tools.append(linear_graphql_tool())
-        new_client = build_backend(
+        new_client = _pkg.build_backend(
             BackendInit(
                 cfg=cfg,
                 cwd=workspace_path,
@@ -2698,7 +2335,7 @@ class Orchestrator:
                 # operator cleanup would `git worktree remove --force` and
                 # discard uncommitted work otherwise. Lenient — failures only
                 # warn; a missed snapshot must not block the queue.
-                await commit_workspace_on_done(
+                await _pkg.commit_workspace_on_done(
                     entry.workspace_path,
                     identifier=entry.issue.identifier,
                     title=entry.issue.title,
@@ -3053,7 +2690,7 @@ class Orchestrator:
                         # Snapshot before remove — `git worktree remove
                         # --force` would otherwise discard whatever the
                         # agent left uncommitted in the worktree.
-                        await commit_workspace_on_done(
+                        await _pkg.commit_workspace_on_done(
                             entry.workspace_path,
                             identifier=entry.issue.identifier,
                             title=entry.issue.title,
@@ -3226,7 +2863,7 @@ class Orchestrator:
                     # hold the last in-progress changes the agent never got
                     # to commit. Snapshot before remove so a force-prune
                     # doesn't lose them.
-                    await commit_workspace_on_done(
+                    await _pkg.commit_workspace_on_done(
                         path,
                         identifier=issue.identifier,
                         title=issue.title,
@@ -3234,91 +2871,3 @@ class Orchestrator:
                         state=issue.state,
                     )
                 await self._workspace_manager.remove(path)
-
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
-
-def _utc_iso_z() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def _to_iso(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _from_monotonic_to_iso(due_at_ms: float) -> str:
-    """Best-effort: project monotonic time onto wall clock for display."""
-    loop = asyncio.get_event_loop()
-    now_mono = loop.time() * 1000.0
-    delta_seconds = max((due_at_ms - now_mono) / 1000.0, 0.0)
-    target = datetime.now(timezone.utc).timestamp() + delta_seconds
-    return datetime.fromtimestamp(target, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _max_turns_exhausted_target_state(cfg: ServiceConfig) -> str:
-    if cfg.agent.budget_exhausted_state:
-        return cfg.agent.budget_exhausted_state
-    for state in cfg.tracker.terminal_states:
-        if normalize_state(state) == "blocked":
-            return state
-    return ""
-
-
-def _notify_state_transition(
-    cfg: ServiceConfig, issue: Issue, target_state: str
-) -> None:
-    """Fire-and-forget Slack (or future channel) ping for one transition.
-
-    Lives at module scope so the static ``_tracker_call_update_state`` can
-    call it without an instance reference. Errors from the dispatcher are
-    already swallowed; this wrapper only guards the lookup itself so a
-    malformed config or a hot reload-mid-transition can't take down the
-    tracker write path.
-    """
-    if not cfg.notifications.has_any():
-        return
-    try:
-        event = NotificationEvent(
-            identifier=issue.identifier,
-            title=issue.title,
-            prev_state=issue.state,
-            next_state=target_state,
-            workflow=cfg.workflow_path.parent.name,
-        )
-        dispatch_notification(cfg.notifications, event)
-    except Exception as exc:
-        log.warning(
-            "notification_emit_failed",
-            identifier=issue.identifier,
-            target=target_state,
-            error=str(exc),
-        )
-
-
-def _task_debug(task: asyncio.Task[Any] | None) -> dict[str, Any] | None:
-    if task is None:
-        return None
-    stack = [
-        f"{frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}"
-        for frame in task.get_stack()
-    ]
-    return {
-        "name": task.get_name(),
-        "done": task.done(),
-        "cancelled": task.cancelled() if task.done() else False,
-        "coro_repr": repr(task.get_coro()),
-        "stack": stack,
-    }
-
-
-def _sort_for_dispatch_fifo(issues: list[Issue], cfg: ServiceConfig) -> list[Issue]:
-    """Sort dispatch candidates by stable ticket registration order."""
-    del cfg  # Reserved for future tracker-specific ordering knobs.
-    return sort_for_dispatch(issues)
