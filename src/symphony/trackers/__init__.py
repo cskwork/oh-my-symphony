@@ -27,6 +27,18 @@ class TrackerClient(Protocol):
 
     def fetch_issue_states_by_ids(self, ids: Iterable[str]) -> list[Issue]: ...
 
+    def fetch_issue_full_by_id(self, issue_id: str) -> Issue | None:
+        """Return a fully-hydrated `Issue` (with description) by id, or
+        `None` when the id is unknown to the adapter.
+
+        Required by the stage-contract validator (§16.5 / v0.6.7+), which
+        evaluates ``Issue.description`` for required sections at every
+        forward phase transition. The cheap `fetch_issue_states_by_ids`
+        path intentionally omits description for poll-hot loops, so a
+        separate accessor is needed when the body itself is the signal.
+        """
+        ...
+
     def update_state(self, issue: Issue, target_state: str) -> None:
         """Mutate the tracker so `issue` lands in `target_state`.
 

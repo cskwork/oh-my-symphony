@@ -236,6 +236,20 @@ class JiraClient:
         jql = _jql_for_ids(id_list)
         return self._search_paginated(jql, fields=_MINIMAL_SEARCH_FIELDS, minimal=True)
 
+    def fetch_issue_full_by_id(self, issue_id: str) -> Issue | None:
+        """Issue with full body (description, priority, labels, blockers).
+
+        Used by the contract validator. Falls back to JQL search rather
+        than a direct GET /issue/{key} so the existing `_normalize_issue`
+        normalization path is reused unchanged — the orchestrator only
+        ever passes one id, so pagination overhead is negligible.
+        """
+        if not issue_id:
+            return None
+        jql = _jql_for_ids([issue_id])
+        results = self._search_paginated(jql, fields=_SEARCH_FIELDS, minimal=False)
+        return results[0] if results else None
+
     def update_state(self, issue: Issue, target_state: str) -> None:
         """Transition `issue` so its status name becomes `target_state`.
 
