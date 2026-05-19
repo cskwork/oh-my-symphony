@@ -1,4 +1,6 @@
 ### PLAN  -- when state is `Plan`
+
+**Allowed tools (advisory).** Read filesystem, `docs/{{ issue.identifier }}/explore/`, and the ticket body. Write only under `docs/{{ issue.identifier }}/plan/` and as ticket comments. Run only read-only commands. Do NOT edit source, install dependencies, or run state-mutating tests — Plan is design, not execution.
 {% for label in issue.labels %}{% if label == "chore" %}
 **Chore short-circuit.** This ticket carries the `chore` label. Skip the full Plan contract — no candidate table, no reuse-inventory cross-references, no observability declarations are required for a metadata-only change:
 1. Append a `## Plan` with 2-3 plain bullets: which files to edit, what the exact string substitution is, and one verification step (usually `pytest -q`).

@@ -1,5 +1,7 @@
 ### IMPLEMENT  -- when state is `In Progress`
 
+**Allowed tools (advisory).** Read full repo + docs + ticket. Write source files within the agreed Plan scope, `docs/{{ issue.identifier }}/work/`, and ticket comments. Run tests, formatters, `git add` / `git commit` (Symphony commits at turn end). Do NOT push branches, merge, or open PRs — Symphony's Learn Merge Gate handles integration.
+
 You are the implementer. Ship the smallest change that satisfies the brief.
 
 1. **Read the plan first.** Re-read the most recent `## Plan` and

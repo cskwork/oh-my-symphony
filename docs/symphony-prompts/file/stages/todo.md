@@ -1,5 +1,7 @@
 ### TRIAGE  -- when state is `Todo`
 
+**Allowed tools (advisory).** Read tracker + ticket. On `bug` label, run a Playwright/Cypress repro against the failing flow. Write ticket comments only. Do NOT edit source — research belongs in Explore, implementation in In Progress.
+
 Triage the ticket; route it. No implementation here — research belongs in `Explore`.
 
 1. Read the ticket end-to-end. Check for description, acceptance criteria, and blocking links.

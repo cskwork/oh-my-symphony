@@ -70,6 +70,7 @@ from .constants import (
     STALL_FORCE_EJECT_GRACE_S,
     _TOKEN_EMA_ALPHA,
 )
+from .contracts import evaluate_contract
 from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
 from .helpers import (
     _branch_hook_env,
@@ -1439,6 +1440,11 @@ class Orchestrator:
                 # through the markdown artefacts under
                 # `docs/<identifier>/<stage>/` plus the ticket body.
                 prev_phase_state = normalize_state(issue.state)
+                # Canonical-cased mirror of `prev_phase_state`. Trackers
+                # like Linear and Jira match state names case-sensitively
+                # on writes, so a contract-failure rewind needs the
+                # original casing rather than the lowercased form.
+                prev_phase_state_raw = issue.state or ""
 
                 while True:
                     # Operator pause gate — `pause_worker` clears the event,
@@ -1497,6 +1503,57 @@ class Orchestrator:
                             is_rewind = _is_rewind_transition(
                                 prev_phase_state, current_state
                             )
+                            # v0.6.7 — contract validator. When the agent
+                            # moved forward (not a rewind), check that
+                            # the producing stage actually wrote the
+                            # sections its prompt promised. On failure:
+                            # write the tracker state back to the
+                            # producing stage, append a ## Contract
+                            # Failure note, and treat the situation as
+                            # a forced rewind so the rebuild + budget
+                            # bookkeeping below still apply.
+                            if not is_rewind:
+                                contract = evaluate_contract(
+                                    producing_state=prev_phase_state,
+                                    ticket_body=issue.description or "",
+                                    identifier=issue.identifier,
+                                    docs_root=workspace.path,
+                                )
+                                if not contract.passed:
+                                    log.warning(
+                                        "stage_contract_failed",
+                                        issue_id=issue.id,
+                                        identifier=issue.identifier,
+                                        producing_state=prev_phase_state,
+                                        advanced_to=current_state,
+                                        missing=contract.missing,
+                                    )
+                                    await asyncio.to_thread(
+                                        self._tracker_call_append_note,
+                                        cfg,
+                                        issue,
+                                        contract.note_heading,
+                                        contract.note_body,
+                                    )
+                                    await asyncio.to_thread(
+                                        self._tracker_call_update_state,
+                                        cfg,
+                                        issue,
+                                        prev_phase_state_raw
+                                        or prev_phase_state,
+                                    )
+                                    refreshed = await self._refresh_issue_state(
+                                        cfg, running_issue_id
+                                    )
+                                    if refreshed is not None:
+                                        issue = refreshed
+                                        running_entry = self._running.get(
+                                            running_issue_id
+                                        )
+                                        if running_entry is not None:
+                                            running_entry.issue = issue
+                                    current_state = normalize_state(issue.state)
+                                    is_rewind = True
                             if is_rewind:
                                 debug = self._issue_debug.setdefault(
                                     running_issue_id, _IssueDebug()
@@ -1664,6 +1721,9 @@ class Orchestrator:
                     # next iteration can detect a phase transition against
                     # the freshly refreshed state below.
                     prev_phase_state = current_state
+                    prev_phase_state_raw = (
+                        running.issue.state if running is not None else issue.state
+                    ) or ""
 
                     # Refresh issue state.
                     refreshed = await self._refresh_issue_state(cfg, running_issue_id)
@@ -2483,6 +2543,44 @@ class Orchestrator:
     ) -> None:
         if self._loop is None:
             return
+        # v0.6.7 — cap auto-retries scheduled after a failure (kind
+        # other than "continuation"). When the cap is set (>0) and we
+        # would otherwise schedule attempt N where N exceeds the cap,
+        # escalate the ticket to a terminal state instead so the
+        # operator gets a board-level signal rather than a silent
+        # retry storm. Continuations (turn-to-turn / stage-to-stage
+        # success rescheduling) are exempt — they aren't failure
+        # retries and reset the attempt counter to 1.
+        cfg = self._workflow_state.current()
+        max_retries = cfg.agent.max_retries if cfg is not None else 0
+        retry_kind = kind or ("continuation" if error is None else "retry")
+        if (
+            max_retries > 0
+            and retry_kind != "continuation"
+            and attempt > max_retries
+        ):
+            log.error(
+                "agent_retry_cap_exhausted",
+                issue_id=issue_id,
+                identifier=identifier,
+                attempt=attempt,
+                max_retries=max_retries,
+                last_error=error,
+            )
+            # `self._loop.create_task` instead of the bare
+            # `asyncio.create_task` — `_schedule_retry` is a sync method
+            # and may be reached from worker_exit callbacks where the
+            # current task is in cleanup; binding to the orchestrator's
+            # owned loop sidesteps "no running event loop" errors.
+            self._loop.create_task(
+                self._escalate_max_retries(
+                    issue_id=issue_id,
+                    identifier=identifier,
+                    attempt=attempt,
+                    error=error,
+                )
+            )
+            return
         existing = self._retry.pop(issue_id, None)
         if existing is not None:
             existing.timer_handle.cancel()
@@ -2503,6 +2601,85 @@ class Orchestrator:
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.current_retry_attempt = attempt
         debug.current_attempt_kind = self._retry[issue_id].kind
+
+    async def _escalate_max_retries(
+        self,
+        *,
+        issue_id: str,
+        identifier: str,
+        attempt: int,
+        error: str | None,
+    ) -> None:
+        """Move a ticket whose retry budget is exhausted to a terminal state.
+
+        Surfaces a board-level ``## Escalation`` note and updates the
+        tracker state to ``Blocked`` (or whichever configured terminal
+        state mentions ``block``/``human``). The ticket no longer cycles
+        through ``_schedule_retry``; an operator inspecting the board
+        sees both the state change and the explanatory comment.
+        """
+        cfg = self._workflow_state.current()
+        if cfg is None:
+            self._claimed.discard(issue_id)
+            self._retry.pop(issue_id, None)
+            return
+        target_state = ""
+        for terminal in cfg.tracker.terminal_states:
+            if "block" in terminal.lower() or "human" in terminal.lower():
+                target_state = terminal
+                break
+        if not target_state and cfg.tracker.terminal_states:
+            target_state = cfg.tracker.terminal_states[0]
+        if not target_state:
+            target_state = "Blocked"
+        synthetic_issue = Issue(
+            id=issue_id,
+            identifier=identifier,
+            title="",
+            description=None,
+            priority=0,
+            state="",
+            blocked_by=(),
+            created_at=datetime.now(timezone.utc),
+        )
+        body = (
+            f"Symphony stopped scheduling retries for `{identifier}` "
+            f"after {attempt - 1} failed attempt(s) "
+            f"(cap=`agent.max_retries={cfg.agent.max_retries}`).\n"
+            f"Last error: {error or '<none>'}\n"
+            "Ticket moved to a terminal state for a human to inspect."
+        )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                synthetic_issue,
+                "Escalation",
+                body,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                synthetic_issue,
+                target_state,
+            )
+            log.warning(
+                "agent_retry_cap_escalated",
+                issue_id=issue_id,
+                identifier=identifier,
+                attempt=attempt,
+                target_state=target_state,
+            )
+        except Exception as exc:
+            log.warning(
+                "agent_retry_cap_escalation_failed",
+                issue_id=issue_id,
+                identifier=identifier,
+                error=str(exc),
+            )
+        finally:
+            self._claimed.discard(issue_id)
+            self._retry.pop(issue_id, None)
 
     async def _on_retry_timer(self, issue_id: str) -> None:
         retry = self._retry.pop(issue_id, None)

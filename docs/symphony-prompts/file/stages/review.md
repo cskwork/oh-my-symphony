@@ -1,4 +1,6 @@
 ### REVIEW  -- when state is `Review`
+
+**Allowed tools (advisory).** Read the full repo, `git diff` / `git show`, the ticket body, and `docs/{{ issue.identifier }}/work/`. Write ticket comments only (`## Security Audit`, `## Review`, `## Review Findings`). Run read-only `git`, lightweight static analysis, and live HTTP probes only when this ticket changed runtime API behavior. Do NOT edit source — fixes belong to In Progress on the rewind.
 {% for label in issue.labels %}{% if label == "chore" %}
 **Chore short-circuit.** This ticket carries the `chore` label. Skip the full Review contract — no Security Audit, no severity table, no live HTTP probes are required for a metadata-only change:
 1. Read the diff: `git show HEAD --stat` then `git show HEAD`.

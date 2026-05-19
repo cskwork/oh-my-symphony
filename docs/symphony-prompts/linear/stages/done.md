@@ -1,5 +1,7 @@
 ### DONE  -- when state is `Done`
 
+**Allowed tools (advisory).** Read full ticket history and prior sections. Post tracker comments only (As-Is -> To-Be Report, Merge Status, Merge Missing). Run read-only commands; invoke fallback merge commands only if Learn left Merge Missing. Do NOT edit source — the ticket has already shipped.
+
 Terminal. Ticket has passed QA and the Learn Merge Gate already merged the
 feature branch into the target branch. Post the comments below, then stop.
 

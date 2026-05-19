@@ -1,5 +1,7 @@
 ### PLAN  -- when state is `Plan`
 
+**Allowed tools (advisory).** Read filesystem, `docs/{{ issue.identifier }}/explore/`, and the ticket body. Write only under `docs/{{ issue.identifier }}/plan/` and as tracker comments. Run only read-only commands. Do NOT edit source, install dependencies, or run state-mutating tests — Plan is design, not execution.
+
 Turn Explore into a professional implementation plan that the next agent can
 execute by reading only `## Plan`. Do not write production code in this stage.
 
