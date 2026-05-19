@@ -120,6 +120,7 @@ def _make_config(
     *,
     max_turns: int = 5,
     max_attempts: int = 3,
+    active_states: tuple[str, ...] = ("Todo", "Explore", "In Progress", "Review"),
     prompt_template: str | None = None,
     prompts: PromptConfig | None = None,
 ) -> ServiceConfig:
@@ -138,7 +139,7 @@ def _make_config(
             endpoint="https://api.linear.app/graphql",
             api_key="tok",
             project_slug="proj",
-            active_states=("Todo", "Explore", "In Progress", "Review"),
+            active_states=active_states,
             terminal_states=("Done", "Cancelled", "Blocked"),
         ),
         hooks=HooksConfig(None, None, None, None, 60_000),
@@ -763,6 +764,105 @@ def test_forward_transition_does_not_set_is_rewind(
     assert len(first_prompts) == 2
     assert "rewind=False" in first_prompts[0]
     assert "rewind=False" in first_prompts[1]
+
+
+def test_contract_validation_uses_fresh_ticket_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(
+        max_turns=4,
+        active_states=("Review", "QA"),
+    )
+    issue = _make_issue(state="Review")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    _install_fake_backend(monkeypatch)
+    good_review = """
+## Security Audit
+| check | verdict |
+| --- | --- |
+| secrets | pass |
+
+## Review
+Looks good. Routing to QA.
+"""
+    refreshes = [
+        replace(issue, state="QA", description=""),
+        replace(issue, state="QA", description=good_review),
+        replace(issue, state="Done", description=good_review),
+    ]
+
+    async def _refresh(_self, _cfg, _issue_id):  # noqa: ANN001
+        return refreshes.pop(0)
+
+    notes: list[tuple[str, str]] = []
+    updates: list[str] = []
+
+    monkeypatch.setattr(Orchestrator, "_refresh_issue_state", _refresh)
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_append_note",
+        staticmethod(lambda _cfg, _issue, heading, body: notes.append((heading, body))),
+    )
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_update_state",
+        staticmethod(lambda _cfg, _issue, target: updates.append(target)),
+    )
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert notes == []
+    assert updates == []
+
+
+def test_contract_failure_rebuilds_at_producing_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(
+        max_turns=4,
+        active_states=("Review", "QA"),
+    )
+    issue = _make_issue(state="Review")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    stale_qa = replace(issue, state="QA", description="")
+    refreshes = [
+        stale_qa,  # after the Review turn moves forward
+        stale_qa,  # contract preflight still sees the failing body
+        stale_qa,  # tracker read after update can be stale on remote trackers
+        replace(issue, state="Done", description=""),
+    ]
+
+    async def _refresh(_self, _cfg, _issue_id):  # noqa: ANN001
+        return refreshes.pop(0)
+
+    updates: list[str] = []
+
+    monkeypatch.setattr(Orchestrator, "_refresh_issue_state", _refresh)
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_append_note",
+        staticmethod(lambda _cfg, _issue, _heading, _body: None),
+    )
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_update_state",
+        staticmethod(lambda _cfg, _issue, target: updates.append(target)),
+    )
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    prompts = [
+        call[1]["initial_prompt"]
+        for inst in instances
+        for call in inst.calls
+        if call[0] == "start_session"
+    ]
+    assert updates == ["Review"]
+    assert "state=Review" in prompts[1]
+    assert "rewind=True" in prompts[1]
 
 
 def test_rewind_budget_blocks_fourth_rewind(
