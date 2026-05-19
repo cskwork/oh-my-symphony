@@ -11,8 +11,9 @@ From inside the `oh-my-symphony` checkout:
 TARGET=/path/to/target-project
 cp tui-open.sh tui-open.bat "$TARGET/"
 cp WORKFLOW.example.md "$TARGET/WORKFLOW.md"              # then edit
-mkdir -p "$TARGET/docs"
+mkdir -p "$TARGET/docs" "$TARGET/tools"
 cp -R docs/symphony-prompts "$TARGET/docs/"
+cp -R tools/board-viewer "$TARGET/tools/"                 # required for `--viewer-port`
 cp -R skills "$TARGET/"
 cp AGENTS.md GEMINI.md "$TARGET/"
 mkdir -p "$TARGET/.claude/skills"
@@ -20,6 +21,13 @@ ln -s ../../skills/using-symphony "$TARGET/.claude/skills/using-symphony"
 ln -s ../../skills/symphony-oneshot "$TARGET/.claude/skills/symphony-oneshot"
 chmod +x "$TARGET/tui-open.sh"
 ```
+
+> ⚠ The board viewer (HTML/web UI at `--viewer-port`) auto-detects
+> `<workflow-dir>/tools/board-viewer/server.py`. If that script is missing,
+> `symphony service start` silently skips spawning the viewer — no error,
+> no warning, just an absent `started board viewer pid=...` line and a
+> `viewer_pid: null` in `.symphony/run/*.json`. Always copy `tools/board-viewer/`
+> when bootstrapping, even if you don't think you need the web UI yet.
 
 Copy `tui-open.sh` and `tui-open.bat` even for headless-first setups. The
 launcher carries safety behavior that plain `symphony tui` does not: port
@@ -45,6 +53,7 @@ python3.12 -m venv .venv
 | `AGENTS.md` | Codex entrypoint pointing to repo skills |
 | `GEMINI.md` | Gemini entrypoint pointing to repo skills |
 | `tui-open.sh`, `tui-open.bat` | One-shot board launchers |
+| `tools/board-viewer/` | Web HTML board viewer for `--viewer-port` (silently no-ops if absent) |
 
 `skills/<name>/` is the source of truth. Edit only the canonical files under
 `skills/`; platform entrypoints should point at them.

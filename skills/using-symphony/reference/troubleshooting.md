@@ -42,6 +42,7 @@ tail -F log/symphony.log
 | `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                   |
 | `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)             |
 | TUI exits immediately, no error          | No TTY (running under a non-interactive shell)           | Run from a real terminal, or use `--port 9999` headless mode                        |
+| `service start` printed `started symphony service ...` but no `started board viewer ...` line; `.symphony/run/*.json` has `viewer_pid: null` | `<workflow-dir>/tools/board-viewer/server.py` is missing; viewer auto-skipped silently | `cp -R <symphony-checkout>/tools/board-viewer <workflow-dir>/tools/` then `symphony service restart ./WORKFLOW.md --viewer-port <port>` |
 | Review reports mass deletes or `120000` symlink entries for host-backed roots such as `kanban/` or `prompt/` | The ticket branch captured host-owned workspace plumbing instead of real code changes | Stop the service, reset the polluted `symphony/<ID>` branch to the last good tree commit, update the file-workflow hooks to hide host symlink roots from Git, then restart |
 
 ## Step 3 — inspect runtime state

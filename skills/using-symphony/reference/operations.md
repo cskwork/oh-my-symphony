@@ -79,6 +79,21 @@ cards expose Pause / Resume buttons, the header refresh button triggers an
 orchestrator `poll + reconcile`, and local git branch dropdowns control
 `agent.feature_base_branch` and `agent.auto_merge_target_branch`.
 
+**Always verify the viewer actually started.** `--viewer-port` is opportunistic:
+if `<workflow-dir>/tools/board-viewer/server.py` is missing, the orchestrator
+starts cleanly but silently skips the viewer (no warning, no FAIL in `doctor`).
+After `service start`, confirm one of:
+
+- the start output prints a `started board viewer pid=NNN url=...` line, *or*
+- `cat .symphony/run/*.json | jq '.viewer_pid'` returns a number (not `null`).
+
+If the viewer is missing, copy the bundle from the symphony repo and restart:
+
+```bash
+cp -R <symphony-checkout>/tools/board-viewer ./tools/
+symphony service restart ./WORKFLOW.md --viewer-port 8765
+```
+
 ### TUI mode (interactive)
 
 ```bash
