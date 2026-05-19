@@ -10,6 +10,51 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-05-19 — Stage-contract enforcement + escalation + tool advisories
+
+Hardens the autonomous loop for weak models (Haiku, GPT-4o-mini, open).
+Stage prompts already encoded contracts (Plan must have Acceptance Tests,
+Review must produce a Security Audit, QA an AC Scorecard, Done an
+artefact-backed report) — strong models obey from prose, weak models
+skipped silently. v0.6.7 turns those prose contracts into machine-checkable
+gates: on a forward phase transition where the producing stage's required
+sections are missing, the orchestrator writes the tracker state back, posts
+a `## Contract Failure` note, and lets the existing rewind machinery
+rebuild the backend for another attempt.
+
+### Added
+
+- **Stage-contract validator** (`src/symphony/orchestrator/contracts.py`)
+  parses the ticket body before each forward transition. Plan must produce
+  `## Plan`, `## Acceptance Tests`, `## Done Signals`; Review must produce
+  a `## Security Audit` plus either `## Review` or `## Review Findings`;
+  QA must produce `## QA Evidence` and `## AC Scorecard`; Done must produce
+  `## As-Is -> To-Be Report` and `## Merge Status`, AND the artefact
+  directories `docs/{id}/qa/` and `docs/{id}/work/` must actually contain
+  files. Explore, In Progress, and Learn pass through.
+- **`agent.max_retries`** config (default `3`) caps the number of auto-retries
+  Symphony schedules after a worker exits with a non-normal outcome
+  (timeout, crash, transient backend error). On exhaustion the orchestrator
+  appends an `## Escalation` note explaining what failed and moves the
+  ticket to a terminal state — preferring a configured `Needs Human` /
+  `Blocked` state. `0` disables the cap (legacy: retry forever with
+  backoff).
+- **Allowed-tools advisory section** on every stage prompt (file/ and
+  linear/, 16 files). Each stage names its expected READ/WRITE/RUN surface
+  and explicitly forbids writes outside its scope. Advisory only — does not
+  change tool dispatch in 0.6.7; informs the agent and reviewers.
+
+### Changed
+
+- Forward phase transitions now consult the producing stage's contract
+  before allowing the new stage to dispatch. Existing `max_attempts` rewind
+  budget applies to contract-driven rewinds.
+
+### Verified
+
+- `pytest -q`: 582+ tests green, 17 new contract tests, 5 new max_retries
+  tests.
+
 ## [0.6.5] — 2026-05-18 — Slack notifications on state transitions
 
 Opt-in notification channel for tracker state transitions. The orchestrator
