@@ -1,4 +1,6 @@
 ### EXPLORE  -- when state is `Explore`
+
+**Allowed tools (advisory).** Read filesystem, `git log` / `git show`, `docs/llm-wiki/`, and the ticket body. Write only under `docs/{{ issue.identifier }}/explore/` and as ticket comments. Run only read-only commands (`grep`, `find`, `git log`, `pytest --collect-only`). Do NOT edit source — Explore is research, not implementation.
 {% for label in issue.labels %}{% if label == "chore" %}
 **Chore short-circuit.** This ticket carries the `chore` label — treat it as a metadata-only change (version bump, file rename, comment fix, dep pin, config nudge). Skip the full Explore contract:
 1. Append a one-line `## Domain Brief` describing the change (e.g. "Chore: bump version 0.6.5 → 0.6.6 in pyproject.toml and src/symphony/__init__.py").

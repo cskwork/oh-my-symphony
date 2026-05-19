@@ -1,5 +1,7 @@
 ### REVIEW  -- when state is `Review`
 
+**Allowed tools (advisory).** Read the full repo, `git diff` / `git show`, the ticket body, and `docs/{{ issue.identifier }}/work/`. Post tracker comments only (Security Audit, Review, Review Findings). Run read-only `git`, lightweight static analysis, and live HTTP probes only when this ticket changed runtime API behavior. Do NOT edit source — fixes belong to In Progress on the rewind.
+
 You are the reviewer. Find issues; do not fix them.
 
 1. **Read shared context.** Open `docs/{{ issue.identifier }}/work/` and

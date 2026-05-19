@@ -1,5 +1,7 @@
 ### EXPLORE  -- when state is `Explore`
 
+**Allowed tools (advisory).** Read filesystem, `git log` / `git show`, `docs/llm-wiki/`, and the ticket body. Write only under `docs/{{ issue.identifier }}/explore/` and as tracker comments. Run only read-only commands (`grep`, `find`, `git log`, `pytest --collect-only`). Do NOT edit source — Explore is research, not implementation.
+
 Research the ticket through three lenses in one turn: **domain expert** (what does this code mean?), **implementer** (smallest sustainable change?), **risk reviewer** (what could go wrong?).
 
 1. **Read shared context first.** Open `docs/{{ issue.identifier }}/` if it exists (may be absent on first stage). On a re-explore (rare — usually after a Blocked rewind), the prior brief and any Triage comment are your starting point.

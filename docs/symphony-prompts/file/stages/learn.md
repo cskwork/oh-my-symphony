@@ -1,4 +1,6 @@
 ### LEARN  -- when state is `Learn`
+
+**Allowed tools (advisory).** Read `docs/{{ issue.identifier }}/{explore,plan,work,qa}/` and prior ticket sections. Write `docs/llm-wiki/` (entries + INDEX.md) and ticket comments. Run `git merge-tree` and Merge Gate commands when `auto_merge_on_done` is true. Do NOT edit source — this stage is knowledge capture + merge, not implementation.
 {% for label in issue.labels %}{% if label == "chore" %}
 **Chore short-circuit.** This ticket carries the `chore` label. Skip the full Learn contract — chore tickets do not produce new domain knowledge worth filing in the wiki:
 1. Append a one-line `## Learnings` ("chore — metadata-only change, no new invariants captured").

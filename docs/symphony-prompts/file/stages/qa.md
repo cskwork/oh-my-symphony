@@ -1,5 +1,7 @@
 ### QA  -- when state is `QA`  (THIS STAGE MUST EXECUTE REAL CODE)
 
+**Allowed tools (advisory).** Read full repo, diff, payload sources (DB / schema / OpenAPI), ticket body. Write only under `docs/{{ issue.identifier }}/qa/` and as ticket comments. Run boot recipes, payload replay (curl / httpie / `requests`), `pytest` / `playwright`, and the repro spec. Do NOT edit production code — failures rewind to In Progress.
+
 You are the QA gate. Execute real code against both builds and prove the diff works. Inspecting the diff is not QA.
 
 1. Read `docs/{{ issue.identifier }}/work/` and the latest `## Review` / `## Review Findings` to learn the intended delivery.

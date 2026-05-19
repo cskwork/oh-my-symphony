@@ -1,5 +1,7 @@
 ### LEARN  -- when state is `Learn`
 
+**Allowed tools (advisory).** Read `docs/{{ issue.identifier }}/{explore,plan,work,qa}/` and prior ticket sections. Write `docs/llm-wiki/` (entries + INDEX.md) and tracker comments. Run `git merge-tree` and Merge Gate commands when `auto_merge_on_done` is true. Do NOT edit source — this stage is knowledge capture + merge, not implementation.
+
 Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wiki/` so **both developers and non-developers** can learn from it.
 
 1. Read `docs/{{ issue.identifier }}/{explore,plan,work,qa}/` and prior Linear comments (Recommendation, Plan, Implementation, QA Evidence) end-to-end.
