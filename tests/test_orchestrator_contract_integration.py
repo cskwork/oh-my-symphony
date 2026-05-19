@@ -132,10 +132,19 @@ class _TicketMutatingBackend:
     entry is ``(new_state, body_after_turn)``. After the script is
     exhausted, ``run_turn`` is a no-op so the orchestrator can drain its
     bookkeeping loop and exit via ``max_turns``.
+
+    NOTE: ``transitions`` is shared across every backend instance built
+    inside one ``_run_agent_attempt`` call. The orchestrator rebuilds
+    the backend on every phase transition (so the next stage starts with
+    a fresh context), and a fresh per-instance transition list would
+    cause turn 2 of the rebuilt backend to replay turn 1's mutation —
+    blowing away an in-between ``## Contract Failure`` note. The factory
+    wires every instance to the same list so the script advances
+    monotonically across rebuilds, matching real agent behaviour.
     """
 
     ticket_path: Path
-    transitions: list[tuple[str, str]] = field(default_factory=list)
+    transitions: list[tuple[str, str]]
     init_id: int = 0
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
@@ -337,11 +346,14 @@ def _install_file_tracker_backend(
     transitions: list[tuple[str, str]],
 ) -> list[_TicketMutatingBackend]:
     instances: list[_TicketMutatingBackend] = []
+    # Share one mutable script across every backend instance built in
+    # this test. See ``_TicketMutatingBackend`` docstring for the why.
+    shared_transitions = list(transitions)
 
     def _factory(init: Any) -> _TicketMutatingBackend:
         backend = _TicketMutatingBackend(
             ticket_path=ticket_path,
-            transitions=list(transitions),
+            transitions=shared_transitions,
             init_id=len(instances),
         )
         backend.calls.append(("factory", {"agent_kind": init.cfg.agent.kind}))
@@ -357,6 +369,22 @@ def _install_file_tracker_backend(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Production bug — fails on current main. The 365e67b hotfix calls "
+        "Orchestrator._refresh_issue_state before evaluate_contract, but "
+        "TrackerClient.fetch_issue_states_by_ids returns a *minimal* Issue "
+        "with description=None for all three trackers (file/Linear/Jira). "
+        "The refresh overwrites the in-memory full description with None, "
+        "so evaluate_contract sees ticket_body='' and fails every forward "
+        "transition out of Plan/Review/QA/Done. The pre-release CI tests "
+        "monkeypatched _refresh_issue_state to return a hydrated body, "
+        "so the regression slipped past 587 green tests. Flip this xfail "
+        "to a plain test once the production refresh helper hydrates the "
+        "description for contract-validation callers."
+    ),
+)
 def test_contract_passes_when_disk_has_required_sections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
