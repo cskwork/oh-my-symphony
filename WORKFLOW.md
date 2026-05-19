@@ -39,6 +39,9 @@ workspace:
   reuse_policy: refresh
 
 hooks:
+  # 4 min — `after_create` runs `pip install -e .[dev]` to prime a worker
+  # venv; on a fresh worktree this exceeds the 60 s default on cold caches.
+  timeout_ms: 240000
   # The workspace starts empty. Attach it as a git worktree of the host
   # repo on a per-ticket symphony/<ID> branch so the host working tree
   # stays untouched while the agent works. Product changes and docs/

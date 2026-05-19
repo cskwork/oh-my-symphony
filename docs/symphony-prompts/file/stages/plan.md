@@ -1,5 +1,11 @@
 ### PLAN  -- when state is `Plan`
-
+{% for label in issue.labels %}{% if label == "chore" %}
+**Chore short-circuit.** This ticket carries the `chore` label. Skip the full Plan contract — no candidate table, no reuse-inventory cross-references, no observability declarations are required for a metadata-only change:
+1. Append a `## Plan` with 2-3 plain bullets: which files to edit, what the exact string substitution is, and one verification step (usually `pytest -q`).
+2. Append a one-line `## Acceptance Tests` — `pytest -q` for any chore that touches Python; `none — chore` if the change is non-code (rename, comment, README, dep pin).
+3. Append a one-line `## Done Signals` (e.g. "`grep '^version' pyproject.toml` shows `0.6.6`").
+4. Set state to `In Progress` and stop. Skip the candidate table, plan rationale, and "## Plan Candidates" refresh — Explore's chore-mode brief already named the single approach.
+{% endif %}{% endfor %}
 Turn Explore into a professional implementation plan that the next agent can
 execute by reading only `## Plan`. Do not write production code in this stage.
 

@@ -1,5 +1,11 @@
 ### REVIEW  -- when state is `Review`
-
+{% for label in issue.labels %}{% if label == "chore" %}
+**Chore short-circuit.** This ticket carries the `chore` label. Skip the full Review contract — no Security Audit, no severity table, no live HTTP probes are required for a metadata-only change:
+1. Read the diff: `git show HEAD --stat` then `git show HEAD`.
+2. Confirm the diff matches the ticket's `## Plan` exactly. The only files allowed to change in a chore are the ones named in `## Plan` (and Symphony's own ticket / `docs/{{ issue.identifier }}/` artefacts).
+3. **If the diff matches the plan:** append a one-line `## Review` ("chore — diff matches plan, no findings") and set state to `QA`.
+4. **If the diff drifts** (touches files not in the plan, contains code beyond the metadata bump, or changes anything that could affect runtime behavior): set state back to `In Progress`, append `## Review Findings` with the specific drift as a HIGH-severity row, and stop. Do NOT use the chore short-circuit to wave through actual code changes.
+{% endif %}{% endfor %}
 You are the reviewer. Find issues; do not fix them.
 
 1. **Read shared context.** Open `docs/{{ issue.identifier }}/work/` and

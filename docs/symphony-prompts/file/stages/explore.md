@@ -1,5 +1,13 @@
 ### EXPLORE  -- when state is `Explore`
+{% for label in issue.labels %}{% if label == "chore" %}
+**Chore short-circuit.** This ticket carries the `chore` label — treat it as a metadata-only change (version bump, file rename, comment fix, dep pin, config nudge). Skip the full Explore contract:
+1. Append a one-line `## Domain Brief` describing the change (e.g. "Chore: bump version 0.6.5 → 0.6.6 in pyproject.toml and src/symphony/__init__.py").
+2. Append a one-line `## Plan Candidates` ("Single approach: edit the named files; no alternatives needed.").
+3. Append a one-line `## Recommendation` pointing at the ticket's `## Acceptance criteria` as the source of truth.
+4. Set state to `Plan` and stop. Do NOT write `reuse-inventory.md`, `vendor-docs.md`, or do a git-history sweep. Do NOT open `docs/llm-wiki/`.
 
+If the diff would touch source code paths beyond the named metadata files, the ticket was mislabeled — drop the `chore` short-circuit, append a one-line `## Triage` flagging the mislabel, and run the full Explore contract below.
+{% endif %}{% endfor %}
 Research the ticket through three lenses in one turn: **domain expert** (what does this code mean?), **implementer** (smallest sustainable change?), **risk reviewer** (what could go wrong?).
 
 1. **Read shared context first.** Open `docs/{{ issue.identifier }}/` if it exists (may be absent on first stage). On a re-explore (rare — usually after a Blocked rewind), the prior brief and any `## Triage` are your starting point.
