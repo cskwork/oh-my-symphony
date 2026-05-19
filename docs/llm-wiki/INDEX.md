@@ -7,6 +7,7 @@ before any new ticket; Learn writes back to them after QA passes.
 | topic-slug | summary | last touched |
 |------------|---------|--------------|
 | production-pipeline | Eight-stage pipeline + non-LLM Todo auto-triage + docs/<id>/<stage>/ artefact convention + WORKFLOW/PIPELINE sync invariant | 2026-05-17 (Todo auto-triage) |
+| release-version-bump | Two-file lockstep version bump (`pyproject.toml:7` + `src/symphony/__init__.py:47`) + `chore(release)` hook contract + out-of-band tag rule | 2026-05-19 (REL-066) |
 | orchestrator-phase-transition | `_rebuild_backend_for_phase` try/except envelope + `_install_fake_backend` factory pattern + WorkspaceManager hot-reload three-setter contract | 2026-05-17 (SMA-24) |
 | workspace-auto-commit-excludes | Opt-in `symphony.autocommitExclude` git-config pathspec exclusions for final auto-commits, including base-squash safety and quoted pathspec handling | 2026-05-17 (SMA-25) |
 | agent-observability | Headless event log signal set + cache token split + stall signatures + cross-refs to orchestrator/doctor/workspace | 2026-05-17 |

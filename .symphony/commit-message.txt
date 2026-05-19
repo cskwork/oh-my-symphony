@@ -1,1 +1,1 @@
-test(orchestrator): pin PR #19 + PR #21 regression paths (SMA-24)
+chore(release): v0.6.6
