@@ -449,7 +449,7 @@ def test_validate_for_dispatch_unsupported_tracker(tmp_path):
         textwrap.dedent(
             """\
             ---
-            tracker: { kind: jira, project_slug: x, api_key: xx }
+            tracker: { kind: unknown_tracker, project_slug: x, api_key: xx }
             ---
             body
             """

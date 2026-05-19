@@ -7,6 +7,7 @@ Adapters live as submodules:
 
     symphony.trackers.file    -> FileBoardTracker  (Markdown ticket files)
     symphony.trackers.linear  -> LinearClient      (Linear GraphQL)
+    symphony.trackers.jira    -> JiraClient        (Jira Cloud REST API v3)
 """
 
 from __future__ import annotations
@@ -54,6 +55,10 @@ def build_tracker_client(cfg: ServiceConfig) -> TrackerClient:
         from .file import FileBoardTracker
 
         return FileBoardTracker(cfg.tracker)
+    if kind == "jira":
+        from .jira import JiraClient
+
+        return JiraClient(cfg.tracker)
     raise UnsupportedTrackerKind("tracker kind not supported", kind=kind)
 
 
