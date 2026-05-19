@@ -2543,6 +2543,44 @@ class Orchestrator:
     ) -> None:
         if self._loop is None:
             return
+        # v0.6.7 — cap auto-retries scheduled after a failure (kind
+        # other than "continuation"). When the cap is set (>0) and we
+        # would otherwise schedule attempt N where N exceeds the cap,
+        # escalate the ticket to a terminal state instead so the
+        # operator gets a board-level signal rather than a silent
+        # retry storm. Continuations (turn-to-turn / stage-to-stage
+        # success rescheduling) are exempt — they aren't failure
+        # retries and reset the attempt counter to 1.
+        cfg = self._workflow_state.current()
+        max_retries = cfg.agent.max_retries if cfg is not None else 0
+        retry_kind = kind or ("continuation" if error is None else "retry")
+        if (
+            max_retries > 0
+            and retry_kind != "continuation"
+            and attempt > max_retries
+        ):
+            log.error(
+                "agent_retry_cap_exhausted",
+                issue_id=issue_id,
+                identifier=identifier,
+                attempt=attempt,
+                max_retries=max_retries,
+                last_error=error,
+            )
+            # `self._loop.create_task` instead of the bare
+            # `asyncio.create_task` — `_schedule_retry` is a sync method
+            # and may be reached from worker_exit callbacks where the
+            # current task is in cleanup; binding to the orchestrator's
+            # owned loop sidesteps "no running event loop" errors.
+            self._loop.create_task(
+                self._escalate_max_retries(
+                    issue_id=issue_id,
+                    identifier=identifier,
+                    attempt=attempt,
+                    error=error,
+                )
+            )
+            return
         existing = self._retry.pop(issue_id, None)
         if existing is not None:
             existing.timer_handle.cancel()
@@ -2563,6 +2601,85 @@ class Orchestrator:
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.current_retry_attempt = attempt
         debug.current_attempt_kind = self._retry[issue_id].kind
+
+    async def _escalate_max_retries(
+        self,
+        *,
+        issue_id: str,
+        identifier: str,
+        attempt: int,
+        error: str | None,
+    ) -> None:
+        """Move a ticket whose retry budget is exhausted to a terminal state.
+
+        Surfaces a board-level ``## Escalation`` note and updates the
+        tracker state to ``Blocked`` (or whichever configured terminal
+        state mentions ``block``/``human``). The ticket no longer cycles
+        through ``_schedule_retry``; an operator inspecting the board
+        sees both the state change and the explanatory comment.
+        """
+        cfg = self._workflow_state.current()
+        if cfg is None:
+            self._claimed.discard(issue_id)
+            self._retry.pop(issue_id, None)
+            return
+        target_state = ""
+        for terminal in cfg.tracker.terminal_states:
+            if "block" in terminal.lower() or "human" in terminal.lower():
+                target_state = terminal
+                break
+        if not target_state and cfg.tracker.terminal_states:
+            target_state = cfg.tracker.terminal_states[0]
+        if not target_state:
+            target_state = "Blocked"
+        synthetic_issue = Issue(
+            id=issue_id,
+            identifier=identifier,
+            title="",
+            description=None,
+            priority=0,
+            state="",
+            blocked_by=(),
+            created_at=datetime.now(timezone.utc),
+        )
+        body = (
+            f"Symphony stopped scheduling retries for `{identifier}` "
+            f"after {attempt - 1} failed attempt(s) "
+            f"(cap=`agent.max_retries={cfg.agent.max_retries}`).\n"
+            f"Last error: {error or '<none>'}\n"
+            "Ticket moved to a terminal state for a human to inspect."
+        )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                synthetic_issue,
+                "Escalation",
+                body,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                synthetic_issue,
+                target_state,
+            )
+            log.warning(
+                "agent_retry_cap_escalated",
+                issue_id=issue_id,
+                identifier=identifier,
+                attempt=attempt,
+                target_state=target_state,
+            )
+        except Exception as exc:
+            log.warning(
+                "agent_retry_cap_escalation_failed",
+                issue_id=issue_id,
+                identifier=identifier,
+                error=str(exc),
+            )
+        finally:
+            self._claimed.discard(issue_id)
+            self._retry.pop(issue_id, None)
 
     async def _on_retry_timer(self, issue_id: str) -> None:
         retry = self._retry.pop(issue_id, None)

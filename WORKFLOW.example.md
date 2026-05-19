@@ -187,6 +187,13 @@ agent:
   budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
+  # Cap on auto-retries scheduled after a worker exits with a non-normal
+  # outcome (timeout, crash, transient backend error). On exhaustion the
+  # orchestrator stops scheduling further retries, appends an
+  # `## Escalation` note to the ticket, and moves the ticket to the first
+  # terminal state mentioning `block` or `human` (else `Blocked`). 0 = no
+  # cap (legacy: retry forever with exponential backoff).
+  max_retries: 3
   # File-board only: route obvious Todo tickets with Acceptance Criteria to
   # Explore without spending a model turn. Bug/blocked/ambiguous tickets still
   # run the Todo prompt.

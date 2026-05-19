@@ -66,6 +66,7 @@ from .constants import (
     DEFAULT_HOOK_TIMEOUT_MS,
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_CONCURRENT_AGENTS,
+    DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_RETRY_BACKOFF_MS,
     DEFAULT_MAX_TOTAL_TURNS,
     DEFAULT_MAX_TURNS,
@@ -294,6 +295,11 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             agent_raw.get("max_attempts"),
             DEFAULT_MAX_ATTEMPTS,
             name="agent.max_attempts",
+        ),
+        max_retries=_validated_nonnegative_or_default(
+            agent_raw.get("max_retries"),
+            DEFAULT_MAX_RETRIES,
+            name="agent.max_retries",
         ),
         auto_triage_actionable_todo=bool(
             agent_raw.get("auto_triage_actionable_todo", True)
