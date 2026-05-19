@@ -173,7 +173,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     tui_task: asyncio.Task[None] | None = None
     if args.tui:
-        from .tui import KanbanTUI
+        from symphony.tui import KanbanTUI
 
         tui = KanbanTUI(orchestrator, state)
 
