@@ -798,7 +798,13 @@ Looks good. Routing to QA.
     notes: list[tuple[str, str]] = []
     updates: list[str] = []
 
+    # Both the minimal (state-only) and full-body refresh helpers pull
+    # from the same scripted sequence. The orchestrator now uses
+    # `_refresh_issue_full` for the contract preflight specifically (so
+    # description is hydrated against the live tracker body), and
+    # `_refresh_issue_state` for the cheap post-turn state poll.
     monkeypatch.setattr(Orchestrator, "_refresh_issue_state", _refresh)
+    monkeypatch.setattr(Orchestrator, "_refresh_issue_full", _refresh)
     monkeypatch.setattr(
         Orchestrator,
         "_tracker_call_append_note",
@@ -840,7 +846,9 @@ def test_contract_failure_rebuilds_at_producing_state(
 
     updates: list[str] = []
 
+    # Same dual monkeypatch as the sibling test — see its comment.
     monkeypatch.setattr(Orchestrator, "_refresh_issue_state", _refresh)
+    monkeypatch.setattr(Orchestrator, "_refresh_issue_full", _refresh)
     monkeypatch.setattr(
         Orchestrator,
         "_tracker_call_append_note",

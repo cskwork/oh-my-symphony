@@ -33,6 +33,11 @@ from .workflow import (
 
 ProcessRunningPredicate = Callable[[int | None], bool]
 ServiceState = Literal["running", "stopped"]
+
+# Module-level runtime bool. Pyright narrows literal `sys.platform == "win32"`
+# at evaluation time, marking Win-only branches as unreachable on macOS/Linux.
+# A separately-bound bool keeps every branch analyzable on every host.
+_IS_WIN32: bool = sys.platform == "win32"
 DEFAULT_SERVICE_PORT = 9999
 DEFAULT_VIEWER_PORT = 8765
 
@@ -182,7 +187,13 @@ def clear_record(workflow_path: str | Path) -> None:
 def _is_process_running_windows(pid: int) -> bool:
     # PROCESS_QUERY_LIMITED_INFORMATION keeps the handle read-only.  If that
     # right is denied, fall back to PROCESS_QUERY_INFORMATION for older hosts.
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # `ctypes.WinDLL` only exists on Windows; the `_IS_WIN32` gate at every
+    # caller site keeps this branch dead on POSIX. Use getattr so Pyright on
+    # macOS/Linux doesn't flag the literal `ctypes.WinDLL` attribute.
+    win_dll = getattr(ctypes, "WinDLL", None)
+    if win_dll is None:
+        return False
+    kernel32 = win_dll("kernel32", use_last_error=True)
     process_query_limited_information = 0x1000
     process_query_information = 0x0400
     still_active = 259
@@ -210,7 +221,7 @@ def is_process_running(pid: int | None) -> bool:
     if parsed <= 0:
         return False
 
-    if sys.platform == "win32":
+    if _IS_WIN32:
         try:
             return _is_process_running_windows(parsed)
         except OSError:
@@ -329,7 +340,7 @@ def _popen_detached(command: list[str], *, cwd: Path, log_path: Path) -> int:
         "stdin": subprocess.DEVNULL,
         "env": env,
     }
-    if sys.platform == "win32":
+    if _IS_WIN32:
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
         kwargs["creationflags"] = creationflags
@@ -380,7 +391,7 @@ def terminate_process(pid: int | None, *, force: bool = False) -> bool:
         return False
     if parsed <= 0 or not is_process_running(parsed):
         return False
-    if sys.platform == "win32":
+    if _IS_WIN32:
         try:
             return _terminate_process_windows(parsed, force=force)
         except OSError:
@@ -532,6 +543,14 @@ def _start_locked(args: argparse.Namespace, *, workflow: Path, cfg: Any) -> int:
                         file=sys.stderr,
                     )
                     viewer_pid = None
+            else:
+                expected = workflow_dir / "tools" / "board-viewer" / "server.py"
+                print(
+                    f"warning: --viewer-port {viewer_port} requested but {expected} not found; "
+                    "viewer skipped (orchestrator OK). "
+                    "Copy `tools/board-viewer/` from the symphony checkout to enable the web UI.",
+                    file=sys.stderr,
+                )
     except OSError as exc:
         if viewer_pid is not None:
             terminate_process(viewer_pid, force=True)

@@ -10,6 +10,43 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-20 — TUI import hotfix + contract-validation hydration + viewer doctor
+
+Follow-up release after v0.6.7 contract enforcement. Fixes a TUI startup
+regression introduced when `symphony.tui` was split from a single module
+into a package, plus a hydration gap in stage-contract validation where
+the validator could read a stale in-memory ticket body and falsely mark
+freshly written sections as missing. Also lands the long-tail board-viewer
+doctor improvements that surfaced silent viewer-launch failures.
+
+### Fixed
+
+- **TUI startup crash** (`src/symphony/cli/main.py`): `symphony --tui` exited
+  immediately with `ModuleNotFoundError: No module named 'symphony.cli.tui'`
+  because commit `d5c4477` moved `KanbanTUI` from `src/symphony/tui.py` to the
+  `src/symphony/tui/` package but the relative `from .tui import KanbanTUI`
+  in `cli/main.py` still resolved against `symphony.cli`. Switched to the
+  absolute `from symphony.tui import KanbanTUI`.
+- **Contract validation reads fresh ticket body** (PR #51, `720ce4f`).
+  Stage-contract validator now hydrates the ticket description before each
+  check so producer-stage sections written in the current turn cannot be
+  reported as missing on the very next dispatch.
+
+### Added
+
+- **File-tracker contract regression test** (PR #50, `ee6ca9d`) plus an
+  xfail covering the v0.6.7 hotfix gap so the contract path is locked
+  against future stale-snapshot regressions.
+- **Board-viewer doctor improvements** (`fd70379`): doctor now emits a
+  WARN rather than silently skipping when the board-viewer launcher is
+  missing or the configured `--viewer-port` cannot be honored.
+
+### Changed
+
+- **Documentation** (`e58f989`): the Symphony skill now documents that
+  `--viewer-port` is silently skipped when the `board-viewer/` directory
+  is absent, so operators stop chasing phantom 8765 listeners.
+
 ## [0.6.7] — 2026-05-19 — Stage-contract enforcement + escalation + tool advisories
 
 Hardens the autonomous loop for weak models (Haiku, GPT-4o-mini, open).

@@ -96,6 +96,34 @@ query ByIds($ids: [ID!]) {
 }
 """
 
+# Single-issue lookup with FULL body — distinct from the minimal
+# `_BY_IDS_QUERY` because the stage-contract validator needs the
+# `description` field. Kept separate so the poll-hot reconcile path
+# stays minimal.
+_BY_ID_FULL_QUERY = """
+query ByIdFull($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    title
+    description
+    priority
+    branchName
+    url
+    createdAt
+    updatedAt
+    state { name }
+    labels { nodes { name } }
+    inverseRelations(filter: { type: { eq: "blocks" } }) {
+      nodes {
+        type
+        issue { id identifier state { name } }
+      }
+    }
+  }
+}
+"""
+
 # Used by `update_state` to translate a state name → state UUID.
 # Linear's `issueUpdate` mutation requires the state's UUID, not its name.
 # We narrow by team via the issue first, then list workflow states for that
@@ -233,6 +261,25 @@ class LinearClient:
         payload = self._post({"query": _BY_IDS_QUERY, "variables": {"ids": id_list}})
         nodes = self._extract_nodes(payload)
         return [_normalize_node(n, minimal=True) for n in nodes]
+
+    def fetch_issue_full_by_id(self, issue_id: str) -> Issue | None:
+        """Issue with full body (description, labels, blockers) by id.
+
+        Used by the contract validator on every forward phase transition;
+        the minimal `fetch_issue_states_by_ids` strips description, so a
+        dedicated GraphQL query is needed to surface it without bloating
+        the poll-hot path.
+        """
+        if not issue_id:
+            return None
+        payload = self._post(
+            {"query": _BY_ID_FULL_QUERY, "variables": {"id": issue_id}}
+        )
+        data = payload.get("data") or {}
+        node = data.get("issue")
+        if not isinstance(node, dict):
+            return None
+        return _normalize_node(node, minimal=False)
 
     def update_state(self, issue: Issue, target_state: str) -> None:
         """Move `issue` to the workflow state named `target_state`.

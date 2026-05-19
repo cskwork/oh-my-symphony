@@ -1519,8 +1519,18 @@ class Orchestrator:
                                     "qa",
                                     "done",
                                 }:
+                                    # IMPORTANT: contract eval reads
+                                    # `issue.description`, so we MUST use
+                                    # the full-body refresh — not the
+                                    # minimal `_refresh_issue_state`, which
+                                    # returns description=None for every
+                                    # tracker adapter and would falsely
+                                    # fail every forward transition. See
+                                    # tests/test_orchestrator_contract_
+                                    # integration.py for the regression
+                                    # the v0.6.7 release surfaced.
                                     refreshed_for_contract = (
-                                        await self._refresh_issue_state(
+                                        await self._refresh_issue_full(
                                             cfg, running_issue_id
                                         )
                                     )
@@ -1561,7 +1571,14 @@ class Orchestrator:
                                         prev_phase_state_raw
                                         or prev_phase_state,
                                     )
-                                    refreshed = await self._refresh_issue_state(
+                                    # Pull the freshly-rewound body so the
+                                    # next backend rebuild's first prompt
+                                    # sees the ## Contract Failure note we
+                                    # just appended (full-body fetch — see
+                                    # the comment above the preflight
+                                    # refresh for why minimal would erase
+                                    # description).
+                                    refreshed = await self._refresh_issue_full(
                                         cfg, running_issue_id
                                     )
                                     if refreshed is not None:
@@ -1939,6 +1956,28 @@ class Orchestrator:
             if issue.id == issue_id:
                 return issue
         return None
+
+    async def _refresh_issue_full(
+        self, cfg: ServiceConfig, issue_id: str
+    ) -> Issue | None:
+        """Refresh an issue with its full body (description) from the tracker.
+
+        `_refresh_issue_state` returns the *minimal* Issue payload — fast
+        but strips description. The stage-contract validator (v0.6.7+)
+        needs the live body to evaluate required-section presence, so the
+        forward-transition path uses this helper instead. Returns None on
+        transport failure or missing id; callers must keep the prior
+        in-memory issue in that case (do NOT replace it with None).
+        """
+        try:
+            return await asyncio.to_thread(
+                self._tracker_call_full_by_id, cfg, issue_id
+            )
+        except Exception as exc:
+            log.warning(
+                "issue_full_refresh_failed", issue_id=issue_id, error=str(exc)
+            )
+            return None
 
     async def _persist_budget_exhausted_state(
         self,
@@ -2969,6 +3008,17 @@ class Orchestrator:
         client = build_tracker_client(cfg)
         try:
             return client.fetch_issue_states_by_ids(ids)
+        finally:
+            client.close()
+
+    @staticmethod
+    def _tracker_call_full_by_id(
+        cfg: ServiceConfig, issue_id: str
+    ) -> Issue | None:
+        """Single-issue fetch with full body — used by contract validation."""
+        client = build_tracker_client(cfg)
+        try:
+            return client.fetch_issue_full_by_id(issue_id)
         finally:
             client.close()
 
