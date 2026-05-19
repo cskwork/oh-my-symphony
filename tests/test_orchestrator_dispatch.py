@@ -2795,6 +2795,82 @@ def test_conflict_pre_check_no_overlap_dispatches_normally(monkeypatch):
     )
 
 
+def test_g1_stale_claimed_pruned_after_conflict_resolves(monkeypatch):
+    """G1 — `_claimed` must release a conflict_blocked id once the worker
+    that triggered the block is gone. Without this prune, the candidate
+    stays sticky forever: the operator can move it back to Todo and the
+    dispatcher will still skip it on the eligibility check.
+    """
+    import asyncio
+
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    held = _issue(
+        "MT-1",
+        state="In Progress",
+        description="## Touched Files\n- src/foo.py\n",
+    )
+    candidate = _issue(
+        "MT-2",
+        state="Todo",
+        description="## Touched Files\n- src/foo.py\n",
+    )
+
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    orch._running[held.id] = RunningEntry(
+        issue=held,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp"),
+    )
+    orch._claimed.add(held.id)
+
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [candidate]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_append_note", staticmethod(lambda *_a, **_k: None)
+    )
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_update_state", staticmethod(lambda *_a, **_k: None)
+    )
+
+    asyncio.run(orch._on_tick())
+    assert candidate.id in orch._claimed, (
+        "conflict path must add MT-2 to _claimed inside the conflict tick"
+    )
+    assert dispatched == [], "conflict must skip dispatch on the first tick"
+
+    # Simulate the worker that owned the file exiting and the operator
+    # restoring MT-2 to an active state. Without the prune, the second
+    # tick would still skip MT-2 because of the sticky _claimed entry.
+    orch._running.pop(held.id, None)
+    orch._claimed.discard(held.id)
+
+    asyncio.run(orch._on_tick())
+    assert candidate.id not in orch._claimed, (
+        "G1 prune must drop the stale claim once MT-1 left _running"
+    )
+    assert dispatched == ["MT-2"], (
+        "candidate must dispatch on the second tick after prune"
+    )
+
+
 # ---------------------------------------------------------------------------
 # C3 — adaptive token-budget EMA (workflow-v0.5.2 § C3).
 # ---------------------------------------------------------------------------

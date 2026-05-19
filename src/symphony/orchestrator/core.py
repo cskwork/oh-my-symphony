@@ -731,6 +731,27 @@ class Orchestrator:
             self._workspace_manager.update_hook_env(_branch_hook_env(cfg))
 
         await self._reconcile_running(cfg)
+        # G1 — drop sticky locks for tickets no longer in flight. `_claimed`
+        # gathers ids on every dispatch path that wants to skip a ticket on
+        # the *current* tick (conflict_blocked, hit_max_turns,
+        # token/turn-budget exhaustion). Without this prune those locks
+        # outlive the situation that set them: a ticket the operator moves
+        # back to Todo after fixing the conflict stays invisible to dispatch
+        # for the rest of the session. Keeping `_claimed` aligned with
+        # `_running ∪ _retry` lets the next tick re-evaluate eligibility
+        # against the live tracker state — Blocked tickets stay skipped via
+        # `_eligible`'s active-state check; recovered tickets dispatch.
+        in_flight_ids = set(self._running) | set(self._retry)
+        stale_claimed = self._claimed - in_flight_ids
+        if stale_claimed:
+            log.info(
+                "stale_claimed_pruned",
+                ids=sorted(stale_claimed),
+            )
+            self._claimed -= stale_claimed
+        stale_turn_budget = self._turn_budget_exhausted - in_flight_ids
+        if stale_turn_budget:
+            self._turn_budget_exhausted -= stale_turn_budget
 
         try:
             validate_for_dispatch(cfg)
@@ -1009,7 +1030,11 @@ class Orchestrator:
 
         Lenient: tracker failures only log a warning. The in-memory
         `_claimed` set still gets the candidate so the same dispatch loop
-        doesn't immediately retry it inside the same tick.
+        doesn't immediately retry it inside the same tick. The G1 prune at
+        `_on_tick` start drops this id on the next tick once the worker
+        that triggered the conflict has exited, so the candidate can
+        re-enter the dispatch loop the moment the operator (or auto-merge)
+        moves it back to an active state.
         """
         sorted_overlap = sorted(overlap)
         note_body = (
