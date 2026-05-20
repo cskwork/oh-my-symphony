@@ -27,6 +27,21 @@ RETRY_BASE_MS = 10_000  # §8.4
 # board. The cancel is still issued; this just stops the slot from leaking.
 STALL_FORCE_EJECT_GRACE_S = 30.0
 
+# G2 — empty-response loop guard. Three consecutive `EVENT_TURN_COMPLETED`
+# events whose turn produced no fresh preview text trigger the escalation
+# path (`empty_response_loop` budget kind). The threshold is conservative
+# enough to ignore tool-only chains while catching the slow-burn loop the
+# stall and max-turns floors miss.
+EMPTY_TURN_LOOP_THRESHOLD = 3
+
+# G3 — wait-age dispatch bump. Candidates released from `_claimed` longer
+# than this threshold ago jump ahead of registration-order FIFO in the
+# dispatch sort. Set conservatively so the bump only fires on real
+# starvation (>10 min waiting after the conflict/budget block cleared),
+# not as a default priority knob that would invert ordinary FIFO ordering
+# for slightly-stale tickets.
+WAIT_AGE_BUMP_MIN = 10.0
+
 
 # Backward stage transitions that count against the rewind budget.
 # `normalize_state` lowercases its input, so compare in lowercase.

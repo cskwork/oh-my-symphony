@@ -28,7 +28,7 @@ from textual.widgets import Footer, Header, Input
 
 from ..i18n import SUPPORTED_LANGUAGES, t
 from ..issue import Issue, normalize_state
-from ..logging import get_logger
+from ..logging import attach_file_handler, get_logger
 from ..orchestrator import Orchestrator
 from ..trackers import build_tracker_client
 from ..workflow import ServiceConfig, WorkflowState
@@ -803,12 +803,35 @@ class KanbanTUI:
         self._app: KanbanApp | None = None
 
     async def run(self) -> None:
+        self._attach_file_log_sink()
         self._app = KanbanApp(self._orch, self._ws)
         try:
             await self._app.run_async()
         except asyncio.CancelledError:
             self.request_stop()
             raise
+
+    def _attach_file_log_sink(self) -> None:
+        """G4 — mirror the headless service's `log/symphony.log` sink so
+        TUI sessions also produce a structured log. `SYMPHONY_LOG_FILE`
+        overrides the default for tests / non-standard layouts. Failures
+        are swallowed: a broken log sink must not block TUI startup.
+        """
+        import os
+        from pathlib import Path
+        try:
+            override = os.environ.get("SYMPHONY_LOG_FILE")
+            if override:
+                log_path = Path(override)
+            else:
+                cfg = self._ws.current()
+                workflow_dir = cfg.workflow_path.parent if cfg is not None else None
+                if workflow_dir is None:
+                    return
+                log_path = workflow_dir / "log" / "symphony.log"
+            attach_file_handler(get_logger(), log_path)
+        except Exception:
+            pass
 
     def request_stop(self) -> None:
         if self._app is not None:

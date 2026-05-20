@@ -295,6 +295,159 @@ def test_create_and_transition_round_trip(tmp_path):
     assert fbt.find_path("X-2") == odd
 
 
+def test_g5_strip_conflict_and_budget_sections_on_active_restore(tmp_path):
+    """G5 — When the operator moves a ticket back into an active state,
+    orchestrator-authored `## Conflict` / `## Budget Exceeded` sections
+    must be stripped so board UIs don't keep showing stale warnings.
+    """
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(identifier="MT-1", title="t", state="Blocked",
+               description="Original body.")
+    # Append both orchestrator-authored notes (mirroring the live
+    # `_tracker_call_append_note(..., "Conflict", ...)` and
+    # `_tracker_call_append_note(..., "Budget Exceeded", ...)` paths).
+    issue = issue_from_file(fbt.find_path("MT-1"))
+    assert issue is not None
+    fbt.append_note(issue, "Conflict", "MT-1 touched files overlap with MT-2.")
+    issue = issue_from_file(fbt.find_path("MT-1"))
+    fbt.append_note(issue, "Budget Exceeded", "tokens budget exceeded …")
+    before_path = fbt.find_path("MT-1")
+    before_body = before_path.read_text()
+    assert "## Conflict" in before_body
+    assert "## Budget Exceeded" in before_body
+
+    # Restore via update_state into an active state.
+    issue = issue_from_file(before_path)
+    fbt.update_state(issue, "Todo")
+
+    after_body = before_path.read_text()
+    assert "## Conflict" not in after_body, (
+        "## Conflict section must be stripped on transition into active state"
+    )
+    assert "## Budget Exceeded" not in after_body, (
+        "## Budget Exceeded section must be stripped on transition into active state"
+    )
+    assert "Original body." in after_body, (
+        "operator-authored body must survive the strip"
+    )
+
+
+def test_g5_strip_does_not_fire_on_transition_into_terminal_state(tmp_path):
+    """G5 — Restoration only fires on active transitions. Moving into
+    Done / Cancelled / any non-active state must NOT mutate the body."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"), terminal=("Done",))
+    )
+    fbt.create(identifier="MT-2", title="t", state="Blocked",
+               description="Original body.")
+    issue = issue_from_file(fbt.find_path("MT-2"))
+    fbt.append_note(issue, "Conflict", "MT-2 conflict with X.")
+    path = fbt.find_path("MT-2")
+    before = path.read_text()
+
+    issue = issue_from_file(path)
+    fbt.update_state(issue, "Done")
+    after = path.read_text()
+
+    # Body untouched apart from state/updated_at frontmatter changes.
+    # The `## Conflict` block must remain visible.
+    assert "## Conflict" in after, (
+        "G5 strip must not fire when transitioning into a non-active state"
+    )
+
+
+def test_g5_strip_preserves_operator_authored_content_between_warnings(tmp_path):
+    """G5 — operator-authored sections between the warning sections must
+    survive the strip. We only remove blocks that match the warning
+    heading regex, not the operator's own content in between."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(
+        identifier="MT-MIX", title="t", state="Blocked",
+        description=textwrap.dedent("""\
+            Operator preamble.
+
+            ## Conflict
+
+            MT-MIX overlap with FOO-1.
+
+            ## Operator Note
+
+            Operator-authored content goes here.
+
+            ## Budget Exceeded
+
+            tokens budget exceeded.
+
+            ## Operator Tail
+
+            Another operator section after warnings.
+        """),
+    )
+    issue = issue_from_file(fbt.find_path("MT-MIX"))
+    fbt.update_state(issue, "Todo")
+
+    after = fbt.find_path("MT-MIX").read_text()
+    assert "## Conflict" not in after
+    assert "## Budget Exceeded" not in after
+    assert "Operator preamble." in after
+    assert "## Operator Note" in after
+    assert "Operator-authored content goes here." in after
+    assert "## Operator Tail" in after
+    assert "Another operator section after warnings." in after
+
+
+def test_g5_strip_handles_warning_at_end_of_body(tmp_path):
+    """G5 — a warning section at the very end of the body must be stripped
+    cleanly without leaving trailing whitespace artifacts."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(
+        identifier="MT-END", title="t", state="Blocked",
+        description="Description body.\n",
+    )
+    issue = issue_from_file(fbt.find_path("MT-END"))
+    fbt.append_note(issue, "Conflict", "tail conflict.")
+    issue = issue_from_file(fbt.find_path("MT-END"))
+    fbt.update_state(issue, "Todo")
+
+    after = fbt.find_path("MT-END").read_text()
+    assert "## Conflict" not in after
+    assert "Description body." in after
+
+
+def test_g5_strip_is_idempotent(tmp_path):
+    """G5 — calling update_state into an active state when the warning
+    sections are already gone must be a no-op for the body."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(identifier="MT-IDEM", title="t", state="Blocked",
+               description="Body only.")
+    issue = issue_from_file(fbt.find_path("MT-IDEM"))
+    fbt.update_state(issue, "Todo")
+    after_first = fbt.find_path("MT-IDEM").read_text()
+
+    # Second restore: should be effectively a no-op for body.
+    issue = issue_from_file(fbt.find_path("MT-IDEM"))
+    fbt.update_state(issue, "In Progress")
+    after_second = fbt.find_path("MT-IDEM").read_text()
+
+    # Frontmatter updated_at + state differs; body remains "Body only.".
+    assert "Body only." in after_second
+    assert "## Conflict" not in after_first
+    assert "## Conflict" not in after_second
+
+
 @pytest.mark.parametrize("agent_kind", sorted(SUPPORTED_AGENT_KINDS))
 def test_create_can_write_agent_kind_override(tmp_path, agent_kind):
     root = tmp_path / "board"
