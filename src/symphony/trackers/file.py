@@ -285,6 +285,36 @@ def serialize_ticket(front: dict[str, Any], body: str) -> str:
     return "\n".join(parts) + "\n"
 
 
+_WARNING_HEADING_RE = re.compile(
+    r"^##\s+(?:Conflict|Budget\s+Exceeded)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_warning_blocks(body: str) -> str:
+    """G5 — remove orchestrator-authored `## Conflict` / `## Budget Exceeded`
+    sections from a ticket body.
+
+    A section runs from its `##` heading up to (but not including) the next
+    `##` heading or end-of-body. Operator-authored bodies that happen to
+    use the same headings sit alongside whatever introduction the operator
+    wrote, so the strip only removes the heading + content up to the next
+    heading and leaves surrounding paragraphs intact.
+    """
+    matches = list(_WARNING_HEADING_RE.finditer(body))
+    if not matches:
+        return body
+    # Walk backwards so deletions don't invalidate earlier offsets.
+    out = body
+    for match in reversed(matches):
+        start = match.start()
+        # Find the next `## ` heading after this one.
+        next_heading = re.search(r"^##\s+\S", out[match.end():], re.MULTILINE)
+        end = match.end() + next_heading.start() if next_heading else len(out)
+        out = out[:start] + out[end:]
+    return out.rstrip() + ("\n" if body.endswith("\n") else "")
+
+
 def write_ticket_atomic(path: Path, front: dict[str, Any], body: str) -> None:
     """Atomic write: temp file in same dir + rename."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,8 +456,27 @@ class FileBoardTracker:
         return path
 
     def update_state(self, issue: Issue, target_state: str) -> None:
-        """TrackerClient protocol mutation hook (delegates to `transition`)."""
+        """TrackerClient protocol mutation hook.
+
+        G5 — when the target_state is one of the configured active states,
+        strip any orchestrator-authored `## Conflict` / `## Budget Exceeded`
+        sections so board UIs do not keep showing warnings that no longer
+        apply. Operator-authored body content with the same headings is
+        preserved because the strip is gated on transition direction and
+        only fires on transition into an active state.
+        """
+        if target_state.lower() in self._active:
+            self._strip_orchestrator_warning_sections(issue.identifier)
         self.transition(issue.identifier, target_state)
+
+    def _strip_orchestrator_warning_sections(self, identifier: str) -> None:
+        path = self.find_path(identifier)
+        if path is None:
+            return
+        front, body = parse_ticket_file(path)
+        stripped = _strip_warning_blocks(body)
+        if stripped != body:
+            write_ticket_atomic(path, front, stripped)
 
     def append_note(self, issue: Issue, heading: str, body: str) -> None:
         """Append an orchestrator-authored Markdown note to a ticket file."""

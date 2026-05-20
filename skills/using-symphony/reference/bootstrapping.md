@@ -11,9 +11,11 @@ From inside the `oh-my-symphony` checkout:
 TARGET=/path/to/target-project
 cp tui-open.sh tui-open.bat "$TARGET/"
 cp WORKFLOW.example.md "$TARGET/WORKFLOW.md"              # then edit
-mkdir -p "$TARGET/docs" "$TARGET/tools"
+mkdir -p "$TARGET/docs" "$TARGET/tools" "$TARGET/scripts"
 cp -R docs/symphony-prompts "$TARGET/docs/"
 cp -R tools/board-viewer "$TARGET/tools/"                 # required for `--viewer-port`
+cp scripts/symphony-setup-worktree.sh "$TARGET/scripts/"  # required by default after_create hook
+chmod +x "$TARGET/scripts/symphony-setup-worktree.sh"
 cp -R skills "$TARGET/"
 cp AGENTS.md GEMINI.md "$TARGET/"
 mkdir -p "$TARGET/.claude/skills"
@@ -54,6 +56,7 @@ python3.12 -m venv .venv
 | `GEMINI.md` | Gemini entrypoint pointing to repo skills |
 | `tui-open.sh`, `tui-open.bat` | One-shot board launchers |
 | `tools/board-viewer/` | Web HTML board viewer for `--viewer-port` (silently no-ops if absent) |
+| `scripts/symphony-setup-worktree.sh` | Worktree-setup body invoked by the default `after_create` hook in `WORKFLOW.example.md`. Without it, every fresh ticket dispatch fails at the hook stage with `No such file or directory`. |
 
 `skills/<name>/` is the source of truth. Edit only the canonical files under
 `skills/`; platform entrypoints should point at them.
