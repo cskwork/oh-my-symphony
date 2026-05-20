@@ -295,6 +295,71 @@ def test_create_and_transition_round_trip(tmp_path):
     assert fbt.find_path("X-2") == odd
 
 
+def test_g5_strip_conflict_and_budget_sections_on_active_restore(tmp_path):
+    """G5 — When the operator moves a ticket back into an active state,
+    orchestrator-authored `## Conflict` / `## Budget Exceeded` sections
+    must be stripped so board UIs don't keep showing stale warnings.
+    """
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(identifier="MT-1", title="t", state="Blocked",
+               description="Original body.")
+    # Append both orchestrator-authored notes (mirroring the live
+    # `_tracker_call_append_note(..., "Conflict", ...)` and
+    # `_tracker_call_append_note(..., "Budget Exceeded", ...)` paths).
+    issue = issue_from_file(fbt.find_path("MT-1"))
+    assert issue is not None
+    fbt.append_note(issue, "Conflict", "MT-1 touched files overlap with MT-2.")
+    issue = issue_from_file(fbt.find_path("MT-1"))
+    fbt.append_note(issue, "Budget Exceeded", "tokens budget exceeded …")
+    before_path = fbt.find_path("MT-1")
+    before_body = before_path.read_text()
+    assert "## Conflict" in before_body
+    assert "## Budget Exceeded" in before_body
+
+    # Restore via update_state into an active state.
+    issue = issue_from_file(before_path)
+    fbt.update_state(issue, "Todo")
+
+    after_body = before_path.read_text()
+    assert "## Conflict" not in after_body, (
+        "## Conflict section must be stripped on transition into active state"
+    )
+    assert "## Budget Exceeded" not in after_body, (
+        "## Budget Exceeded section must be stripped on transition into active state"
+    )
+    assert "Original body." in after_body, (
+        "operator-authored body must survive the strip"
+    )
+
+
+def test_g5_strip_does_not_fire_on_transition_into_terminal_state(tmp_path):
+    """G5 — Restoration only fires on active transitions. Moving into
+    Done / Cancelled / any non-active state must NOT mutate the body."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"), terminal=("Done",))
+    )
+    fbt.create(identifier="MT-2", title="t", state="Blocked",
+               description="Original body.")
+    issue = issue_from_file(fbt.find_path("MT-2"))
+    fbt.append_note(issue, "Conflict", "MT-2 conflict with X.")
+    path = fbt.find_path("MT-2")
+    before = path.read_text()
+
+    issue = issue_from_file(path)
+    fbt.update_state(issue, "Done")
+    after = path.read_text()
+
+    # Body untouched apart from state/updated_at frontmatter changes.
+    # The `## Conflict` block must remain visible.
+    assert "## Conflict" in after, (
+        "G5 strip must not fire when transitioning into a non-active state"
+    )
+
+
 @pytest.mark.parametrize("agent_kind", sorted(SUPPORTED_AGENT_KINDS))
 def test_create_can_write_agent_kind_override(tmp_path, agent_kind):
     root = tmp_path / "board"

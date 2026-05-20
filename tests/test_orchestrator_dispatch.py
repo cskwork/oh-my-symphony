@@ -2871,6 +2871,309 @@ def test_g1_stale_claimed_pruned_after_conflict_resolves(monkeypatch):
     )
 
 
+def test_g2_empty_response_loop_escalates_after_three_consecutive_turns(monkeypatch):
+    """G2 — three consecutive `EVENT_TURN_COMPLETED` events with no
+    fresh model output must cancel the worker and persist via
+    `_persist_budget_exhausted_state` with `budget_kind="empty_response_loop"`.
+
+    Without this guard, an agent that silently returns empty turns burns
+    through `max_total_turns` or `max_total_tokens` before any escalation,
+    leaving the operator to discover the loop only via slow-burn metrics.
+    """
+    import asyncio
+
+    base_cfg = _make_config(max_concurrent=1)
+    cfg = _replace_agent_field(base_cfg, budget_exhausted_state="Blocked")
+    orch = _orch()
+    issue = _issue("MT-EMPTY", state="In Progress")
+
+    persisted_kinds: list[str] = []
+
+    async def _persist(*, cfg, entry, issue_id, target_state, budget_kind):
+        persisted_kinds.append(budget_kind)
+        return True
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+        monkeypatch.setattr(orch, "_persist_budget_exhausted_state", _persist)
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 0,
+                    "total_tokens": 100,
+                },
+            }
+            for _ in range(3):
+                await orch._on_codex_event(issue.id, empty_event)
+
+            assert entry.cancelled_at is not None, (
+                "three consecutive empty TURN_COMPLETED events must cancel the worker"
+            )
+            assert worker_task.cancelled() or worker_task.cancelling() > 0, (
+                "worker_task.cancel() must have been called"
+            )
+            assert persisted_kinds == ["empty_response_loop"], (
+                "must persist via empty_response_loop budget kind"
+            )
+            debug = orch._issue_debug.get(issue.id)
+            assert debug is not None
+            assert "empty_response_loop" in (debug.last_error or "")
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_g3_wait_age_bumps_starved_recovered_ticket_ahead_of_fifo(monkeypatch):
+    """G3 — A candidate whose `_claim_released_at` is older than
+    `WAIT_AGE_BUMP_MIN` must dispatch ahead of a fresh-but-lower-id
+    candidate. Without the bump, registration-order FIFO starves the
+    recovered ticket every tick.
+    """
+    import asyncio
+    from datetime import timedelta
+
+    cfg = _make_config(
+        max_concurrent=1,
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    fresh = _issue("TKT-005", state="Todo")
+    starved = _issue("TKT-010", state="Todo")
+
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+
+    # Simulate G1 release recording: starved ticket left `_claimed` 15 min
+    # ago (above WAIT_AGE_BUMP_MIN=10 min). Fresh ticket has no entry.
+    long_ago = datetime.now(timezone.utc) - timedelta(minutes=15)
+    orch._claim_released_at[starved.id] = long_ago
+
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [fresh, starved]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+    asyncio.run(orch._on_tick())
+    assert dispatched[0] == "TKT-010", (
+        "G3 wait-age bump must promote a recovered ticket older than "
+        "WAIT_AGE_BUMP_MIN ahead of registration-order FIFO "
+        f"(actual dispatch order: {dispatched})"
+    )
+
+
+def test_g3_fresh_release_keeps_fifo_order(monkeypatch):
+    """G3 — A recovered ticket released less than `WAIT_AGE_BUMP_MIN` ago
+    must NOT bypass FIFO. Bump only fires on starvation cases.
+    """
+    import asyncio
+    from datetime import timedelta
+
+    cfg = _make_config(
+        max_concurrent=1,
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    fresh = _issue("TKT-005", state="Todo")
+    just_released = _issue("TKT-010", state="Todo")
+
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+
+    # Released 2 minutes ago — under threshold, normal FIFO must hold.
+    recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+    orch._claim_released_at[just_released.id] = recent
+
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [fresh, just_released]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+    asyncio.run(orch._on_tick())
+    assert dispatched[0] == "TKT-005", (
+        "wait-age bump must not fire under WAIT_AGE_BUMP_MIN — FIFO holds "
+        f"(actual dispatch order: {dispatched})"
+    )
+
+
+def test_g3_claim_release_timestamp_recorded_by_prune(monkeypatch):
+    """G3 — The G1 prune block must populate `_claim_released_at[id]` with
+    the moment the id left `_claimed`. Without this, the wait-age sort
+    has nothing to compare against on subsequent ticks.
+    """
+    import asyncio
+
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    held = _issue(
+        "MT-1",
+        state="In Progress",
+        description="## Touched Files\n- src/foo.py\n",
+    )
+    candidate = _issue(
+        "MT-2",
+        state="Todo",
+        description="## Touched Files\n- src/foo.py\n",
+    )
+
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    orch._running[held.id] = RunningEntry(
+        issue=held,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp"),
+    )
+    orch._claimed.add(held.id)
+
+    async def _fetch(_cfg):
+        return [candidate]
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_append_note", staticmethod(lambda *_a, **_k: None)
+    )
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_update_state", staticmethod(lambda *_a, **_k: None)
+    )
+
+    # Tick 1: conflict adds MT-2 to _claimed.
+    asyncio.run(orch._on_tick())
+    assert candidate.id in orch._claimed
+
+    # Worker exits, operator restores. Tick 2 should prune AND record release.
+    orch._running.pop(held.id, None)
+    orch._claimed.discard(held.id)
+
+    asyncio.run(orch._on_tick())
+    assert candidate.id not in orch._claimed
+    assert candidate.id in orch._claim_released_at, (
+        "G3 — prune block must record the release timestamp so wait-age "
+        "sort has something to compare against"
+    )
+
+
+def test_g2_empty_response_loop_resets_on_non_empty_turn(monkeypatch):
+    """G2 — a non-empty turn after empties must reset the counter so a
+    real recovery does not escalate."""
+    import asyncio
+
+    base_cfg = _make_config(max_concurrent=1)
+    cfg = _replace_agent_field(base_cfg, budget_exhausted_state="Blocked")
+    orch = _orch()
+    issue = _issue("MT-RECOVER", state="In Progress")
+
+    persisted_kinds: list[str] = []
+
+    async def _persist(*, cfg, entry, issue_id, target_state, budget_kind):
+        persisted_kinds.append(budget_kind)
+        return True
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+        monkeypatch.setattr(orch, "_persist_budget_exhausted_state", _persist)
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100},
+            }
+            non_empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"message": "actual model output here"},
+                "usage": {"input_tokens": 200, "output_tokens": 50, "total_tokens": 250},
+            }
+            # 2 empty, 1 non-empty (resets counter), 2 more empty → still under threshold
+            await orch._on_codex_event(issue.id, empty_event)
+            await orch._on_codex_event(issue.id, empty_event)
+            await orch._on_codex_event(issue.id, non_empty_event)
+            await orch._on_codex_event(issue.id, empty_event)
+            await orch._on_codex_event(issue.id, empty_event)
+
+            assert entry.cancelled_at is None, (
+                "non-empty turn must reset counter so 2-1-2 pattern does not escalate"
+            )
+            assert persisted_kinds == [], (
+                "no persistence must fire when threshold is not crossed"
+            )
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------------------------
 # C3 — adaptive token-budget EMA (workflow-v0.5.2 § C3).
 # ---------------------------------------------------------------------------

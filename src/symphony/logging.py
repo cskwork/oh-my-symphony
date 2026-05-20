@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, TextIO
 
 
@@ -96,3 +97,28 @@ def configure_logging(level: str | None = None) -> StructuredLogger:
         level = os.environ.get("SYMPHONY_LOG_LEVEL", "INFO")
     _default.set_level(getattr(logging, level.upper(), logging.INFO))
     return _default
+
+
+def attach_file_handler(
+    logger: StructuredLogger, path: str | Path
+) -> None:
+    """G4 — attach an append-mode file sink to `logger`, idempotent on `path`.
+
+    The headless service routes the orchestrator subprocess stdout/stderr
+    to `log/symphony.log` via shell redirection. The TUI runs the same
+    orchestrator in-process, so its `StructuredLogger` only writes to
+    stderr (the terminal). Calling this helper from the TUI startup
+    (and from any future in-process entry point) restores a parallel
+    file sink so post-hoc diagnostics work for both modes.
+
+    Idempotent: a second call with the same path is a no-op. Streams
+    are matched by their `name` attribute, which `open()` populates with
+    the resolved string path.
+    """
+    resolved = str(Path(path))
+    for existing in logger._streams:
+        if getattr(existing, "name", None) == resolved:
+            return
+    Path(resolved).parent.mkdir(parents=True, exist_ok=True)
+    fh = open(resolved, "a", encoding="utf-8")
+    logger.add_stream(fh)

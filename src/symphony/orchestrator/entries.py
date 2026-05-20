@@ -90,6 +90,17 @@ class RunningEntry:
     # unchanged state is budget-blocked.
     hit_token_budget: bool = False
     token_budget_cap: int = 0
+    # G2 — empty-response loop guard. Counts consecutive `EVENT_TURN_COMPLETED`
+    # events whose turn produced no fresh preview text. Reset to 0 when a turn
+    # completes with non-empty `current_turn_message`. Crossing the threshold
+    # (orchestrator-side constant) cancels the worker + persists via
+    # `_persist_budget_exhausted_state` with `budget_kind="empty_response_loop"`.
+    consecutive_empty_turns: int = 0
+    # Per-turn preview accumulator. Updated alongside `last_codex_message` for
+    # any payload that yields preview text; cleared back to "" on every
+    # `EVENT_TURN_COMPLETED` after the empty-loop check. `last_codex_message`
+    # is sticky for UI continuity; this buffer is what the guard reads.
+    current_turn_message: str = ""
 
 
 @dataclass

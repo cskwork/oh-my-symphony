@@ -65,9 +65,11 @@ from .constants import (
     AUTO_TRIAGE_NOTE,
     AUTO_TRIAGE_TARGET_STATE,
     CONTINUATION_RETRY_DELAY_MS,
+    EMPTY_TURN_LOOP_THRESHOLD,
     PAUSED_RETRY_HOLD_MS,
     RETRY_BASE_MS,
     STALL_FORCE_EJECT_GRACE_S,
+    WAIT_AGE_BUMP_MIN,
     _TOKEN_EMA_ALPHA,
 )
 from .contracts import evaluate_contract
@@ -116,6 +118,12 @@ class Orchestrator:
         # `sys.maxsize` is a non-issue at any realistic ticket throughput.
         self._done_count: int = 0
         self._turn_budget_exhausted: set[str] = set()
+        # G3 — wait-age dispatch bump. Each id leaves `_claimed` via the G1
+        # prune block; record the moment it left so the sort can promote
+        # candidates older than `WAIT_AGE_BUMP_MIN` ahead of FIFO. Entries
+        # are dropped as soon as the ticket dispatches (so a fresh
+        # registration doesn't keep inheriting a stale wait-age bonus).
+        self._claim_released_at: dict[str, datetime] = {}
         self._totals = _CodexTotals()
         self._latest_rate_limits: dict[str, Any] | None = None
         self._issue_debug: dict[str, _IssueDebug] = {}
@@ -749,6 +757,14 @@ class Orchestrator:
                 ids=sorted(stale_claimed),
             )
             self._claimed -= stale_claimed
+            # G3 — record the moment each id left `_claimed`. The dispatch
+            # sort uses this to bump candidates whose wait age crossed
+            # `WAIT_AGE_BUMP_MIN` ahead of registration FIFO, so a ticket
+            # that spent 45 min in conflict isn't starved behind unrelated
+            # numbered tickets that only just appeared.
+            now_release = datetime.now(timezone.utc)
+            for stale_id in stale_claimed:
+                self._claim_released_at[stale_id] = now_release
         stale_turn_budget = self._turn_budget_exhausted - in_flight_ids
         if stale_turn_budget:
             self._turn_budget_exhausted -= stale_turn_budget
@@ -768,7 +784,7 @@ class Orchestrator:
             await self._notify_observers()
             return
 
-        for issue in _sort_for_dispatch_fifo(candidates, cfg):
+        for issue in self._sort_with_wait_age_bump(candidates, cfg):
             if await self._auto_triage_todo_if_actionable(issue, cfg):
                 continue
             if self._available_slots(cfg) <= 0:
@@ -792,6 +808,35 @@ class Orchestrator:
         await self._archive_sweep(cfg)
 
         await self._notify_observers()
+
+    def _sort_with_wait_age_bump(
+        self, candidates: list[Issue], cfg: ServiceConfig
+    ) -> list[Issue]:
+        """G3 — promote candidates whose recovered wait age crossed the
+        threshold ahead of registration-order FIFO. Candidates with no
+        `_claim_released_at` entry, or one inside the threshold, keep
+        their FIFO order. Among promoted candidates, oldest release
+        wins so the most-starved ticket dispatches first.
+        """
+        if not self._claim_released_at:
+            return _sort_for_dispatch_fifo(candidates, cfg)
+        now = datetime.now(timezone.utc)
+        bumped: list[Issue] = []
+        normal: list[Issue] = []
+        for issue in candidates:
+            released_at = self._claim_released_at.get(issue.id)
+            if released_at is None:
+                normal.append(issue)
+                continue
+            wait_minutes = (now - released_at).total_seconds() / 60.0
+            if wait_minutes >= WAIT_AGE_BUMP_MIN:
+                bumped.append(issue)
+            else:
+                normal.append(issue)
+        bumped.sort(
+            key=lambda i: self._claim_released_at.get(i.id) or now
+        )
+        return bumped + _sort_for_dispatch_fifo(normal, cfg)
 
     async def _archive_sweep(self, cfg: ServiceConfig) -> None:
         """Auto-archive terminal-state issues older than `archive_after_days`.
@@ -2022,6 +2067,11 @@ class Orchestrator:
             )
         elif budget_kind == "max_turns":
             budget_detail = f"(max_turns={cfg.agent.max_turns}/attempt)"
+        elif budget_kind == "empty_response_loop":
+            budget_detail = (
+                f"(consecutive_empty_turns={entry.consecutive_empty_turns}, "
+                f"threshold={EMPTY_TURN_LOOP_THRESHOLD})"
+            )
         else:
             budget_detail = f"(max_total_turns={cfg.agent.max_total_turns})"
         note_body = (
@@ -2129,6 +2179,10 @@ class Orchestrator:
             msg = self._preview_from_payload(payload)
             if msg:
                 entry.last_codex_message = msg[:400]
+                # G2 — per-turn buffer tracks any preview that arrived during
+                # this turn. Cleared on EVENT_TURN_COMPLETED after the
+                # empty-loop check so the next turn starts fresh.
+                entry.current_turn_message = msg[:400]
         # Token deltas (§13.5).
         usage = event.get("usage") or {}
         delta_out = 0
@@ -2272,6 +2326,42 @@ class Orchestrator:
                 entry.last_ema_state_total_tokens = (
                     entry.codex_state_total_tokens
                 )
+            # G2 — empty-response loop guard. A turn whose `current_turn_message`
+            # stayed empty produced no fresh preview text. Counter resets on a
+            # turn with real preview; crossing the threshold cancels the worker
+            # and persists via the existing budget-exhausted plumbing.
+            if entry.current_turn_message.strip():
+                entry.consecutive_empty_turns = 0
+            else:
+                entry.consecutive_empty_turns += 1
+            entry.current_turn_message = ""
+            if (
+                entry.consecutive_empty_turns >= EMPTY_TURN_LOOP_THRESHOLD
+                and entry.cancelled_at is None
+            ):
+                log.warning(
+                    "empty_response_loop",
+                    issue_id=issue_id,
+                    identifier=entry.issue.identifier,
+                    consecutive_empty_turns=entry.consecutive_empty_turns,
+                    threshold=EMPTY_TURN_LOOP_THRESHOLD,
+                )
+                debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
+                debug.last_error = (
+                    f"empty_response_loop after "
+                    f"{entry.consecutive_empty_turns} consecutive empty turns"
+                )
+                if cfg is not None:
+                    await self._persist_budget_exhausted_state(
+                        cfg=cfg,
+                        entry=entry,
+                        issue_id=issue_id,
+                        target_state=cfg.agent.budget_exhausted_state,
+                        budget_kind="empty_response_loop",
+                    )
+                if entry.worker_task is not None:
+                    entry.worker_task.cancel()
+                entry.cancelled_at = datetime.now(timezone.utc)
         if ev_name == EVENT_TURN_FAILED:
             reason = payload.get("reason") if isinstance(payload, dict) else None
             stderr_tail = payload.get("stderr_tail") if isinstance(payload, dict) else None
@@ -2365,6 +2455,11 @@ class Orchestrator:
             running_keys_before_pop=list(self._running.keys()),
         )
         entry = self._running.pop(issue_id, None)
+        # G3 — clear any stale wait-age bonus once the worker exits. The
+        # next entry into `_claimed` (conflict, budget, etc.) will record
+        # a fresh release timestamp, so leaving the old one behind would
+        # falsely promote the ticket on its next candidate-list appearance.
+        self._claim_released_at.pop(issue_id, None)
         # The wakeup event is per-worker — pop it so a fresh worker (if
         # any) starts with a clean gate. `_paused_issue_ids` is per-issue
         # and is intentionally preserved: it's what lets `_eligible`

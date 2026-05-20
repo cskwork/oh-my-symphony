@@ -28,6 +28,42 @@ def test_logger_redacts_sensitive_keys():
     assert "api_key=" in line
 
 
+def test_g4_attach_file_handler_writes_to_path(tmp_path):
+    """G4 — `attach_file_handler` must open the path in append mode and
+    register it on the structured logger so subsequent `log.info` calls
+    land in the file. Reproduces the TUI gap where `log/symphony.log`
+    was empty despite the headless service writing to the same path.
+    """
+    from symphony.logging import StructuredLogger, attach_file_handler
+
+    log_path = tmp_path / "symphony.log"
+    logger = StructuredLogger(streams=[])
+    attach_file_handler(logger, log_path)
+    logger.info("tui_boot", port=9991)
+
+    contents = log_path.read_text()
+    assert "tui_boot" in contents
+    assert "port=9991" in contents
+
+
+def test_g4_attach_file_handler_is_idempotent(tmp_path):
+    """G4 — repeat calls with the same path must NOT add duplicate
+    handlers. Without idempotency, each TUI restart inside one process
+    would double-write."""
+    from symphony.logging import StructuredLogger, attach_file_handler
+
+    log_path = tmp_path / "symphony.log"
+    logger = StructuredLogger(streams=[])
+    attach_file_handler(logger, log_path)
+    attach_file_handler(logger, log_path)
+    logger.info("only_once", n=1)
+
+    lines = log_path.read_text().splitlines()
+    assert len(lines) == 1, (
+        f"second attach_file_handler call must be a no-op (got {len(lines)} lines)"
+    )
+
+
 def test_failed_sink_does_not_crash():
     class Bad(io.StringIO):
         def write(self, _value):
