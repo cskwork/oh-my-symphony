@@ -46,6 +46,35 @@ def test_g4_attach_file_handler_writes_to_path(tmp_path):
     assert "port=9991" in contents
 
 
+def test_g4_attach_file_handler_creates_missing_parent_dir(tmp_path):
+    """G4 — parent directory must be created automatically; a fresh
+    checkout without a log/ folder must not error out."""
+    from symphony.logging import StructuredLogger, attach_file_handler
+
+    log_path = tmp_path / "log" / "nested" / "symphony.log"
+    assert not log_path.parent.exists()
+    logger = StructuredLogger(streams=[])
+    attach_file_handler(logger, log_path)
+    logger.info("nested_dir", n=1)
+    assert log_path.exists()
+    assert "nested_dir" in log_path.read_text()
+
+
+def test_g4_attach_file_handler_appends_existing_content(tmp_path):
+    """G4 — opens in append mode; pre-existing log content must survive."""
+    from symphony.logging import StructuredLogger, attach_file_handler
+
+    log_path = tmp_path / "symphony.log"
+    log_path.write_text("previous run line\n", encoding="utf-8")
+    logger = StructuredLogger(streams=[])
+    attach_file_handler(logger, log_path)
+    logger.info("new_run", n=1)
+
+    contents = log_path.read_text()
+    assert "previous run line" in contents, "must NOT truncate existing log"
+    assert "new_run" in contents
+
+
 def test_g4_attach_file_handler_is_idempotent(tmp_path):
     """G4 — repeat calls with the same path must NOT add duplicate
     handlers. Without idempotency, each TUI restart inside one process

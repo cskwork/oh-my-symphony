@@ -360,6 +360,94 @@ def test_g5_strip_does_not_fire_on_transition_into_terminal_state(tmp_path):
     )
 
 
+def test_g5_strip_preserves_operator_authored_content_between_warnings(tmp_path):
+    """G5 — operator-authored sections between the warning sections must
+    survive the strip. We only remove blocks that match the warning
+    heading regex, not the operator's own content in between."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(
+        identifier="MT-MIX", title="t", state="Blocked",
+        description=textwrap.dedent("""\
+            Operator preamble.
+
+            ## Conflict
+
+            MT-MIX overlap with FOO-1.
+
+            ## Operator Note
+
+            Operator-authored content goes here.
+
+            ## Budget Exceeded
+
+            tokens budget exceeded.
+
+            ## Operator Tail
+
+            Another operator section after warnings.
+        """),
+    )
+    issue = issue_from_file(fbt.find_path("MT-MIX"))
+    fbt.update_state(issue, "Todo")
+
+    after = fbt.find_path("MT-MIX").read_text()
+    assert "## Conflict" not in after
+    assert "## Budget Exceeded" not in after
+    assert "Operator preamble." in after
+    assert "## Operator Note" in after
+    assert "Operator-authored content goes here." in after
+    assert "## Operator Tail" in after
+    assert "Another operator section after warnings." in after
+
+
+def test_g5_strip_handles_warning_at_end_of_body(tmp_path):
+    """G5 — a warning section at the very end of the body must be stripped
+    cleanly without leaving trailing whitespace artifacts."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(
+        identifier="MT-END", title="t", state="Blocked",
+        description="Description body.\n",
+    )
+    issue = issue_from_file(fbt.find_path("MT-END"))
+    fbt.append_note(issue, "Conflict", "tail conflict.")
+    issue = issue_from_file(fbt.find_path("MT-END"))
+    fbt.update_state(issue, "Todo")
+
+    after = fbt.find_path("MT-END").read_text()
+    assert "## Conflict" not in after
+    assert "Description body." in after
+
+
+def test_g5_strip_is_idempotent(tmp_path):
+    """G5 — calling update_state into an active state when the warning
+    sections are already gone must be a no-op for the body."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress"))
+    )
+    fbt.create(identifier="MT-IDEM", title="t", state="Blocked",
+               description="Body only.")
+    issue = issue_from_file(fbt.find_path("MT-IDEM"))
+    fbt.update_state(issue, "Todo")
+    after_first = fbt.find_path("MT-IDEM").read_text()
+
+    # Second restore: should be effectively a no-op for body.
+    issue = issue_from_file(fbt.find_path("MT-IDEM"))
+    fbt.update_state(issue, "In Progress")
+    after_second = fbt.find_path("MT-IDEM").read_text()
+
+    # Frontmatter updated_at + state differs; body remains "Body only.".
+    assert "Body only." in after_second
+    assert "## Conflict" not in after_first
+    assert "## Conflict" not in after_second
+
+
 @pytest.mark.parametrize("agent_kind", sorted(SUPPORTED_AGENT_KINDS))
 def test_create_can_write_agent_kind_override(tmp_path, agent_kind):
     root = tmp_path / "board"
