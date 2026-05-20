@@ -2359,6 +2359,26 @@ class Orchestrator:
                         target_state=cfg.agent.budget_exhausted_state,
                         budget_kind="empty_response_loop",
                     )
+                # G2 — auto-pause the ticket so dispatch + retry both refuse to
+                # restart it even when `budget_exhausted_state` is unset (the
+                # persist branch above is a no-op then). The pause survives
+                # worker exit via `_paused_issue_ids` and is the same gate the
+                # operator's manual pause uses, so the operator's existing
+                # resume_worker() path lifts it. Without this, an unconfigured
+                # budget_exhausted_state lets the loop re-dispatch immediately
+                # on the next tick (verified live on olive-clone 2026-05-20).
+                if issue_id not in self._paused_issue_ids:
+                    self._paused_issue_ids.add(issue_id)
+                    pause_event = self._pause_events.get(issue_id)
+                    if pause_event is None:
+                        pause_event = asyncio.Event()
+                        self._pause_events[issue_id] = pause_event
+                    pause_event.clear()
+                    log.info(
+                        "empty_response_loop_auto_paused",
+                        issue_id=issue_id,
+                        identifier=entry.issue.identifier,
+                    )
                 if entry.worker_task is not None:
                     entry.worker_task.cancel()
                 entry.cancelled_at = datetime.now(timezone.utc)

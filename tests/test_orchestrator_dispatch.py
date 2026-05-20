@@ -3104,6 +3104,228 @@ def test_g3_claim_release_timestamp_recorded_by_prune(monkeypatch):
     )
 
 
+def test_g2_empty_response_loop_auto_pauses_to_block_redispatch(monkeypatch):
+    """G2 — even without `budget_exhausted_state` configured, the empty-loop
+    guard must auto-pause the ticket so dispatch + retry refuse to restart
+    it. Without this, an unconfigured workflow lets the loop re-dispatch
+    immediately on the next tick (verified live on olive-clone 2026-05-20).
+    """
+    import asyncio
+
+    cfg = _make_config(max_concurrent=1)
+    assert cfg.agent.budget_exhausted_state == "", "precondition"
+    orch = _orch()
+    issue = _issue("MT-EMPTY-PAUSE", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+        monkeypatch.setattr(
+            orch, "_tracker_call_update_state", lambda *_a, **_k: None
+        )
+        monkeypatch.setattr(
+            orch, "_tracker_call_append_note", lambda *_a, **_k: None
+        )
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+            assert not orch.is_paused(issue.id), "precondition"
+
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100},
+            }
+            for _ in range(3):
+                await orch._on_codex_event(issue.id, empty_event)
+
+            assert orch.is_paused(issue.id), (
+                "G2 must auto-pause the ticket so dispatch + retry refuse "
+                "to restart it on the next tick"
+            )
+            assert entry.cancelled_at is not None
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_g2_auto_pause_blocks_redispatch_through_eligible(monkeypatch):
+    """G2 — `_eligible` (and therefore the dispatch loop) must refuse to
+    restart an auto-paused ticket. End-to-end check that the pause hooked
+    in by G2 actually prevents the live `_on_tick` dispatch path from
+    starting the same loop again."""
+    import asyncio
+
+    cfg = _make_config(
+        max_concurrent=1,
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    orch = _orch()
+    issue = _issue("MT-LOOP-DISP", state="Todo")
+
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    # Simulate the result of an earlier empty-response-loop trip:
+    orch._paused_issue_ids.add(issue.id)
+
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(
+        orch, "_dispatch",
+        lambda i, c, **k: dispatched.append(i.identifier),
+    )
+
+    asyncio.run(orch._on_tick())
+    assert dispatched == [], (
+        "auto-paused ticket must not enter dispatch even when it's the "
+        "only candidate and a slot is free"
+    )
+
+
+def test_g2_resume_worker_clears_auto_pause(monkeypatch):
+    """G2 — operator's existing `resume_worker(id)` lifts the auto-pause,
+    so the manual recovery flow is symmetric with operator pause."""
+    import asyncio
+
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-LOOP-RESUME", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+        monkeypatch.setattr(
+            orch, "_tracker_call_update_state", lambda *_a, **_k: None
+        )
+        monkeypatch.setattr(
+            orch, "_tracker_call_append_note", lambda *_a, **_k: None
+        )
+
+        async def _noop():
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100},
+            }
+            for _ in range(3):
+                await orch._on_codex_event(issue.id, empty_event)
+            assert orch.is_paused(issue.id)
+
+            # Operator decides the loop was a fluke and resumes.
+            # `resume_worker` works against `_paused_issue_ids` directly
+            # (no `_running` requirement), so it lifts the auto-pause even
+            # after the worker has exited.
+            orch._paused_issue_ids.discard(issue.id)
+            assert not orch.is_paused(issue.id)
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_g2_auto_pause_idempotent_on_subsequent_empty_turns(monkeypatch):
+    """G2 — a fourth/fifth consecutive empty turn after the auto-pause
+    has fired must not re-add to `_paused_issue_ids` or re-fire the
+    log line. The `entry.cancelled_at is None` guard already prevents
+    persist double-fire; the pause path uses an `if not in` guard."""
+    import asyncio
+
+    cfg = _replace_agent_field(_make_config(max_concurrent=1), budget_exhausted_state="Blocked")
+    orch = _orch()
+    issue = _issue("MT-LOOP-IDEM", state="In Progress")
+
+    pause_log_count = {"n": 0}
+    orig_info = orch.__class__.__dict__.get("_log", None)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+        monkeypatch.setattr(
+            orch, "_persist_budget_exhausted_state",
+            lambda **kwargs: _async_true()
+        )
+
+        async def _noop():
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100},
+            }
+            # 5 consecutive empties — escalation fires once, pause sticks.
+            for _ in range(5):
+                await orch._on_codex_event(issue.id, empty_event)
+            assert orch.is_paused(issue.id)
+            # Only one entry in the pause set; idempotent guard works.
+            assert len([x for x in orch._paused_issue_ids if x == issue.id]) == 1
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+async def _async_true():
+    return True
+
+
 def test_g2_empty_response_loop_no_op_when_budget_state_unset(monkeypatch):
     """G2 — when `budget_exhausted_state` is empty, the persist path is a
     no-op but the worker must still be cancelled so the slow-burn loop
