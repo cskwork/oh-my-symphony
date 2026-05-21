@@ -765,10 +765,6 @@ class Orchestrator:
             now_release = datetime.now(timezone.utc)
             for stale_id in stale_claimed:
                 self._claim_released_at[stale_id] = now_release
-        stale_turn_budget = self._turn_budget_exhausted - in_flight_ids
-        if stale_turn_budget:
-            self._turn_budget_exhausted -= stale_turn_budget
-
         try:
             validate_for_dispatch(cfg)
         except SymphonyError as exc:

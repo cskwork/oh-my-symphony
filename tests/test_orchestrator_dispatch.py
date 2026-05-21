@@ -1201,6 +1201,49 @@ def test_max_total_turns_exhaustion_no_transition_when_state_unset(monkeypatch):
     asyncio.run(_run())
 
 
+def test_max_total_turns_exhaustion_survives_next_tick_prune(monkeypatch):
+    """A budget-exhausted active ticket must not re-dispatch on the next tick."""
+    import asyncio
+
+    cfg = _replace_agent_field(_make_config(max_concurrent=1), max_total_turns=2)
+    assert cfg.agent.budget_exhausted_state == "", "precondition"
+    issue = _issue("MT-BUDGET-PRUNE", state="In Progress")
+    orch = _orch()
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(orch, "_archive_sweep", _archive)
+        monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+        debug = orch._issue_debug.setdefault(issue.id, _IssueDebug())
+        debug.completed_turn_count = 2
+
+        await orch._on_worker_exit(issue.id, reason="normal", error=None)
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id in orch._claimed
+
+        await orch._on_tick()
+
+        assert dispatched == []
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id not in orch._claimed
+
+    asyncio.run(_run())
+
+
 def test_max_total_tokens_cap_cancels_worker(monkeypatch):
     """A per-ticket token cap cancels the worker on breach.
 
