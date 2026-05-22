@@ -180,6 +180,7 @@ def test_parse_ticket_file_auto_heals_markdown_inside_front_matter(tmp_path):
             """
         ),
     )
+    original_text = path.read_text(encoding="utf-8")
 
     front, body = parse_ticket_file(path)
 
@@ -189,10 +190,7 @@ def test_parse_ticket_file_auto_heals_markdown_inside_front_matter(tmp_path):
     assert body.startswith("## Triage\n\nticket is actionable")
     assert "Existing body." in body
 
-    healed_text = path.read_text(encoding="utf-8")
-    front_text = healed_text.split("---", 2)[1]
-    assert "## Triage" not in front_text
-    assert "labels:" in front_text
+    assert path.read_text(encoding="utf-8") == original_text
 
 
 def test_fetch_candidate_filters_by_active(tmp_path):
