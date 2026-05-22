@@ -3,13 +3,14 @@ tracker:
   kind: file
   board_root: ./kanban_smoke
   active_states: [Todo, "In Progress"]
-  terminal_states: [Done, Cancelled, Blocked]
+  terminal_states: ["Human Review", Done, Cancelled, Blocked]
   archive_state: Archive
   archive_after_days: 0
   state_descriptions:
     Todo: "Triage; route to In Progress"
-    "In Progress": "Implement; transition to Done"
-    Done: "Completed"
+    "In Progress": "Implement; transition to Human Review"
+    "Human Review": "Human confirms before Done"
+    Done: "Human-confirmed complete"
 
 polling:
   interval_ms: 5000
@@ -91,6 +92,7 @@ Rules:
 - Stay inside the workspace cwd. Do not touch parent directories.
 - The host board is linked into the workspace as `./kanban_smoke/`. When
   work is done, rewrite `./kanban_smoke/{{ issue.identifier }}.md` to set
-  `state: Done` and append a `## Resolution` section summarizing what you did.
+  `state: Human Review` and append a `## Human Review` section summarizing what
+  you did. A human confirms the card to Done.
 - Keep responses short. One or two short turns is enough.
 - No emojis.

@@ -42,7 +42,6 @@ def test_symphony_bash_override_rejecting_wsl_launcher(
     assert not _is_wsl_launcher(result)
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only WSL filter")
 def test_windows_filter_rejects_wsl_when_only_choice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -51,6 +50,7 @@ def test_windows_filter_rejects_wsl_when_only_choice(
     bare ``"bash"`` sentinel (caught by ``doctor.check_shell``) rather than
     silently use the WSL binary."""
     monkeypatch.delenv("SYMPHONY_BASH", raising=False)
+    monkeypatch.setattr(_shell.sys, "platform", "win32")
     monkeypatch.setattr(
         _shell,
         "_WIN_GIT_BASH_CANDIDATES",
@@ -64,12 +64,12 @@ def test_windows_filter_rejects_wsl_when_only_choice(
     assert resolve_bash() == "bash"
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only WSL filter")
 def test_windows_picks_git_bash_when_available(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
     """When a Git Bash candidate exists on disk, it wins over PATH."""
     monkeypatch.delenv("SYMPHONY_BASH", raising=False)
+    monkeypatch.setattr(_shell.sys, "platform", "win32")
     fake_git_bash = tmp_path / "fake-git-bash.exe"
     fake_git_bash.write_text("")
     monkeypatch.setattr(
@@ -90,6 +90,27 @@ import subprocess as _subprocess
 from types import SimpleNamespace
 
 from symphony._shell import safe_proc_wait
+
+
+class _FakeWindowsProcess:
+    def __init__(
+        self,
+        *,
+        returncode: int | None = None,
+        wait_result: int = 0,
+        wait_delay: float = 0.0,
+    ) -> None:
+        self.pid = 99999
+        self.returncode = returncode
+        self.wait_result = wait_result
+        self.wait_delay = wait_delay
+        self.wait_calls = 0
+
+    async def wait(self) -> int:
+        self.wait_calls += 1
+        if self.wait_delay:
+            await asyncio.sleep(self.wait_delay)
+        return self.wait_result
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX waitpid semantics")
@@ -145,37 +166,31 @@ def test_safe_proc_wait_timeout_returns_none() -> None:
 # the ``module 'os' has no attribute 'WIFEXITED'`` regression.
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="exercises the Windows delegation path")
-def test_safe_proc_wait_windows_delegates_to_proc_wait() -> None:
-    async def _run() -> int | None:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-c", "import sys; sys.exit(7)",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        return await safe_proc_wait(proc, timeout=10.0)
-    rc = asyncio.run(_run())
+def test_safe_proc_wait_windows_delegates_to_proc_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_shell.sys, "platform", "win32")
+    fake = _FakeWindowsProcess(wait_result=7)
+    rc = asyncio.run(safe_proc_wait(fake, timeout=10.0))
     assert rc == 7
+    assert fake.wait_calls == 1
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="exercises the Windows delegation path")
-def test_safe_proc_wait_windows_short_circuits_when_returncode_set() -> None:
-    fake = SimpleNamespace(pid=99999, returncode=0)
+def test_safe_proc_wait_windows_short_circuits_when_returncode_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_shell.sys, "platform", "win32")
+    fake = _FakeWindowsProcess(returncode=0, wait_result=7)
     rc = asyncio.run(safe_proc_wait(fake, timeout=1.0))
     assert rc == 0
+    assert fake.wait_calls == 0
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="exercises the Windows delegation path")
-def test_safe_proc_wait_windows_timeout_returns_none() -> None:
-    async def _run() -> int | None:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-c", "import time; time.sleep(5)",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            return await safe_proc_wait(proc, timeout=0.2)
-        finally:
-            proc.kill()
-    rc = asyncio.run(_run())
+def test_safe_proc_wait_windows_timeout_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_shell.sys, "platform", "win32")
+    fake = _FakeWindowsProcess(wait_result=7, wait_delay=1.0)
+    rc = asyncio.run(safe_proc_wait(fake, timeout=0.01))
     assert rc is None
+    assert fake.wait_calls == 1

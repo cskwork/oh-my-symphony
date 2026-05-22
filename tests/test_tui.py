@@ -922,6 +922,76 @@ async def test_archive_hotkey_refuses_active_state_card(monkeypatch: Any) -> Non
 
 
 @pytest.mark.asyncio
+async def test_confirm_done_hotkey_calls_update_state_on_human_review_card(
+    monkeypatch: Any,
+) -> None:
+    cfg = _make_config(
+        active_states=("Todo",), terminal_states=("Human Review", "Done", "Archive")
+    )
+    review_issue = _issue("SMA-100", state="Human Review")
+    _stub_tracker(monkeypatch, [], [review_issue])
+
+    moved: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        KanbanApp,
+        "_call_update_state",
+        staticmethod(
+            lambda _cfg, issue, target: moved.append((issue.identifier, target))
+        ),
+    )
+
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = [
+            c for c in app.query(IssueCard) if c.issue.identifier == "SMA-100"
+        ]
+        assert cards, "expected the Human Review card to render"
+        cards[0].focus()
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+    assert moved == [("SMA-100", "Done")]
+
+
+@pytest.mark.asyncio
+async def test_confirm_done_hotkey_refuses_non_human_review_card(
+    monkeypatch: Any,
+) -> None:
+    cfg = _make_config(
+        active_states=("Todo",), terminal_states=("Human Review", "Done")
+    )
+    _stub_tracker(monkeypatch, [], [_issue("SMA-101", state="Done")])
+
+    moved: list[Any] = []
+
+    monkeypatch.setattr(
+        KanbanApp,
+        "_call_update_state",
+        staticmethod(lambda *_a, **_kw: moved.append("called")),
+    )
+
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards
+        cards[0].focus()
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+    assert moved == []
+
+
+@pytest.mark.asyncio
 async def test_shift_p_pauses_focused_running_card(monkeypatch: Any) -> None:
     """Shift+P on a running card calls orchestrator.pause_worker; second press resumes."""
     cfg = _make_config(active_states=("In Progress",), terminal_states=("Done",))

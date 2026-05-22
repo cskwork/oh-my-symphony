@@ -3,7 +3,7 @@ tracker:
   kind: file
   board_root: ./kanban
   active_states: [Todo, Explore, Plan, "In Progress", Review, QA, Learn]
-  terminal_states: [Done, Cancelled, Blocked, Archive]
+  terminal_states: ["Human Review", Done, Cancelled, Blocked, Archive]
   # Auto-archive sweep — terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on each poll tick.
   # Set `archive_after_days: 0` to disable the sweep (TUI `a` hotkey still
@@ -19,7 +19,8 @@ tracker:
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "Execute real code, capture evidence"
     Learn: "Distill learnings, update docs/llm-wiki"
-    Done: "As-Is -> To-Be report"
+    "Human Review": "Human confirms agent work before Done"
+    Done: "Human-confirmed complete"
     Archive: "Auto-archived after 30 days idle"
 
 polling:
@@ -43,7 +44,7 @@ hooks:
   # Default: each ticket gets its own git worktree of the host repo on a
   # symphony/<ID> branch. Product changes and docs/ artefacts stay on that
   # branch; Symphony merges it back with an explicit --no-ff merge commit
-  # when the ticket reaches Done.
+  # when the ticket reaches Done after Human Review confirmation.
   #
   # If your code lives in a *different* remote than the WORKFLOW.md repo,
   # replace the worktree commands with `git clone <remote> .` instead.
@@ -217,9 +218,10 @@ agent:
   # Reuses any enclosing git repo; otherwise runs `git init` first. Set to
   # false to opt out (e.g. workspace is a real repo you don't want touched).
   auto_commit_on_done: true
-  # Merge policy for the Learn -> Done gate. Learn must merge the
+  # Merge policy for the Learn -> Human Review gate. Learn must merge the
   # `symphony/<ID>` feature branch into the target branch before setting
-  # Done. kanban/ is a host-owned board link, so if it appears in the
+  # Human Review. A human then confirms Done from the TUI (`c`) or board
+  # viewer button. kanban/ is a host-owned board link, so if it appears in the
   # feature-branch diff the merge is blocked as leaked workspace plumbing.
   # docs/ is intentionally branch-local and merges normally. The post-Done
   # auto-merge remains a best-effort fallback for older prompts.

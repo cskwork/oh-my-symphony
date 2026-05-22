@@ -6,6 +6,7 @@ import {
   fetchKanbanIndex,
   fetchGitBranches,
   archiveTicket,
+  confirmDoneTicket,
   pauseTicket,
   resumeTicket,
   refreshSymphony,
@@ -112,7 +113,7 @@ function renderSourceToggles(sources) {
 const POLL_INTERVAL_MS = 5000;
 const FALLBACK_STATES = [
   "Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn",
-  "Done", "Cancelled", "Blocked", "Archive",
+  "Human Review", "Done", "Cancelled", "Blocked", "Archive",
 ];
 
 // ---- UI Zoom ----------------------------------------------------------
@@ -289,6 +290,15 @@ const cardHandlers = {
       const res = await archiveTicket(id);
       if (!res.ok) {
         flashError(`Archive 실패 (${res.status || "network"})`);
+      }
+      poll();
+    });
+  },
+  onConfirmDone: (id, btn) => {
+    withButtonLock(btn, async () => {
+      const res = await confirmDoneTicket(id);
+      if (!res.ok) {
+        flashError(`Confirm Done 실패 (${res.status || "network"})`);
       }
       poll();
     });

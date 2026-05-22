@@ -3,7 +3,7 @@ tracker:
   kind: file
   board_root: ./kanban
   active_states: [Todo, Explore, Plan, "In Progress", Review, QA, Learn]
-  terminal_states: [Done, Cancelled, Blocked, Archive]
+  terminal_states: ["Human Review", Done, Cancelled, Blocked, Archive]
   # Auto-archive sweep: terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on the next poll.
   # Set `archive_after_days: 0` to disable the sweep (manual `a` hotkey
@@ -19,7 +19,8 @@ tracker:
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "pytest -q + real-CLI smoke"
     Learn: "Distill learnings, update llm-wiki"
-    Done: "As-Is -> To-Be report"
+    "Human Review": "Human confirms agent work before Done"
+    Done: "Human-confirmed complete"
     Archive: "Auto-archived after 30 days idle"
 
 polling:
@@ -261,10 +262,11 @@ agent:
   max_total_tokens_by_state:
     "In Progress": 500000000
     QA: 500000000
-  # Merge policy for the Learn -> Done gate. Learn must merge the
+  # Merge policy for the Learn -> Human Review gate. Learn must merge the
   # `symphony/<ID>` feature branch into the target branch before setting
-  # Done. The post-Done auto-merge remains a best-effort fallback for older
-  # prompts.
+  # Human Review. A human then confirms the card to Done from the TUI (`c`)
+  # or board viewer button. The post-Done auto-merge remains a best-effort
+  # fallback for older prompts.
   auto_merge_on_done: true
   # Branch/ref used as the start point for new `symphony/<ID>` feature
   # branches. Empty string = current host branch. The board viewer can

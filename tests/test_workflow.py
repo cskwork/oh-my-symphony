@@ -117,6 +117,8 @@ def test_build_service_config_defaults(tmp_path, monkeypatch):
     assert cfg.poll_interval_ms == DEFAULT_POLL_INTERVAL_MS
     assert cfg.tracker.active_states == DEFAULT_ACTIVE_STATES
     assert cfg.tracker.terminal_states == DEFAULT_TERMINAL_STATES
+    assert "Human Review" in cfg.tracker.terminal_states
+    assert "Human Review" not in cfg.tracker.active_states
     assert cfg.tracker.api_key == "lin_test_token"
     assert cfg.tracker.project_slug == "my-proj"
     assert cfg.codex.command == "codex app-server"

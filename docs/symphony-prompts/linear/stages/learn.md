@@ -132,16 +132,23 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    - Beginner block sanity: every existing `## 감 잡기` / `## Getting the Feel` still has 3-5 flow steps, exactly five terms, one-sentence takeaway. Fix only obvious shape violations; rewriting prose is out of scope unless this ticket changed the underlying truth.
 5. Commit wiki edits onto the ticket's PR (same branch, not a separate PR).
 6. Post a Learn comment with `## Learnings` (3-4 bullets of new facts/constraints/surprises) and `## Wiki Updates` (paths created/modified/removed, one line each with a changelog tag: `merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
+7. Post a `## Human Review` comment. Keep it succinct and digestible for the human who will confirm Done:
+   - `### What Changed` — 2-3 bullets naming the user-visible or system-visible change.
+   - `### Why It Matters` — 1-2 bullets explaining value or risk reduced.
+   - `### Evidence` — commands/proofs, each with pass/fail and the top evidence path.
+   - `### Risks` — known residual risks, follow-ups, or `none`.
+   - `### Human Checklist` — 3-5 checkboxes a reviewer can verify quickly.
+   - `### Decision Needed` — exactly one line: `Confirm Done` or `Do not confirm; move back to <state> because <reason>`.
 {% if agent.auto_merge_on_done %}
-7. Merge Gate — after Learn and before setting state to `Done`, prove and merge this ticket's feature branch into the target branch:
+8. Merge Gate — after Learn and before setting state to `Human Review`, prove and merge this ticket's feature branch into the target branch:
    - Resolve target in this order: `agent.auto_merge_target_branch`, `agent.feature_base_branch`, then the current host branch.
    - First run `git merge-tree --write-tree <target-branch> symphony/{{ issue.identifier }}` from the host repo. This checks the committed target/branch merge without requiring a clean worktree.
    - Do not use `git status -uno --porcelain` as the merge proof. A dirty host worktree is a separate safety check; it is not proof of a committed target/branch merge conflict.
    - If `git merge-tree --write-tree` reports a committed target/branch merge conflict, move the issue to `Blocked` and post a `Merge Failure` comment with the exact command, target branch, and conflicted paths.
    - If the committed merge is clean, then check whether host dirty tracked files overlap `git diff --name-only <target-branch>..symphony/{{ issue.identifier }}`. Block only on actual overlap or workspace-only path changes.
    - If safe, create the explicit merge commit on the target branch, then record the merge SHA in a `Merge Status` comment.
-8. Transition state to `Done`. If nothing new and sweep was clean, say so in the Learn comment and still transition only after the Merge Gate succeeds.
+9. Transition state to `Human Review`. If nothing new and sweep was clean, say so in the Learn comment and still transition only after the Merge Gate succeeds. Do not set `Done`; a human must confirm.
 {% else %}
-7. Merge Gate is disabled because `agent.auto_merge_on_done` is false. Post a `Merge Status` comment explaining that this workflow intentionally leaves branch integration to the operator.
-8. Transition state to `Done` after the Learn evidence is complete.
+8. Merge Gate is disabled because `agent.auto_merge_on_done` is false. Post a `Merge Status` comment explaining that this workflow intentionally leaves branch integration to the operator.
+9. Transition state to `Human Review` after the Learn evidence is complete. Do not set `Done`; a human must confirm.
 {% endif %}

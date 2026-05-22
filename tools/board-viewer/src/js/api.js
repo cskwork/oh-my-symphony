@@ -96,6 +96,10 @@ export function archiveTicket(id) {
   return postNoBody(`/api/kanban/${encodeURIComponent(id)}/archive`);
 }
 
+export function confirmDoneTicket(id) {
+  return postNoBody(`/api/kanban/${encodeURIComponent(id)}/confirm-done`);
+}
+
 export function refreshSymphony() {
   return postNoBody("/api/symphony/refresh");
 }

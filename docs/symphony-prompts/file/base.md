@@ -28,7 +28,7 @@ Every ticket flows through the same gates. Honour the gate that matches
 `{{ issue.state }}`. Each stage owns one transition; never jump ahead.
 
 ```
-  Todo  ->  Explore  ->  Plan  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Merge Gate  ->  Done
+  Todo  ->  Explore  ->  Plan  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Merge Gate  ->  Human Review  ->  Done
                               ^   \                ^    \                ^
                               |    +-> Blocked     |     +-> Blocked     |
                               |                    |                     |
@@ -42,7 +42,8 @@ Learn writes back after QA passes. Treat it as living memory future
 tickets depend on. The first Learn stage creates the directory if missing.
 Plan turns Explore's candidates into a single executable `## Plan`; In
 Progress must read that plan before editing code. Learn's Merge Gate
-handles feature-branch integration before `Done`.
+handles feature-branch integration before `Human Review`; `Done` requires
+human confirmation from the TUI or web viewer.
 
 `docs/{{ issue.identifier }}/` is this ticket's evidence root — see Hard rules below for the artefact policy. Learn writes to `${LLM_WIKI_PATH:-./docs/llm-wiki}/<topic>.md`, a sibling under the same `docs/` root.
 
@@ -89,6 +90,7 @@ the end: `_세부: docs/<id>/<stage>/details.md_`.
 | `## QA Evidence`        | header + commands + 1-line `**판정**` + AC table + AC Scorecard | raw pytest/curl/Playwright output |
 | `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
 | `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
+| `## Human Review`       | ≤ 18 lines across all 6 sub-sections   | full evidence dump under docs/      |
 | As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |
 
 **Style rules:**
@@ -145,6 +147,7 @@ the end: `_details: docs/<id>/<stage>/details.md_`.
 | `## QA Evidence`        | header + commands + 1-line `**Verdict**` + AC table + AC Scorecard | raw pytest/curl/Playwright output |
 | `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
 | `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
+| `## Human Review`       | ≤ 18 lines across all 6 sub-sections   | full evidence dump under docs/      |
 | As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |
 
 **Style rules:**
@@ -167,8 +170,9 @@ the end: `_details: docs/<id>/<stage>/details.md_`.
 
 ## Hard rules (apply in every stage)
 
-- Never skip a stage. Never mark `Done` without `## QA Evidence` and a
-  successful Learn Merge Gate into the target branch.
+- Never skip a stage. Never mark `Done` without `## QA Evidence`, a
+  successful Learn Merge Gate into the target branch, and explicit human
+  confirmation from `Human Review`.
 - Never silence failing tests, hide errors, or add fake success paths.
   Fix the root cause or move the ticket to `Blocked`.
 - Touch only what the ticket requires. No drive-by refactors.

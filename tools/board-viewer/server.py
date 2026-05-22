@@ -10,6 +10,7 @@
        POST /api/symphony/refresh          — 모든 source 에 fan-out
        POST /api/symphony/<ID>/pause       — 해당 issue 가 속한 source 에 라우팅
        POST /api/symphony/<ID>/resume      — 해당 issue 가 속한 source 에 라우팅
+       POST /api/kanban/<ID>/confirm-done  — Human Review 티켓을 Done 상태로 이동
        POST /api/kanban/<ID>/archive       — Done 티켓을 Archive 상태로 이동
   3. Kanban 파일 인덱스/원본: /api/kanban/index, /api/kanban/<ID>.md
 
@@ -166,7 +167,7 @@ WORKFLOW_PATH: Path | None = _resolve_workflow_path(None)
 PROJECT_ROOT: Path = Path.cwd()
 
 ACTIVE_STATES = ["Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn"]
-TERMINAL_STATES = ["Done", "Cancelled", "Blocked", "Archive"]
+TERMINAL_STATES = ["Human Review", "Done", "Cancelled", "Blocked", "Archive"]
 ALL_STATES = ACTIVE_STATES + TERMINAL_STATES
 
 # 정적 파일 MIME
@@ -1031,13 +1032,13 @@ def _upsert_frontmatter_scalar(
     return lines
 
 
-def archive_kanban_ticket(ticket_id: str, target_state: str = "Archive") -> dict[str, Any]:
-    """Move a Done ticket to the configured Archive lane.
-
-    Board Viewer is intentionally narrower than the TUI hotkey here: it exposes
-    a per-card button only on Done cards, so active work cannot be archived by
-    an accidental browser click.
-    """
+def _transition_kanban_ticket(
+    ticket_id: str,
+    *,
+    source_state: str,
+    target_state: str,
+    action_name: str,
+) -> dict[str, Any]:
     path = _kanban_ticket_path(ticket_id)
     if path is None:
         raise FileNotFoundError(ticket_id)
@@ -1046,8 +1047,10 @@ def archive_kanban_ticket(ticket_id: str, target_state: str = "Archive") -> dict
     current_state = str(front.get("state") or "Todo")
     if current_state.strip().lower() == target_state.strip().lower():
         return {"id": ticket_id, "state": current_state, "changed": False}
-    if current_state.strip().lower() != "done":
-        raise ValueError(f"only Done tickets can be archived (state={current_state})")
+    if current_state.strip().lower() != source_state.strip().lower():
+        raise ValueError(
+            f"only {source_state} tickets can be {action_name} (state={current_state})"
+        )
     front_lines, tail_lines = _split_kanban_frontmatter(text)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     front_lines = _upsert_frontmatter_scalar(front_lines, "state", target_state)
@@ -1069,6 +1072,31 @@ def archive_kanban_ticket(ticket_id: str, target_state: str = "Archive") -> dict
         "updated_at": now,
         "changed": True,
     }
+
+
+def confirm_kanban_ticket(ticket_id: str, target_state: str = "Done") -> dict[str, Any]:
+    """Move a Human Review ticket to Done after explicit operator approval."""
+    return _transition_kanban_ticket(
+        ticket_id,
+        source_state="Human Review",
+        target_state=target_state,
+        action_name="confirmed done",
+    )
+
+
+def archive_kanban_ticket(ticket_id: str, target_state: str = "Archive") -> dict[str, Any]:
+    """Move a Done ticket to the configured Archive lane.
+
+    Board Viewer is intentionally narrower than the TUI hotkey here: it exposes
+    a per-card button only on Done cards, so active work cannot be archived by
+    an accidental browser click.
+    """
+    return _transition_kanban_ticket(
+        ticket_id,
+        source_state="Done",
+        target_state=target_state,
+        action_name="archived",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1215,6 +1243,33 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, **result})
             return
 
+        m = re.fullmatch(r"/api/kanban/([A-Za-z0-9_\-]+)/confirm-done", path)
+        if m:
+            if not self._local_origin_allowed():
+                self._drain_request_body()
+                self._send_json(403, {"error": "forbidden_origin"})
+                return
+            self._drain_request_body()
+            try:
+                result = confirm_kanban_ticket(m.group(1))
+            except FileNotFoundError:
+                self._send_json(404, {"error": "not_found", "id": m.group(1)})
+                return
+            except ValueError as exc:
+                self._send_json(
+                    409,
+                    {"error": "not_confirmable", "message": str(exc)},
+                )
+                return
+            except Exception as exc:
+                self._send_json(
+                    500,
+                    {"error": "confirm_failed", "message": str(exc)},
+                )
+                return
+            self._send_json(200, {"ok": True, **result})
+            return
+
         # refresh — payload 없는 단순 트리거. 모든 source 에 fan-out.
         if path == "/api/symphony/refresh":
             # 클라이언트 body는 무시(stdlib http 서버는 close-notify까지 안 해도 됨).
@@ -1269,7 +1324,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             405,
             {
                 "error": "method_not_allowed",
-                "message": "POST only allowed on /api/workflow/branch-policy, /api/settings, /api/kanban/<id>/archive, /api/symphony/refresh, /api/symphony/<id>/(pause|resume)",
+                "message": "POST only allowed on /api/workflow/branch-policy, /api/settings, /api/kanban/<id>/(archive|confirm-done), /api/symphony/refresh, /api/symphony/<id>/(pause|resume)",
             },
         )
 

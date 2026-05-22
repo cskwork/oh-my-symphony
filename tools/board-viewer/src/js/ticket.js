@@ -77,6 +77,11 @@ function normalizeAgentKind(value) {
   return value.trim().toLowerCase();
 }
 
+function normalizeState(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
+}
+
 function agentKindFromTicket(ticket) {
   return normalizeAgentKind(ticket.agent_kind || ticket.agent?.kind || "");
 }
@@ -105,7 +110,7 @@ function renderAgentBadges(ticket, runningInfo, options = {}) {
 
 // 카드 DOM 생성
 // handlers (옵션):
-//   { onPause(id, btn), onResume(id, btn), onArchive(id, btn) } — 모두 e.stopPropagation으로
+//   { onPause(id, btn), onResume(id, btn), onArchive(id, btn), onConfirmDone(id, btn) } — 모두 e.stopPropagation으로
 //   카드 클릭(=modal-open)과 분리된다. 핸들러가 없으면 버튼 자체가 안 그려진다.
 export function renderCard(ticket, runningInfo, handlers, options = {}) {
   const cls = ["card"];
@@ -161,9 +166,19 @@ export function renderCard(ticket, runningInfo, handlers, options = {}) {
   // pause/resume 버튼은 worker가 잡힌 상태(runningInfo 있음)에서만 의미가 있다.
   // Archive는 Done 카드에서만 노출해 active work 오조작을 막는다.
   let actionRow = null;
-  if (handlers && (handlers.onPause || handlers.onResume || handlers.onArchive)) {
+  if (
+    handlers &&
+    (handlers.onPause || handlers.onResume || handlers.onArchive || handlers.onConfirmDone)
+  ) {
     const buttons = [];
-    const isDone = String(ticket.state || "").trim().toLowerCase() === "done";
+    const isDone = normalizeState(ticket.state) === "done";
+    const isHumanReview = normalizeState(ticket.state) === "human review";
+    if (isHumanReview && handlers.onConfirmDone) {
+      buttons.push(makeActionBtn("Confirm Done", "card-btn confirm", (e) => {
+        e.stopPropagation();
+        handlers.onConfirmDone(id, e.currentTarget);
+      }));
+    }
     if (isDone && handlers.onArchive) {
       buttons.push(makeActionBtn("Archive", "card-btn archive", (e) => {
         e.stopPropagation();

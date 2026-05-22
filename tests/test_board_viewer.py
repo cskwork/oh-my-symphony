@@ -48,7 +48,7 @@ def test_card_renderer_has_done_archive_action() -> None:
     board_js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
     api_js = Path("tools/board-viewer/src/js/api.js").read_text(encoding="utf-8")
 
-    assert 'String(ticket.state || "").trim().toLowerCase() === "done"' in ticket_js
+    assert 'normalizeState(ticket.state) === "done"' in ticket_js
     assert 'makeActionBtn("Archive", "card-btn archive"' in ticket_js
     assert "onArchive" in ticket_js
     assert "archiveTicket" in board_js
@@ -56,11 +56,25 @@ def test_card_renderer_has_done_archive_action() -> None:
     assert "/api/kanban/${encodeURIComponent(id)}/archive" in api_js
 
 
+def test_card_renderer_has_human_review_confirm_action() -> None:
+    ticket_js = Path("tools/board-viewer/src/js/ticket.js").read_text(encoding="utf-8")
+    board_js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
+    api_js = Path("tools/board-viewer/src/js/api.js").read_text(encoding="utf-8")
+
+    assert 'normalizeState(ticket.state) === "human review"' in ticket_js
+    assert 'makeActionBtn("Confirm Done", "card-btn confirm"' in ticket_js
+    assert "onConfirmDone" in ticket_js
+    assert "confirmDoneTicket" in board_js
+    assert "onConfirmDone" in board_js
+    assert "/api/kanban/${encodeURIComponent(id)}/confirm-done" in api_js
+
+
 def test_board_viewer_fallback_states_and_policy_mode() -> None:
     js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
 
     assert "const FALLBACK_STATES" in js
     assert '"Plan"' in js
+    assert '"Human Review"' in js
     assert "branchPolicyEl" not in js
     assert "`branch:" not in js
     assert "merge off" not in js
@@ -180,6 +194,62 @@ body
         raise AssertionError("expected active ticket archive to fail")
     front, _body = server.parse_frontmatter(ticket.read_text(encoding="utf-8"))
     assert front["state"] == "Todo"
+
+
+def test_confirm_kanban_ticket_moves_human_review_to_done(tmp_path, monkeypatch) -> None:
+    server = _load_server_module()
+    board = tmp_path / "kanban"
+    board.mkdir()
+    ticket = board / "TASK-5.md"
+    ticket.write_text(
+        """---
+id: TASK-5
+identifier: TASK-5
+title: Needs human review
+state: Human Review
+updated_at: 2026-05-01T00:00:00Z
+---
+body stays
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "KANBAN_DIR", board)
+
+    result = server.confirm_kanban_ticket("TASK-5")
+    front, body = server.parse_frontmatter(ticket.read_text(encoding="utf-8"))
+
+    assert result["changed"] is True
+    assert result["previous_state"] == "Human Review"
+    assert front["state"] == "Done"
+    assert front["updated_at"] != "2026-05-01T00:00:00Z"
+    assert body == "body stays\n"
+
+
+def test_confirm_kanban_ticket_refuses_non_human_review_state(tmp_path, monkeypatch) -> None:
+    server = _load_server_module()
+    board = tmp_path / "kanban"
+    board.mkdir()
+    ticket = board / "TASK-6.md"
+    ticket.write_text(
+        """---
+id: TASK-6
+title: Still learning
+state: Learn
+---
+body
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "KANBAN_DIR", board)
+
+    try:
+        server.confirm_kanban_ticket("TASK-6")
+    except ValueError as exc:
+        assert "only Human Review tickets" in str(exc)
+    else:
+        raise AssertionError("expected non-human-review confirm to fail")
+    front, _body = server.parse_frontmatter(ticket.read_text(encoding="utf-8"))
+    assert front["state"] == "Learn"
 
 
 def test_workflow_branch_policy_update_preserves_body(tmp_path, monkeypatch) -> None:

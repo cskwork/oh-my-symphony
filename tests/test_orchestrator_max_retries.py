@@ -121,7 +121,7 @@ def test_zero_max_retries_disables_cap() -> None:
             "iss-1",
             identifier="MT-1",
             attempt=999,  # way over any plausible cap
-            delay_ms=0,
+            delay_ms=10_000,
             error="timeout",
             kind="retry",
         )
@@ -204,7 +204,7 @@ def test_continuation_kind_is_exempt_from_cap() -> None:
             "iss-1",
             identifier="MT-1",
             attempt=99,  # would normally exceed cap
-            delay_ms=0,
+            delay_ms=10_000,
             error=None,  # kind resolves to "continuation"
             kind=None,
         )

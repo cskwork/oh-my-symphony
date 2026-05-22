@@ -2,9 +2,9 @@
 WORKFLOW.file.example.md / WORKFLOW.example.md plus docs/symphony-prompts/.
 
 These tests assert the prompt: (1) parses + renders for every active state,
-(2) carries only the current stage-specific instructions the agent needs,
-(3) renders the retry and blocked_by branches, and (4) preserves the
-fixed `## As-Is -> To-Be Report` shape required at Done.
+    (2) carries only the current stage-specific instructions the agent needs,
+    (3) renders the retry and blocked_by branches, and (4) preserves the
+    fixed human-review handoff before Done.
 """
 
 from __future__ import annotations
@@ -87,6 +87,16 @@ DONE_REPORT_SHAPE = (
     "### Evidence",
 )
 
+HUMAN_REVIEW_HANDOFF_SHAPE = (
+    "## Human Review",
+    "### What Changed",
+    "### Why It Matters",
+    "### Evidence",
+    "### Risks",
+    "### Human Checklist",
+    "### Decision Needed",
+)
+
 
 def _load(name: str):
     cfg = build_service_config(load_workflow(REPO_ROOT / name))
@@ -120,6 +130,8 @@ def test_active_states_cover_full_pipeline(workflow: str) -> None:
     assert "done" in cfg.prompts.stage_templates, (
         f"{workflow} prompts.stages missing terminal Done report prompt"
     )
+    assert "Human Review" in cfg.tracker.terminal_states
+    assert "Human Review" not in cfg.tracker.active_states
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
@@ -241,8 +253,9 @@ def test_learn_stage_requires_merge_before_done(workflow: str) -> None:
         cfg.prompt_template_for_state("Learn"),
         build_prompt_env(_issue("Learn"), attempt=None),
     )
-    for phrase in ("Merge Gate", "target branch", "before setting state to `Done`"):
+    for phrase in ("Merge Gate", "target branch", "before setting state to `Human Review`"):
         assert phrase in rendered, f"Learn stage missing merge gate: {phrase!r}"
+    assert "before setting state to `Done`" not in rendered
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
@@ -273,6 +286,7 @@ def test_learn_stage_respects_disabled_auto_merge(workflow: str) -> None:
     assert "Merge Gate is disabled" in rendered
     assert "leaves branch integration to the operator" in rendered
     assert "before setting state to `Done`" not in rendered
+    assert "Transition state to `Human Review`" in rendered
 
 
 @pytest.mark.parametrize("flavor", ("file", "linear"))
@@ -283,19 +297,21 @@ def test_base_prompt_declares_merge_gate(flavor: str) -> None:
 
     assert "eight stages, no skipping" in text
     assert "Plan  ->  In Progress" in text
-    assert "Learn  ->  Merge Gate  ->  Done" in text
+    assert "Learn  ->  Merge Gate  ->  Human Review  ->  Done" in text
     assert "successful Learn Merge Gate" in text
+    assert "human confirmation" in text
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
-def test_done_stage_carries_as_is_to_be_report_shape(workflow: str) -> None:
+def test_learn_stage_carries_human_review_handoff_shape(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(
-        cfg.prompt_template_for_state("Done"),
-        build_prompt_env(_issue("Done"), attempt=None),
+        cfg.prompt_template_for_state("Learn"),
+        build_prompt_env(_issue("Learn"), attempt=None),
     )
-    for heading in DONE_REPORT_SHAPE:
-        assert heading in rendered, f"Done report missing section: {heading!r}"
+    for heading in HUMAN_REVIEW_HANDOFF_SHAPE:
+        assert heading in rendered, f"Human Review handoff missing section: {heading!r}"
+    assert "Transition state to `Human Review`" in rendered
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

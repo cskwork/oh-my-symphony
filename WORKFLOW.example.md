@@ -4,7 +4,7 @@ tracker:
   project_slug: my-team-project
   api_key: $LINEAR_API_KEY
   active_states: [Todo, Explore, Plan, "In Progress", Review, QA, Learn]
-  terminal_states: [Closed, Cancelled, Canceled, Duplicate, Done, Archive]
+  terminal_states: [Closed, Cancelled, Canceled, Duplicate, "Human Review", Done, Archive]
   # Auto-archive sweep — terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on each poll tick.
   # Set `archive_after_days: 0` to disable the sweep (TUI `a` hotkey still
@@ -20,7 +20,8 @@ tracker:
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "Execute real code, capture evidence"
     Learn: "Distill learnings, update docs/llm-wiki"
-    Done: "As-Is -> To-Be report"
+    "Human Review": "Human confirms agent work before Done"
+    Done: "Human-confirmed complete"
     Archive: "Auto-archived after 30 days idle"
 
 polling:
@@ -40,7 +41,8 @@ hooks:
   # Default: attach the per-ticket workspace as a git worktree of the
   # host repo on a symphony/<ID> branch. The host working tree is never
   # touched while the ticket is active. The default Learn gate merges the
-  # feature branch into the target branch before the ticket can move to Done.
+  # feature branch into the target branch before the ticket can move to Human
+  # Review. A human then confirms Done from the TUI (`c`) or board viewer.
   #
   # If your code lives in a *different* remote than where WORKFLOW.md
   # sits (common with Linear setups where the config repo is config-only),
@@ -213,8 +215,8 @@ agent:
   # runs first. Set to false if your workspace is an existing repo with
   # strict commit-style rules you don't want auto-touched.
   auto_commit_on_done: true
-  # Merge policy for the Learn -> Done gate. Learn must merge the
-  # `symphony/<ID>` feature branch into this target before setting Done.
+  # Merge policy for the Learn -> Human Review gate. Learn must merge the
+  # `symphony/<ID>` feature branch into this target before setting Human Review.
   # The post-Done auto-merge remains a best-effort fallback for older prompts.
   auto_merge_on_done: true
   # Branch/ref used as the start point for new `symphony/<ID>` feature

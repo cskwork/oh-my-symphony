@@ -1,8 +1,8 @@
-"""End-to-end Symphony agent lifecycle: Todo -> Done golden path.
+"""End-to-end Symphony agent lifecycle: Todo -> Human Review golden path.
 
 Existing tests cover *one* phase transition at a time. This file walks an
 issue through the full canonical 7-state pipeline
-(Todo -> Explore -> In Progress -> Review -> QA -> Learn -> Done) and
+(Todo -> Explore -> In Progress -> Review -> QA -> Learn -> Human Review) and
 asserts the *expected outputs at each phase boundary*:
 
 1. A fresh backend is built per phase (state changes => session rebuild).
@@ -11,7 +11,7 @@ asserts the *expected outputs at each phase boundary*:
 4. `run_turn` on the freshly built backend carries `is_continuation=False`.
 5. Session ids are distinct across all 6 transitions.
 6. `WorkspaceManager.after_run_best_effort` fires once per phase.
-7. On the final Done refresh the worker exits cleanly, the running slot
+7. On the final Human Review refresh the worker exits cleanly, the running slot
    is released, and no retry entry survives.
 
 The test deliberately uses the same `_FakeBackend` + `_FakeWorkspaceManager`
@@ -61,7 +61,7 @@ CANONICAL_ACTIVE_STATES = (
     "QA",
     "Learn",
 )
-TERMINAL_STATES = ("Done", "Cancelled", "Blocked")
+TERMINAL_STATES = ("Human Review", "Done", "Cancelled", "Blocked")
 
 
 @dataclass
@@ -315,8 +315,8 @@ def test_full_todo_to_done_pipeline_rebuilds_backend_per_phase(
     _seed_running(o, issue, tmp_path)
     instances = _install_backend_factory(monkeypatch)
     # After the first run_turn (Todo), the scripted refresh walks through
-    # every remaining canonical state and then exits at Done.
-    _install_state_walk(monkeypatch, ["Explore", "In Progress", "Review", "QA", "Learn", "Done"])
+    # every remaining canonical state and then exits at Human Review.
+    _install_state_walk(monkeypatch, ["Explore", "In Progress", "Review", "QA", "Learn", "Human Review"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
@@ -396,7 +396,7 @@ def test_lifecycle_stops_each_intermediate_backend_exactly_once(
     o = _orch(tmp_path)
     _seed_running(o, issue, tmp_path)
     instances = _install_backend_factory(monkeypatch)
-    _install_state_walk(monkeypatch, ["Explore", "In Progress", "Review", "QA", "Learn", "Done"])
+    _install_state_walk(monkeypatch, ["Explore", "In Progress", "Review", "QA", "Learn", "Human Review"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 

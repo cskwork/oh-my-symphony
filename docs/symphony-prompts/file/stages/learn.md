@@ -6,8 +6,8 @@
 1. Append a one-line `## Learnings` ("chore — metadata-only change, no new invariants captured").
 2. Append a one-line `## Wiki Updates` ("none — chore short-circuit").
 3. Skip the wiki Decision-log row, the beginner / Technical Reference block, the `INDEX.md` refresh, and the integrity sweep.
-4. Then **run whichever Merge Gate clause step 7 below renders**, exactly as written — the chore short-circuit cannot bypass it. Under `agent.auto_merge_on_done=true` step 7 is the merge-tree probe + conflict-vs-clean branch; under `agent.auto_merge_on_done=false` step 7 is the disabled-gate clause that appends `## Merge Status` and leaves integration to the operator. Honor whichever the prompt renders.
-5. Set state to `Done` per step 8 (or `Blocked` if step 7's merge-tree probe reported a committed conflict, exactly as the standard flow specifies).
+4. Then **run whichever Merge Gate clause step 8 below renders**, exactly as written — the chore short-circuit cannot bypass it. Under `agent.auto_merge_on_done=true` step 8 is the merge-tree probe + conflict-vs-clean branch; under `agent.auto_merge_on_done=false` step 8 is the disabled-gate clause that appends `## Merge Status` and leaves integration to the operator. Honor whichever the prompt renders.
+5. Set state to `Human Review` per step 8 (or `Blocked` if step 7's merge-tree probe reported a committed conflict, exactly as the standard flow specifies).
 {% endif %}{% endfor %}
 Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wiki/` so **both developers and non-developers** can learn from it.
 
@@ -149,16 +149,23 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    - Bulk dup/orphan/stale/missing-file sweeping is handled by `symphony wiki-sweep` (run automatically every `wiki.sweep_every_n` Done transitions; also `symphony wiki-sweep --root docs/llm-wiki --dry-run` on demand). Do NOT re-do those checks by hand.
 5. Append `## Learnings` to the ticket — 3-4 bullets of new facts/constraints/surprises.
 6. Append `## Wiki Updates` to the ticket — paths created/modified/removed, one line each with a changelog tag (`merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
+7. Append `## Human Review` to the ticket. Keep it succinct and digestible for the human who will confirm Done:
+   - `### What Changed` — 2-3 bullets naming the user-visible or system-visible change.
+   - `### Why It Matters` — 1-2 bullets explaining value or risk reduced.
+   - `### Evidence` — commands/proofs, each with pass/fail and the top evidence path.
+   - `### Risks` — known residual risks, follow-ups, or `none`.
+   - `### Human Checklist` — 3-5 checkboxes a reviewer can verify quickly.
+   - `### Decision Needed` — exactly one line: `Confirm Done` or `Do not confirm; move back to <state> because <reason>`.
 {% if agent.auto_merge_on_done %}
-7. Merge Gate — after Learn and before setting state to `Done`, prove and merge this ticket's feature branch into the target branch:
+8. Merge Gate — after Learn and before setting state to `Human Review`, prove and merge this ticket's feature branch into the target branch:
    - Resolve target in this order: `agent.auto_merge_target_branch`, `agent.feature_base_branch`, then the current host branch.
    - First run `git merge-tree --write-tree <target-branch> symphony/{{ issue.identifier }}` from the host repo. This checks the committed target/branch merge without requiring a clean worktree.
    - Do not use `git status -uno --porcelain` as the merge proof. A dirty host worktree is a separate safety check; it is not proof of a committed target/branch merge conflict.
    - If `git merge-tree --write-tree` reports a committed target/branch merge conflict, set state to `Blocked` and append `## Merge Failure` with the exact command, target branch, and conflicted paths.
    - If the committed merge is clean, then check whether host dirty tracked files overlap `git diff --name-only <target-branch>..symphony/{{ issue.identifier }}`. Block only on actual overlap or workspace-only path changes.
    - If safe, create the explicit merge commit on the target branch, then record the merge SHA under `## Merge Status`.
-8. Set state to `Done`. If nothing new and sweep was clean, say so under `## Learnings` and still transition only after the Merge Gate succeeds.
+9. Transition state to `Human Review`. If nothing new and sweep was clean, say so under `## Learnings` and still transition only after the Merge Gate succeeds. Do not set `Done`; a human must confirm.
 {% else %}
-7. Merge Gate is disabled because `agent.auto_merge_on_done` is false. Append `## Merge Status` explaining that this workflow intentionally leaves branch integration to the operator.
-8. Set state to `Done` after the Learn evidence is complete.
+8. Merge Gate is disabled because `agent.auto_merge_on_done` is false. Append `## Merge Status` explaining that this workflow intentionally leaves branch integration to the operator.
+9. Transition state to `Human Review` after the Learn evidence is complete. Do not set `Done`; a human must confirm.
 {% endif %}

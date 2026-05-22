@@ -108,6 +108,7 @@ class KanbanApp(App):
         Binding("left_square_bracket", "focus_board", "Board focus", show=False),
         Binding("L", "toggle_language", "Language"),
         Binding("a", "archive_focused", "Archive"),
+        Binding("c", "confirm_done_focused", "Confirm done"),
         Binding("P", "toggle_pause_focused", "Pause/resume"),
         Binding("slash", "open_filter", "Filter"),
         Binding("escape", "escape", "Close filter / zoom", show=False),
@@ -310,7 +311,7 @@ class KanbanApp(App):
             "1-9 zoom lane · 0/esc reset · "
             f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
             "d density · p detail-pane · ]/[ focus detail/board · "
-            "L language · a archive · P pause/resume · / filter · "
+            "L language · a archive · c confirm done · P pause/resume · / filter · "
             "tab focus · j/k scroll · g/G top/bottom · "
             f"lang={lang}"
         )
@@ -506,9 +507,8 @@ class KanbanApp(App):
     def action_archive_focused(self) -> None:
         """Move the focused card to the configured archive state.
 
-        Only fires for cards already in a *terminal* state — auto-archive
-        and the manual hotkey both target Done-ish lanes, so accidentally
-        archiving an in-flight ticket from the TUI shouldn't be possible.
+        Only fires for Done cards. Human Review is terminal too, but it
+        requires explicit confirmation before it can become archiveable.
         """
         focused = self.focused
         if not isinstance(focused, IssueCard):
@@ -517,13 +517,12 @@ class KanbanApp(App):
         cfg = self._ws.current()
         if cfg is None:
             return
-        terminal_keys = {normalize_state(s) for s in cfg.tracker.terminal_states}
         archive_key = normalize_state(cfg.tracker.archive_state)
         issue = focused.issue
         state_key = normalize_state(issue.state)
-        if state_key not in terminal_keys:
+        if state_key != "done":
             self.notify(
-                f"only terminal states can be archived (state={issue.state})",
+                f"only Done cards can be archived (state={issue.state})",
                 timeout=3,
             )
             return
@@ -551,6 +550,41 @@ class KanbanApp(App):
             self.notify(f"archive failed: {exc}", timeout=4, severity="error")
             return
         self.notify(f"archived {issue.identifier}", timeout=2)
+        self._kick_tracker_refresh()
+
+    def action_confirm_done_focused(self) -> None:
+        """Move a Human Review card to Done after operator approval."""
+        focused = self.focused
+        if not isinstance(focused, IssueCard):
+            self.notify("focus a card first", timeout=2)
+            return
+        cfg = self._ws.current()
+        if cfg is None:
+            return
+        issue = focused.issue
+        if normalize_state(issue.state) != "human review":
+            self.notify(
+                f"only Human Review cards can be confirmed (state={issue.state})",
+                timeout=3,
+            )
+            return
+        self.run_worker(
+            self._confirm_done_issue(cfg, issue),
+            thread=False,
+            exclusive=False,
+            group="confirm_done",
+        )
+
+    async def _confirm_done_issue(self, cfg: ServiceConfig, issue: Issue) -> None:
+        try:
+            await asyncio.to_thread(self._call_update_state, cfg, issue, "Done")
+        except Exception as exc:
+            log.warning(
+                "tui_confirm_done_failed", identifier=issue.identifier, error=str(exc)
+            )
+            self.notify(f"confirm failed: {exc}", timeout=4, severity="error")
+            return
+        self.notify(f"confirmed {issue.identifier} as Done", timeout=2)
         self._kick_tracker_refresh()
 
     @staticmethod

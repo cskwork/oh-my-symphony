@@ -740,6 +740,10 @@ pre,
   border-color: color-mix(in oklch, var(--good) 55%, transparent);
   color: var(--running);
 }
+.card-btn.confirm:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--good) 55%, transparent);
+  color: var(--good);
+}
 .card-btn.archive:hover:not(:disabled) {
   border-color: color-mix(in oklch, var(--accent) 55%, transparent);
   color: var(--accent-strong);
