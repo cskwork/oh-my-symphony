@@ -765,9 +765,6 @@ class Orchestrator:
             now_release = datetime.now(timezone.utc)
             for stale_id in stale_claimed:
                 self._claim_released_at[stale_id] = now_release
-        stale_turn_budget = self._turn_budget_exhausted - in_flight_ids
-        if stale_turn_budget:
-            self._turn_budget_exhausted -= stale_turn_budget
 
         try:
             validate_for_dispatch(cfg)
@@ -1051,14 +1048,10 @@ class Orchestrator:
         for other_id, retry_entry in self._retry.items():
             if other_id == candidate.id:
                 continue
-            # Retry entries don't carry the full Issue. Look up the
-            # last-known body via running history when present; the
-            # common case (retry of an exited ticket) leaves no body to
-            # inspect, and the retry path re-evaluates on its own tick.
-            running_entry = self._running.get(other_id)
-            if running_entry is None:
+            other_issue = retry_entry.issue
+            if other_issue is None:
                 continue
-            other_files = self._touched_files_for(running_entry.issue)
+            other_files = self._touched_files_for(other_issue)
             overlap = candidate_files & other_files
             if overlap:
                 return retry_entry.identifier, overlap
@@ -2653,12 +2646,14 @@ class Orchestrator:
                     delay_ms=CONTINUATION_RETRY_DELAY_MS,
                     error=None,
                     kind="continuation",
+                    issue=entry.issue,
                 )
             elif entry.hit_max_turns:
                 # `max_turns` exhausted without a terminal transition: stop
                 # auto-continuation and, when the workflow exposes a Blocked
                 # terminal state, persist that state so the web/TUI boards do
                 # not look idle while the ticket is actually operator-blocked.
+                self._turn_budget_exhausted.add(issue_id)
                 self._claimed.add(issue_id)
                 attempt_cap = cfg.agent.max_turns if cfg is not None else 0
                 target_state = (
@@ -2693,6 +2688,7 @@ class Orchestrator:
                 delay_ms=delay_ms,
                 error=f"{reason}: {error}" if error else reason,
                 kind="retry",
+                issue=entry.issue,
             )
         log.info(
             "worker_exit",
@@ -2727,6 +2723,7 @@ class Orchestrator:
             attempt=next_attempt,
             delay_ms=delay_ms,
             error="force_ejected_zombie",
+            issue=entry.issue,
         )
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.last_workspace = entry.workspace_path
@@ -2745,6 +2742,7 @@ class Orchestrator:
         delay_ms: int,
         error: str | None,
         kind: str | None = None,
+        issue: Issue | None = None,
     ) -> None:
         if self._loop is None:
             return
@@ -2802,6 +2800,7 @@ class Orchestrator:
             timer_handle=handle,
             error=error,
             kind=kind or ("continuation" if error is None else "retry"),
+            issue=issue,
         )
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.current_retry_attempt = attempt
@@ -2902,6 +2901,7 @@ class Orchestrator:
                 attempt=retry.attempt,
                 delay_ms=PAUSED_RETRY_HOLD_MS,
                 error="paused",
+                issue=retry.issue,
             )
             return
         cfg = self._workflow_state.current()
@@ -2920,6 +2920,7 @@ class Orchestrator:
                     RETRY_BASE_MS * (2 ** retry.attempt), cfg.agent.max_retry_backoff_ms
                 ),
                 error=f"retry poll failed: {exc}",
+                issue=retry.issue,
             )
             return
         match = next((i for i in candidates if i.id == issue_id), None)
@@ -2940,6 +2941,7 @@ class Orchestrator:
                     RETRY_BASE_MS * (2 ** retry.attempt), cfg.agent.max_retry_backoff_ms
                 ),
                 error="not eligible at retry time",
+                issue=match,
             )
             return
         if self._available_slots(cfg) == 0:
@@ -2951,6 +2953,7 @@ class Orchestrator:
                     RETRY_BASE_MS * (2 ** retry.attempt), cfg.agent.max_retry_backoff_ms
                 ),
                 error="no available orchestrator slots",
+                issue=match,
             )
             return
         self._dispatch(match, cfg, attempt=retry.attempt, attempt_kind=retry.kind)

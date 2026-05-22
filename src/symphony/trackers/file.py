@@ -95,7 +95,7 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
     try:
         parsed = yaml.safe_load(front_text)
     except yaml.YAMLError as exc:
-        healed = _auto_heal_markdown_in_front_matter(path, lines, end)
+        healed = _auto_heal_markdown_in_front_matter(lines, end)
         if healed is not None:
             return healed
         raise SymphonyError(
@@ -112,9 +112,9 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def _auto_heal_markdown_in_front_matter(
-    path: Path, lines: list[str], end: int
+    lines: list[str], end: int
 ) -> tuple[dict[str, Any], str] | None:
-    """Repair a common ticket corruption: Markdown inserted before YAML close."""
+    """Parse a common ticket corruption: Markdown inserted before YAML close."""
     yaml_lines: list[str] = []
     misplaced_lines: list[str] = []
     in_misplaced_markdown = False
@@ -163,7 +163,6 @@ def _auto_heal_markdown_in_front_matter(
 
     original_body = "\n".join(lines[end + 1 :]).strip()
     body = "\n\n".join(part for part in (moved_text, original_body) if part)
-    write_ticket_atomic(path, front, body)
     return front, body
 
 
