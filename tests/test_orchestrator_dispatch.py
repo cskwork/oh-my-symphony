@@ -1790,6 +1790,48 @@ def test_after_done_failure_policy_warn_removes_workspace(monkeypatch):
     asyncio.run(_run())
 
 
+def test_confirm_done_runs_done_side_effects(tmp_path: Path, monkeypatch):
+    """Human confirmation must use the orchestrator's normal Done pipeline."""
+    workspace = tmp_path / "ws" / "MT-REVIEW"
+    workspace.mkdir(parents=True)
+    cfg = _make_config(
+        max_concurrent=1,
+        terminal_states=("Human Review", "Done", "Cancelled", "Blocked"),
+        workflow_path=tmp_path / "WORKFLOW.md",
+    )
+    issue = _issue("MT-REVIEW", state="Human Review")
+    orch = _orch()
+    orch._workflow_state._config = cfg  # type: ignore[attr-defined]
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda c: [issue])
+
+    updates: list[tuple[str, str]] = []
+    calls: list[str] = []
+
+    def _capture_update_state(_cfg, captured_issue, target_state):
+        updates.append((captured_issue.identifier, target_state))
+
+    class _StubWS:
+        def path_for(self, ident):
+            return workspace
+
+        async def after_done_best_effort(self, p, *, identifier, title):
+            calls.append(f"after_done:{identifier}")
+            return True
+
+        async def remove(self, p):
+            calls.append(f"remove:{Path(p).name}")
+
+    monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update_state)
+    orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+    result = asyncio.run(orch.confirm_done("MT-REVIEW"))
+
+    assert result["changed"] is True
+    assert updates == [("MT-REVIEW", "Done")]
+    assert calls == ["after_done:MT-REVIEW", "remove:MT-REVIEW"]
+    assert orch._done_count == 1
+
+
 def test_on_worker_exit_hit_max_turns_blocks_ticket_when_blocked_state_exists(monkeypatch):
     """Per-attempt `max_turns` exhaustion should surface as a blocked ticket.
 
@@ -2384,6 +2426,38 @@ def test_startup_terminal_cleanup_preserves_unmerged_done_workspace_without_repl
         "update:MT-DONE->Blocked",
         "note:MT-DONE:Merge Gate Failed",
     ]
+
+
+def test_startup_terminal_cleanup_preserves_human_review_workspace(
+    tmp_path: Path, monkeypatch
+):
+    """Human Review is awaiting approval; restart cleanup must not reap it."""
+    workspace = tmp_path / "ws" / "MT-REVIEW"
+    workspace.mkdir(parents=True)
+
+    cfg = _make_config(
+        max_concurrent=1,
+        terminal_states=("Human Review", "Done", "Cancelled", "Blocked"),
+    )
+    issue = _issue("MT-REVIEW", state="Human Review")
+    orch = _orch()
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda c: [issue])
+
+    calls: list[str] = []
+
+    class _StubWS:
+        def path_for(self, ident):
+            return workspace
+
+        async def remove(self, p):
+            calls.append(f"remove:{Path(p).name}")
+
+    orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+    asyncio.run(orch._startup_terminal_cleanup(cfg))
+
+    assert calls == []
+    assert workspace.exists()
 
 
 def test_snapshot_retry_row_includes_paused_flag():

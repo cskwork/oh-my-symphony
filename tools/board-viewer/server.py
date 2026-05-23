@@ -10,7 +10,7 @@
        POST /api/symphony/refresh          — 모든 source 에 fan-out
        POST /api/symphony/<ID>/pause       — 해당 issue 가 속한 source 에 라우팅
        POST /api/symphony/<ID>/resume      — 해당 issue 가 속한 source 에 라우팅
-       POST /api/kanban/<ID>/confirm-done  — Human Review 티켓을 Done 상태로 이동
+       POST /api/kanban/<ID>/confirm-done  — Symphony에 Human Review 확인 요청
        POST /api/kanban/<ID>/archive       — Done 티켓을 Archive 상태로 이동
   3. Kanban 파일 인덱스/원본: /api/kanban/index, /api/kanban/<ID>.md
 
@@ -22,7 +22,7 @@ Multi-source CLI:
 
 설계 원칙:
   - stdlib 만 사용 (Python 3.11+)
-  - 노출하는 mutating endpoint는 refresh / pause / resume / archive
+  - 노출하는 mutating endpoint는 refresh / pause / resume / confirm / archive
     allowlist로 제한한다. 그 외 GET 전부.
   - 127.0.0.1 바인딩 + CORS `*` — 같은 origin 보험
   - Symphony가 죽어도 board file 인덱스는 동작해야 함 (degraded mode)
@@ -1250,24 +1250,26 @@ class BoardHandler(BaseHTTPRequestHandler):
                 self._send_json(403, {"error": "forbidden_origin"})
                 return
             self._drain_request_body()
-            try:
-                result = confirm_kanban_ticket(m.group(1))
-            except FileNotFoundError:
-                self._send_json(404, {"error": "not_found", "id": m.group(1)})
-                return
-            except ValueError as exc:
-                self._send_json(
-                    409,
-                    {"error": "not_confirmable", "message": str(exc)},
+            identifier = m.group(1)
+            preferred = _lookup_source_for_issue(identifier)
+            order = []
+            if preferred:
+                order.append(preferred)
+            for s in SOURCES:
+                if s["name"] not in order:
+                    order.append(s["name"])
+            last: tuple[int, bytes, str] = (
+                599,
+                b'{"error":"no_sources"}',
+                "application/json",
+            )
+            for source_name in order:
+                last = symphony_post_to(
+                    source_name, f"/api/v1/{identifier}/confirm-done"
                 )
-                return
-            except Exception as exc:
-                self._send_json(
-                    500,
-                    {"error": "confirm_failed", "message": str(exc)},
-                )
-                return
-            self._send_json(200, {"ok": True, **result})
+                if 200 <= last[0] < 300:
+                    break
+            self._send(*last)
             return
 
         # refresh — payload 없는 단순 트리거. 모든 source 에 fan-out.
