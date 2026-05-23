@@ -1799,6 +1799,7 @@ def test_confirm_done_runs_done_side_effects(tmp_path: Path, monkeypatch):
         terminal_states=("Human Review", "Done", "Cancelled", "Blocked"),
         workflow_path=tmp_path / "WORKFLOW.md",
     )
+    cfg = replace(cfg, agent=replace(cfg.agent, auto_merge_on_done=False))
     issue = _issue("MT-REVIEW", state="Human Review")
     orch = _orch()
     orch._workflow_state._config = cfg  # type: ignore[attr-defined]
