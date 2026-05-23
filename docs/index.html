@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="description" content="oh-my-symphony — one terminal, one Kanban board, four AI coding agents. Codex, Claude Code, Gemini, and Pi running in parallel git worktrees, watched live in a Jira-style TUI." />
+<meta name="theme-color" content="#0B0E14" />
+
+<title>oh-my-symphony — One terminal. One Kanban board. Four AI coding agents.</title>
+
+<meta property="og:title" content="oh-my-symphony — multi-agent Kanban TUI" />
+<meta property="og:description" content="Codex · Claude Code · Gemini · Pi — pick per ticket, run in parallel, watch live." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://cskwork.github.io/oh-my-symphony/" />
+<meta property="og:image" content="https://cskwork.github.io/oh-my-symphony/tui-screenshot.svg" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet" />
+
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          surface: "#0B0E14",
+          "surface-container": "#151921",
+          "surface-container-low": "#10141B",
+          "surface-container-lowest": "#07090D",
+          "on-surface": "#E5E2DB",
+          "on-surface-variant": "#8A919E",
+          "on-background": "#BFBDB6",
+          background: "#0B0E14",
+          primary: "#FFB454",
+          "primary-dim": "#FFB961",
+          "on-primary": "#0B0E14",
+          secondary: "#7FD1B9",
+          "on-secondary": "#0B0E14",
+          outline: "#272D38",
+          "outline-variant": "#1B2029",
+          danger: "#FF6D6D"
+        },
+        borderRadius: {
+          DEFAULT: "4px",
+          sm: "4px",
+          md: "4px",
+          lg: "4px",
+          xl: "4px"
+        },
+        spacing: {
+          gutter: "24px",
+          "margin-mobile": "16px",
+          "margin-desktop": "48px",
+          "container-max": "1280px"
+        },
+        fontFamily: {
+          mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+          sans: ['"Inter"', "ui-sans-serif", "system-ui", "Segoe UI", "Roboto", "sans-serif"]
+        },
+        fontSize: {
+          "headline-xl": ["48px", { lineHeight: "1.1", letterSpacing: "-0.02em", fontWeight: "700" }],
+          "headline-lg": ["32px", { lineHeight: "1.2", fontWeight: "600" }],
+          "headline-md": ["24px", { lineHeight: "1.3", fontWeight: "600" }],
+          "body-lg": ["18px", { lineHeight: "1.6", fontWeight: "400" }],
+          "body-md": ["16px", { lineHeight: "1.5", fontWeight: "400" }],
+          "label-md": ["14px", { lineHeight: "1.2", letterSpacing: "0.05em", fontWeight: "500" }],
+          "code-sm": ["13px", { lineHeight: "1.5", fontWeight: "400" }]
+        },
+        maxWidth: {
+          "container-max": "1280px"
+        }
+      }
+    }
+  };
+</script>
+
+<style>
+  html, body { background-color: #0B0E14; }
+  body { font-family: "Inter", ui-sans-serif, system-ui, sans-serif; color: #E5E2DB; }
+  .font-mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .font-sans { font-family: "Inter", ui-sans-serif, system-ui, sans-serif; }
+
+  /* subtle terminal scanline texture */
+  .terminal-scanline::before {
+    content: "";
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0) 0px,
+      rgba(255, 255, 255, 0) 3px,
+      rgba(0, 0, 0, 0.18) 3px,
+      rgba(0, 0, 0, 0.18) 4px
+    );
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.35;
+  }
+
+  /* dot-grid hero background */
+  .hero-grid {
+    background-image:
+      radial-gradient(rgba(255, 180, 84, 0.06) 1px, transparent 1px),
+      radial-gradient(rgba(127, 209, 185, 0.04) 1px, transparent 1px);
+    background-size: 32px 32px, 64px 64px;
+    background-position: 0 0, 16px 16px;
+  }
+
+  .cursor-blink {
+    display: inline-block;
+    width: 0.55ch;
+    height: 1em;
+    background: #FFB454;
+    vertical-align: -2px;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .running-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 9999px;
+    background: #7FD1B9;
+    box-shadow: 0 0 6px rgba(127, 209, 185, 0.6);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  .terminal-card {
+    background: #151921;
+    border: 1px solid #272D38;
+  }
+  .terminal-bar {
+    background: #10141B;
+    border-bottom: 1px solid #272D38;
+  }
+  .term-dot { width: 10px; height: 10px; border-radius: 9999px; display: inline-block; }
+
+  a, button { transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease; }
+
+  .feature-card:hover { border-color: #FFB454; }
+  .feature-card:hover .feature-prompt { color: #FFB454; }
+
+  table.matrix th, table.matrix td { border-bottom: 1px solid #1B2029; }
+  table.matrix tr:hover td { background: #10141B; }
+
+  /* Reserve space so content sits above the scanline overlay */
+  main, nav, footer { position: relative; z-index: 2; }
+
+  ::selection { background: rgba(255, 180, 84, 0.35); color: #0B0E14; }
+</style>
+</head>
+
+<body class="bg-surface text-on-surface min-h-screen overflow-x-hidden terminal-scanline">
+
+<!-- =========================================================
+  Top Navigation
+========================================================== -->
+<nav class="sticky top-0 z-50 bg-surface/95 backdrop-blur border-b border-outline">
+  <div class="max-w-container-max mx-auto h-16 px-margin-mobile md:px-margin-desktop flex items-center justify-between">
+    <a href="#top" class="flex items-center gap-3 font-mono text-on-surface">
+      <span class="text-primary text-[18px] leading-none">▲</span>
+      <span class="text-[15px] font-semibold tracking-tight">oh-my-symphony</span>
+      <span class="hidden md:inline text-[11px] font-mono text-on-surface-variant border border-outline px-2 py-[2px] rounded">v0.6.x</span>
+    </a>
+    <div class="flex items-center gap-2 md:gap-6">
+      <a href="#features" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">features</a>
+      <a href="#quickstart" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">quickstart</a>
+      <a href="#agents" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">agents</a>
+      <a href="https://github.com/cskwork/oh-my-symphony" class="hidden sm:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">github</a>
+      <a href="#quickstart" class="font-mono text-[13px] bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">Get Started →</a>
+    </div>
+  </div>
+</nav>
+
+<main id="top">
+
+<!-- =========================================================
+  Hero
+========================================================== -->
+<section class="border-b border-outline hero-grid">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-24">
+
+    <div class="max-w-3xl">
+      <div class="font-mono text-[12px] text-secondary mb-4 flex items-center gap-2">
+        <span class="text-primary">$</span>
+        <span class="text-on-surface-variant">symphony</span>
+        <span class="text-on-surface">tui ./WORKFLOW.md</span>
+        <span class="cursor-blink ml-1"></span>
+      </div>
+
+      <h1 class="font-mono text-[34px] md:text-headline-xl text-on-surface mb-6">
+        One terminal.<br/>
+        One Kanban board.<br/>
+        <span class="text-primary">Four AI coding agents.</span>
+      </h1>
+
+      <p class="font-sans text-body-lg text-on-background max-w-2xl mb-8">
+        <span class="font-mono text-secondary">Codex</span> ·
+        <span class="font-mono text-secondary">Claude&nbsp;Code</span> ·
+        <span class="font-mono text-secondary">Gemini</span> ·
+        <span class="font-mono text-secondary">Pi</span>
+        — pick per ticket, run in parallel inside isolated <span class="font-mono text-primary">git&nbsp;worktree</span>s,
+        watch live in a Jira-style TUI you never have to leave your terminal for.
+      </p>
+
+      <div class="flex flex-wrap gap-3">
+        <a href="#quickstart"
+           class="inline-flex items-center gap-2 bg-primary text-on-primary font-mono text-[14px] font-semibold px-5 py-3 rounded hover:bg-primary-dim">
+          Try it in 60 seconds <span>→</span>
+        </a>
+        <a href="https://github.com/cskwork/oh-my-symphony"
+           class="inline-flex items-center gap-2 border border-secondary text-secondary font-mono text-[14px] font-semibold px-5 py-3 rounded hover:bg-secondary/10">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.42 7.42 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+    </div>
+
+    <!-- Live Kanban screenshot card -->
+    <div class="terminal-card rounded mt-12 md:mt-16">
+      <div class="terminal-bar flex items-center gap-3 px-4 py-2">
+        <span class="term-dot bg-[#FF6D6D]"></span>
+        <span class="term-dot bg-[#FFB454]"></span>
+        <span class="term-dot bg-[#7FD1B9]"></span>
+        <span class="font-mono text-[12px] text-on-surface-variant ml-2">symphony@tui — WORKFLOW.md</span>
+        <span class="ml-auto font-mono text-[11px] text-on-surface-variant">
+          running=<span class="text-secondary">2</span> · retry=<span class="text-primary">1</span> · tokens=<span class="text-on-surface">111,840</span>
+        </span>
+      </div>
+      <div class="p-3 md:p-4">
+        <img src="tui-screenshot.svg"
+             alt="oh-my-symphony Kanban TUI showing columns Todo, In Progress, Review, Done, Archive with cards DEMO-104, DEMO-098, DEMO-122 and live token counters and running indicators."
+             class="w-full rounded-sm" loading="eager" />
+      </div>
+    </div>
+
+    <p class="font-mono text-[12px] text-on-surface-variant mt-4 max-w-3xl">
+      <span class="text-primary">›</span> columns are your tracker's states · cards show active agent, turn count, last event, accumulated tokens · ● running, ↻ retry queued, ✓ done.
+    </p>
+  </div>
+</section>
+
+<!-- =========================================================
+  Features
+========================================================== -->
+<section id="features" class="border-b border-outline">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20">
+    <div class="border-l-2 border-secondary pl-6 mb-12">
+      <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
+        <span class="text-secondary">&gt;</span> Why Symphony
+      </h2>
+      <p class="font-sans text-body-md text-on-surface-variant mt-2 max-w-2xl">
+        A thin layer on top of OpenAI's battle-tested Symphony orchestrator — with four agents, a Jira-style TUI, and operator-grade tooling.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+      <div class="feature-card terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[01] vendor</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">No vendor lock-in</h3>
+        <p class="font-sans text-body-md text-on-background">
+          Swap Codex ↔ Claude Code ↔ Gemini ↔ Pi with one YAML line. New agents drop in behind a thin <code class="font-mono text-primary text-[13px]">AgentBackend</code> Protocol — four steps, no orchestrator changes.
+        </p>
+      </div>
+
+      <div class="feature-card terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[02] visibility</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">Live progress</h3>
+        <p class="font-sans text-body-md text-on-background">
+          Turn count, last event, accumulated tokens, and rate-limit headroom for every running card. No more "is it stuck or just thinking?" — and no SaaS dashboard to log into.
+        </p>
+      </div>
+
+      <div class="feature-card terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[03] concurrency</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">Parallel by default</h3>
+        <p class="font-sans text-body-md text-on-background">
+          Every ticket gets its own <code class="font-mono text-primary text-[13px]">git&nbsp;worktree</code> workspace. Agents can't step on each other. Headless mode mirrors progress to a Markdown file you can <code class="font-mono text-secondary text-[13px]">tail&nbsp;-F</code>.
+        </p>
+      </div>
+
+      <div class="feature-card terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[04] zero-saas</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">No SaaS, no API key to try</h3>
+        <p class="font-sans text-body-md text-on-background">
+          File-based Markdown Kanban means tickets live in <code class="font-mono text-primary text-[13px]">git</code> next to your code. Linear is supported as a drop-in tracker — you don't need it.
+        </p>
+      </div>
+
+      <div class="feature-card terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[05] upstream</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">Battle-tested core</h3>
+        <p class="font-sans text-body-md text-on-background">
+          Forked from <a class="text-secondary underline-offset-4 hover:underline" href="https://github.com/openai/symphony">OpenAI's Symphony</a> reference implementation. Orchestrator, scheduler, retry, workspace lifecycle, and prompt renderer are all upstream.
+        </p>
+      </div>
+
+      <div class="feature-card terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[06] tooling</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">Operator-grade tooling</h3>
+        <p class="font-sans text-body-md text-on-background">
+          <code class="font-mono text-primary text-[13px]">symphony&nbsp;doctor</code> catches the five most common first-run failures in one pass. <code class="font-mono text-primary text-[13px]">symphony&nbsp;service</code> runs the orchestrator as a managed background daemon. A web viewer adds Pause / Resume.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+  Quickstart
+========================================================== -->
+<section id="quickstart" class="border-b border-outline bg-surface-container-low">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20 grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+
+    <div>
+      <div class="border-l-2 border-primary pl-6 mb-8">
+        <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
+          <span class="text-primary">&gt;</span> Try it in 60 seconds
+        </h2>
+        <p class="font-sans text-body-md text-on-surface-variant mt-2">
+          No AI CLI required — Symphony ships a fake-agent demo so you can see the Kanban move before installing anything else.
+        </p>
+      </div>
+
+      <ol class="space-y-6">
+        <li class="flex gap-4">
+          <span class="font-mono text-[18px] text-primary leading-none w-8 shrink-0">01</span>
+          <div>
+            <h3 class="font-mono text-headline-md text-on-surface mb-1">Install</h3>
+            <p class="font-sans text-body-md text-on-background">
+              One command. Isolated venv via <code class="font-mono text-primary text-[13px]">pipx</code>; nothing leaks into your global Python.
+            </p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="font-mono text-[18px] text-primary leading-none w-8 shrink-0">02</span>
+          <div>
+            <h3 class="font-mono text-headline-md text-on-surface mb-1">Launch the TUI</h3>
+            <p class="font-sans text-body-md text-on-background">
+              Point Symphony at any <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>. Columns become Kanban lanes, cards become tickets.
+            </p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="font-mono text-[18px] text-primary leading-none w-8 shrink-0">03</span>
+          <div>
+            <h3 class="font-mono text-headline-md text-on-surface mb-1">Watch agents pick up tickets</h3>
+            <p class="font-sans text-body-md text-on-background">
+              Move a card to <em>In Progress</em>; the configured agent claims it, runs in its own git worktree, and streams turn counts + tokens live.
+            </p>
+          </div>
+        </li>
+      </ol>
+    </div>
+
+    <div class="terminal-card rounded">
+      <div class="terminal-bar flex items-center gap-3 px-4 py-2">
+        <span class="term-dot bg-[#FF6D6D]"></span>
+        <span class="term-dot bg-[#FFB454]"></span>
+        <span class="term-dot bg-[#7FD1B9]"></span>
+        <span class="font-mono text-[12px] text-on-surface-variant ml-2">~/code/your-project</span>
+      </div>
+      <pre class="font-mono text-code-sm text-on-surface p-5 md:p-6 overflow-x-auto leading-relaxed"><span class="text-on-surface-variant"># 1. install (isolated, no global Python pollution)</span>
+<span class="text-secondary">$</span> <span class="text-on-surface">pipx install oh-my-symphony</span>
+
+<span class="text-on-surface-variant"># 2. (optional) run the built-in demo with a fake agent</span>
+<span class="text-secondary">$</span> <span class="text-on-surface">symphony tui</span> <span class="text-primary">./examples/WORKFLOW.fake.md</span>
+
+<span class="text-on-surface-variant"># 3. then point it at your real workflow</span>
+<span class="text-secondary">$</span> <span class="text-on-surface">symphony tui</span> <span class="text-primary">./WORKFLOW.md</span>
+
+<span class="text-on-surface-variant"># 4. health-check your install (catches the 5 most common first-run failures)</span>
+<span class="text-secondary">$</span> <span class="text-on-surface">symphony doctor</span><span class="cursor-blink ml-1"></span></pre>
+    </div>
+
+  </div>
+</section>
+
+<!-- =========================================================
+  Agent Matrix
+========================================================== -->
+<section id="agents" class="border-b border-outline">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20">
+    <div class="border-l-2 border-primary pl-6 mb-8">
+      <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
+        <span class="text-primary">&gt;</span> Agent matrix
+      </h2>
+      <p class="font-sans text-body-md text-on-surface-variant mt-2 max-w-2xl">
+        Each backend is a thin adapter over the agent's official CLI. Set <code class="font-mono text-primary text-[13px]">agent.kind</code> in your <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code> — or mix backends per ticket.
+      </p>
+    </div>
+
+    <div class="terminal-card rounded overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="matrix w-full text-left font-mono text-[13px]">
+          <thead>
+            <tr class="text-on-surface-variant">
+              <th class="px-5 py-3 border-b border-outline">Agent</th>
+              <th class="px-5 py-3 border-b border-outline">CLI invocation</th>
+              <th class="px-5 py-3 border-b border-outline">Transport</th>
+              <th class="px-5 py-3 border-b border-outline">Resume</th>
+              <th class="px-5 py-3 border-b border-outline">Best for</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="px-5 py-4 text-primary">Codex</td>
+              <td class="px-5 py-4 text-on-surface">codex app-server</td>
+              <td class="px-5 py-4 text-on-background">JSON-RPC stdio · multi-turn</td>
+              <td class="px-5 py-4 text-secondary">native</td>
+              <td class="px-5 py-4 font-sans text-on-background">Original Symphony agent · long codebase sessions</td>
+            </tr>
+            <tr>
+              <td class="px-5 py-4 text-primary">Claude Code</td>
+              <td class="px-5 py-4 text-on-surface">claude -p --output-format stream-json</td>
+              <td class="px-5 py-4 text-on-background">NDJSON events · per-turn subprocess</td>
+              <td class="px-5 py-4 text-secondary">--resume</td>
+              <td class="px-5 py-4 font-sans text-on-background">Complex multi-file refactors · long planning</td>
+            </tr>
+            <tr>
+              <td class="px-5 py-4 text-primary">Gemini</td>
+              <td class="px-5 py-4 text-on-surface">gemini -p ""</td>
+              <td class="px-5 py-4 text-on-background">one-shot per turn · stdin → stdout</td>
+              <td class="px-5 py-4 text-on-surface-variant">stateless</td>
+              <td class="px-5 py-4 font-sans text-on-background">Quick edits · large-context one-shots</td>
+            </tr>
+            <tr>
+              <td class="px-5 py-4 text-primary">Pi</td>
+              <td class="px-5 py-4 text-on-surface">pi --mode json -p ""</td>
+              <td class="px-5 py-4 text-on-background">JSONL events · per-turn subprocess</td>
+              <td class="px-5 py-4 text-secondary">--session</td>
+              <td class="px-5 py-4 font-sans text-on-background">Multi-backend (Anthropic / OpenAI / Gemini / Bedrock under one CLI)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="terminal-card rounded mt-6">
+      <div class="terminal-bar flex items-center gap-3 px-4 py-2">
+        <span class="term-dot bg-[#FF6D6D]"></span>
+        <span class="term-dot bg-[#FFB454]"></span>
+        <span class="term-dot bg-[#7FD1B9]"></span>
+        <span class="font-mono text-[12px] text-on-surface-variant ml-2">WORKFLOW.md</span>
+      </div>
+      <pre class="font-mono text-code-sm text-on-surface p-5 md:p-6 overflow-x-auto leading-relaxed"><span class="text-on-surface-variant"># pick an agent — one YAML line</span>
+<span class="text-secondary">agent</span>:
+  <span class="text-secondary">kind</span>: <span class="text-primary">claude_code</span>   <span class="text-on-surface-variant"># or: codex | gemini | pi</span>
+  <span class="text-secondary">model</span>: <span class="text-primary">claude-sonnet-4-6</span>
+
+<span class="text-on-surface-variant"># or mix per ticket via card front-matter</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+  Who is this for
+========================================================== -->
+<section class="border-b border-outline bg-surface-container-low">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20">
+    <div class="border-l-2 border-secondary pl-6 mb-10">
+      <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
+        <span class="text-secondary">&gt;</span> Who this is for
+      </h2>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-secondary mb-3">SOLO</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">Solo devs</h3>
+        <p class="font-sans text-body-md text-on-background">
+          Running unattended overnight refactors across dozens of tickets while you sleep. macOS keep-awake stops the lock screen from killing your pipeline.
+        </p>
+      </div>
+      <div class="terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-secondary mb-3">TEAM</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">Teams</h3>
+        <p class="font-sans text-body-md text-on-background">
+          Parallelizing bug fixes, doc updates, or migration tickets across multiple coding agents simultaneously — without juggling four chat windows.
+        </p>
+      </div>
+      <div class="terminal-card rounded p-6">
+        <div class="font-mono text-[11px] text-secondary mb-3">RESEARCH</div>
+        <h3 class="font-mono text-headline-md text-on-surface mb-2">Researchers & reviewers</h3>
+        <p class="font-sans text-body-md text-on-background">
+          Comparing how Codex, Claude Code, Gemini, and Pi tackle the same task side by side — identical prompts, identical workspaces.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================
+  Final CTA
+========================================================== -->
+<section class="border-b border-outline">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-20 md:py-24 text-center">
+    <h2 class="font-mono text-[28px] md:text-headline-xl text-on-surface mb-4">
+      Stop juggling AI coding CLIs.
+    </h2>
+    <p class="font-sans text-body-lg text-on-background max-w-2xl mx-auto mb-8">
+      One terminal. One Kanban. Four agents working in parallel — visible, isolated, and yours.
+    </p>
+    <div class="flex flex-wrap gap-3 justify-center">
+      <a href="#quickstart"
+         class="inline-flex items-center gap-2 bg-primary text-on-primary font-mono text-[14px] font-semibold px-6 py-3 rounded hover:bg-primary-dim">
+        Get started <span>→</span>
+      </a>
+      <a href="https://github.com/cskwork/oh-my-symphony#readme"
+         class="inline-flex items-center gap-2 border border-outline text-on-surface font-mono text-[14px] font-semibold px-6 py-3 rounded hover:border-secondary hover:text-secondary">
+        Read the docs
+      </a>
+    </div>
+
+    <div class="flex flex-wrap items-center justify-center gap-4 mt-10 font-mono text-[12px] text-on-surface-variant">
+      <span>Forked from <a class="text-secondary hover:underline" href="https://github.com/openai/symphony">openai/symphony</a></span>
+      <span aria-hidden="true">·</span>
+      <span>Apache 2.0</span>
+      <span aria-hidden="true">·</span>
+      <span>Python 3.12+</span>
+      <span aria-hidden="true">·</span>
+      <span>Built on <a class="text-secondary hover:underline" href="https://textual.textualize.io">Textual</a></span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- =========================================================
+  Footer
+========================================================== -->
+<footer class="bg-surface-container-low">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-12 grid grid-cols-1 md:grid-cols-4 gap-8">
+    <div class="md:col-span-2">
+      <div class="flex items-center gap-3 font-mono text-on-surface mb-3">
+        <span class="text-primary text-[18px] leading-none">▲</span>
+        <span class="text-[15px] font-semibold tracking-tight">oh-my-symphony</span>
+      </div>
+      <p class="font-sans text-body-md text-on-surface-variant max-w-md">
+        A multi-agent fork of OpenAI's Symphony reference implementation.
+        Stop juggling AI coding CLIs — run them in parallel under one Kanban board.
+      </p>
+    </div>
+
+    <div>
+      <h4 class="font-mono text-[12px] text-on-surface-variant uppercase tracking-wider mb-3">Project</h4>
+      <ul class="space-y-2 font-mono text-[13px]">
+        <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony#readme">README</a></li>
+        <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony/blob/main/CHANGELOG.md">Changelog</a></li>
+        <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony/blob/main/LICENSE">License</a></li>
+      </ul>
+    </div>
+
+    <div>
+      <h4 class="font-mono text-[12px] text-on-surface-variant uppercase tracking-wider mb-3">Community</h4>
+      <ul class="space-y-2 font-mono text-[13px]">
+        <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony">GitHub</a></li>
+        <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony/issues">Issues</a></li>
+        <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony/discussions">Discussions</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="border-t border-outline">
+    <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-5 flex flex-wrap items-center justify-between gap-2 font-mono text-[12px] text-on-surface-variant">
+      <span>Apache 2.0 · <a class="hover:text-primary" href="https://github.com/cskwork/oh-my-symphony">cskwork/oh-my-symphony</a></span>
+      <span>Designed with <a class="text-secondary hover:underline" href="https://stitch.withgoogle.com">Stitch</a> · hosted on GitHub Pages</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
