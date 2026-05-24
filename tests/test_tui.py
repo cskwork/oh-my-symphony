@@ -92,6 +92,7 @@ class _StubOrchestrator:
             "generated_at": "now",
         }
         self._running_issues = running_issues
+        self.confirm_done_calls: list[str] = []
 
     def snapshot(self) -> dict[str, Any]:
         return self._snapshot
@@ -103,6 +104,10 @@ class _StubOrchestrator:
         # KanbanApp registers a tick observer; the Pilot test exercises the
         # widgets directly so we do not need to fire it.
         del observer
+
+    async def confirm_done(self, identifier: str) -> dict[str, Any]:
+        self.confirm_done_calls.append(identifier)
+        return {"issue_identifier": identifier, "state": "Done", "changed": True}
 
 
 def _make_config(
@@ -922,7 +927,7 @@ async def test_archive_hotkey_refuses_active_state_card(monkeypatch: Any) -> Non
 
 
 @pytest.mark.asyncio
-async def test_confirm_done_hotkey_calls_update_state_on_human_review_card(
+async def test_confirm_done_hotkey_uses_orchestrator_on_human_review_card(
     monkeypatch: Any,
 ) -> None:
     cfg = _make_config(
@@ -931,17 +936,8 @@ async def test_confirm_done_hotkey_calls_update_state_on_human_review_card(
     review_issue = _issue("SMA-100", state="Human Review")
     _stub_tracker(monkeypatch, [], [review_issue])
 
-    moved: list[tuple[str, str]] = []
-
-    monkeypatch.setattr(
-        KanbanApp,
-        "_call_update_state",
-        staticmethod(
-            lambda _cfg, issue, target: moved.append((issue.identifier, target))
-        ),
-    )
-
-    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    orch = _StubOrchestrator()
+    app = KanbanApp(orch, _StaticWorkflowState(cfg))  # type: ignore[arg-type]
     async with app.run_test(size=(160, 30)) as pilot:
         await pilot.pause()
         await asyncio.sleep(0.05)
@@ -956,7 +952,7 @@ async def test_confirm_done_hotkey_calls_update_state_on_human_review_card(
         await pilot.pause()
         await asyncio.sleep(0.05)
         await pilot.pause()
-    assert moved == [("SMA-100", "Done")]
+    assert orch.confirm_done_calls == ["SMA-100"]
 
 
 @pytest.mark.asyncio
