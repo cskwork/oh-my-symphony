@@ -1201,6 +1201,49 @@ def test_max_total_turns_exhaustion_no_transition_when_state_unset(monkeypatch):
     asyncio.run(_run())
 
 
+def test_max_total_turns_exhaustion_survives_next_tick_prune(monkeypatch):
+    """A budget-exhausted active ticket must not re-dispatch on the next tick."""
+    import asyncio
+
+    cfg = _replace_agent_field(_make_config(max_concurrent=1), max_total_turns=2)
+    assert cfg.agent.budget_exhausted_state == "", "precondition"
+    issue = _issue("MT-BUDGET-PRUNE", state="In Progress")
+    orch = _orch()
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(orch, "_archive_sweep", _archive)
+        monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+        debug = orch._issue_debug.setdefault(issue.id, _IssueDebug())
+        debug.completed_turn_count = 2
+
+        await orch._on_worker_exit(issue.id, reason="normal", error=None)
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id in orch._claimed
+
+        await orch._on_tick()
+
+        assert dispatched == []
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id not in orch._claimed
+
+    asyncio.run(_run())
+
+
 def test_max_total_tokens_cap_cancels_worker(monkeypatch):
     """A per-ticket token cap cancels the worker on breach.
 
@@ -1843,6 +1886,48 @@ def test_on_worker_exit_hit_max_turns_blocks_ticket_when_blocked_state_exists(mo
         finally:
             for retry in list(orch._retry.values()):
                 retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_on_worker_exit_hit_max_turns_survives_next_tick_prune(monkeypatch):
+    """Per-attempt max_turns without a persisted state must not re-dispatch."""
+    import asyncio
+
+    cfg = _make_config(max_concurrent=1)
+    assert cfg.agent.budget_exhausted_state == "", "precondition"
+    assert "Blocked" not in cfg.tracker.terminal_states, "precondition"
+    orch = _orch()
+    issue = _issue("MT-MAX-PRUNE", state="In Progress")
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        entry = _install_running_entry(orch, issue)
+        entry.hit_max_turns = True
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(orch, "_archive_sweep", _archive)
+        monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+        await orch._on_worker_exit(issue.id, reason="normal", error=None)
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id in orch._claimed
+
+        await orch._on_tick()
+
+        assert dispatched == []
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id not in orch._claimed
 
     asyncio.run(_run())
 
@@ -2743,6 +2828,71 @@ def test_conflict_pre_check_blocks_overlapping_candidate(monkeypatch):
     assert "src/other.py" not in note_body, (
         "Non-overlapping paths must not appear in the Conflict note"
     )
+
+
+def test_conflict_pre_check_blocks_retry_queued_overlap(monkeypatch):
+    """Retry-queued tickets still hold their touched-file claim."""
+    cfg = _make_config(
+        max_concurrent=2,
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    held = _issue(
+        "MT-1",
+        state="In Progress",
+        description="## Touched Files\n- src/foo.py\n",
+    )
+    candidate = _issue(
+        "MT-2",
+        state="Todo",
+        description="## Touched Files\n- src/foo.py\n",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    dispatched: list[str] = []
+    blocked: list[tuple[str, str, set[str]]] = []
+
+    async def _fetch(_cfg):
+        return [candidate]
+
+    async def _archive(_cfg):
+        return None
+
+    async def _block(_cfg, issue, other_identifier, overlap):
+        blocked.append((issue.identifier, other_identifier, overlap))
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._schedule_retry(
+            held.id,
+            identifier=held.identifier,
+            attempt=1,
+            delay_ms=300_000,
+            error=None,
+            kind="continuation",
+            issue=held,
+        )
+        monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(orch, "_archive_sweep", _archive)
+        monkeypatch.setattr(orch, "_block_ticket_for_conflict", _block)
+        monkeypatch.setattr(
+            orch,
+            "_dispatch",
+            lambda i, _cfg, **_kwargs: dispatched.append(i.identifier),
+        )
+
+        try:
+            await orch._on_tick()
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+    assert dispatched == []
+    assert blocked == [("MT-2", "MT-1", {"src/foo.py"})]
 
 
 def test_conflict_pre_check_no_overlap_dispatches_normally(monkeypatch):
