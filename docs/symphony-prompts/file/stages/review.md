@@ -1,76 +1,25 @@
 ### REVIEW  -- when state is `Review`
 
-**Allowed tools (advisory).** Read the full repo, `git diff` / `git show`, the ticket body, and `docs/{{ issue.identifier }}/work/`. Write ticket comments only (`## Security Audit`, `## Review`, `## Review Findings`). Run read-only `git`, lightweight static analysis, and live HTTP probes only when this ticket changed runtime API behavior. Do NOT edit source — fixes belong to In Progress on the rewind.
+**Allowed tools (advisory).** Read full repo, `git diff` / `git show`, ticket body, `docs/{{ issue.identifier }}/work/`. Write ticket comments only (`## Security Audit`, `## Review`, `## Review Findings`). Run read-only `git`, lightweight static analysis, and live HTTP probes only when this ticket changed runtime API behavior. Do NOT edit source — fixes belong to In Progress on the rewind.
 {% for label in issue.labels %}{% if label == "chore" %}
-**Chore short-circuit.** This ticket carries the `chore` label. Skip the full Review contract — no Security Audit, no severity table, no live HTTP probes are required for a metadata-only change:
-1. Read the diff: `git show HEAD --stat` then `git show HEAD`.
-2. Confirm the diff matches the ticket's `## Plan` exactly. The only files allowed to change in a chore are the ones named in `## Plan` (and Symphony's own ticket / `docs/{{ issue.identifier }}/` artefacts).
-3. **If the diff matches the plan:** append a one-line `## Review` ("chore — diff matches plan, no findings") and set state to `QA`.
-4. **If the diff drifts** (touches files not in the plan, contains code beyond the metadata bump, or changes anything that could affect runtime behavior): set state back to `In Progress`, append `## Review Findings` with the specific drift as a HIGH-severity row, and stop. Do NOT use the chore short-circuit to wave through actual code changes.
+**Chore short-circuit.** `chore` label — no Security Audit, severity table, or live HTTP probes:
+1. Read the diff: `git show HEAD --stat`, then `git show HEAD`.
+2. The diff must match `## Plan` exactly; only Plan-named files (plus ticket / `docs/{{ issue.identifier }}/` artefacts) may change.
+3. Match → append a one-line `## Review` ("chore — diff matches plan, no findings"), set state to `QA`.
+4. Drift (files outside the plan, code beyond the metadata bump, anything runtime-affecting) → set state back to `In Progress`, append `## Review Findings` with the drift as a HIGH row, stop. Never wave through real code changes.
 {% endif %}{% endfor %}
-You are the reviewer. Find issues; do not fix them.
+Find issues; do not fix them.
 
-1. **Read shared context.** Open `docs/{{ issue.identifier }}/work/` and
-   re-read the most recent `## Implementation` section. If a prior
-   `## Review Findings` exists, confirm those specific items are resolved
-   before opening new findings.
-2. Review the current workspace code and deliverables. Use `git diff` /
-   `git status` only as a fallback; prefer the latest In Progress wip
-   commit (`git show --stat`, then `git show --unified=0`) to identify
-   files and changed line ranges, then open touched files end-to-end.
-   Docs are reviewable when they are deliverables; ignore only root
-   symlink/junction metadata for host-backed `kanban/` or `prompt/`
-   plumbing unless the ticket is explicitly about Symphony setup.
-3. Apply the checklist: clarity, naming, error handling, security,
-   performance, simplicity, no dead code, no debug prints, no secrets.
-   Then scan `git log --format=%s $(git config symphony.basesha)..HEAD`
-   for `[no-test]` markers (Symphony's `after_run` hook prefixes wip
-   commits that changed prod code without a paired test). Each marker
-   = HIGH row in `## Review Findings` (file = unpaired prod path; fix =
-   "add a test exercising this change"). Exempt: commit changed only
-   `docs/` / `kanban/` / `.symphony/` paths — note the exemption in
-   `## Review` if applied.
-4. Use live HTTP proof only when this ticket changed runtime API behavior
-   or its acceptance criteria explicitly require endpoint execution. For
-   docs-only API mapping / scenario-definition tickets, verify against
-   source contracts, route definitions, schemas, and existing tests instead;
-   do not probe live endpoints just because the document names APIs. When
-   live proof is required, hit both baseline (As-Is) and the new build
-   (To-Be) with curl/httpie/`requests` and save under
-   `docs/{{ issue.identifier }}/verify/`: `baseline.json`, `pr.json`,
-   `diff.txt`, `curl.log`.
-5. **Security Audit (mandatory, before `## Review`).** Append a
-   `## Security Audit` section with exactly this 7-row table — same row
-   order, no extras, no spillover:
+1. Read `docs/{{ issue.identifier }}/work/` and the latest `## Implementation`. If a prior `## Review Findings` exists, confirm those items are resolved before opening new findings.
+2. Identify changed files and line ranges from the latest In Progress wip commit (`git show --stat`, then `git show --unified=0`); `git diff` / `git status` only as fallback. Open touched files end-to-end. Docs are reviewable deliverables; ignore root symlink/junction metadata for host-backed `kanban/` / `prompt/` plumbing unless the ticket is about Symphony setup.
+3. Checklist: clarity, naming, error handling, security, performance, simplicity, no dead code, no debug prints, no secrets. Then scan `git log --format=%s $(git config symphony.basesha)..HEAD` for `[no-test]` markers (prod change without a paired test). Each marker = HIGH row in `## Review Findings` (file = unpaired prod path; fix = "add a test exercising this change"). Exempt: commit touched only `docs/` / `kanban/` / `.symphony/` — note the exemption in `## Review`.
+4. Live HTTP proof only when this ticket changed runtime API behavior or its acceptance criteria require endpoint execution. Docs-only API mapping / scenario tickets: verify against source contracts, route definitions, schemas, and existing tests — do not probe live endpoints. When live proof is required: hit baseline (As-Is) and new build (To-Be) with curl/httpie/`requests`, save under `docs/{{ issue.identifier }}/verify/`: `baseline.json`, `pr.json`, `diff.txt`, `curl.log`.
+5. **Security Audit (mandatory, before `## Review`).** Append `## Security Audit` with exactly this 7-row table — same row order, no extras, no spillover:
    `check | verdict (pass/fail/n/a) | evidence (path:line or "n/a — <reason>")`
-   - `secrets`
-   - `input-validation`
-   - `sql-injection`
-   - `xss`
-   - `csrf`
-   - `authz`
-   - `rate-limit`
-   `n/a` is acceptable but the evidence cell must explain why (e.g.
-   `n/a — docs-only change`). Any `fail` row auto-promotes to a CRITICAL
-   row in `## Review Findings` (file = the cited `path:line`, fix = "fix
-   the security gap named in the audit") and triggers Review → In Progress.
-6. Classify findings into a severity table: `severity | file:line | fix`.
-   Include `[no-test]` HIGH rows from step 3 and `fail`-promoted CRITICAL
-   rows from step 5. Cap at 6 rows in the body; spillover goes to
-   `docs/{{ issue.identifier }}/review/details.md`.
-7. **If any CRITICAL, HIGH, or MEDIUM finding exists:** set state back to
-   `In Progress`, append `## Review Findings` with the Plain-Korean
-   header + the severity table (referencing any verify artefacts under
-   `docs/{{ issue.identifier }}/verify/`), and STOP. Do NOT fix findings
-   inside Review — that is In Progress's job, with a fresh context.
-   Symphony dispatches a new fix turn automatically.
-8. If prior `## Review Findings` are resolved and no CRITICAL, HIGH, or
-   MEDIUM finding remains, do not append another `## Review Findings`
-   section. Append `## Review` and set state to `QA` in the same turn;
-   staying in `Review` after a clean review is a workflow failure.
-9. If the only findings are LOW (or none): append `## Review` with the
-   Plain-Korean header + the same severity table — flag deferred LOW
-   items in the same section so Learn can address them — and set state
-   to `QA`.
-10. If something is genuinely out of scope or unfixable: set state to
-    `Blocked` and append `## Blocker` explaining what is needed.
+   rows: `secrets`, `input-validation`, `sql-injection`, `xss`, `csrf`, `authz`, `rate-limit`.
+   `n/a` needs a reason in the evidence cell (e.g. `n/a — docs-only change`). Any `fail` row auto-promotes to a CRITICAL row in `## Review Findings` (file = the cited `path:line`, fix = "fix the security gap named in the audit") and triggers Review → In Progress.
+6. Classify findings into a severity table: `severity | file:line | fix`. Include `[no-test]` HIGH rows from step 3 and `fail`-promoted CRITICAL rows from step 5. Cap 6 rows; spillover goes to `docs/{{ issue.identifier }}/review/details.md`.
+7. **If any CRITICAL, HIGH, or MEDIUM finding exists:** set state back to `In Progress`, append `## Review Findings` (plain-language header + severity table, referencing any verify artefacts), and STOP. Do NOT fix findings inside Review; Symphony dispatches a fresh fix turn.
+8. Prior findings resolved and nothing ≥ MEDIUM remains → do not append another `## Review Findings`. Append `## Review` and set state to `QA` in the same turn; staying in `Review` after a clean review is a workflow failure.
+9. Only LOW findings (or none) → append `## Review` (header + the same severity table; flag deferred LOW items so Learn can address them), set state to `QA`.
+10. Genuinely out of scope or unfixable → set state to `Blocked`, append `## Blocker` with what is needed.

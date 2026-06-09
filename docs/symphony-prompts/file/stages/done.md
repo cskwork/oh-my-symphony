@@ -2,8 +2,7 @@
 
 **Allowed tools (advisory).** Read full ticket history and prior sections. Write ticket comments only (`## As-Is -> To-Be Report`, `## Merge Status`, `## Merge Missing`). Run read-only commands; invoke fallback merge commands only if Learn left `## Merge Missing`. Do NOT edit source — the ticket has already shipped.
 
-Terminal. Ticket has passed QA and the Learn Merge Gate already merged the
-feature branch into the target branch. Append the sections below, then stop.
+Terminal. QA passed and the Learn Merge Gate already merged the feature branch into the target branch. Append the sections below, then stop.
 
 1. Append `## As-Is -> To-Be Report` in this exact structure:
 
@@ -32,13 +31,9 @@ feature branch into the target branch. Append the sections below, then stop.
    - `docs/{{ issue.identifier }}/qa/` — QA durable specs, traces, logs.
    ```
 
-2. Append `## Merge Status` confirming the target branch and merge evidence.
-   If the Learn Merge Gate used a PR instead of a local merge, include the PR
-   URL and target branch.
+2. Append `## Merge Status` confirming the target branch and merge evidence. If the Learn Merge Gate used a PR, include the PR URL and target branch.
 
-3. If merge evidence is missing, do not invent it. Append `## Merge Missing`
-   with the fallback commands below and move the ticket to `Blocked` until the
-   merge is completed:
+3. If merge evidence is missing, do not invent it. Append `## Merge Missing` with the fallback commands below and move the ticket to `Blocked` until the merge is completed:
 
    ```sh
    # From the host repo root (parent of the worktree):
