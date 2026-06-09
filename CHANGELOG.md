@@ -10,6 +10,40 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-06-10 — agent-terse workflow prompts + token-budget directive
+
+Prompt-cost release. All 18 stage templates under
+`docs/symphony-prompts/{file,linear}/` rewritten as terse agent-directives:
+rendered dispatch prompts shrink ~12% (282,009 → 247,942 chars across the
+28 tracker × language × stage combinations) with every section anchor,
+transition rule, command, table spec, and liquid branch preserved —
+verified by the 51-test prompt contract suite plus an independent
+old-vs-new rule audit. Human-facing artefact templates (Plain-language
+header, caps table, wiki entry, As-Is→To-Be report, Human Review handoff)
+are untouched.
+
+### Added
+
+- **Soft token-budget directive** in both `base.md` templates: when
+  `agent.max_total_tokens_by_state` sets a budget, the prompt now renders
+  `Token budget: keep this turn under N completion tokens` from the
+  previously unused C3 `token_ema` / `token_budget` env vars. Off by
+  default (budget 0). Regression tests pin both states.
+- **Chore short-circuits on linear boards**: the file tracker's
+  Explore/Plan/Review/Learn `chore`-label fast paths are now ported to the
+  linear prompt set, so metadata-only tickets skip the full stage
+  contracts there too.
+
+### Changed
+
+- **linear Learn delegates bulk wiki sweeping** to `symphony wiki-sweep`
+  (the orchestrator already runs it every `wiki.sweep_every_n` Done
+  transitions regardless of tracker kind); the per-ticket invalidated-entry
+  update, beginner-block shape check, and `Wiki Conflict` flag stay in the
+  prompt.
+- **linear wiki entry template gains the Observability hooks block**, so
+  file- and linear-authored `docs/llm-wiki/` entries share one schema.
+
 ## [0.7.0] — 2026-05-20 — TUI import hotfix + contract-validation hydration + viewer doctor
 
 Follow-up release after v0.6.7 contract enforcement. Fixes a TUI startup
