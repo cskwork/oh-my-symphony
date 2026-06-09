@@ -138,6 +138,7 @@ Distill what this ticket taught into `docs/llm-wiki/` for **both developers and 
    - If this ticket invalidated an entry, update it now and log the prior wrong claim in the Decision log.
    - Cross-entry contradiction noticed in passing → post a `Wiki Conflict` comment pointing at both files (do not fix here).
    - Bulk dup/orphan/stale/missing-file sweeping belongs to `symphony wiki-sweep` (auto every `wiki.sweep_every_n` Done transitions; `symphony wiki-sweep --root docs/llm-wiki --dry-run` on demand). Do NOT re-do it by hand.
+   - Beginner-block shape: every existing `## 감 잡기` / `## Getting the Feel` keeps 3-5 flow steps, exactly 5 terms, a one-sentence takeaway. Fix obvious shape violations only; rewriting prose is out of scope unless this ticket changed the underlying truth.
 5. Commit wiki edits onto the ticket's PR (same branch, not a separate PR).
 6. Post a Learn comment with `## Learnings` (3-4 bullets of new facts/constraints/surprises) and `## Wiki Updates` (paths created/modified/removed, one line each with a changelog tag: `merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
 7. Post a `## Human Review` comment — succinct, for the human who confirms Done:

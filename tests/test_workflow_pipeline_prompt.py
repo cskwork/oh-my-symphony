@@ -357,3 +357,27 @@ def test_pipeline_demo_ticket_is_a_complete_worked_example() -> None:
         "### Evidence",
     ):
         assert required in body, f"PIPELINE-DEMO missing section {required!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_base_prompt_renders_token_budget_directive_when_set(workflow: str) -> None:
+    """C3 plumbing: a non-zero `token_budget` must surface as a soft
+    budget directive in every dispatched prompt."""
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("QA"),
+        build_prompt_env(_issue("QA"), attempt=None, token_ema=1200, token_budget=8000),
+    )
+    assert "under 8000 completion tokens" in rendered
+    assert "1200" in rendered
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_base_prompt_omits_token_budget_directive_by_default(workflow: str) -> None:
+    """Default env (budget 0) must not render the directive."""
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("QA"),
+        build_prompt_env(_issue("QA"), attempt=None),
+    )
+    assert "Token budget" not in rendered
