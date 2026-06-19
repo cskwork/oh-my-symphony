@@ -112,6 +112,7 @@ class RetryEntry:
     timer_handle: asyncio.TimerHandle
     error: str | None = None
     kind: str = "retry"
+    issue: Issue | None = None
 
 
 @dataclass
