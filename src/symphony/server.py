@@ -10,6 +10,7 @@ Endpoints:
     GET  /api/v1/state           — runtime snapshot
     GET  /api/v1/<identifier>    — issue debug detail
     POST /api/v1/refresh         — trigger immediate poll/reconcile
+    POST /api/v1/<identifier>/confirm-done — confirm Human Review as Done
 """
 
 from __future__ import annotations
@@ -29,7 +30,8 @@ ROOT_HINT = (
     "oh-my-symphony JSON API.\n"
     "The HTML dashboard was replaced by a CLI Kanban — run `symphony tui`.\n"
     "API: GET /api/v1/state, GET /api/v1/<identifier>, POST /api/v1/refresh,\n"
-    "     POST /api/v1/<identifier>/pause, POST /api/v1/<identifier>/resume\n"
+    "     POST /api/v1/<identifier>/pause, POST /api/v1/<identifier>/resume,\n"
+    "     POST /api/v1/<identifier>/confirm-done\n"
 )
 
 
@@ -108,6 +110,21 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
             }
         )
 
+    async def handle_confirm_done(request: web.Request) -> web.Response:
+        identifier = request.match_info.get("identifier", "")
+        try:
+            result = await orchestrator.confirm_done(identifier)
+        except FileNotFoundError:
+            return _error_response(
+                404, "issue_not_found", f"unknown terminal issue {identifier}"
+            )
+        except ValueError as exc:
+            return _error_response(409, "not_confirmable", str(exc))
+        except Exception as exc:
+            log.warning("confirm_done_failed", identifier=identifier, error=str(exc))
+            return _error_response(500, "confirm_done_failed", str(exc))
+        return web.json_response(result)
+
     async def handle_method_not_allowed(request: web.Request) -> web.Response:
         return _error_response(405, "method_not_allowed", request.method)
 
@@ -140,6 +157,7 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
     app.router.add_get("/api/v1/_debug/tasks", handle_debug_tasks)
     app.router.add_post("/api/v1/{identifier}/pause", handle_pause)
     app.router.add_post("/api/v1/{identifier}/resume", handle_resume)
+    app.router.add_post("/api/v1/{identifier}/confirm-done", handle_confirm_done)
     app.router.add_get("/api/v1/{identifier}", handle_issue)
 
     return app

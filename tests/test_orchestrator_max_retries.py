@@ -4,8 +4,7 @@ Track 3-A: when a worker keeps exiting with a non-normal outcome and the
 retry attempt would exceed `agent.max_retries`, the orchestrator stops
 scheduling further retries, appends a board-level ## Escalation note to
 the ticket, and moves the ticket to a terminal state (`Blocked` by
-default, or the first configured terminal state mentioning ``block`` or
-``human``).
+default, or a human-named terminal only when no blocked lane exists).
 """
 
 from __future__ import annotations
@@ -216,14 +215,14 @@ def test_continuation_kind_is_exempt_from_cap() -> None:
     o._loop.close()
 
 
-def test_escalation_picks_human_terminal_when_named(monkeypatch) -> None:
-    """If `terminal_states` contains "Needs Human", prefer it over "Blocked"."""
+def test_escalation_prefers_blocked_over_human_review(monkeypatch) -> None:
+    """Retry exhaustion is a failure path, not a human approval handoff."""
     cfg = _make_config(max_retries=3)
     cfg = replace(
         cfg,
         tracker=replace(
             cfg.tracker,
-            terminal_states=("Done", "Cancelled", "Needs Human", "Blocked"),
+            terminal_states=("Human Review", "Done", "Cancelled", "Blocked"),
         ),
     )
     o = _orch(cfg)
@@ -258,6 +257,49 @@ def test_escalation_picks_human_terminal_when_named(monkeypatch) -> None:
     )
     o._loop.close()
 
-    # "Needs Human" comes BEFORE "Blocked" in terminal_states and
-    # matches the "human" preference rule, so it should win.
+    assert captured == ["Blocked"], captured
+
+
+def test_escalation_uses_human_terminal_only_without_blocked(monkeypatch) -> None:
+    """Workflows without a Blocked lane can still surface retry failures."""
+    cfg = _make_config(max_retries=3)
+    cfg = replace(
+        cfg,
+        tracker=replace(
+            cfg.tracker,
+            terminal_states=("Done", "Cancelled", "Needs Human"),
+        ),
+    )
+    o = _orch(cfg)
+
+    captured: list[str] = []
+
+    def _fake_update_state(cfg, issue, state):  # noqa: ANN001
+        del cfg, issue
+        captured.append(state)
+
+    def _fake_append_note(cfg, issue, heading, body):  # noqa: ANN001
+        del cfg, issue, heading, body
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_append_note",
+        staticmethod(_fake_append_note),
+    )
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_update_state",
+        staticmethod(_fake_update_state),
+    )
+
+    o._loop.run_until_complete(
+        o._escalate_max_retries(
+            issue_id="iss-1",
+            identifier="MT-1",
+            attempt=4,
+            error="timeout",
+        )
+    )
+    o._loop.close()
+
     assert captured == ["Needs Human"], captured

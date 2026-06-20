@@ -60,6 +60,7 @@ def test_card_renderer_has_human_review_confirm_action() -> None:
     ticket_js = Path("tools/board-viewer/src/js/ticket.js").read_text(encoding="utf-8")
     board_js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
     api_js = Path("tools/board-viewer/src/js/api.js").read_text(encoding="utf-8")
+    server_py = Path("tools/board-viewer/server.py").read_text(encoding="utf-8")
 
     assert 'normalizeState(ticket.state) === "human review"' in ticket_js
     assert 'makeActionBtn("Confirm Done", "card-btn confirm"' in ticket_js
@@ -67,6 +68,7 @@ def test_card_renderer_has_human_review_confirm_action() -> None:
     assert "confirmDoneTicket" in board_js
     assert "onConfirmDone" in board_js
     assert "/api/kanban/${encodeURIComponent(id)}/confirm-done" in api_js
+    assert 'f"/api/v1/{identifier}/confirm-done"' in server_py
 
 
 def test_board_viewer_fallback_states_and_policy_mode() -> None:

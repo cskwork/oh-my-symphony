@@ -249,6 +249,86 @@ class Orchestrator:
         """Return the issues currently owned by running workers."""
         return tuple(entry.issue for entry in self._running.values())
 
+    async def confirm_done(self, identifier: str) -> dict[str, Any]:
+        """Confirm a Human Review ticket and run the normal Done side effects."""
+        cfg = self._workflow_state.current()
+        if cfg is None:
+            cfg, err = self._workflow_state.reload()
+            if err is not None or cfg is None:
+                raise err or SymphonyError("workflow not loaded")
+
+        terminal_issues = await asyncio.to_thread(
+            self._tracker_call_terminal_issues, cfg
+        )
+        issue = next(
+            (
+                candidate
+                for candidate in terminal_issues
+                if candidate.identifier == identifier or candidate.id == identifier
+            ),
+            None,
+        )
+        if issue is None:
+            raise FileNotFoundError(identifier)
+
+        state_key = normalize_state(issue.state)
+        if state_key == "done":
+            return {
+                "issue_identifier": issue.identifier,
+                "issue_id": issue.id,
+                "state": issue.state,
+                "changed": False,
+            }
+        if state_key != "human review":
+            raise ValueError(
+                f"only Human Review tickets can be confirmed (state={issue.state})"
+            )
+
+        await asyncio.to_thread(self._tracker_call_update_state, cfg, issue, "Done")
+        done_issue = replace(issue, state="Done")
+        self._claimed.discard(issue.id)
+        self._retry.pop(issue.id, None)
+        self._completed.add(issue.id)
+
+        path = (
+            self._workspace_manager.path_for(issue.identifier)
+            if self._workspace_manager is not None
+            else None
+        )
+        done_side_effects_ok = True
+        if path is not None and path.exists():
+            merge_ok = await self._auto_merge_done_gate_or_block(
+                cfg,
+                done_issue,
+                path,
+                debug_target=self._issue_debug.get(issue.id),
+            )
+            if merge_ok:
+                await self._after_done_then_remove_per_policy(
+                    cfg,
+                    path,
+                    identifier=issue.identifier,
+                    title=issue.title,
+                    debug_target=self._issue_debug.get(issue.id),
+                )
+            else:
+                done_side_effects_ok = False
+        else:
+            log.warning(
+                "confirm_done_workspace_missing",
+                identifier=issue.identifier,
+                workspace=str(path) if path is not None else "",
+            )
+        if done_side_effects_ok:
+            self._maybe_run_wiki_sweep(cfg, identifier=issue.identifier)
+        await self._notify_observers()
+        return {
+            "issue_identifier": issue.identifier,
+            "issue_id": issue.id,
+            "state": "Done",
+            "changed": True,
+        }
+
     def snapshot(self) -> dict[str, Any]:
         cfg = self._workflow_state.current()
         running_rows = [self._running_row(eid, entry) for eid, entry in self._running.items()]
@@ -2818,8 +2898,8 @@ class Orchestrator:
         """Move a ticket whose retry budget is exhausted to a terminal state.
 
         Surfaces a board-level ``## Escalation`` note and updates the
-        tracker state to ``Blocked`` (or whichever configured terminal
-        state mentions ``block``/``human``). The ticket no longer cycles
+        tracker state to ``Blocked`` (or the closest configured failure
+        review state when no blocked lane exists). The ticket no longer cycles
         through ``_schedule_retry``; an operator inspecting the board
         sees both the state change and the explanatory comment.
         """
@@ -2830,9 +2910,19 @@ class Orchestrator:
             return
         target_state = ""
         for terminal in cfg.tracker.terminal_states:
-            if "block" in terminal.lower() or "human" in terminal.lower():
+            if normalize_state(terminal) == "blocked":
                 target_state = terminal
                 break
+        if not target_state:
+            for terminal in cfg.tracker.terminal_states:
+                if "block" in terminal.lower():
+                    target_state = terminal
+                    break
+        if not target_state:
+            for terminal in cfg.tracker.terminal_states:
+                if "human" in terminal.lower():
+                    target_state = terminal
+                    break
         if not target_state and cfg.tracker.terminal_states:
             target_state = cfg.tracker.terminal_states[0]
         if not target_state:
@@ -3204,6 +3294,13 @@ class Orchestrator:
             path = self._workspace_manager.path_for(issue.identifier)
             if path.exists():
                 is_done = (issue.state or "").strip().lower() == "done"
+                if normalize_state(issue.state) == "human review":
+                    log.info(
+                        "startup_terminal_cleanup_preserved_human_review_workspace",
+                        identifier=issue.identifier,
+                        path=str(path),
+                    )
+                    continue
                 if is_done:
                     branch = f"symphony/{issue.identifier}"
                     already_merged = False

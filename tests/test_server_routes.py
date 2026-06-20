@@ -11,6 +11,7 @@ own server. This file pins the orchestrator-side route contract:
   * GET  /api/v1/{identifier}      -> orchestrator.issue_snapshot()
   * POST /api/v1/{identifier}/pause   -> 200 {paused: true}
   * POST /api/v1/{identifier}/resume  -> 200 {paused: false}
+  * POST /api/v1/{identifier}/confirm-done -> orchestrator.confirm_done()
   * GET  /api/v1/_debug/tasks      -> {tasks: [...]}
 
 Drives the aiohttp Application through `aiohttp.test_utils` directly so
@@ -40,6 +41,7 @@ class _StubOrchestrator:
     running_ids: dict[str, str] = field(default_factory=dict)
     paused_ids: set[str] = field(default_factory=set)
     refresh_calls: int = 0
+    confirm_done_calls: list[str] = field(default_factory=list)
 
     def snapshot(self) -> dict[str, Any]:
         return self.snapshot_payload
@@ -68,6 +70,15 @@ class _StubOrchestrator:
             self.paused_ids.discard(issue_id)
             return True
         return False
+
+    async def confirm_done(self, identifier: str) -> dict[str, Any]:
+        self.confirm_done_calls.append(identifier)
+        return {
+            "issue_identifier": identifier,
+            "issue_id": "iss-confirmed",
+            "state": "Done",
+            "changed": True,
+        }
 
 
 def _make_app_with_stub() -> tuple[Any, _StubOrchestrator]:
@@ -226,6 +237,22 @@ async def test_resume_route_returns_404_for_unknown_identifier(
     assert resp.status == 404
     payload = await resp.json()
     assert payload["error"]["code"] == "issue_not_running"
+
+
+async def test_confirm_done_route_delegates_to_orchestrator() -> None:
+    app, orch = _make_app_with_stub()
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        resp = await client.post("/api/v1/MT-1/confirm-done")
+        assert resp.status == 200
+        payload = await resp.json()
+        assert payload["state"] == "Done"
+        assert payload["changed"] is True
+        assert orch.confirm_done_calls == ["MT-1"]
+    finally:
+        await client.close()
 
 
 async def test_debug_tasks_route_returns_list(client: TestClient) -> None:
