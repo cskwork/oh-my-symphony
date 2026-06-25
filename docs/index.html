@@ -166,11 +166,12 @@
       <span class="hidden md:inline text-[11px] font-mono text-on-surface-variant border border-outline px-2 py-[2px] rounded">v0.6.x</span>
     </a>
     <div class="flex items-center gap-2 md:gap-6">
-      <a href="#features" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">features</a>
-      <a href="#quickstart" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">quickstart</a>
-      <a href="#agents" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">agents</a>
+      <a href="#features" data-i18n="nav.features" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">features</a>
+      <a href="#quickstart" data-i18n="nav.quickstart" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">quickstart</a>
+      <a href="#agents" data-i18n="nav.agents" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">agents</a>
       <a href="https://github.com/cskwork/oh-my-symphony" class="hidden sm:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">github</a>
-      <a href="#quickstart" class="font-mono text-[13px] bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">Get Started →</a>
+      <button id="lang-toggle" type="button" aria-label="한국어로 전환" class="font-mono text-[13px] text-on-surface-variant hover:text-primary border border-outline rounded px-2 py-[5px]">한국어</button>
+      <a href="#quickstart" data-i18n="nav.cta" class="font-mono text-[13px] bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">Get Started →</a>
     </div>
   </div>
 </nav>
@@ -191,13 +192,13 @@
         <span class="cursor-blink ml-1"></span>
       </div>
 
-      <h1 class="font-mono text-[34px] md:text-headline-xl text-on-surface mb-6">
+      <h1 data-i18n="hero.h1" class="font-mono text-[34px] md:text-headline-xl text-on-surface mb-6">
         One terminal.<br/>
         One Kanban board.<br/>
         <span class="text-primary">Four AI coding agents.</span>
       </h1>
 
-      <p class="font-sans text-body-lg text-on-background max-w-2xl mb-8">
+      <p data-i18n="hero.sub" class="font-sans text-body-lg text-on-background max-w-2xl mb-8">
         <span class="font-mono text-secondary">Codex</span> ·
         <span class="font-mono text-secondary">Claude&nbsp;Code</span> ·
         <span class="font-mono text-secondary">Gemini</span> ·
@@ -207,14 +208,14 @@
       </p>
 
       <div class="flex flex-wrap gap-3">
-        <a href="#quickstart"
+        <a href="#quickstart" data-i18n="hero.cta1"
            class="inline-flex items-center gap-2 bg-primary text-on-primary font-mono text-[14px] font-semibold px-5 py-3 rounded hover:bg-primary-dim">
           Try it in 60 seconds <span>→</span>
         </a>
         <a href="https://github.com/cskwork/oh-my-symphony"
            class="inline-flex items-center gap-2 border border-secondary text-secondary font-mono text-[14px] font-semibold px-5 py-3 rounded hover:bg-secondary/10">
           <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.42 7.42 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-          View on GitHub
+          <span data-i18n="hero.cta2">View on GitHub</span>
         </a>
       </div>
     </div>
@@ -237,7 +238,7 @@
       </div>
     </div>
 
-    <p class="font-mono text-[12px] text-on-surface-variant mt-4 max-w-3xl">
+    <p data-i18n="hero.caption" class="font-mono text-[12px] text-on-surface-variant mt-4 max-w-3xl">
       <span class="text-primary">›</span> columns are your tracker's states · cards show active agent, turn count, last event, accumulated tokens · ● running, ↻ retry queued, ✓ done.
     </p>
   </div>
@@ -250,9 +251,9 @@
   <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20">
     <div class="border-l-2 border-secondary pl-6 mb-12">
       <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
-        <span class="text-secondary">&gt;</span> Why Symphony
+        <span class="text-secondary">&gt;</span> <span data-i18n="feat.title">Why Symphony</span>
       </h2>
-      <p class="font-sans text-body-md text-on-surface-variant mt-2 max-w-2xl">
+      <p data-i18n="feat.sub" class="font-sans text-body-md text-on-surface-variant mt-2 max-w-2xl">
         A thin layer on top of OpenAI's battle-tested Symphony orchestrator — with four agents, a Jira-style TUI, and operator-grade tooling.
       </p>
     </div>
@@ -261,48 +262,48 @@
 
       <div class="feature-card terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[01] vendor</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">No vendor lock-in</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="feat.c1.h" class="font-mono text-headline-md text-on-surface mb-2">No vendor lock-in</h3>
+        <p data-i18n="feat.c1.b" class="font-sans text-body-md text-on-background">
           Swap Codex ↔ Claude Code ↔ Gemini ↔ Pi with one YAML line. New agents drop in behind a thin <code class="font-mono text-primary text-[13px]">AgentBackend</code> Protocol — four steps, no orchestrator changes.
         </p>
       </div>
 
       <div class="feature-card terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[02] visibility</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">Live progress</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="feat.c2.h" class="font-mono text-headline-md text-on-surface mb-2">Live progress</h3>
+        <p data-i18n="feat.c2.b" class="font-sans text-body-md text-on-background">
           Turn count, last event, accumulated tokens, and rate-limit headroom for every running card. No more "is it stuck or just thinking?" — and no SaaS dashboard to log into.
         </p>
       </div>
 
       <div class="feature-card terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[03] concurrency</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">Parallel by default</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="feat.c3.h" class="font-mono text-headline-md text-on-surface mb-2">Parallel by default</h3>
+        <p data-i18n="feat.c3.b" class="font-sans text-body-md text-on-background">
           Every ticket gets its own <code class="font-mono text-primary text-[13px]">git&nbsp;worktree</code> workspace. Agents can't step on each other. Headless mode mirrors progress to a Markdown file you can <code class="font-mono text-secondary text-[13px]">tail&nbsp;-F</code>.
         </p>
       </div>
 
       <div class="feature-card terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[04] zero-saas</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">No SaaS, no API key to try</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="feat.c4.h" class="font-mono text-headline-md text-on-surface mb-2">No SaaS, no API key to try</h3>
+        <p data-i18n="feat.c4.b" class="font-sans text-body-md text-on-background">
           File-based Markdown Kanban means tickets live in <code class="font-mono text-primary text-[13px]">git</code> next to your code. Linear is supported as a drop-in tracker — you don't need it.
         </p>
       </div>
 
       <div class="feature-card terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[05] upstream</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">Battle-tested core</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="feat.c5.h" class="font-mono text-headline-md text-on-surface mb-2">Battle-tested core</h3>
+        <p data-i18n="feat.c5.b" class="font-sans text-body-md text-on-background">
           Forked from <a class="text-secondary underline-offset-4 hover:underline" href="https://github.com/openai/symphony">OpenAI's Symphony</a> reference implementation. Orchestrator, scheduler, retry, workspace lifecycle, and prompt renderer are all upstream.
         </p>
       </div>
 
       <div class="feature-card terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-on-surface-variant feature-prompt mb-3">[06] tooling</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">Operator-grade tooling</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="feat.c6.h" class="font-mono text-headline-md text-on-surface mb-2">Operator-grade tooling</h3>
+        <p data-i18n="feat.c6.b" class="font-sans text-body-md text-on-background">
           <code class="font-mono text-primary text-[13px]">symphony&nbsp;doctor</code> catches the five most common first-run failures in one pass. <code class="font-mono text-primary text-[13px]">symphony&nbsp;service</code> runs the orchestrator as a managed background daemon. A web viewer adds Pause / Resume.
         </p>
       </div>
@@ -320,9 +321,9 @@
     <div>
       <div class="border-l-2 border-primary pl-6 mb-8">
         <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
-          <span class="text-primary">&gt;</span> Try it in 60 seconds
+          <span class="text-primary">&gt;</span> <span data-i18n="qs.title">Try it in 60 seconds</span>
         </h2>
-        <p class="font-sans text-body-md text-on-surface-variant mt-2">
+        <p data-i18n="qs.sub" class="font-sans text-body-md text-on-surface-variant mt-2">
           No AI CLI required — Symphony ships a fake-agent demo so you can see the Kanban move before installing anything else.
         </p>
       </div>
@@ -331,8 +332,8 @@
         <li class="flex gap-4">
           <span class="font-mono text-[18px] text-primary leading-none w-8 shrink-0">01</span>
           <div>
-            <h3 class="font-mono text-headline-md text-on-surface mb-1">Install</h3>
-            <p class="font-sans text-body-md text-on-background">
+            <h3 data-i18n="qs.s1.h" class="font-mono text-headline-md text-on-surface mb-1">Install</h3>
+            <p data-i18n="qs.s1.b" class="font-sans text-body-md text-on-background">
               One command. Isolated venv via <code class="font-mono text-primary text-[13px]">pipx</code>; nothing leaks into your global Python.
             </p>
           </div>
@@ -340,8 +341,8 @@
         <li class="flex gap-4">
           <span class="font-mono text-[18px] text-primary leading-none w-8 shrink-0">02</span>
           <div>
-            <h3 class="font-mono text-headline-md text-on-surface mb-1">Launch the TUI</h3>
-            <p class="font-sans text-body-md text-on-background">
+            <h3 data-i18n="qs.s2.h" class="font-mono text-headline-md text-on-surface mb-1">Launch the TUI</h3>
+            <p data-i18n="qs.s2.b" class="font-sans text-body-md text-on-background">
               Point Symphony at any <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>. Columns become Kanban lanes, cards become tickets.
             </p>
           </div>
@@ -349,8 +350,8 @@
         <li class="flex gap-4">
           <span class="font-mono text-[18px] text-primary leading-none w-8 shrink-0">03</span>
           <div>
-            <h3 class="font-mono text-headline-md text-on-surface mb-1">Watch agents pick up tickets</h3>
-            <p class="font-sans text-body-md text-on-background">
+            <h3 data-i18n="qs.s3.h" class="font-mono text-headline-md text-on-surface mb-1">Watch agents pick up tickets</h3>
+            <p data-i18n="qs.s3.b" class="font-sans text-body-md text-on-background">
               Move a card to <em>In Progress</em>; the configured agent claims it, runs in its own git worktree, and streams turn counts + tokens live.
             </p>
           </div>
@@ -388,9 +389,9 @@
   <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20">
     <div class="border-l-2 border-primary pl-6 mb-8">
       <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
-        <span class="text-primary">&gt;</span> Agent matrix
+        <span class="text-primary">&gt;</span> <span data-i18n="am.title">Agent matrix</span>
       </h2>
-      <p class="font-sans text-body-md text-on-surface-variant mt-2 max-w-2xl">
+      <p data-i18n="am.sub" class="font-sans text-body-md text-on-surface-variant mt-2 max-w-2xl">
         Each backend is a thin adapter over the agent's official CLI. Set <code class="font-mono text-primary text-[13px]">agent.kind</code> in your <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code> — or mix backends per ticket.
       </p>
     </div>
@@ -400,41 +401,41 @@
         <table class="matrix w-full text-left font-mono text-[13px]">
           <thead>
             <tr class="text-on-surface-variant">
-              <th class="px-5 py-3 border-b border-outline">Agent</th>
-              <th class="px-5 py-3 border-b border-outline">CLI invocation</th>
-              <th class="px-5 py-3 border-b border-outline">Transport</th>
-              <th class="px-5 py-3 border-b border-outline">Resume</th>
-              <th class="px-5 py-3 border-b border-outline">Best for</th>
+              <th data-i18n="am.th.agent" class="px-5 py-3 border-b border-outline">Agent</th>
+              <th data-i18n="am.th.cli" class="px-5 py-3 border-b border-outline">CLI invocation</th>
+              <th data-i18n="am.th.transport" class="px-5 py-3 border-b border-outline">Transport</th>
+              <th data-i18n="am.th.resume" class="px-5 py-3 border-b border-outline">Resume</th>
+              <th data-i18n="am.th.bestfor" class="px-5 py-3 border-b border-outline">Best for</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td class="px-5 py-4 text-primary">Codex</td>
               <td class="px-5 py-4 text-on-surface">codex app-server</td>
-              <td class="px-5 py-4 text-on-background">JSON-RPC stdio · multi-turn</td>
-              <td class="px-5 py-4 text-secondary">native</td>
-              <td class="px-5 py-4 font-sans text-on-background">Original Symphony agent · long codebase sessions</td>
+              <td data-i18n="am.r1.transport" class="px-5 py-4 text-on-background">JSON-RPC stdio · multi-turn</td>
+              <td data-i18n="am.r1.resume" class="px-5 py-4 text-secondary">native</td>
+              <td data-i18n="am.r1.bestfor" class="px-5 py-4 font-sans text-on-background">Original Symphony agent · long codebase sessions</td>
             </tr>
             <tr>
               <td class="px-5 py-4 text-primary">Claude Code</td>
               <td class="px-5 py-4 text-on-surface">claude -p --output-format stream-json</td>
-              <td class="px-5 py-4 text-on-background">NDJSON events · per-turn subprocess</td>
+              <td data-i18n="am.r2.transport" class="px-5 py-4 text-on-background">NDJSON events · per-turn subprocess</td>
               <td class="px-5 py-4 text-secondary">--resume</td>
-              <td class="px-5 py-4 font-sans text-on-background">Complex multi-file refactors · long planning</td>
+              <td data-i18n="am.r2.bestfor" class="px-5 py-4 font-sans text-on-background">Complex multi-file refactors · long planning</td>
             </tr>
             <tr>
               <td class="px-5 py-4 text-primary">Gemini</td>
               <td class="px-5 py-4 text-on-surface">gemini -p ""</td>
-              <td class="px-5 py-4 text-on-background">one-shot per turn · stdin → stdout</td>
-              <td class="px-5 py-4 text-on-surface-variant">stateless</td>
-              <td class="px-5 py-4 font-sans text-on-background">Quick edits · large-context one-shots</td>
+              <td data-i18n="am.r3.transport" class="px-5 py-4 text-on-background">one-shot per turn · stdin → stdout</td>
+              <td data-i18n="am.r3.resume" class="px-5 py-4 text-on-surface-variant">stateless</td>
+              <td data-i18n="am.r3.bestfor" class="px-5 py-4 font-sans text-on-background">Quick edits · large-context one-shots</td>
             </tr>
             <tr>
               <td class="px-5 py-4 text-primary">Pi</td>
               <td class="px-5 py-4 text-on-surface">pi --mode json -p ""</td>
-              <td class="px-5 py-4 text-on-background">JSONL events · per-turn subprocess</td>
+              <td data-i18n="am.r4.transport" class="px-5 py-4 text-on-background">JSONL events · per-turn subprocess</td>
               <td class="px-5 py-4 text-secondary">--session</td>
-              <td class="px-5 py-4 font-sans text-on-background">Multi-backend (Anthropic / OpenAI / Gemini / Bedrock under one CLI)</td>
+              <td data-i18n="am.r4.bestfor" class="px-5 py-4 font-sans text-on-background">Multi-backend (Anthropic / OpenAI / Gemini / Bedrock under one CLI)</td>
             </tr>
           </tbody>
         </table>
@@ -465,29 +466,29 @@
   <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20">
     <div class="border-l-2 border-secondary pl-6 mb-10">
       <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
-        <span class="text-secondary">&gt;</span> Who this is for
+        <span class="text-secondary">&gt;</span> <span data-i18n="who.title">Who this is for</span>
       </h2>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <div class="terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-secondary mb-3">SOLO</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">Solo devs</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="who.c1.h" class="font-mono text-headline-md text-on-surface mb-2">Solo devs</h3>
+        <p data-i18n="who.c1.b" class="font-sans text-body-md text-on-background">
           Running unattended overnight refactors across dozens of tickets while you sleep. macOS keep-awake stops the lock screen from killing your pipeline.
         </p>
       </div>
       <div class="terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-secondary mb-3">TEAM</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">Teams</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="who.c2.h" class="font-mono text-headline-md text-on-surface mb-2">Teams</h3>
+        <p data-i18n="who.c2.b" class="font-sans text-body-md text-on-background">
           Parallelizing bug fixes, doc updates, or migration tickets across multiple coding agents simultaneously — without juggling four chat windows.
         </p>
       </div>
       <div class="terminal-card rounded p-6">
         <div class="font-mono text-[11px] text-secondary mb-3">RESEARCH</div>
-        <h3 class="font-mono text-headline-md text-on-surface mb-2">Researchers & reviewers</h3>
-        <p class="font-sans text-body-md text-on-background">
+        <h3 data-i18n="who.c3.h" class="font-mono text-headline-md text-on-surface mb-2">Researchers & reviewers</h3>
+        <p data-i18n="who.c3.b" class="font-sans text-body-md text-on-background">
           Comparing how Codex, Claude Code, Gemini, and Pi tackle the same task side by side — identical prompts, identical workspaces.
         </p>
       </div>
@@ -500,31 +501,31 @@
 ========================================================== -->
 <section class="border-b border-outline">
   <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-20 md:py-24 text-center">
-    <h2 class="font-mono text-[28px] md:text-headline-xl text-on-surface mb-4">
+    <h2 data-i18n="cta.title" class="font-mono text-[28px] md:text-headline-xl text-on-surface mb-4">
       Stop juggling AI coding CLIs.
     </h2>
-    <p class="font-sans text-body-lg text-on-background max-w-2xl mx-auto mb-8">
+    <p data-i18n="cta.sub" class="font-sans text-body-lg text-on-background max-w-2xl mx-auto mb-8">
       One terminal. One Kanban. Four agents working in parallel — visible, isolated, and yours.
     </p>
     <div class="flex flex-wrap gap-3 justify-center">
-      <a href="#quickstart"
+      <a href="#quickstart" data-i18n="cta.b1"
          class="inline-flex items-center gap-2 bg-primary text-on-primary font-mono text-[14px] font-semibold px-6 py-3 rounded hover:bg-primary-dim">
         Get started <span>→</span>
       </a>
-      <a href="https://github.com/cskwork/oh-my-symphony#readme"
+      <a href="https://github.com/cskwork/oh-my-symphony#readme" data-i18n="cta.b2"
          class="inline-flex items-center gap-2 border border-outline text-on-surface font-mono text-[14px] font-semibold px-6 py-3 rounded hover:border-secondary hover:text-secondary">
         Read the docs
       </a>
     </div>
 
     <div class="flex flex-wrap items-center justify-center gap-4 mt-10 font-mono text-[12px] text-on-surface-variant">
-      <span>Forked from <a class="text-secondary hover:underline" href="https://github.com/openai/symphony">openai/symphony</a></span>
+      <span data-i18n="cta.meta1">Forked from <a class="text-secondary hover:underline" href="https://github.com/openai/symphony">openai/symphony</a></span>
       <span aria-hidden="true">·</span>
       <span>Apache 2.0</span>
       <span aria-hidden="true">·</span>
       <span>Python 3.12+</span>
       <span aria-hidden="true">·</span>
-      <span>Built on <a class="text-secondary hover:underline" href="https://textual.textualize.io">Textual</a></span>
+      <span data-i18n="cta.meta2">Built on <a class="text-secondary hover:underline" href="https://textual.textualize.io">Textual</a></span>
     </div>
   </div>
 </section>
@@ -541,14 +542,14 @@
         <span class="text-primary text-[18px] leading-none">▲</span>
         <span class="text-[15px] font-semibold tracking-tight">oh-my-symphony</span>
       </div>
-      <p class="font-sans text-body-md text-on-surface-variant max-w-md">
+      <p data-i18n="foot.desc" class="font-sans text-body-md text-on-surface-variant max-w-md">
         A multi-agent fork of OpenAI's Symphony reference implementation.
         Stop juggling AI coding CLIs — run them in parallel under one Kanban board.
       </p>
     </div>
 
     <div>
-      <h4 class="font-mono text-[12px] text-on-surface-variant uppercase tracking-wider mb-3">Project</h4>
+      <h4 data-i18n="foot.project" class="font-mono text-[12px] text-on-surface-variant uppercase tracking-wider mb-3">Project</h4>
       <ul class="space-y-2 font-mono text-[13px]">
         <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony#readme">README</a></li>
         <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony/blob/main/CHANGELOG.md">Changelog</a></li>
@@ -557,7 +558,7 @@
     </div>
 
     <div>
-      <h4 class="font-mono text-[12px] text-on-surface-variant uppercase tracking-wider mb-3">Community</h4>
+      <h4 data-i18n="foot.community" class="font-mono text-[12px] text-on-surface-variant uppercase tracking-wider mb-3">Community</h4>
       <ul class="space-y-2 font-mono text-[13px]">
         <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony">GitHub</a></li>
         <li><a class="text-on-surface hover:text-primary" href="https://github.com/cskwork/oh-my-symphony/issues">Issues</a></li>
@@ -569,10 +570,196 @@
   <div class="border-t border-outline">
     <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-5 flex flex-wrap items-center justify-between gap-2 font-mono text-[12px] text-on-surface-variant">
       <span>Apache 2.0 · <a class="hover:text-primary" href="https://github.com/cskwork/oh-my-symphony">cskwork/oh-my-symphony</a></span>
-      <span>Designed with <a class="text-secondary hover:underline" href="https://stitch.withgoogle.com">Stitch</a> · hosted on GitHub Pages</span>
+      <span data-i18n="foot.madewith">Designed with <a class="text-secondary hover:underline" href="https://stitch.withgoogle.com">Stitch</a> · hosted on GitHub Pages</span>
     </div>
   </div>
 </footer>
+
+<!-- =========================================================
+  i18n — browser-language auto-detect + EN/KO toggle
+  Prose only; commands and YAML stay identical across languages.
+========================================================== -->
+<script id="i18n">
+(function () {
+  const I18N = {
+    en: {
+      "nav.features": `features`,
+      "nav.quickstart": `quickstart`,
+      "nav.agents": `agents`,
+      "nav.cta": `Get Started →`,
+      "hero.h1": `One terminal.<br/>One Kanban board.<br/><span class="text-primary">Four AI coding agents.</span>`,
+      "hero.sub": `<span class="font-mono text-secondary">Codex</span> · <span class="font-mono text-secondary">Claude&nbsp;Code</span> · <span class="font-mono text-secondary">Gemini</span> · <span class="font-mono text-secondary">Pi</span> — pick per ticket, run in parallel inside isolated <span class="font-mono text-primary">git&nbsp;worktree</span>s, watch live in a Jira-style TUI you never have to leave your terminal for.`,
+      "hero.cta1": `Try it in 60 seconds <span>→</span>`,
+      "hero.cta2": `View on GitHub`,
+      "hero.caption": `<span class="text-primary">›</span> columns are your tracker's states · cards show active agent, turn count, last event, accumulated tokens · ● running, ↻ retry queued, ✓ done.`,
+      "feat.title": `Why Symphony`,
+      "feat.sub": `A thin layer on top of OpenAI's battle-tested Symphony orchestrator — with four agents, a Jira-style TUI, and operator-grade tooling.`,
+      "feat.c1.h": `No vendor lock-in`,
+      "feat.c1.b": `Swap Codex ↔ Claude Code ↔ Gemini ↔ Pi with one YAML line. New agents drop in behind a thin <code class="font-mono text-primary text-[13px]">AgentBackend</code> Protocol — four steps, no orchestrator changes.`,
+      "feat.c2.h": `Live progress`,
+      "feat.c2.b": `Turn count, last event, accumulated tokens, and rate-limit headroom for every running card. No more "is it stuck or just thinking?" — and no SaaS dashboard to log into.`,
+      "feat.c3.h": `Parallel by default`,
+      "feat.c3.b": `Every ticket gets its own <code class="font-mono text-primary text-[13px]">git&nbsp;worktree</code> workspace. Agents can't step on each other. Headless mode mirrors progress to a Markdown file you can <code class="font-mono text-secondary text-[13px]">tail&nbsp;-F</code>.`,
+      "feat.c4.h": `No SaaS, no API key to try`,
+      "feat.c4.b": `File-based Markdown Kanban means tickets live in <code class="font-mono text-primary text-[13px]">git</code> next to your code. Linear is supported as a drop-in tracker — you don't need it.`,
+      "feat.c5.h": `Battle-tested core`,
+      "feat.c5.b": `Forked from <a class="text-secondary underline-offset-4 hover:underline" href="https://github.com/openai/symphony">OpenAI's Symphony</a> reference implementation. Orchestrator, scheduler, retry, workspace lifecycle, and prompt renderer are all upstream.`,
+      "feat.c6.h": `Operator-grade tooling`,
+      "feat.c6.b": `<code class="font-mono text-primary text-[13px]">symphony&nbsp;doctor</code> catches the five most common first-run failures in one pass. <code class="font-mono text-primary text-[13px]">symphony&nbsp;service</code> runs the orchestrator as a managed background daemon. A web viewer adds Pause / Resume.`,
+      "qs.title": `Try it in 60 seconds`,
+      "qs.sub": `No AI CLI required — Symphony ships a fake-agent demo so you can see the Kanban move before installing anything else.`,
+      "qs.s1.h": `Install`,
+      "qs.s1.b": `One command. Isolated venv via <code class="font-mono text-primary text-[13px]">pipx</code>; nothing leaks into your global Python.`,
+      "qs.s2.h": `Launch the TUI`,
+      "qs.s2.b": `Point Symphony at any <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>. Columns become Kanban lanes, cards become tickets.`,
+      "qs.s3.h": `Watch agents pick up tickets`,
+      "qs.s3.b": `Move a card to <em>In Progress</em>; the configured agent claims it, runs in its own git worktree, and streams turn counts + tokens live.`,
+      "am.title": `Agent matrix`,
+      "am.sub": `Each backend is a thin adapter over the agent's official CLI. Set <code class="font-mono text-primary text-[13px]">agent.kind</code> in your <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code> — or mix backends per ticket.`,
+      "am.th.agent": `Agent`,
+      "am.th.cli": `CLI invocation`,
+      "am.th.transport": `Transport`,
+      "am.th.resume": `Resume`,
+      "am.th.bestfor": `Best for`,
+      "am.r1.transport": `JSON-RPC stdio · multi-turn`,
+      "am.r1.resume": `native`,
+      "am.r1.bestfor": `Original Symphony agent · long codebase sessions`,
+      "am.r2.transport": `NDJSON events · per-turn subprocess`,
+      "am.r2.bestfor": `Complex multi-file refactors · long planning`,
+      "am.r3.transport": `one-shot per turn · stdin → stdout`,
+      "am.r3.resume": `stateless`,
+      "am.r3.bestfor": `Quick edits · large-context one-shots`,
+      "am.r4.transport": `JSONL events · per-turn subprocess`,
+      "am.r4.bestfor": `Multi-backend (Anthropic / OpenAI / Gemini / Bedrock under one CLI)`,
+      "who.title": `Who this is for`,
+      "who.c1.h": `Solo devs`,
+      "who.c1.b": `Running unattended overnight refactors across dozens of tickets while you sleep. macOS keep-awake stops the lock screen from killing your pipeline.`,
+      "who.c2.h": `Teams`,
+      "who.c2.b": `Parallelizing bug fixes, doc updates, or migration tickets across multiple coding agents simultaneously — without juggling four chat windows.`,
+      "who.c3.h": `Researchers & reviewers`,
+      "who.c3.b": `Comparing how Codex, Claude Code, Gemini, and Pi tackle the same task side by side — identical prompts, identical workspaces.`,
+      "cta.title": `Stop juggling AI coding CLIs.`,
+      "cta.sub": `One terminal. One Kanban. Four agents working in parallel — visible, isolated, and yours.`,
+      "cta.b1": `Get started <span>→</span>`,
+      "cta.b2": `Read the docs`,
+      "cta.meta1": `Forked from <a class="text-secondary hover:underline" href="https://github.com/openai/symphony">openai/symphony</a>`,
+      "cta.meta2": `Built on <a class="text-secondary hover:underline" href="https://textual.textualize.io">Textual</a>`,
+      "foot.desc": `A multi-agent fork of OpenAI's Symphony reference implementation. Stop juggling AI coding CLIs — run them in parallel under one Kanban board.`,
+      "foot.project": `Project`,
+      "foot.community": `Community`,
+      "foot.madewith": `Designed with <a class="text-secondary hover:underline" href="https://stitch.withgoogle.com">Stitch</a> · hosted on GitHub Pages`
+    },
+    ko: {
+      "nav.features": `기능`,
+      "nav.quickstart": `빠른 시작`,
+      "nav.agents": `에이전트`,
+      "nav.cta": `시작하기 →`,
+      "hero.h1": `터미널 하나.<br/>칸반 보드 하나.<br/><span class="text-primary">AI 코딩 에이전트 넷.</span>`,
+      "hero.sub": `<span class="font-mono text-secondary">Codex</span> · <span class="font-mono text-secondary">Claude&nbsp;Code</span> · <span class="font-mono text-secondary">Gemini</span> · <span class="font-mono text-secondary">Pi</span> — 티켓마다 골라, 격리된 <span class="font-mono text-primary">git&nbsp;worktree</span> 안에서 병렬로 실행하고, 터미널을 벗어날 필요 없는 Jira 스타일 TUI에서 실시간으로 지켜본다.`,
+      "hero.cta1": `60초 만에 체험하기 <span>→</span>`,
+      "hero.cta2": `GitHub에서 보기`,
+      "hero.caption": `<span class="text-primary">›</span> 컬럼은 트래커의 상태 · 카드는 실행 중 에이전트·턴 수·마지막 이벤트·누적 토큰을 표시 · ● 실행 중, ↻ 재시도 대기, ✓ 완료.`,
+      "feat.title": `Symphony를 쓰는 이유`,
+      "feat.sub": `OpenAI의 검증된 Symphony 오케스트레이터 위에 얹은 얇은 레이어 — 네 가지 에이전트, Jira 스타일 TUI, 운영자급 도구를 더했다.`,
+      "feat.c1.h": `벤더 종속 없음`,
+      "feat.c1.b": `YAML 한 줄로 Codex ↔ Claude Code ↔ Gemini ↔ Pi 교체. 새 에이전트는 얇은 <code class="font-mono text-primary text-[13px]">AgentBackend</code> Protocol 뒤에 끼워 넣으면 된다 — 네 단계, 오케스트레이터 변경 없음.`,
+      "feat.c2.h": `실시간 진행 상황`,
+      "feat.c2.b": `실행 중인 모든 카드의 턴 수, 마지막 이벤트, 누적 토큰, 레이트 리밋 여유분 표시. "멈춘 건가, 생각 중인가?"는 이제 끝 — 로그인할 SaaS 대시보드도 없다.`,
+      "feat.c3.h": `기본이 병렬`,
+      "feat.c3.b": `티켓마다 전용 <code class="font-mono text-primary text-[13px]">git&nbsp;worktree</code> 워크스페이스를 갖는다. 에이전트끼리 서로 간섭하지 않는다. 헤드리스 모드는 진행 상황을 <code class="font-mono text-secondary text-[13px]">tail&nbsp;-F</code>로 따라갈 수 있는 Markdown 파일로 미러링한다.`,
+      "feat.c4.h": `체험에 SaaS·API 키 불필요`,
+      "feat.c4.b": `파일 기반 Markdown 칸반이라 티켓이 코드 옆 <code class="font-mono text-primary text-[13px]">git</code> 안에 함께 산다. Linear도 드롭인 트래커로 지원하지만 — 꼭 필요하진 않다.`,
+      "feat.c5.h": `검증된 코어`,
+      "feat.c5.b": `<a class="text-secondary underline-offset-4 hover:underline" href="https://github.com/openai/symphony">OpenAI Symphony</a> 레퍼런스 구현에서 포크. 오케스트레이터, 스케줄러, 재시도, 워크스페이스 생명주기, 프롬프트 렌더러가 모두 업스트림 그대로다.`,
+      "feat.c6.h": `운영자급 도구`,
+      "feat.c6.b": `<code class="font-mono text-primary text-[13px]">symphony&nbsp;doctor</code>는 첫 실행에서 가장 흔한 다섯 가지 실패를 한 번에 잡는다. <code class="font-mono text-primary text-[13px]">symphony&nbsp;service</code>는 오케스트레이터를 관리형 백그라운드 데몬으로 실행한다. 웹 뷰어는 일시정지 / 재개를 더한다.`,
+      "qs.title": `60초 만에 체험하기`,
+      "qs.sub": `AI CLI 불필요 — Symphony는 가짜 에이전트 데모를 함께 제공해, 다른 걸 설치하기 전에 칸반이 움직이는 걸 볼 수 있다.`,
+      "qs.s1.h": `설치`,
+      "qs.s1.b": `명령 하나. <code class="font-mono text-primary text-[13px]">pipx</code>로 격리된 venv에 설치되어 전역 Python을 건드리지 않는다.`,
+      "qs.s2.h": `TUI 실행`,
+      "qs.s2.b": `Symphony를 아무 <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>에 연결한다. 컬럼은 칸반 레인이 되고, 카드는 티켓이 된다.`,
+      "qs.s3.h": `에이전트가 티켓을 집어가는 걸 지켜보기`,
+      "qs.s3.b": `카드를 <em>In Progress</em>로 옮기면, 설정된 에이전트가 그걸 가져가 전용 git worktree에서 실행하며 턴 수와 토큰을 실시간으로 스트리밍한다.`,
+      "am.title": `에이전트 매트릭스`,
+      "am.sub": `각 백엔드는 에이전트 공식 CLI 위의 얇은 어댑터다. <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>에서 <code class="font-mono text-primary text-[13px]">agent.kind</code>를 설정하거나 — 티켓마다 백엔드를 섞어 쓴다.`,
+      "am.th.agent": `에이전트`,
+      "am.th.cli": `CLI 호출`,
+      "am.th.transport": `전송 방식`,
+      "am.th.resume": `세션 재개`,
+      "am.th.bestfor": `추천 용도`,
+      "am.r1.transport": `JSON-RPC stdio · 멀티턴`,
+      "am.r1.resume": `네이티브`,
+      "am.r1.bestfor": `원조 Symphony 에이전트 · 긴 코드베이스 세션`,
+      "am.r2.transport": `NDJSON 이벤트 · 턴별 서브프로세스`,
+      "am.r2.bestfor": `복잡한 다중 파일 리팩터링 · 긴 계획 수립`,
+      "am.r3.transport": `턴당 원샷 · stdin → stdout`,
+      "am.r3.resume": `무상태`,
+      "am.r3.bestfor": `빠른 수정 · 대용량 컨텍스트 원샷`,
+      "am.r4.transport": `JSONL 이벤트 · 턴별 서브프로세스`,
+      "am.r4.bestfor": `멀티 백엔드 (CLI 하나로 Anthropic / OpenAI / Gemini / Bedrock)`,
+      "who.title": `이런 분께`,
+      "who.c1.h": `1인 개발자`,
+      "who.c1.b": `잠든 사이 수십 개 티켓에 걸쳐 무인 야간 리팩터링을 돌린다. macOS 절전 방지가 잠금 화면이 파이프라인을 끊지 못하게 막는다.`,
+      "who.c2.h": `팀`,
+      "who.c2.b": `버그 수정, 문서 갱신, 마이그레이션 티켓을 여러 코딩 에이전트에 걸쳐 동시에 병렬화한다 — 네 개의 채팅 창을 저글링하지 않고.`,
+      "who.c3.h": `연구자 & 리뷰어`,
+      "who.c3.b": `Codex, Claude Code, Gemini, Pi가 같은 작업을 어떻게 푸는지 나란히 비교한다 — 동일한 프롬프트, 동일한 워크스페이스.`,
+      "cta.title": `AI 코딩 CLI 저글링은 그만.`,
+      "cta.sub": `터미널 하나. 칸반 하나. 병렬로 일하는 에이전트 넷 — 보이고, 격리되고, 당신의 것.`,
+      "cta.b1": `시작하기 <span>→</span>`,
+      "cta.b2": `문서 읽기`,
+      "cta.meta1": `<a class="text-secondary hover:underline" href="https://github.com/openai/symphony">openai/symphony</a>에서 포크`,
+      "cta.meta2": `<a class="text-secondary hover:underline" href="https://textual.textualize.io">Textual</a> 기반`,
+      "foot.desc": `OpenAI Symphony 레퍼런스 구현의 멀티에이전트 포크. AI 코딩 CLI 저글링은 그만 — 칸반 보드 하나 아래에서 병렬로 실행한다.`,
+      "foot.project": `프로젝트`,
+      "foot.community": `커뮤니티`,
+      "foot.madewith": `<a class="text-secondary hover:underline" href="https://stitch.withgoogle.com">Stitch</a>로 디자인 · GitHub Pages 호스팅`
+    }
+  };
+
+  const STORAGE_KEY = "oms-lang";
+  const SUPPORTED = ["en", "ko"];
+
+  function detect() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved && SUPPORTED.indexOf(saved) !== -1) return saved;
+    } catch (e) {}
+    const nav = (navigator.language || navigator.userLanguage || "en").toLowerCase();
+    return nav.indexOf("ko") === 0 ? "ko" : "en";
+  }
+
+  function apply(lang) {
+    if (SUPPORTED.indexOf(lang) === -1) lang = "en";
+    const dict = I18N[lang];
+    document.documentElement.lang = lang;
+    const nodes = document.querySelectorAll("[data-i18n]");
+    for (let i = 0; i < nodes.length; i++) {
+      const key = nodes[i].getAttribute("data-i18n");
+      if (dict[key] != null) nodes[i].innerHTML = dict[key];
+    }
+    const btn = document.getElementById("lang-toggle");
+    if (btn) {
+      // The button advertises the language you switch TO.
+      btn.textContent = lang === "ko" ? "EN" : "한국어";
+      btn.setAttribute("aria-label", lang === "ko" ? "Switch to English" : "한국어로 전환");
+    }
+    try { localStorage.setItem(STORAGE_KEY, lang); } catch (e) {}
+  }
+
+  let current = detect();
+  apply(current);
+
+  const btn = document.getElementById("lang-toggle");
+  if (btn) {
+    btn.addEventListener("click", function () {
+      current = current === "ko" ? "en" : "ko";
+      apply(current);
+    });
+  }
+})();
+</script>
 
 </body>
 </html>
