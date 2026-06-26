@@ -123,6 +123,116 @@ def test_plan_contract_skips_for_chore_label() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Critic contract (In Progress → Critic → Review, with Critic → In Progress
+# rewind). Either a clean `## Critic` OR the rewind pair
+# `## Surfaced Requirements` + `## Critic Tests` — mirrors _REVIEW_OUTCOMES.
+# ---------------------------------------------------------------------------
+
+
+def test_critic_contract_passes_with_clean_critic_section() -> None:
+    body = """
+## Critic
+no surfaced requirements — existing tests cover the spec
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_critic_contract_passes_with_rewind_pair() -> None:
+    body = """
+## Surfaced Requirements
+### 2026-06-26
+- spec implies empty input returns []; no test covers it; test_edge_empty; open
+
+## Critic Tests
+- tests/test_critic_gap.py::test_edge_empty
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_critic_contract_fails_when_critic_tests_missing_on_rewind() -> None:
+    # Surfaced Requirements without the matching failing-test list is an
+    # incomplete rewind — the fixer has nothing red to clear.
+    body = """
+## Surfaced Requirements
+- spec implies idempotency; not covered; open
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is False
+    assert "## Critic Tests" in result.missing
+    assert "## Contract Failure" in result.note
+
+
+def test_critic_contract_fails_when_no_outcome_present() -> None:
+    # Neither a clean `## Critic` nor the rewind pair -> the Critic agent
+    # produced nothing actionable; both rewind sections are reported.
+    body = """
+## Implementation
+shipped the feature
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is False
+    assert "## Surfaced Requirements" in result.missing
+    assert "## Critic Tests" in result.missing
+
+
+def test_critic_contract_empty_critic_falls_through_to_rewind_pair() -> None:
+    # An empty `## Critic` body is not a valid clean pass; the validator
+    # then requires the rewind pair and reports both as missing.
+    body = """
+## Critic
+
+## Implementation
+nothing here
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is False
+    assert "## Surfaced Requirements" in result.missing
+    assert "## Critic Tests" in result.missing
+
+
+def test_critic_clean_section_not_confused_with_critic_tests() -> None:
+    # `## Critic Tests` must not satisfy the clean `## Critic` outcome — the
+    # heading regex anchors on end-of-line, so a rewind that lists tests but
+    # omits Surfaced Requirements still fails.
+    body = """
+## Critic Tests
+- tests/test_critic_gap.py::test_edge_empty
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is False
+    assert "## Surfaced Requirements" in result.missing
+    assert "## Critic Tests" not in result.missing
+
+
+# ---------------------------------------------------------------------------
 # Review contract (Review → QA)
 # ---------------------------------------------------------------------------
 
@@ -229,6 +339,171 @@ def test_qa_contract_fails_without_ac_scorecard() -> None:
     )
     assert result.passed is False
     assert "## AC Scorecard" in result.missing
+
+
+# ---------------------------------------------------------------------------
+# S2 content-checking gates: external-fact checks layered on presence.
+# ---------------------------------------------------------------------------
+
+
+_AUDIT_ALL_PASS = """## Security Audit
+| check | verdict | evidence |
+| --- | --- | --- |
+| secrets | pass | n/a |
+| input-validation | pass | n/a |
+| sql-injection | pass | n/a |
+| xss | pass | n/a |
+| csrf | pass | n/a |
+| authz | pass | n/a |
+| rate-limit | pass | n/a |
+"""
+
+_AUDIT_WITH_FAIL = """## Security Audit
+| check | verdict | evidence |
+| --- | --- | --- |
+| secrets | pass | n/a |
+| input-validation | pass | n/a |
+| sql-injection | fail | src/foo.py:42 |
+| xss | pass | n/a |
+| csrf | pass | n/a |
+| authz | pass | n/a |
+| rate-limit | pass | n/a |
+"""
+
+
+def test_review_fail_verdict_with_clean_review_rewinds() -> None:
+    # A `fail` Security Audit row paired with a clean `## Review` (not
+    # `## Review Findings`) is self-contradictory -> hard rewind.
+    body = _AUDIT_WITH_FAIL + "\n## Review\nlooks good, shipping\n"
+    result = evaluate_contract(
+        producing_state="Review",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is False
+    assert any("fail" in m.lower() and "review" in m.lower() for m in result.missing)
+
+
+def test_review_fail_verdict_with_findings_passes() -> None:
+    # Same `fail` row, but the reviewer correctly used `## Review Findings`.
+    body = _AUDIT_WITH_FAIL + (
+        "\n## Review Findings\n"
+        "| severity | file:line | fix |\n"
+        "| --- | --- | --- |\n"
+        "| HIGH | src/foo.py:42 | sanitize input |\n"
+    )
+    result = evaluate_contract(
+        producing_state="Review",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is True
+
+
+def test_review_missing_evidence_file_rewinds(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    # Audit cites src/foo.py:42 but no such file exists under docs_root.
+    body = _AUDIT_WITH_FAIL + (
+        "\n## Review Findings\n"
+        "| severity | file:line | fix |\n"
+        "| --- | --- | --- |\n"
+        "| HIGH | src/foo.py:42 | sanitize input |\n"
+    )
+    result = evaluate_contract(
+        producing_state="Review",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is False
+    assert any("src/foo.py" in m for m in result.missing)
+
+
+def test_review_clean_pass_with_real_evidence_passes(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    (docs_root / "src").mkdir(parents=True)
+    (docs_root / "src" / "foo.py").write_text("# real file")
+    # Findings cite a path:line that DOES exist -> no fabricated citation.
+    body = _AUDIT_ALL_PASS + (
+        "\n## Review Findings\n"
+        "| severity | file:line | fix |\n"
+        "| --- | --- | --- |\n"
+        "| LOW | src/foo.py:1 | tidy import |\n"
+    )
+    result = evaluate_contract(
+        producing_state="Review",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_review_clean_pass_with_na_evidence_passes() -> None:
+    # `n/a` evidence cells must never be treated as cited paths, even
+    # with a docs_root absent — a clean pass stays clean.
+    body = _AUDIT_ALL_PASS + "\n## Review\nchore — diff matches plan\n"
+    result = evaluate_contract(
+        producing_state="Review",
+        ticket_body=body,
+        identifier="SMA-1",
+    )
+    assert result.passed is True
+
+
+def test_qa_missing_evidence_file_rewinds(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    # Scorecard cites an evidence log that does not exist under docs_root.
+    body = """
+## QA Evidence
+- ran pytest -q, exit 0
+
+## AC Scorecard
+| signal | source | result | evidence |
+| --- | --- | --- | --- |
+| version bumped | pyproject.toml | pass | SMA-1/qa/version.log |
+"""
+    result = evaluate_contract(
+        producing_state="QA",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is False
+    assert any("SMA-1/qa/version.log" in m for m in result.missing)
+
+
+def test_qa_scorecard_fail_row_warns_without_rewind(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
+    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    (docs_root / "SMA-1" / "qa" / "ac2.log").write_text("ok")
+    # One scorecard row is `fail`, but its evidence file is real. The fail
+    # ships SOFT this release: a warning, not a rewind (passed stays True).
+    body = """
+## QA Evidence
+- ran pytest -q
+
+## AC Scorecard
+| signal | source | result | evidence |
+| --- | --- | --- | --- |
+| version bumped | pyproject.toml | pass | SMA-1/qa/version.log |
+| handles empty input | test_edge | fail | SMA-1/qa/ac2.log |
+"""
+    result = evaluate_contract(
+        producing_state="QA",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is True
+    assert result.missing == []
+    assert result.warnings
+    assert any("handles empty input" in w for w in result.warnings)
+    assert "[contract-warn]" in result.warning_note
 
 
 # ---------------------------------------------------------------------------

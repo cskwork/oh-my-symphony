@@ -19,4 +19,5 @@ Turn Explore into a plan the next agent can execute by reading only `## Plan`. D
    - first failing test, verification commands, and required evidence,
    - acceptance criteria, user-visible behavior, rollback/risk notes.
    Replace any vague bullet ("wire it up", "handle errors") with concrete files, commands, states, or payloads.
-5. Transition state to `In Progress`. In Progress must read this `## Plan` before editing code.
+5. Post `## Difficulty` (right after the `## Plan` / Done Signals) — exactly one of `trivial` / `standard` / `complex`, plus a one-line rationale (cap 2 lines total). This declares how much of the pipeline the issue needs: `trivial` lets a non-`bug` issue with no runtime-behavior change skip Critic and QA; `standard` / `complex` run the full loop. Omitting `## Difficulty` defaults to `standard`. Pick `trivial` only for a single-spot edit the visible tests already cover; when in doubt choose `standard`.
+6. Transition state to `In Progress`. In Progress must read this `## Plan` before editing code.

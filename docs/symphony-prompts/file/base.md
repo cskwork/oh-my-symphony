@@ -66,7 +66,11 @@ Then the stage body, within these caps. Overflow goes to
 | `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
 | `## Acceptance Tests`   | ≤ 10 lines (1 bullet per AC)           | per-test setup / fixtures           |
 | `## Done Signals`       | ≤ 8 lines (1 bullet per signal)        | full payload bodies, long curl logs |
+| `## Difficulty`         | ≤ 2 lines (verdict + 1-line rationale) | n/a                                 |
 | `## Implementation`     | ≤ 10 lines                             | per-file change list, helper names  |
+| `## Pipeline Route`     | 1 line (route + why any stage skipped) | n/a                                 |
+| `## Surfaced Requirements` | ≤ 8 lines (1 bullet per requirement) | full rationale per requirement       |
+| `## Critic Tests`       | ≤ 8 lines (1 test signature per line)  | full failing-test output             |
 | `## Security Audit`     | exactly 7 rows (1 per check, no spillover) | per-check reasoning, suppression rationale |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
@@ -116,7 +120,11 @@ Then the stage body, within these caps. Overflow goes to
 | `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
 | `## Acceptance Tests`   | ≤ 10 lines (1 bullet per AC)           | per-test setup / fixtures           |
 | `## Done Signals`       | ≤ 8 lines (1 bullet per signal)        | full payload bodies, long curl logs |
+| `## Difficulty`         | ≤ 2 lines (verdict + 1-line rationale) | n/a                                 |
 | `## Implementation`     | ≤ 10 lines                             | per-file change list, helper names  |
+| `## Pipeline Route`     | 1 line (route + why any stage skipped) | n/a                                 |
+| `## Surfaced Requirements` | ≤ 8 lines (1 bullet per requirement) | full rationale per requirement       |
+| `## Critic Tests`       | ≤ 8 lines (1 test signature per line)  | full failing-test output             |
 | `## Security Audit`     | exactly 7 rows (1 per check, no spillover) | per-check reasoning, suppression rationale |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |

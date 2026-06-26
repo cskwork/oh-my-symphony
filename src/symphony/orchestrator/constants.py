@@ -47,6 +47,7 @@ WAIT_AGE_BUMP_MIN = 10.0
 # `normalize_state` lowercases its input, so compare in lowercase.
 _REWIND_TRANSITIONS = frozenset(
     {
+        ("critic", "in progress"),
         ("review", "in progress"),
         ("qa", "in progress"),
         ("in progress", "plan"),

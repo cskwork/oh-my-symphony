@@ -3,7 +3,7 @@ tracker:
   kind: linear
   project_slug: my-team-project
   api_key: $LINEAR_API_KEY
-  active_states: [Todo, Explore, Plan, "In Progress", Review, QA, Learn]
+  active_states: [Todo, Explore, Plan, "In Progress", Critic, Review, QA, Learn]
   terminal_states: [Closed, Cancelled, Canceled, Duplicate, "Human Review", Done, Archive]
   # Auto-archive sweep — terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on each poll tick.
@@ -17,6 +17,7 @@ tracker:
     Explore: "Brief from docs/llm-wiki + git + code"
     Plan: "Lock the implementation plan"
     "In Progress": "TDD loop, draft PR"
+    Critic: "Fresh agent writes failing tests for spec gaps"
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "Execute real code, capture evidence"
     Learn: "Distill learnings, update docs/llm-wiki"
@@ -330,6 +331,7 @@ prompts:
     Explore: ./docs/symphony-prompts/linear/stages/explore.md
     Plan: ./docs/symphony-prompts/linear/stages/plan.md
     "In Progress": ./docs/symphony-prompts/linear/stages/in-progress.md
+    Critic: ./docs/symphony-prompts/linear/stages/critic.md
     Review: ./docs/symphony-prompts/linear/stages/review.md
     QA: ./docs/symphony-prompts/linear/stages/qa.md
     Learn: ./docs/symphony-prompts/linear/stages/learn.md

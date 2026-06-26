@@ -36,6 +36,7 @@ STAGE_HEADINGS_BY_STATE = {
     "Explore": "### EXPLORE",
     "Plan": "### PLAN",
     "In Progress": "### IMPLEMENT",
+    "Critic": "### CRITIC",
     "Review": "### REVIEW",
     "QA": "### QA",
     "Learn": "### LEARN",
@@ -79,6 +80,57 @@ QA_REWIND_RULES = (
     "QA Failure",
 )
 
+# Phrases the CRITIC stage must reference (shared across file + linear
+# flavors): an independent agent writes failing tests for spec gaps, must
+# not touch source or existing tests, records the durable ledger, and
+# carries the supergoal guardrail that the generated tests are a signal,
+# not the oracle.
+CRITIC_HARD_RULES = (
+    "did NOT write this code",
+    "NEW FAILING test",
+    "Surfaced Requirements",
+    "Critic Tests",
+    "surfaced-requirements.md",
+    "not the acceptance oracle",
+)
+
+# Critic outcomes (verb + section markup differ by flavor: file appends
+# `## ...` sections / "set state", linear posts comments / "transition
+# state"): gaps rewind to In Progress, a clean Critic outcome advances to
+# Review. Assert on the destination states only — flavor-agnostic.
+CRITIC_OUTCOME_RULES = (
+    "In Progress",
+    "Review",
+)
+
+# S3 difficulty gate (prompt-level branch, both flavors). Plan declares
+# `## Difficulty` (trivial/standard/complex, default standard); In Progress
+# routes trivial+non-bug straight to Review (skip Critic); Review routes
+# trivial + no-runtime-change to Learn (skip QA). Every elision is recorded
+# in a `## Pipeline Route` line — never silent. Hard safety rails: a `bug`
+# ticket never skips, and a `fail` Security Audit row forces the full route.
+PLAN_DIFFICULTY_RULES = (
+    "## Difficulty",
+    "trivial",
+    "standard",
+    "complex",
+    "defaults to `standard`",
+)
+
+IN_PROGRESS_DIFFICULTY_RULES = (
+    "## Difficulty: trivial",
+    "to `Review`",
+    "to `Critic`",
+    "## Pipeline Route",
+)
+
+REVIEW_DIFFICULTY_RULES = (
+    "## Difficulty: trivial",
+    "to `Learn`",
+    "to `QA`",
+    "## Pipeline Route",
+)
+
 DONE_REPORT_SHAPE = (
     "## As-Is -> To-Be Report",
     "### As-Is",
@@ -120,7 +172,16 @@ def _issue(state: str, **overrides) -> Issue:
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 def test_active_states_cover_full_pipeline(workflow: str) -> None:
     cfg = _load(workflow)
-    for required in ("Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn"):
+    for required in (
+        "Todo",
+        "Explore",
+        "Plan",
+        "In Progress",
+        "Critic",
+        "Review",
+        "QA",
+        "Learn",
+    ):
         assert required in cfg.tracker.active_states, (
             f"{workflow} active_states missing {required!r} — TUI lane will not render"
         )
@@ -136,7 +197,8 @@ def test_active_states_cover_full_pipeline(workflow: str) -> None:
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 @pytest.mark.parametrize(
-    "state", ["Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn", "Done"]
+    "state",
+    ["Todo", "Explore", "Plan", "In Progress", "Critic", "Review", "QA", "Learn", "Done"],
 )
 def test_prompt_renders_for_every_stage(workflow: str, state: str) -> None:
     cfg = _load(workflow)
@@ -193,6 +255,31 @@ def test_qa_server_reported_high_issues_rewind_to_in_progress(
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_critic_stage_writes_failing_tests_for_spec_gaps(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Critic"),
+        build_prompt_env(_issue("Critic"), attempt=None),
+    )
+    for phrase in CRITIC_HARD_RULES:
+        assert phrase in rendered, f"Critic stage missing hard rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_critic_stage_rewinds_or_advances(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Critic"),
+        build_prompt_env(_issue("Critic"), attempt=None),
+    )
+    # Both outcomes must be reachable: gaps -> In Progress, clean -> Review.
+    for phrase in CRITIC_OUTCOME_RULES:
+        assert phrase in rendered, f"Critic stage missing outcome state: {phrase!r}"
+    # Must not authorize editing source — that is the fixer's job on rewind.
+    assert "Do NOT edit source" in rendered or "do NOT edit source" in rendered
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 def test_explore_stage_consults_wiki_history_and_code(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(
@@ -233,6 +320,72 @@ def test_in_progress_uses_plan_as_primary_contract(workflow: str) -> None:
     assert "That plan should be enough to implement" in rendered
     assert "Use Explore notes, llm-wiki, or" in rendered
     assert "only as reference material" in rendered
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_plan_stage_declares_difficulty(workflow: str) -> None:
+    """S3: Plan must declare `## Difficulty` (trivial/standard/complex) so the
+    later stages can route; omitting it defaults to standard (backward-compat)."""
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Plan"),
+        build_prompt_env(_issue("Plan"), attempt=None),
+    )
+    for phrase in PLAN_DIFFICULTY_RULES:
+        assert phrase in rendered, f"Plan stage missing difficulty rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_in_progress_difficulty_branch_skips_critic_for_trivial(
+    workflow: str,
+) -> None:
+    """S3: trivial + non-bug routes In Progress -> Review (skip Critic); else
+    -> Critic. The elision is recorded in `## Pipeline Route` (never silent),
+    and a `bug` ticket may never skip the Critic+QA path."""
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("In Progress"),
+        build_prompt_env(_issue("In Progress"), attempt=None),
+    )
+    for phrase in IN_PROGRESS_DIFFICULTY_RULES:
+        assert phrase in rendered, (
+            f"In Progress stage missing difficulty branch: {phrase!r}"
+        )
+    # Safety rail: a bug ticket can never skip.
+    assert "bug" in rendered
+    assert "never skip" in rendered
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_review_difficulty_branch_skips_qa_for_trivial(workflow: str) -> None:
+    """S3: trivial + no runtime behavior change routes Review -> Learn (skip
+    QA); else -> QA. Records the route in `## Pipeline Route`. Hard rails: a
+    `bug` ticket never skips QA, and any `fail` Security Audit row forces the
+    full route."""
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Review"),
+        build_prompt_env(_issue("Review"), attempt=None),
+    )
+    for phrase in REVIEW_DIFFICULTY_RULES:
+        assert phrase in rendered, (
+            f"Review stage missing difficulty branch: {phrase!r}"
+        )
+    # Safety rails override difficulty.
+    assert "may never skip QA" in rendered
+    assert "Security Audit" in rendered
+    assert "forces the full route" in rendered
+
+
+@pytest.mark.parametrize("flavor", ("file",))
+def test_base_prompt_caps_difficulty_and_pipeline_route(flavor: str) -> None:
+    """S3: base.md must length-cap the two new sections so they cannot bloat
+    the ticket (Difficulty <= 2 lines, Pipeline Route a single line)."""
+    text = (REPO_ROOT / "docs" / "symphony-prompts" / flavor / "base.md").read_text(
+        encoding="utf-8"
+    )
+    assert "## Difficulty" in text
+    assert "## Pipeline Route" in text
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

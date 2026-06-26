@@ -17,8 +17,10 @@ tracker:
   # Jira's stock workflow uses "To Do" / "In Progress" / "Done". Tune
   # these to match your project's actual workflow statuses — the names
   # are inserted verbatim into the JQL `status in (...)` clause and
-  # matched case-insensitively when resolving transitions.
-  active_states: ["To Do", "In Progress", "In Review"]
+  # matched case-insensitively when resolving transitions. "Critic" is the
+  # independent failing-test stage between In Progress and Review; add the
+  # matching status to your Jira workflow or drop it from this list.
+  active_states: ["To Do", "In Progress", "Critic", "In Review"]
   terminal_states: ["Done", "Cancelled"]
   # Auto-archive sweep — terminal-state issues older than archive_after_days
   # transition to archive_state. Set to 0 to disable. The target state must

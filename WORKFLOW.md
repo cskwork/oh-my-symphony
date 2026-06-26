@@ -2,7 +2,7 @@
 tracker:
   kind: file
   board_root: ./kanban
-  active_states: [Todo, Explore, Plan, "In Progress", Review, QA, Learn]
+  active_states: [Todo, Explore, Plan, "In Progress", Critic, Review, QA, Learn]
   terminal_states: ["Human Review", Done, Cancelled, Blocked, Archive]
   # Auto-archive sweep: terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on the next poll.
@@ -16,6 +16,7 @@ tracker:
     Explore: "Brief from llm-wiki + git + code"
     Plan: "Lock implementation plan"
     "In Progress": "TDD loop, draft branch"
+    Critic: "Fresh agent writes failing tests for spec gaps"
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "pytest -q + real-CLI smoke"
     Learn: "Distill learnings, update llm-wiki"
@@ -362,6 +363,7 @@ prompts:
     Explore: ./docs/symphony-prompts/file/stages/explore.md
     Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Critic: ./docs/symphony-prompts/file/stages/critic.md
     Review: ./docs/symphony-prompts/file/stages/review.md
     QA: ./docs/symphony-prompts/file/stages/qa.md
     Learn: ./docs/symphony-prompts/file/stages/learn.md

@@ -174,6 +174,8 @@ Symphony's host repo and the workspace monorepo are siblings. Claude Code's defa
 ## 7. References
 
 - `references/workflow-template.md` — annotated WORKFLOW.md skeleton with hooks
-- `references/claude-command-options.md` — every claude.command flag explained
-- `references/worktree-hooks.md` — full hook recipes (`before_run`, `after_run`)
 - `scripts/setup-monorepo.sh` — the bootstrap script
+
+The `claude.command` flags are documented inline in §4; the worktree
+`after_create`/`before_run`/`after_run` hook recipes are in §3 and in
+`references/workflow-template.md`.

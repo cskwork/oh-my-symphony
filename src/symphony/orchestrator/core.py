@@ -1667,6 +1667,25 @@ class Orchestrator:
                                         running_entry.issue = issue
                                     current_state = normalize_state(issue.state)
                                     is_rewind = True
+                                elif contract.warnings:
+                                    # Soft S2 advisories (e.g. a non-passing AC
+                                    # Scorecard row): surface as a ticket note
+                                    # without rewinding so the pipeline proceeds.
+                                    log.warning(
+                                        "stage_contract_warn",
+                                        issue_id=issue.id,
+                                        identifier=issue.identifier,
+                                        producing_state=prev_phase_state,
+                                        advanced_to=current_state,
+                                        warnings=contract.warnings,
+                                    )
+                                    await asyncio.to_thread(
+                                        self._tracker_call_append_note,
+                                        cfg,
+                                        issue,
+                                        "Contract Warning",
+                                        contract.warning_note.split("\n", 1)[1],
+                                    )
                             if is_rewind:
                                 debug = self._issue_debug.setdefault(
                                     running_issue_id, _IssueDebug()

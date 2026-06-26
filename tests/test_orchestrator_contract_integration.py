@@ -100,6 +100,18 @@ def _has_contract_failure_heading(body: str) -> bool:
     return _CONTRACT_FAILURE_HEADING_RE.search(body) is not None
 
 
+_CONTRACT_WARNING_HEADING_RE = re.compile(r"^##\s+Contract\s+Warning\s*$", re.MULTILINE)
+
+
+def _has_contract_warning_heading(body: str) -> bool:
+    """True when a `## Contract Warning` HEADING anchors a line.
+
+    The soft S2 path appends this note (no rewind) when a stage passes the
+    presence + evidence contract but an AC Scorecard row is non-passing.
+    """
+    return _CONTRACT_WARNING_HEADING_RE.search(body) is not None
+
+
 _PLAN_BODY_COMPLETE = """## Plan
 
 Step 1 — wire the new validator into the forward-transition path.
@@ -125,6 +137,23 @@ Step 1 — wire the new validator into the forward-transition path.
 ## Acceptance Tests
 
 - existing phase-transition tests stay green
+"""
+
+
+# QA body that satisfies the presence + evidence contract (evidence cells
+# are `n/a`, so the hard path-existence check is a no-op) but carries a
+# non-passing AC Scorecard row — the soft S2 warning path: a
+# `## Contract Warning` note is appended and the ticket still advances.
+_QA_BODY_SCORECARD_FAIL = """## QA Evidence
+
+- booted the service and replayed the acceptance payloads
+
+## AC Scorecard
+
+| signal | source | result | evidence |
+|--------|--------|--------|----------|
+| happy path returns 200 | curl | pass | n/a |
+| edge case rejects bad input | curl | fail | n/a |
 """
 
 
@@ -484,4 +513,56 @@ def test_contract_fails_when_disk_missing_sections(
     assert final_front["state"] == "Plan", (
         "Contract guard did not rewind the ticket back to Plan after a "
         f"failed contract. Final state was {final_front['state']!r}."
+    )
+
+
+def test_qa_scorecard_fail_warns_without_rewind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Soft S2 warning path end-to-end against a real FileBoardTracker.
+
+    A QA ticket that passes the presence + evidence contract but carries a
+    ``fail`` AC Scorecard row must NOT rewind. The orchestrator's
+    ``elif contract.warnings:`` branch appends a ``## Contract Warning``
+    note and lets the ticket advance past QA. The contracts-layer unit
+    tests cover ``_scorecard_all_pass``; this guards the orchestrator
+    wiring (the core.py branch) against the same stale-body / phantom
+    refresh class of bug the rewind tests above guard.
+    """
+    board_root = tmp_path / "board"
+    ticket_path = _write_initial_ticket(
+        board_root, state="QA", body=_QA_BODY_SCORECARD_FAIL
+    )
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("QA", "Learn"),
+        max_turns=2,
+    )
+
+    _install_file_tracker_backend(
+        monkeypatch,
+        ticket_path=ticket_path,
+        transitions=[("Learn", _QA_BODY_SCORECARD_FAIL)],
+    )
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    o = _orch(workspace_path)
+    issue = _make_issue_from_disk("QA", _QA_BODY_SCORECARD_FAIL)
+    _seed_running_entry(o, issue, workspace_path)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert _has_contract_warning_heading(final_body), (
+        "Soft scorecard warning did not append a ## Contract Warning "
+        "heading. Body was:\n" + final_body
+    )
+    assert not _has_contract_failure_heading(final_body), (
+        "Soft scorecard warning incorrectly escalated to a "
+        "## Contract Failure rewind."
+    )
+    assert final_front["state"] != "QA", (
+        "Soft scorecard warning incorrectly rewound the ticket instead of "
+        f"advancing past QA. Final state was {final_front['state']!r}."
     )
