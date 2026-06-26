@@ -4,6 +4,8 @@
 
 Execute real code against both builds and prove the diff works. Inspecting the diff is not QA.
 
+**Confirm runners exist before trusting results.** Before running any external runner (`playwright`, a boot command, a non-Python test runner), verify it is available (`npx playwright --version`, `command -v <tool>`). If a required runner is missing, install it via the project's standard manager when that is in scope, else transition state to `In Progress` (`Blocked` if unfixable) and post a `QA Failure` comment naming the missing tool — never record a scorecard pass for a check you could not execute.
+
 1. Read `docs/{{ issue.identifier }}/work/` and the latest Review / Review Findings comment for the intended delivery.
 
 2. Map the API surface from the diff: method, path, auth, request schema, response schema. Post as an `API Surface` comment. No API → jump to **Non-API fallbacks**.
@@ -24,7 +26,7 @@ Execute real code against both builds and prove the diff works. Inspecting the d
    - Write per-scenario diff to `docs/{{ issue.identifier }}/qa/diff/<scenario>.diff`. Confirm only the intended change — no surprise renames, leaked PII, broken unrelated scenarios, or status regressions on invalid/unauthorized rows.
    - Performance gate from `qa.regression_budget`: for each scenario where As-Is `latency_ms` ≥ `min_baseline_ms`, fail if To-Be `latency_ms` > `latency_factor × As-Is`. Record breach as `scenario | as-is ms | to-be ms | factor`. `latency_factor: 0` disables.
 
-7. Bug repro closure (`bug` label only): re-run `docs/{{ issue.identifier }}/reproduce/repro.spec.ts` against To-Be, save to `docs/{{ issue.identifier }}/qa/repro-after.log`; it must pass. Never skip.
+7. Bug repro closure (`bug` label only): re-run the reproduction authored at Todo under `docs/{{ issue.identifier }}/reproduce/` (whatever its extension) against To-Be, save to `docs/{{ issue.identifier }}/qa/repro-after.log`; it must pass. Never skip.
 
 8. Post a `QA Evidence` comment: payload data source (DB tool + query, or `synthesized from <schema file>`), boot recipe, exact commands with exit codes, a `scenario × {As-Is status, As-Is ms, To-Be status, To-Be ms, verdict}` matrix, the repro re-run line for `bug` tickets, and links under `docs/{{ issue.identifier }}/qa/`.
 
@@ -39,4 +41,4 @@ Execute real code against both builds and prove the diff works. Inspecting the d
 - Web UI: write a Playwright (or Cypress) spec at `docs/{{ issue.identifier }}/qa/e2e.spec.ts`; save traces, videos, HAR under `docs/{{ issue.identifier }}/qa/`.
 - CLI: run the command, assert exit code and stdout/stderr / file output, save to `docs/{{ issue.identifier }}/qa/cli.log`.
 
-Step 7 (bug repro closure) still applies in non-API mode if `reproduce/repro.spec.ts` exists.
+Step 7 (bug repro closure) still applies in non-API mode if a reproduction exists under `docs/{{ issue.identifier }}/reproduce/`.

@@ -71,10 +71,12 @@ Then the stage body, within these caps. Overflow goes to
 | `## Pipeline Route`     | 1 line (route + why any stage skipped) | n/a                                 |
 | `## Surfaced Requirements` | ≤ 8 lines (1 bullet per requirement) | full rationale per requirement       |
 | `## Critic Tests`       | ≤ 8 lines (1 test signature per line)  | full failing-test output             |
+| `## Critic Cap`         | ≤ 6 lines (1 open red per line)        | full failing-test output             |
 | `## Security Audit`     | exactly 7 rows (1 per check, no spillover) | per-check reasoning, suppression rationale |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
 | `## QA Evidence`        | header + commands + 1-line `**판정**` + AC table + AC Scorecard | raw pytest/curl/Playwright output |
+| `## QA Failure`         | ≤ 6 lines (1 regression / missing tool per line) | raw pytest/curl/Playwright output |
 | `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
 | `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
 | `## Human Review`       | ≤ 18 lines across all 6 sub-sections   | full evidence dump under docs/      |
@@ -125,10 +127,12 @@ Then the stage body, within these caps. Overflow goes to
 | `## Pipeline Route`     | 1 line (route + why any stage skipped) | n/a                                 |
 | `## Surfaced Requirements` | ≤ 8 lines (1 bullet per requirement) | full rationale per requirement       |
 | `## Critic Tests`       | ≤ 8 lines (1 test signature per line)  | full failing-test output             |
+| `## Critic Cap`         | ≤ 6 lines (1 open red per line)        | full failing-test output             |
 | `## Security Audit`     | exactly 7 rows (1 per check, no spillover) | per-check reasoning, suppression rationale |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
 | `## QA Evidence`        | header + commands + 1-line `**Verdict**` + AC table + AC Scorecard | raw pytest/curl/Playwright output |
+| `## QA Failure`         | ≤ 6 lines (1 regression / missing tool per line) | raw pytest/curl/Playwright output |
 | `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
 | `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
 | `## Human Review`       | ≤ 18 lines across all 6 sub-sections   | full evidence dump under docs/      |

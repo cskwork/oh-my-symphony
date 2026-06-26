@@ -8,7 +8,52 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — supergoal verification discipline + hardening
+
+Ports the `supergoal` skill's verification discipline into Symphony's per-stage
+pipeline, then hardens it so every promised mechanism is honest and enforced: a
+new independent Critic stage turns the prose spec into failing tests before
+review, content-checking gates assert artefacts are real (not just that headings
+are present), and a difficulty gate keeps the heavy loop off trivial tickets.
+Backward-compatible: the new gates no-op on existing non-bug / clean-Critic
+boards, and a ticket without `## Difficulty` keeps the full loop.
+
+### Added
+
+- **Critic stage** between In Progress and Review (data-driven `active_states`
+  addition, no `core.py` rewrite): a fresh-context agent enumerates required
+  behaviors the builder's tests miss and writes one failing test per gap,
+  recording them in a durable `docs/<id>/critic/surfaced-requirements.md` ledger
+  before rewinding to In Progress for the fix.
+- **Content-checking contract gates** (`evaluate_contract`): cited evidence
+  paths in the QA scorecard / Review security audit must exist on disk; a `fail`
+  security-audit row cannot coexist with a clean Review; a bug ticket's populated
+  `reproduce/` dir must be closed by `qa/repro-after.log`; a Critic rewind must
+  persist its ledger file. Missing artefacts rewind the producing stage instead
+  of passing on a hollow heading.
+- **Difficulty gate**: Plan declares `## Difficulty: trivial|standard|complex`;
+  a `trivial` non-bug ticket with no runtime change skips Critic and QA, and the
+  route is always recorded in `## Pipeline Route` (never silent).
+- **Skill contract tests** (`tests/skills/`) and a **scenario-proof suite**
+  (`tests/test_supergoal_hardening_loop.py`) that walks a bug ticket through the
+  full critic → fix → review → QA loop, asserting each gate fires and clears.
+
+### Changed
+
+- **Bug reproduction is language-agnostic**: the reproduction authored at Todo
+  and re-run at QA is the project's own test framework (pytest / go test / …),
+  not a hardcoded Playwright `.spec.ts`.
+- **QA confirms a runner exists before trusting it**: before running playwright /
+  a boot command / a non-Python runner, QA verifies availability and fails with
+  `## QA Failure` rather than recording a scorecard pass it never executed.
+
+### Fixed
+
+- **Critic bounded-loop claim corrected**: the prompt and spec said the 3-cycle
+  cap was "enforced by S2's gate counting `## Critic` rewinds" — it was not (the
+  gate counts nothing). The Critic now counts prior `## Surfaced Requirements`
+  cycles itself and escalates to `Blocked` with `## Critic Cap` on the 3rd, with
+  the shared `cfg.agent.max_attempts` budget as the hard backstop.
 
 ## [0.7.2] — 2026-06-10 — agent-terse workflow prompts + token-budget directive
 
