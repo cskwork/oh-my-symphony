@@ -23,6 +23,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import traceback
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -62,6 +63,7 @@ from ..workflow import (
 from ..utils.auto_merge import AutoMergeResult
 from ..workspace import WorkspaceManager
 from .constants import (
+    ARCHIVE_SWEEP_INTERVAL_SEC,
     AUTO_TRIAGE_NOTE,
     AUTO_TRIAGE_TARGET_STATE,
     CONTINUATION_RETRY_DELAY_MS,
@@ -117,6 +119,10 @@ class Orchestrator:
         # housekeeping nudge, not a correctness gate). Wraparound at
         # `sys.maxsize` is a non-issue at any realistic ticket throughput.
         self._done_count: int = 0
+        # Throttle the per-tick auto-archive sweep to a multi-minute cadence
+        # (ARCHIVE_SWEEP_INTERVAL_SEC). Monotonic clock so a wall-clock jump
+        # can't wedge it; None = never swept, so the first tick sweeps once.
+        self._last_archive_sweep_monotonic: float | None = None
         self._turn_budget_exhausted: set[str] = set()
         # G3 — wait-age dispatch bump. Each id leaves `_claimed` via the G1
         # prune block; record the moment it left so the sort can promote
@@ -805,7 +811,14 @@ class Orchestrator:
                 continue
             self._dispatch(issue, cfg, attempt=None)
 
-        await self._archive_sweep(cfg)
+        now_monotonic = time.monotonic()
+        if (
+            self._last_archive_sweep_monotonic is None
+            or now_monotonic - self._last_archive_sweep_monotonic
+            >= ARCHIVE_SWEEP_INTERVAL_SEC
+        ):
+            self._last_archive_sweep_monotonic = now_monotonic
+            await self._archive_sweep(cfg)
 
         await self._notify_observers()
 
