@@ -17,6 +17,7 @@ import signal
 import sys
 from pathlib import Path
 
+from .. import __version__
 from ..errors import SymphonyError
 from ..utils import wiki_sweep as wiki_sweep
 from ..utils.keep_awake import KeepAwake
@@ -31,6 +32,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="symphony",
         description="Symphony multi-agent — Codex / Claude Code / Gemini orchestration.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"symphony {__version__}",
     )
     parser.add_argument(
         "workflow",

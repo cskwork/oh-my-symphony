@@ -147,3 +147,19 @@ def test_unknown_subcommand_is_treated_as_workflow_path(
     assert rc == 0
     # The first token reaches argparse as the positional workflow arg.
     assert str(captured["workflow"]).endswith("my-workflow.md")
+
+
+def test_version_flag_prints_version_and_exits_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`symphony --version` prints `symphony <version>` and exits 0.
+
+    argparse's version action prints to stdout and raises SystemExit(0) inside
+    `parse_args` — before the orchestrator path — so no event loop ever starts.
+    """
+    from symphony import __version__
+
+    with pytest.raises(SystemExit) as exc:
+        cli_main_mod.main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"symphony {__version__}"

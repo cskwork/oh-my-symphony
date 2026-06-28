@@ -45,7 +45,7 @@ elif command -v symphony >/dev/null 2>&1; then
   SYMPHONY="$(command -v symphony)"
 else
   echo "tui-open: 'symphony' not found on PATH and no .venv/bin/symphony" >&2
-  echo "tui-open: install with: python3.11 -m venv .venv && .venv/bin/pip install -e ." >&2
+  echo "tui-open: install with: python3 -m venv .venv && .venv/bin/pip install -e ." >&2
   exit 3
 fi
 

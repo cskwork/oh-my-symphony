@@ -177,3 +177,45 @@ async def test_archive_sweep_swallows_per_issue_failures(monkeypatch) -> None:
     await orch._archive_sweep(cfg)
     # B should have been archived even though A failed.
     assert moved == ["B"]
+
+
+@pytest.mark.asyncio
+async def test_archive_sweep_throttled_across_ticks(monkeypatch) -> None:
+    """The per-tick archive sweep is gated to ARCHIVE_SWEEP_INTERVAL_SEC.
+
+    Re-scanning the whole terminal board every poll tick is wasted work for a
+    day-granular threshold, so `_on_tick` sweeps on the first tick, skips an
+    immediate second tick, and sweeps again only once the interval elapses.
+    """
+    from symphony.orchestrator.constants import ARCHIVE_SWEEP_INTERVAL_SEC
+
+    cfg = _cfg(archive_after_days=30)
+    state = WorkflowState(Path("/tmp/no.md"))
+    orch = Orchestrator(state)
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+
+    sweeps = 0
+
+    async def _count_sweep(_cfg: ServiceConfig) -> None:
+        nonlocal sweeps
+        sweeps += 1
+
+    async def _noop_reconcile(_cfg: ServiceConfig) -> None:
+        return None
+
+    async def _no_candidates(_cfg: ServiceConfig) -> list[Issue]:
+        return []
+
+    monkeypatch.setattr(orch, "_archive_sweep", _count_sweep)
+    monkeypatch.setattr(orch, "_reconcile_running", _noop_reconcile)
+    monkeypatch.setattr(orch, "_fetch_candidates", _no_candidates)
+
+    await orch._on_tick()
+    await orch._on_tick()
+    assert sweeps == 1  # second tick gated by the interval
+
+    # Rewind the marker past the interval -> the next tick sweeps again.
+    assert orch._last_archive_sweep_monotonic is not None
+    orch._last_archive_sweep_monotonic -= ARCHIVE_SWEEP_INTERVAL_SEC + 1.0
+    await orch._on_tick()
+    assert sweeps == 2

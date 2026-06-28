@@ -23,6 +23,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import traceback
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -62,6 +63,7 @@ from ..workflow import (
 from ..utils.auto_merge import AutoMergeResult
 from ..workspace import WorkspaceManager
 from .constants import (
+    ARCHIVE_SWEEP_INTERVAL_SEC,
     AUTO_TRIAGE_NOTE,
     AUTO_TRIAGE_TARGET_STATE,
     CONTINUATION_RETRY_DELAY_MS,
@@ -117,7 +119,19 @@ class Orchestrator:
         # housekeeping nudge, not a correctness gate). Wraparound at
         # `sys.maxsize` is a non-issue at any realistic ticket throughput.
         self._done_count: int = 0
+        # Throttle the per-tick auto-archive sweep to a multi-minute cadence
+        # (ARCHIVE_SWEEP_INTERVAL_SEC). Monotonic clock so a wall-clock jump
+        # can't wedge it; None = never swept, so the first tick sweeps once.
+        self._last_archive_sweep_monotonic: float | None = None
         self._turn_budget_exhausted: set[str] = set()
+        # Tickets whose worker-exit handler is mid-flight. `_on_worker_exit`
+        # adds the id on entry and clears it in a `finally`, so from the moment
+        # a worker leaves `_running` until its terminal-state persist (or retry
+        # enqueue) finishes the ticket stays ineligible and counts as in-flight
+        # for the G1 `_claimed` prune. Without it the `await`s inside the exit
+        # body yield to a poll tick that re-dispatches the still-active ticket.
+        # See docs/improvements/dispatch-double-dispatch-race-2026-06-28.md.
+        self._terminal_persist_pending: set[str] = set()
         # G3 — wait-age dispatch bump. Each id leaves `_claimed` via the G1
         # prune block; record the moment it left so the sort can promote
         # candidates older than `WAIT_AGE_BUMP_MIN` ahead of FIFO. Entries
@@ -749,7 +763,9 @@ class Orchestrator:
         # `_running ∪ _retry` lets the next tick re-evaluate eligibility
         # against the live tracker state — Blocked tickets stay skipped via
         # `_eligible`'s active-state check; recovered tickets dispatch.
-        in_flight_ids = set(self._running) | set(self._retry)
+        in_flight_ids = (
+            set(self._running) | set(self._retry) | self._terminal_persist_pending
+        )
         stale_claimed = self._claimed - in_flight_ids
         if stale_claimed:
             log.info(
@@ -805,7 +821,14 @@ class Orchestrator:
                 continue
             self._dispatch(issue, cfg, attempt=None)
 
-        await self._archive_sweep(cfg)
+        now_monotonic = time.monotonic()
+        if (
+            self._last_archive_sweep_monotonic is None
+            or now_monotonic - self._last_archive_sweep_monotonic
+            >= ARCHIVE_SWEEP_INTERVAL_SEC
+        ):
+            self._last_archive_sweep_monotonic = now_monotonic
+            await self._archive_sweep(cfg)
 
         await self._notify_observers()
 
@@ -968,6 +991,8 @@ class Orchestrator:
         if issue.id in self._paused_issue_ids:
             return False
         if issue.id in self._turn_budget_exhausted:
+            return False
+        if issue.id in self._terminal_persist_pending:
             return False
         active = {s.lower() for s in cfg.tracker.active_states}
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
@@ -2483,6 +2508,22 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _on_worker_exit(self, issue_id: str, reason: str, error: str | None) -> None:
+        # Treat the whole exit handler as in-flight. From the moment a worker
+        # leaves `_running` until its terminal-state persist (or retry enqueue)
+        # finishes, the ticket must stay ineligible: the `await`s inside the
+        # body (auto-commit, the async budget persist) each yield to a poll tick
+        # that would otherwise prune the in-tick `_claimed` lock and re-dispatch
+        # the still-active ticket. See docs/improvements/
+        # dispatch-double-dispatch-race-2026-06-28.md.
+        self._terminal_persist_pending.add(issue_id)
+        try:
+            await self._on_worker_exit_impl(issue_id, reason, error)
+        finally:
+            self._terminal_persist_pending.discard(issue_id)
+
+    async def _on_worker_exit_impl(
+        self, issue_id: str, reason: str, error: str | None
+    ) -> None:
         # INFO-level entry marker — pairs with `worker_finally_entered`.
         # If `worker_finally_entered` is in the log but this is missing,
         # the outer finally's `await self._on_worker_exit(...)` was

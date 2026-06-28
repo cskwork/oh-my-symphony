@@ -47,7 +47,8 @@ a Jira-style TUI you never have to leave your terminal for.
   backends and the TUI.
 - **Operator-grade tooling out of the box.** `symphony doctor` catches the
   five most common first-run failures (port collisions, missing CLIs,
-  placeholder URLs, unwritable workspaces) in one pass. `symphony service
+  placeholder URLs, unwritable workspaces, missing board directories) in one
+  pass. `symphony service
   start/stop/restart/logs` runs the orchestrator as a managed background
   service. A web viewer adds **Pause / Resume** for running cards and a real
   branch-picker for feature / merge branches.
@@ -87,7 +88,7 @@ a Jira-style TUI you never have to leave your terminal for.
 │  blocked by D…   │                                                                                 ╰─────────────────────────────────╯
 ╰──────────────────╯
 
-q quit · r refresh · enter details · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · / filter · ?
+q quit · r refresh · enter details · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · c confirm done · P pause/resume · / filter · ?
 ```
 
 </details>
@@ -589,6 +590,17 @@ Key bindings (also auto-listed in the footer):
 | `b` / `pgup`       | Page up                                      |
 | `g` / `home`       | Jump to top                                  |
 | `G` / `end`        | Jump to bottom                               |
+| `1`–`9` / `0`      | Zoom that lane (others shrink) / reset zoom  |
+| `t` / `T`          | Page lanes forward / back                    |
+| `+` / `-`          | Grow / shrink the visible-lane window        |
+| `d`                | Toggle card density (compact / full)         |
+| `p`                | Toggle the detail pane                        |
+| `]` / `[`          | Park focus in the detail pane / back to board|
+| `L`                | Cycle TUI + doc language                      |
+| `a`                | Archive the focused card                     |
+| `c`                | Confirm a Done-gated card (clears manual gate)|
+| `P`                | Pause / resume the focused running worker    |
+| `/`                | Open the filter prompt                       |
 | `enter`            | Open the focused card's full-detail modal    |
 | `esc` / `q`        | Close the modal (when one is open)           |
 

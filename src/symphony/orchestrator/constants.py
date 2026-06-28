@@ -27,6 +27,14 @@ RETRY_BASE_MS = 10_000  # §8.4
 # board. The cancel is still issued; this just stops the slot from leaking.
 STALL_FORCE_EJECT_GRACE_S = 30.0
 
+# Minimum wall-clock interval between auto-archive sweeps. The sweep is
+# day-granular (`archive_after_days`, default 30), so re-scanning the whole
+# terminal board on every poll tick is wasted work — a multi-minute cadence
+# still archives a newly-stale ticket well within its threshold. This is an
+# internal cadence, not a user policy: the `archive_after_days <= 0` disable
+# still wins, and the first tick after start always sweeps once.
+ARCHIVE_SWEEP_INTERVAL_SEC = 300.0
+
 # G2 — empty-response loop guard. Three consecutive `EVENT_TURN_COMPLETED`
 # events whose turn produced no fresh preview text trigger the escalation
 # path (`empty_response_loop` budget kind). The threshold is conservative

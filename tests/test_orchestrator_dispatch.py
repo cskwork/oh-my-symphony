@@ -4047,3 +4047,93 @@ async def test_reload_refreshes_reuse_policy_and_hook_env_alongside_workflow_dir
     await orch._workspace_manager.create_or_reuse("MT-WFDIR")
     second_lines = snapshot.read_text().splitlines()
     assert second_lines == [expected_line, expected_line]
+
+
+def test_max_turns_exhaustion_does_not_double_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A ticket that exhausts per-attempt max_turns must not be re-dispatched
+    while its budget_exhausted_state transition is still being persisted.
+
+    Reproduces the live run-path race in
+    docs/improvements/dispatch-double-dispatch-race-2026-06-28.md: the exit
+    path pops the worker from `_running` and then awaits the async persist of
+    the blocked state. Before the fix, a poll tick firing in that window pruned
+    the in-tick `_claimed` lock (the ticket is no longer in-flight) and saw the
+    still-active ticket as a fresh candidate, dispatching a second worker.
+    """
+    import asyncio
+    import threading
+
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Done", "Cancelled", "Blocked"),
+        auto_triage_actionable_todo=False,
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    issue = _issue("MT-1", state="Todo")
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=tmp_path,
+    )
+    entry.hit_max_turns = True
+    orch._running[issue.id] = entry
+
+    # Park the exit path inside its persist await: the tracker write blocks on
+    # a threading.Event so a tick can race it deterministically.
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_update(_cfg: object, _iss: object, _target: object) -> None:
+        started.set()
+        assert release.wait(5.0), "persist tracker write never released"
+
+    monkeypatch.setattr(orch, "_tracker_call_update_state", _blocking_update)
+    monkeypatch.setattr(orch, "_tracker_call_append_note", lambda *a, **k: None)
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        orch, "_dispatch", lambda iss, c, attempt=None: dispatched.append(iss.id)
+    )
+
+    async def _noop(_cfg: object) -> None:
+        return None
+
+    async def _candidates(_cfg: object) -> list[Issue]:
+        return [issue]
+
+    monkeypatch.setattr(orch, "_reconcile_running", _noop)
+    monkeypatch.setattr(orch, "_archive_sweep", _noop)
+    monkeypatch.setattr(orch, "_fetch_candidates", _candidates)
+
+    async def _run() -> None:
+        exit_task = asyncio.create_task(
+            orch._on_worker_exit(issue.id, "normal", None)
+        )
+        # Wait (bounded) until the persist's tracker write is in flight.
+        for _ in range(500):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set(), "exit path never reached the budget persist"
+        # The exit handler holds the ticket ineligible for its whole duration
+        # (entry -> auto-commit -> persist), so the guard is set here.
+        assert issue.id in orch._terminal_persist_pending
+        # Fire a poll tick while the blocked-state transition is mid-persist.
+        await orch._on_tick()
+        release.set()
+        await exit_task
+
+    asyncio.run(_run())
+
+    assert dispatched == [], (
+        "ticket was re-dispatched while its terminal-state persist was in "
+        "flight (double-dispatch race)"
+    )

@@ -55,6 +55,46 @@ boards, and a ticket without `## Difficulty` keeps the full loop.
   cycles itself and escalates to `Blocked` with `## Critic Cap` on the 3rd, with
   the shared `cfg.agent.max_attempts` budget as the hard backstop.
 
+### Added
+
+- **`symphony --version`** prints the package version and exits 0. Previously
+  the flag errored with `unrecognized arguments: --version`. (`cli/main.py`,
+  regression test in `test_cli_main_routing.py`.)
+
+### Fixed
+
+- **Launcher install hint** in `tui-open.sh` suggested `python3.11 -m venv`,
+  which fails `command not found` on hosts that ship only the declared 3.12+
+  floor (pyproject, CI matrix, README badge, and bootstrapping docs are all
+  3.12). Changed the hint to `python3`.
+- **README key-binding docs** were missing the load-bearing `c` (confirm a
+  Done-gated card) and `P` (pause/resume) bindings in both the key table and
+  the footer mockup — `c` clears the manual Done gate, so its absence could
+  strand a reader. The `doctor` "five first-run failures" summary also
+  enumerated only four. Both now match the running app (`tui/app.py`) and the
+  doctor's own later enumeration.
+- **Double-dispatch race on per-attempt `max_turns` exhaustion** (found by the
+  live run-path smoke, root-caused in
+  `docs/improvements/dispatch-double-dispatch-race-2026-06-28.md`). The
+  worker-exit handler popped the worker from `_running` and then `await`ed
+  auto-commit and the async `budget_exhausted_state` persist; a poll tick
+  firing in that window pruned the in-tick `_claimed` lock and re-dispatched
+  the still-active ticket, producing a second worker and a `git index.lock`
+  collision. `_on_worker_exit` now holds the ticket in a
+  `_terminal_persist_pending` in-flight set for its whole duration, so it stays
+  ineligible until its terminal state is durably written. The live smoke now
+  shows exactly one dispatch and one worker exit. (`orchestrator/core.py`,
+  regression test in `test_orchestrator_dispatch.py`.)
+
+### Changed
+
+- **Auto-archive sweep throttled** to a 5-minute cadence
+  (`ARCHIVE_SWEEP_INTERVAL_SEC`) instead of a full terminal-board rescan on
+  every poll tick. Archivability is day-granular (`archive_after_days`,
+  default 30), so the per-tick rescan was wasted work; the `archive_after_days
+  <= 0` disable still wins and the first tick after start always sweeps once.
+  (`orchestrator/core.py`, regression test in `test_orchestrator_archive.py`.)
+
 ## [0.7.2] — 2026-06-10 — agent-terse workflow prompts + token-budget directive
 
 Prompt-cost release. All 18 stage templates under
