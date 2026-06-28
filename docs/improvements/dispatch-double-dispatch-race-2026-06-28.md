@@ -1,6 +1,8 @@
 # Double-dispatch race on `max_turns` exhaustion (2026-06-28)
 
-Status: **root-caused, fix deferred pending approach decision.**
+Status: **FIXED** (approach A, see below) — verified by the live run-path smoke
+(exactly one dispatch, one worker exit, zero `index.lock` collisions) plus a
+regression test in `test_orchestrator_dispatch.py`.
 Severity: non-fatal but real — a ticket that exhausts its per-attempt
 `max_turns` ceiling can be dispatched a second time while its terminal-state
 transition is still being persisted. The ticket still settles correctly in the
@@ -115,10 +117,23 @@ A regression test should drive `_on_tick`/`_on_worker_exit` with a tracker whose
 does **not** re-dispatch the ticket, then release and assert a single terminal
 transition.
 
-## Why it was not fixed in the same pass
+## Fix applied (approach A)
 
-It sits in the dispatch/exit path that has repeatedly produced subtle
-regressions (slot leaks, stranded tickets). It is non-fatal and config-amplified
-(real workflows default to `max_turns: 100`), so the correct move is to choose
-an approach (A/B/C) and implement it test-first with a live run-path re-check,
-rather than ship a one-liner that only looks right.
+Implemented test-first. `_on_worker_exit` was split into a thin wrapper plus
+`_on_worker_exit_impl`: the wrapper adds the issue id to a new
+`_terminal_persist_pending` set on entry and clears it in a `finally`. That set
+is unioned into `in_flight_ids` (so the G1 prune no longer strips the in-tick
+`_claimed` lock mid-exit) and is checked in `_eligible`. The ticket therefore
+stays ineligible for the whole exit handler — across both the auto-commit
+`await` and the async budget persist — until its terminal state is durable.
+
+Note the false start, kept here as a warning: a first attempt guarded only
+inside `_persist_budget_exhausted_state`. The unit test passed, but the live
+run-path smoke still showed the double dispatch — the auto-commit `await`
+(earlier than the persist) was still an open window. Only moving the guard to
+span the entire `_on_worker_exit` closed it. This is exactly why the run-path
+smoke, not just the unit test, is the acceptance gate for dispatch-path fixes.
+
+Verified: the live smoke now logs exactly one dispatch / one worker exit / zero
+`index.lock` collisions; the regression test in `test_orchestrator_dispatch.py`
+passes; the full suite stays green.

@@ -28,6 +28,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   strand a reader. The `doctor` "five first-run failures" summary also
   enumerated only four. Both now match the running app (`tui/app.py`) and the
   doctor's own later enumeration.
+- **Double-dispatch race on per-attempt `max_turns` exhaustion** (found by the
+  live run-path smoke, root-caused in
+  `docs/improvements/dispatch-double-dispatch-race-2026-06-28.md`). The
+  worker-exit handler popped the worker from `_running` and then `await`ed
+  auto-commit and the async `budget_exhausted_state` persist; a poll tick
+  firing in that window pruned the in-tick `_claimed` lock and re-dispatched
+  the still-active ticket, producing a second worker and a `git index.lock`
+  collision. `_on_worker_exit` now holds the ticket in a
+  `_terminal_persist_pending` in-flight set for its whole duration, so it stays
+  ineligible until its terminal state is durably written. The live smoke now
+  shows exactly one dispatch and one worker exit. (`orchestrator/core.py`,
+  regression test in `test_orchestrator_dispatch.py`.)
 
 ### Changed
 
@@ -37,18 +49,6 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default 30), so the per-tick rescan was wasted work; the `archive_after_days
   <= 0` disable still wins and the first tick after start always sweeps once.
   (`orchestrator/core.py`, regression test in `test_orchestrator_archive.py`.)
-
-### Known issues
-
-- **Double-dispatch race on per-attempt `max_turns` exhaustion**, surfaced by a
-  live run-path smoke and root-caused in
-  `docs/improvements/dispatch-double-dispatch-race-2026-06-28.md`. The
-  exhaustion handler pops the worker from `_running` and then `await`s an async
-  persist of `budget_exhausted_state`; in that window the ticket is in no
-  in-flight set and still active in the tracker, so a concurrent tick can
-  re-dispatch it. Non-fatal (the ticket still settles in the blocked state) and
-  config-amplified (needs a very low `max_turns`), deferred pending a
-  fix-approach decision because it sits in the highest-regression-risk path.
 
 ## [0.7.2] — 2026-06-10 — agent-terse workflow prompts + token-budget directive
 
