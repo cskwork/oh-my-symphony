@@ -10,6 +10,46 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`symphony --version`** prints the package version and exits 0. Previously
+  the flag errored with `unrecognized arguments: --version`. (`cli/main.py`,
+  regression test in `test_cli_main_routing.py`.)
+
+### Fixed
+
+- **Launcher install hint** in `tui-open.sh` suggested `python3.11 -m venv`,
+  which fails `command not found` on hosts that ship only the declared 3.12+
+  floor (pyproject, CI matrix, README badge, and bootstrapping docs are all
+  3.12). Changed the hint to `python3`.
+- **README key-binding docs** were missing the load-bearing `c` (confirm a
+  Done-gated card) and `P` (pause/resume) bindings in both the key table and
+  the footer mockup — `c` clears the manual Done gate, so its absence could
+  strand a reader. The `doctor` "five first-run failures" summary also
+  enumerated only four. Both now match the running app (`tui/app.py`) and the
+  doctor's own later enumeration.
+
+### Changed
+
+- **Auto-archive sweep throttled** to a 5-minute cadence
+  (`ARCHIVE_SWEEP_INTERVAL_SEC`) instead of a full terminal-board rescan on
+  every poll tick. Archivability is day-granular (`archive_after_days`,
+  default 30), so the per-tick rescan was wasted work; the `archive_after_days
+  <= 0` disable still wins and the first tick after start always sweeps once.
+  (`orchestrator/core.py`, regression test in `test_orchestrator_archive.py`.)
+
+### Known issues
+
+- **Double-dispatch race on per-attempt `max_turns` exhaustion**, surfaced by a
+  live run-path smoke and root-caused in
+  `docs/improvements/dispatch-double-dispatch-race-2026-06-28.md`. The
+  exhaustion handler pops the worker from `_running` and then `await`s an async
+  persist of `budget_exhausted_state`; in that window the ticket is in no
+  in-flight set and still active in the tracker, so a concurrent tick can
+  re-dispatch it. Non-fatal (the ticket still settles in the blocked state) and
+  config-amplified (needs a very low `max_turns`), deferred pending a
+  fix-approach decision because it sits in the highest-regression-risk path.
+
 ## [0.7.2] — 2026-06-10 — agent-terse workflow prompts + token-budget directive
 
 Prompt-cost release. All 18 stage templates under
