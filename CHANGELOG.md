@@ -18,6 +18,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Symphony OneShot bootstrap test failed on CI** (`test_symphony_oneshot_bootstrap.py::test_bootstrap_creates_vault_skeleton`).
+  The hermetic run asserts `bootstrap.sh` exits 0, but the script's final
+  `symphony doctor` preflight fails (exit 1) when no agent CLI is on `$PATH` —
+  and CI installs `symphony` without `claude`, so doctor's `check_agent_cli`
+  failed and bootstrap exited 1. The test now honors its own "no agent CLI"
+  contract by putting a never-invoked `claude` stub on `$PATH` (doctor only
+  `shutil.which`-es it). bootstrap.sh's strict preflight is intentionally
+  unchanged. Also hardened the test's bash invocation for the Windows
+  maintainer box (`resolve_bash()` to dodge the WSL launcher, `as_posix()` to
+  stop bash collapsing a backslash script path) — both no-ops on Linux/CI.
 - **Launcher install hint** in `tui-open.sh` suggested `python3.11 -m venv`,
   which fails `command not found` on hosts that ship only the declared 3.12+
   floor (pyproject, CI matrix, README badge, and bootstrapping docs are all

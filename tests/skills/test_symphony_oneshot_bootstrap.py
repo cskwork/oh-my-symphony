@@ -17,9 +17,12 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+from symphony._shell import resolve_bash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ONESHOT = REPO_ROOT / "skills" / "symphony-oneshot"
@@ -59,6 +62,25 @@ def _deliver_gate_vault_files() -> list[str]:
     return required
 
 
+def _stub_agent_cli(bin_dir: Path, name: str = "claude") -> None:
+    """Put a no-op executable named ``name`` on PATH.
+
+    bootstrap.sh's final step runs ``symphony doctor``, whose ``check_agent_cli``
+    fails (exit 1) when the configured agent binary (``claude`` by default) is
+    not on ``$PATH`` — so on CI, where no agent CLI is installed, bootstrap
+    exits 1 and never reaches the skeleton this test pins. The stub satisfies
+    that ``shutil.which`` lookup without a real agent; it is never executed
+    (doctor only resolves the path), keeping the run hermetic — no agent CLI.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        (bin_dir / f"{name}.cmd").write_text("@echo off\nexit /b 0\n", encoding="utf-8")
+    else:
+        stub = bin_dir / name
+        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        stub.chmod(0o755)
+
+
 def test_bootstrap_script_exists() -> None:
     assert BOOTSTRAP.is_file(), f"missing bootstrap script: {BOOTSTRAP}"
 
@@ -96,8 +118,19 @@ def test_bootstrap_creates_vault_skeleton(tmp_path: Path) -> None:
     env = dict(os.environ)
     env["HOME"] = str(fake_home)  # keep ~/symphony_workspaces inside the sandbox
 
+    # Doctor's agent-CLI check needs `claude` on PATH; CI has no agent CLI, so
+    # stub one (never invoked) and prepend it so the run stays self-contained.
+    stub_bin = tmp_path / "bin"
+    _stub_agent_cli(stub_bin)
+    env["PATH"] = str(stub_bin) + os.pathsep + env.get("PATH", "")
+
     result = subprocess.run(
-        ["bash", str(BOOTSTRAP), "test prompt for hermetic bootstrap"],
+        # resolve_bash(): on Windows, a bare "bash" can resolve to the WSL
+        # launcher, which can't open the Windows-drive script path; use the
+        # same MSYS/Git bash the product spawns with. as_posix(): a backslash
+        # path makes bash collapse the separators (rc 127) before the script
+        # runs. On Linux/CI both are the prior behavior (plain "bash", "/"-paths).
+        [resolve_bash(), BOOTSTRAP.as_posix(), "test prompt for hermetic bootstrap"],
         cwd=project,
         env=env,
         capture_output=True,
