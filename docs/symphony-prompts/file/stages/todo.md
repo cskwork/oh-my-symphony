@@ -8,5 +8,5 @@ Triage and route; no implementation here.
 2. Under-specified or ambiguous → append `## Triage` listing the missing inputs, set state to `Blocked`.
 3. Otherwise → append a one-line `## Triage` ("ticket is actionable; routing to Explore"), set state to `Explore`.
 {% for label in issue.labels %}{% if label == "bug" %}
-4. `bug` label — capture the symptom *as is* before any RCA. Author a Playwright (or Cypress) spec walking the failing flow at `docs/{{ issue.identifier }}/reproduce/repro.spec.ts`, run it, save trace/screenshot/console under `docs/{{ issue.identifier }}/reproduce/`. Append `## Reproduction` (command, spec path, 3-10 line failure excerpt). Triage still ends with state `Explore`.
+4. `bug` label — capture the symptom *as is* before any RCA. Author the reproduction in the project's own test framework (Playwright/Cypress for a web UI; `pytest`/`go test`/`cargo test`/JUnit/etc. for a backend) at `docs/{{ issue.identifier }}/reproduce/repro.<ext>` (the extension the project uses), run it, save trace/output under `docs/{{ issue.identifier }}/reproduce/`. Append `## Reproduction` (command, repro path, 3-10 line failure excerpt). Triage still ends with state `Explore`.
 {% endif %}{% endfor %}

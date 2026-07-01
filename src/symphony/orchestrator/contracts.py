@@ -145,6 +145,20 @@ def evaluate_contract(
         if _section_present_nonempty(body, _CRITIC_CLEAN):
             return _build_result(producing_state, [])
         missing = _missing_sections(body, _CRITIC_REQUIRED)
+        # H5 ledger-realness (hard): a rewind turn (`## Surfaced
+        # Requirements` present) must also write the durable ledger on disk
+        # — appending the sections without the file is the same skipped-step
+        # gap S2 closed for QA/Review evidence. No-op without a docs_root.
+        if (
+            docs_root is not None
+            and identifier
+            and _section_present_nonempty(body, _CRITIC_REQUIRED[0])
+        ):
+            ledger = docs_root / identifier / "critic" / "surfaced-requirements.md"
+            if not ledger.exists():
+                missing.append(
+                    f"surfaced-requirements ledger `{ledger}` missing"
+                )
         return _build_result(producing_state, missing)
 
     if state == "review":
@@ -176,6 +190,9 @@ def evaluate_contract(
         # S2 evidence-path realness (hard): cited AC Scorecard paths must
         # exist under docs_root.
         missing.extend(_cited_paths_exist(body, docs_root, identifier))
+        # H2 bug-repro closure (hard): a bug ticket whose `reproduce/` dir
+        # Todo populated must close the loop with `qa/repro-after.log`.
+        missing.extend(_bug_repro_closed(docs_root, identifier))
         # S2 scorecard consistency (soft this release): a non-passing
         # result cell is a warning, not a rewind — passed stays True.
         scorecard_problems = _scorecard_all_pass(body)[1]
@@ -237,6 +254,29 @@ def _directory_has_files(path: Path) -> bool:
         if entry.is_file():
             return True
     return False
+
+
+def _bug_repro_closed(docs_root: Path | None, identifier: str) -> list[str]:
+    """Return a message when a bug's reproduction was never re-run at QA.
+
+    Todo populates `docs_root / identifier / "reproduce"` for bug tickets.
+    When that directory holds files, QA must close the loop by saving
+    `docs_root / identifier / "qa" / "repro-after.log"`; a missing log is a
+    hard failure naming the absent file. No reproduce dir (non-bug ticket)
+    or no docs_root -> no-op. Mirrors the Done-branch path resolution.
+    """
+    if docs_root is None or not identifier:
+        return []
+    reproduce_dir = docs_root / identifier / "reproduce"
+    if not _directory_has_files(reproduce_dir):
+        return []
+    repro_after = docs_root / identifier / "qa" / "repro-after.log"
+    if not repro_after.exists():
+        return [
+            f"bug reproduction not closed: `{repro_after}` missing "
+            f"(reproduce dir `{reproduce_dir}` is populated)"
+        ]
+    return []
 
 
 def _section_body_text(body: str, heading: str) -> str:

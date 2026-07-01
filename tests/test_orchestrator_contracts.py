@@ -232,6 +232,73 @@ def test_critic_clean_section_not_confused_with_critic_tests() -> None:
     assert "## Critic Tests" not in result.missing
 
 
+def test_critic_rewind_without_ledger_file_rewinds(tmp_path: Path) -> None:
+    # H5: a rewind turn (`## Surfaced Requirements` + `## Critic Tests`)
+    # must persist the ledger on disk; an absent file is a hard rewind.
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    body = """
+## Surfaced Requirements
+### 2026-06-26
+- spec implies empty input returns []; no test covers it; test_edge_empty; open
+
+## Critic Tests
+- tests/test_critic_gap.py::test_edge_empty
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is False
+    assert any("surfaced-requirements" in m for m in result.missing)
+
+
+def test_critic_rewind_with_ledger_file_passes(tmp_path: Path) -> None:
+    # H5: same rewind pair, but the durable ledger exists on disk.
+    docs_root = tmp_path / "docs"
+    (docs_root / "SMA-1" / "critic").mkdir(parents=True)
+    (docs_root / "SMA-1" / "critic" / "surfaced-requirements.md").write_text(
+        "### 2026-06-26\n- empty input gap; test_edge_empty; open\n"
+    )
+    body = """
+## Surfaced Requirements
+### 2026-06-26
+- spec implies empty input returns []; no test covers it; test_edge_empty; open
+
+## Critic Tests
+- tests/test_critic_gap.py::test_edge_empty
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_critic_clean_pass_unaffected_by_ledger_gate(tmp_path: Path) -> None:
+    # H5: a clean `## Critic` took no rewind path -> the ledger gate is a
+    # no-op even when docs_root is supplied with no ledger present.
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    body = """
+## Critic
+no surfaced requirements — existing tests cover the spec
+"""
+    result = evaluate_contract(
+        producing_state="Critic",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is True
+    assert result.missing == []
+
+
 # ---------------------------------------------------------------------------
 # Review contract (Review → QA)
 # ---------------------------------------------------------------------------
@@ -474,6 +541,85 @@ def test_qa_missing_evidence_file_rewinds(tmp_path: Path) -> None:
     )
     assert result.passed is False
     assert any("SMA-1/qa/version.log" in m for m in result.missing)
+
+
+def test_qa_bug_repro_not_closed_rewinds(tmp_path: Path) -> None:
+    # H2: a populated `reproduce/` dir with no `qa/repro-after.log` is an
+    # unclosed bug loop -> hard rewind naming the missing log.
+    docs_root = tmp_path / "docs"
+    (docs_root / "SMA-1" / "reproduce").mkdir(parents=True)
+    (docs_root / "SMA-1" / "reproduce" / "repro.spec.ts").write_text("test")
+    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
+    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    body = """
+## QA Evidence
+- ran pytest -q, exit 0
+
+## AC Scorecard
+| signal | source | result | evidence |
+| --- | --- | --- | --- |
+| version bumped | pyproject.toml | pass | SMA-1/qa/version.log |
+"""
+    result = evaluate_contract(
+        producing_state="QA",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is False
+    assert any("repro-after.log" in m for m in result.missing)
+
+
+def test_qa_bug_repro_closed_passes(tmp_path: Path) -> None:
+    # H2: reproduce dir populated AND repro-after.log saved -> loop closed.
+    docs_root = tmp_path / "docs"
+    (docs_root / "SMA-1" / "reproduce").mkdir(parents=True)
+    (docs_root / "SMA-1" / "reproduce" / "repro.spec.ts").write_text("test")
+    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
+    (docs_root / "SMA-1" / "qa" / "repro-after.log").write_text("0 failures")
+    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    body = """
+## QA Evidence
+- re-ran reproduction, now green
+
+## AC Scorecard
+| signal | source | result | evidence |
+| --- | --- | --- | --- |
+| version bumped | pyproject.toml | pass | SMA-1/qa/version.log |
+"""
+    result = evaluate_contract(
+        producing_state="QA",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_qa_no_reproduce_dir_unaffected(tmp_path: Path) -> None:
+    # H2: a non-bug ticket has no `reproduce/` dir -> the repro gate is a
+    # no-op; QA still passes on evidence + a real scorecard path.
+    docs_root = tmp_path / "docs"
+    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
+    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    body = """
+## QA Evidence
+- ran pytest -q, exit 0
+
+## AC Scorecard
+| signal | source | result | evidence |
+| --- | --- | --- | --- |
+| version bumped | pyproject.toml | pass | SMA-1/qa/version.log |
+"""
+    result = evaluate_contract(
+        producing_state="QA",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+    assert result.passed is True
+    assert result.missing == []
 
 
 def test_qa_scorecard_fail_row_warns_without_rewind(tmp_path: Path) -> None:

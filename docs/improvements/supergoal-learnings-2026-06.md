@@ -48,9 +48,13 @@ These govern S1 and S2 and are non-negotiable acceptance criteria:
 2. **Critic derives every test from the prose spec, not a guessed rubric.**
    A wrong generated test the fixer optimizes to is the failure mode — keep
    them black-box and spec-anchored.
-3. **Bounded loop.** Cap critic->fixer at 3 cycles; a 4th escalates to a human
-   (`Blocked`) with the open reds. 2+ cycles that find issues but change no code
-   = "doubt theater" → stop and recut. (`role-loop.md:85-87`)
+3. **Bounded loop (agent-counted).** The Critic counts the prior
+   `## Surfaced Requirements` cycles in the ticket body and caps critic->fixer at
+   3: on the 3rd cycle that would still surface gaps it sets `Blocked` with
+   `## Critic Cap` (the open reds) instead of rewinding again. 2+ cycles that find
+   issues but change no code = "doubt theater" → set `Blocked`, do not re-surface.
+   The shared `cfg.agent.max_attempts` rewind budget (default 3) is the
+   orchestrator's hard backstop. (`role-loop.md:85-87`)
 4. **Content gates verify external facts, never re-implement the prompt
    contract in regex.** This respects `contracts.py:19-24`. A gate may assert
    "the cited evidence file exists" or "no scorecard row says fail"; it may NOT
@@ -98,8 +102,10 @@ diff + prose spec + `## Plan` + `## Acceptance Tests`.
 - Fixer side (reuse `In Progress`, no new stage): on a Critic rewind, the
   builder makes the failing tests pass with the smallest change, adds no code
   not required by a red test, breaks no passing test, and updates the ledger
-  (`fixed` / why-still-`open`). The 3-cycle cap (principle 3) is enforced by
-  S2's gate counting `## Critic` rewinds.
+  (`fixed` / why-still-`open`). The 3-cycle cap (principle 3) is enforced by the
+  Critic counting prior `## Surfaced Requirements` cycles in the ticket body (the
+  gate counts nothing); the shared `cfg.agent.max_attempts` rewind budget
+  (default 3) is the orchestrator's hard backstop.
 - `contracts.py`: add `Critic` to the enforcement set —
   `_CRITIC_REQUIRED = ("## Surfaced Requirements", "## Critic Tests")` when it
   rewinds, OR a clean `## Critic`. Mirror the `_REVIEW_OUTCOMES` either/or shape
