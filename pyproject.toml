@@ -12,6 +12,7 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "oh-my-symphony" }]
 dependencies = [
     "PyYAML>=6.0",
+    "ruamel.yaml>=0.18",
     "httpx>=0.27",
     "watchdog>=4.0",
     "aiohttp>=3.9",
@@ -30,6 +31,9 @@ symphony = "symphony.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+symphony = ["web/static/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

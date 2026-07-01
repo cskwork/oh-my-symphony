@@ -52,6 +52,8 @@ from ..errors import (
 from ..issue import Issue, normalize_state
 from ..logging import get_logger
 from ..prompt import build_continuation_prompt, build_first_turn_prompt
+from ..skills import render_skill_block
+from ..stats import StatsStore, stats_store_for
 from ..trackers import build_tracker_client
 from ..utils.wiki_sweep import sweep as _wiki_sweep_run
 from ..workflow import (
@@ -168,6 +170,22 @@ class Orchestrator:
         # via `_update_token_ema_for_completed_turn`. C3 (workflow-v0.5.2).
         self._token_ema: dict[str, float] = {}
         self._token_ema_loaded: bool = False
+        # Run-stats event store (`.symphony/stats.jsonl`). Bound in start()
+        # once the workflow dir is known; every record call is failure-
+        # tolerant inside StatsStore, so hooks never guard beyond None.
+        self._stats: StatsStore | None = None
+
+    # ------------------------------------------------------------------
+    # public accessors for API / TUI layers
+    # ------------------------------------------------------------------
+
+    @property
+    def workflow_state(self) -> WorkflowState:
+        return self._workflow_state
+
+    @property
+    def stats(self) -> StatsStore | None:
+        return self._stats
 
     # ------------------------------------------------------------------
     # public lifecycle
@@ -197,6 +215,9 @@ class Orchestrator:
         )
         self._load_token_ema(cfg)
         self._load_done_count(cfg)
+        self._stats = stats_store_for(
+            cfg.workflow_path.parent / ".symphony" / "stats.jsonl"
+        )
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
 
@@ -902,15 +923,15 @@ class Orchestrator:
                     error=str(exc),
                 )
 
-    @staticmethod
     def _tracker_call_update_state(
-        cfg: ServiceConfig, issue: Issue, target_state: str
+        self, cfg: ServiceConfig, issue: Issue, target_state: str
     ) -> None:
         client = build_tracker_client(cfg)
         try:
             client.update_state(issue, target_state)
         finally:
             client.close()
+        self._record_stats_transition(issue.identifier, issue.state, target_state)
         # Notifications fire after the tracker write succeeds. If the write
         # raised, we never reach here — operators see the failure in logs
         # instead of a misleading "moved to X" Slack ping. Lenient by
@@ -1522,6 +1543,9 @@ class Orchestrator:
                     token_ema=self._token_ema_for_state(issue.state),
                     token_budget=self._token_budget_for_state(cfg, issue.state),
                     rewind_scope=None,
+                    extra_context=render_skill_block(
+                        cfg.workflow_path.parent, issue.skills
+                    ),
                 )
                 await client.start_session(
                     initial_prompt=first_prompt,
@@ -1797,6 +1821,9 @@ class Orchestrator:
                                 is_rewind=is_rewind,
                                 workspace=str(workspace.path),
                             )
+                            self._record_stats_transition(
+                                issue.identifier, prev_phase_state, current_state
+                            )
                         except Exception as exc:
                             outcome = "phase_transition_error"
                             error = str(exc)
@@ -2037,6 +2064,9 @@ class Orchestrator:
                 token_budget=self._token_budget_for_state(cfg, issue.state),
                 rewind_scope=(
                     _parse_findings_rows(issue.description) if is_rewind else None
+                ),
+                extra_context=render_skill_block(
+                    cfg.workflow_path.parent, issue.skills
                 ),
             )
             await new_client.start_session(
@@ -2346,6 +2376,7 @@ class Orchestrator:
                 total_tokens=entry.codex_total_tokens,
                 last_message=(entry.last_codex_message or "")[:160],
             )
+            self._record_stats_turn(entry)
             # C3 — adaptive token budget. Sample = per-turn state-local
             # total tokens. `_update_token_ema` no-ops on non-positive
             # samples, so a turn with zero token movement (e.g. an event
@@ -2504,6 +2535,42 @@ class Orchestrator:
         return delta_total, delta_out
 
     # ------------------------------------------------------------------
+    # run-stats recording (stats.jsonl — feeds the stats page / TUI screen)
+    # ------------------------------------------------------------------
+
+    def _record_stats_turn(self, entry: RunningEntry) -> None:
+        if self._stats is None:
+            return
+        delta_in = entry.codex_input_tokens - entry.stats_input_tokens
+        delta_cache = entry.codex_cache_input_tokens - entry.stats_cache_input_tokens
+        delta_out = entry.codex_output_tokens - entry.stats_output_tokens
+        delta_total = entry.codex_total_tokens - entry.stats_total_tokens
+        entry.stats_input_tokens = entry.codex_input_tokens
+        entry.stats_cache_input_tokens = entry.codex_cache_input_tokens
+        entry.stats_output_tokens = entry.codex_output_tokens
+        entry.stats_total_tokens = entry.codex_total_tokens
+        self._stats.record_turn(
+            issue=entry.issue.identifier,
+            state=entry.state_at_turn_start or normalize_state(entry.issue.state),
+            agent=self._entry_agent_kind(entry),
+            input_tokens=max(delta_in, 0),
+            cache_tokens=max(delta_cache, 0),
+            output_tokens=max(delta_out, 0),
+            total_tokens=max(delta_total, 0),
+        )
+
+    def _record_stats_transition(
+        self, identifier: str, from_state: str, to_state: str
+    ) -> None:
+        if self._stats is None:
+            return
+        self._stats.record_transition(
+            issue=identifier,
+            from_state=normalize_state(from_state),
+            to_state=normalize_state(to_state),
+        )
+
+    # ------------------------------------------------------------------
     # worker exit handling (§16.6)
     # ------------------------------------------------------------------
 
@@ -2564,6 +2631,15 @@ class Orchestrator:
         debug.last_workspace = entry.workspace_path
         debug.last_error = error
         debug.completed_turn_count += entry.turn_count
+        if self._stats is not None:
+            self._stats.record_run_end(
+                issue=entry.issue.identifier,
+                state=normalize_state(entry.issue.state),
+                agent=self._entry_agent_kind(entry),
+                outcome=reason,
+                turns=entry.turn_count,
+                seconds=elapsed,
+            )
 
         if reason == "normal":
             cfg = self._workflow_state.current()

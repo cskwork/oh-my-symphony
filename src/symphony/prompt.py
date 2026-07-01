@@ -505,6 +505,7 @@ def build_first_turn_prompt(
     token_ema: int = 0,
     token_budget: int = 0,
     rewind_scope: list[dict[str, Any]] | None = None,
+    extra_context: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Construct the first-turn prompt sent to a worker.
 
@@ -521,6 +522,10 @@ def build_first_turn_prompt(
     `token_ema` / `token_budget` / `rewind_scope` plumb the C3 + A2
     template-context fields through to `build_prompt_env`. Defaults keep
     older callers (and tests) unchanged.
+
+    `extra_context` is appended verbatim after the rendered body — used
+    for ticket-attached skill blocks, which must not pass through the
+    strict template renderer (skill files may contain literal `{{ }}`).
 
     Returns `(final_prompt, env)` so callers can keep `env` for later
     bookkeeping (e.g. logging, tests).
@@ -542,6 +547,8 @@ def build_first_turn_prompt(
     env["turn_number"] = 1
     env["max_turns"] = max_turns
     body = render(prompt_template, env)
+    if extra_context.strip():
+        body = body.rstrip() + "\n\n" + extra_context.strip() + "\n"
     return preamble + "\n\n" + body, env
 
 

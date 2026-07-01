@@ -62,6 +62,12 @@ class RunningEntry:
     # 0 alongside `codex_state_total_tokens` on phase transitions so the
     # EMA samples turn-cost-within-stage, not cross-stage history.
     last_ema_state_total_tokens: int = 0
+    # Cumulative run-local counters at the last stats event — the stats
+    # recorder derives per-turn deltas from these (never reset mid-run).
+    stats_input_tokens: int = 0
+    stats_cache_input_tokens: int = 0
+    stats_output_tokens: int = 0
+    stats_total_tokens: int = 0
     # The state the current turn STARTED in. Captured at worker_turn_started
     # so the EMA samples the stage that actually consumed the tokens. Without
     # this, `_update_token_ema` reads `entry.issue.state` at

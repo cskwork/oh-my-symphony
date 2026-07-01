@@ -1,15 +1,13 @@
-"""Optional HTTP JSON API.
+"""HTTP server: web Kanban app + JSON API.
 
-The upstream HTML dashboard at `/` was removed in the multi-agent fork — the
-primary UI is the CLI Kanban (`symphony tui`). Remaining endpoints are the
-programmatic JSON API: state snapshots, per-issue debug, and a coalesced
-refresh trigger.
+`/` serves the built-in web board (see `webapi.py` for the REST surface:
+board/issue CRUD, workflow column + prompt editing, skills, stats). The
+endpoints below predate the web app and remain for scripts and the TUI:
 
-Endpoints:
-    GET  /                       — text hint pointing at `symphony tui`
     GET  /api/v1/state           — runtime snapshot
     GET  /api/v1/<identifier>    — issue debug detail
     POST /api/v1/refresh         — trigger immediate poll/reconcile
+    POST /api/v1/<id>/pause|resume
 """
 
 from __future__ import annotations
@@ -21,16 +19,10 @@ from aiohttp import web
 
 from .logging import get_logger
 from .orchestrator import Orchestrator
+from .webapi import register_web_routes
 
 
 log = get_logger()
-
-ROOT_HINT = (
-    "oh-my-symphony JSON API.\n"
-    "The HTML dashboard was replaced by a CLI Kanban — run `symphony tui`.\n"
-    "API: GET /api/v1/state, GET /api/v1/<identifier>, POST /api/v1/refresh,\n"
-    "     POST /api/v1/<identifier>/pause, POST /api/v1/<identifier>/resume\n"
-)
 
 
 def _error_response(status: int, code: str, message: str) -> web.Response:
@@ -40,9 +32,6 @@ def _error_response(status: int, code: str, message: str) -> web.Response:
 
 def build_app(orchestrator: Orchestrator) -> web.Application:
     app = web.Application()
-
-    async def handle_root(_request: web.Request) -> web.Response:
-        return web.Response(text=ROOT_HINT, content_type="text/plain")
 
     async def handle_state(_request: web.Request) -> web.Response:
         return web.json_response(orchestrator.snapshot())
@@ -133,11 +122,14 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
             )
         return web.json_response({"tasks": out})
 
-    app.router.add_get("/", handle_root)
     app.router.add_get("/api/v1/state", handle_state)
     app.router.add_get("/api/v1/refresh", handle_method_not_allowed)
     app.router.add_post("/api/v1/refresh", handle_refresh)
     app.router.add_get("/api/v1/_debug/tasks", handle_debug_tasks)
+    # Web app routes (board/issues/workflow/skills/stats + static SPA).
+    # Registered before the `{identifier}` catch-alls below so named routes
+    # like /api/v1/board resolve to their handlers, not to issue lookup.
+    register_web_routes(app, orchestrator)
     app.router.add_post("/api/v1/{identifier}/pause", handle_pause)
     app.router.add_post("/api/v1/{identifier}/resume", handle_resume)
     app.router.add_get("/api/v1/{identifier}", handle_issue)

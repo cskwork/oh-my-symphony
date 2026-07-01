@@ -51,6 +51,7 @@ from ..issue import (
     normalize_state,
     parse_iso_timestamp,
 )
+from ..skills import normalize_skill_names
 from ..workflow import TrackerConfig
 
 
@@ -69,6 +70,7 @@ _CANONICAL_FRONT_MATTER_KEYS = {
     "blocked_by",
     "agent",
     "agent_kind",
+    "skills",
     "created_at",
     "updated_at",
 }
@@ -201,6 +203,7 @@ def issue_from_file(path: Path) -> Issue | None:
         updated_at=parse_iso_timestamp(front.get("updated_at"))
         or parse_iso_timestamp(_file_mtime_iso(path)),
         agent_kind=_parse_agent_kind(front),
+        skills=normalize_skill_names(front.get("skills")),
     )
 
 
@@ -267,6 +270,7 @@ def serialize_ticket(front: dict[str, Any], body: str) -> str:
         "blocked_by",
         "agent",
         "agent_kind",
+        "skills",
         "created_at",
         "updated_at",
     ]
@@ -526,6 +530,7 @@ class FileBoardTracker:
         labels: list[str] | None = None,
         description: str = "",
         agent_kind: str | None = None,
+        skills: list[str] | None = None,
     ) -> Path:
         path = self._root / f"{identifier}.md"
         if path.exists():
@@ -543,7 +548,66 @@ class FileBoardTracker:
         }
         if isinstance(agent_kind, str) and agent_kind.strip():
             front["agent"] = {"kind": agent_kind.strip().lower()}
+        normalized_skills = normalize_skill_names(list(skills or []))
+        if normalized_skills:
+            front["skills"] = list(normalized_skills)
         write_ticket_atomic(path, front, description)
+        return path
+
+    def update_fields(
+        self,
+        identifier: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        state: str | None = None,
+        priority: int | None = None,
+        clear_priority: bool = False,
+        labels: list[str] | None = None,
+        skills: list[str] | None = None,
+        agent_kind: str | None = None,
+    ) -> Path:
+        """Partial ticket update from the board UI. None = leave unchanged.
+
+        `description` replaces the Markdown body. `agent_kind=""` clears the
+        per-ticket agent override; `clear_priority=True` drops priority.
+        """
+        path = self.find_path(identifier)
+        if path is None:
+            raise SymphonyError("ticket not found", identifier=identifier)
+        front, body = parse_ticket_file(path)
+        if title is not None:
+            front["title"] = title
+        if state is not None:
+            front["state"] = state
+        if priority is not None:
+            front["priority"] = priority
+        elif clear_priority:
+            front.pop("priority", None)
+        if labels is not None:
+            front["labels"] = [str(item) for item in labels]
+        if skills is not None:
+            normalized = normalize_skill_names(skills)
+            if normalized:
+                front["skills"] = list(normalized)
+            else:
+                front.pop("skills", None)
+        if agent_kind is not None:
+            cleaned = agent_kind.strip().lower()
+            front.pop("agent_kind", None)
+            if cleaned:
+                front["agent"] = {"kind": cleaned}
+            else:
+                front.pop("agent", None)
+        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        write_ticket_atomic(path, front, body if description is None else description)
+        return path
+
+    def delete(self, identifier: str) -> Path:
+        path = self.find_path(identifier)
+        if path is None:
+            raise SymphonyError("ticket not found", identifier=identifier)
+        path.unlink()
         return path
 
 
