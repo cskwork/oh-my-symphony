@@ -75,3 +75,26 @@ Guardrails: prompt paths must resolve inside the workflow dir; state and issue
 identifiers validated; a state with a running worker cannot be removed; at
 least one active and one terminal state must remain; removed states migrate
 their tickets to the first active state.
+
+## Review outcomes (2026-07-02)
+
+Three independent reviews (security, backend, SPA JS) ran against the branch;
+all CRITICAL/HIGH findings were fixed and regression-tested the same day:
+
+- **CRITICAL** — ticket identifiers from GET/DELETE routes reached
+  `board_root / f"{id}.md"` unvalidated; on Windows a `%5C`-encoded backslash
+  traverses out of the board. Fixed with the same identifier whitelist used
+  on create, applied to every route parameter.
+- **HIGH** — stats appends and skill-file reads ran synchronously on the
+  event loop. StatsStore now enqueues to a single-worker FIFO executor
+  (order preserved, `read_events` flushes first); skill rendering moved to
+  `asyncio.to_thread` at both dispatch sites.
+  - Rejected: queue + hand-rolled daemon thread — the one-worker executor
+    gives the same non-blocking behavior with exact flush semantics for free.
+- **HIGH** — a YAML typo in hand-edited WORKFLOW.md became an unlogged 500;
+  now a 400 carrying the ruamel parse message.
+- **MEDIUM** — Host allowlist extended to GET (DNS-rebinding reads); omitted
+  column descriptions preserved on PUT (None=keep, ""=clear); unstable
+  stats-store singleton key; per-request catch-all logging.
+- Deliberately NOT fixed: stats.jsonl rotation (greppable local file, small
+  at realistic ticket volume — revisit if a board ever exceeds ~100k events).
