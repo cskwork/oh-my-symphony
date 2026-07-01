@@ -20,10 +20,12 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.error import YAMLError
 
 from ..errors import SymphonyError
 
 _STATE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _/-]{0,39}$")
+_MAX_COLUMNS = 100
 
 DEFAULT_STAGE_PROMPT = """You are working on {{ issue.identifier }}: {{ issue.title }}.
 Current state: **{{ state_name }}**.
@@ -36,13 +38,19 @@ move the ticket to the next state when done.
 class WorkflowMutationError(SymphonyError):
     """Invalid user edit — message is safe to show verbatim in the UI."""
 
+    code = "workflow_mutation_error"
+
 
 @dataclass(frozen=True)
 class StateSpec:
-    """One kanban column as submitted by the UI."""
+    """One kanban column as submitted by the UI.
+
+    `description=None` means "not provided — keep whatever WORKFLOW.md
+    already has"; an empty string explicitly clears the description.
+    """
 
     name: str
-    description: str = ""
+    description: str | None = None
     terminal: bool = False
     # Set when the user renamed a column; tickets migrate from this name.
     previous_name: str | None = None
@@ -90,7 +98,14 @@ def _load_frontmatter(path: Path) -> tuple[CommentedMap, str]:
     except OSError as exc:
         raise WorkflowMutationError(f"cannot read workflow file: {exc}") from exc
     front_text, body = _split_workflow(text)
-    data = _yaml_rt().load(front_text)
+    try:
+        data = _yaml_rt().load(front_text)
+    except YAMLError as exc:
+        # A hand-edit typo must surface as a 400 with the parse error, not
+        # as an unlogged 500 from the API layer.
+        raise WorkflowMutationError(
+            f"WORKFLOW.md frontmatter is not valid YAML: {exc}"
+        ) from exc
     if data is None:
         data = CommentedMap()
     if not isinstance(data, CommentedMap):
@@ -137,6 +152,8 @@ def _flow_seq(items: list[str]) -> CommentedSeq:
 def validate_states(specs: list[StateSpec]) -> None:
     if not specs:
         raise WorkflowMutationError("at least one column is required")
+    if len(specs) > _MAX_COLUMNS:
+        raise WorkflowMutationError(f"too many columns (max {_MAX_COLUMNS})")
     seen: set[str] = set()
     for spec in specs:
         name = spec.name.strip()
@@ -168,7 +185,7 @@ def apply_states_update(workflow_path: Path, specs: list[StateSpec]) -> StatesUp
     specs = [
         StateSpec(
             name=s.name.strip(),
-            description=s.description.strip(),
+            description=s.description.strip() if s.description is not None else None,
             terminal=s.terminal,
             previous_name=(s.previous_name or "").strip() or None,
         )
@@ -201,10 +218,20 @@ def apply_states_update(workflow_path: Path, specs: list[StateSpec]) -> StatesUp
     tracker["active_states"] = _flow_seq([s.name for s in specs if not s.terminal])
     tracker["terminal_states"] = _flow_seq([s.name for s in specs if s.terminal])
 
+    old_descriptions = {
+        str(k).lower(): str(v)
+        for k, v in (tracker.get("state_descriptions") or {}).items()
+    }
     descriptions = CommentedMap()
     for spec in specs:
-        if spec.description:
+        if spec.description is None:
+            # Not provided — keep the existing description (rename-aware).
+            carried = old_descriptions.get((spec.previous_name or spec.name).lower())
+            if carried:
+                descriptions[spec.name] = carried
+        elif spec.description:
             descriptions[spec.name] = spec.description
+        # Empty string = explicit clear: no entry.
     if descriptions or "state_descriptions" in tracker:
         tracker["state_descriptions"] = descriptions
 

@@ -612,10 +612,20 @@ class KanbanApp(App):
                 timeout=3,
             )
             return
+        # Skill discovery reads SKILL.md files — do it off the UI loop,
+        # then open the modal once the list is in hand.
+        self.run_worker(
+            self._open_new_issue(cfg), thread=False, exclusive=True, group="new_issue"
+        )
+
+    async def _open_new_issue(self, cfg: ServiceConfig) -> None:
         from ..skills import list_skills
         from ..workflow import SUPPORTED_AGENT_KINDS
 
-        skills = [s.name for s in list_skills(cfg.workflow_path.parent)]
+        skills = [
+            s.name
+            for s in await asyncio.to_thread(list_skills, cfg.workflow_path.parent)
+        ]
 
         def _on_result(form: dict[str, Any] | None) -> None:
             if form:

@@ -33,7 +33,7 @@ symphony = "symphony.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-symphony = ["web/static/*"]
+symphony = ["web/static/*", "web/static/*/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -201,3 +201,57 @@ def test_set_branch_policy_writes_agent_keys(workflow: Path) -> None:
     assert "feature_base_branch: dev" in text
     assert "auto_merge_target_branch: main" in text
     assert "# operator note: keep Todo first" in text
+
+
+# ---------------------------------------------------------------------------
+# review follow-ups (2026-07-02)
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_yaml_raises_mutation_error(tmp_path: Path) -> None:
+    path = tmp_path / "WORKFLOW.md"
+    path.write_text("---\ntracker: [unclosed\n---\nbody\n", encoding="utf-8")
+    with pytest.raises(WorkflowMutationError, match="YAML"):
+        set_branch_policy(path, feature_base_branch="dev")
+
+
+def test_mutation_error_message_has_no_code_prefix() -> None:
+    err = WorkflowMutationError("title is required")
+    assert err.message == "title is required"
+    assert err.code == "workflow_mutation_error"
+
+
+def test_omitted_description_preserved_and_empty_string_clears(workflow: Path) -> None:
+    apply_states_update(
+        workflow,
+        [
+            StateSpec(name="Todo"),  # description omitted -> keep "triage"
+            StateSpec(name="Building", previous_name="Doing"),  # rename keeps "build"
+            StateSpec(name="Done", terminal=True),
+            StateSpec(name="Archive", terminal=True),
+        ],
+    )
+    text = workflow.read_text(encoding="utf-8")
+    assert "Todo: triage" in text
+    assert "Building: build" in text
+    # Explicit empty string clears.
+    apply_states_update(
+        workflow,
+        [
+            StateSpec(name="Todo", description=""),
+            StateSpec(name="Building"),
+            StateSpec(name="Done", terminal=True),
+            StateSpec(name="Archive", terminal=True),
+        ],
+    )
+    text = workflow.read_text(encoding="utf-8")
+    assert "Todo: triage" not in text
+    assert "Building: build" in text
+
+
+def test_column_count_cap(workflow: Path) -> None:
+    specs = [StateSpec(name=f"Col{i}") for i in range(101)] + [
+        StateSpec(name="Done", terminal=True)
+    ]
+    with pytest.raises(WorkflowMutationError, match="too many columns"):
+        apply_states_update(workflow, specs)

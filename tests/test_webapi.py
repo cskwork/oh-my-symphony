@@ -342,3 +342,68 @@ async def test_stats_endpoint_counts_created_issue(client: TestClient) -> None:
     assert payload["totals"]["done"] == 0
     assert "live" in payload
     assert (await client.get("/api/v1/stats?days=nope")).status == 400
+
+
+# ---------------------------------------------------------------------------
+# security regressions (2026-07-02 review)
+# ---------------------------------------------------------------------------
+
+
+async def test_traversal_identifiers_rejected_on_get_and_delete(
+    client: TestClient,
+) -> None:
+    # Windows treats backslash as a path separator, and aiohttp's default
+    # dynamic segment regex lets it through — the identifier whitelist is
+    # the gate. See security review 2026-07-02.
+    for payload in ("..%5C..%5Csecret", "..%2e", "a.b", "space name"):
+        resp = await client.get(f"/api/v1/issues/{payload}")
+        assert resp.status == 400, payload
+        resp = await client.delete(f"/api/v1/issues/{payload}")
+        assert resp.status == 400, payload
+
+
+async def test_non_loopback_host_rejected_even_for_get(client: TestClient) -> None:
+    resp = await client.get("/api/v1/board", headers={"Host": "evil.example:9993"})
+    assert resp.status == 403
+    payload = await resp.json()
+    assert payload["error"]["code"] == "forbidden_host"
+    # Bracketed IPv6 loopback without a port must still be allowed.
+    resp = await client.get("/api/v1/board", headers={"Host": "[::1]"})
+    assert resp.status == 200
+
+
+async def test_malformed_workflow_yaml_returns_400_not_500(
+    client: TestClient, board_dir: Path
+) -> None:
+    workflow = board_dir / "WORKFLOW.md"
+    workflow.write_text(
+        "---\ntracker: [unclosed\n---\nbody\n", encoding="utf-8"
+    )
+    resp = await client.put(
+        "/api/v1/workflow/branch-policy", json={"feature_base_branch": "dev"}
+    )
+    assert resp.status == 400
+    payload = await resp.json()
+    assert "YAML" in payload["error"]["message"]
+
+
+async def test_states_put_preserves_omitted_descriptions(
+    client: TestClient, board_dir: Path
+) -> None:
+    # Todo starts with description "triage"; a spec that omits description
+    # must keep it, and a rename must carry it over.
+    resp = await client.put(
+        "/api/v1/workflow/states",
+        json={
+            "states": [
+                {"name": "Todo"},
+                {"name": "Building", "previous_name": "Doing"},
+                {"name": "Done", "terminal": True},
+                {"name": "Archive", "terminal": True},
+            ]
+        },
+    )
+    assert resp.status == 200
+    board = await (await client.get("/api/v1/board")).json()
+    by_name = {c["name"]: c for c in board["columns"]}
+    assert by_name["Todo"]["description"] == "triage"

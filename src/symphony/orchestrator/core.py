@@ -1532,6 +1532,11 @@ class Orchestrator:
                 # both TUI chrome AND artefact docs. Resolution already
                 # honours `SYMPHONY_LANG` (build_service_config call).
                 doc_language = cfg.tui.language
+                # Skill files are read off-loop; dispatch shares the event
+                # loop with every other running worker.
+                skill_context = await asyncio.to_thread(
+                    render_skill_block, cfg.workflow_path.parent, issue.skills
+                )
                 first_prompt, _ = build_first_turn_prompt(
                     prompt_template=cfg.prompt_template_for_state(issue.state),
                     issue=issue,
@@ -1543,9 +1548,7 @@ class Orchestrator:
                     token_ema=self._token_ema_for_state(issue.state),
                     token_budget=self._token_budget_for_state(cfg, issue.state),
                     rewind_scope=None,
-                    extra_context=render_skill_block(
-                        cfg.workflow_path.parent, issue.skills
-                    ),
+                    extra_context=skill_context,
                 )
                 await client.start_session(
                     initial_prompt=first_prompt,
@@ -2051,6 +2054,9 @@ class Orchestrator:
         try:
             await new_client.start()
             await new_client.initialize()
+            skill_context = await asyncio.to_thread(
+                render_skill_block, cfg.workflow_path.parent, issue.skills
+            )
             first_prompt, _ = build_first_turn_prompt(
                 prompt_template=cfg.prompt_template_for_state(issue.state),
                 issue=issue,
@@ -2065,9 +2071,7 @@ class Orchestrator:
                 rewind_scope=(
                     _parse_findings_rows(issue.description) if is_rewind else None
                 ),
-                extra_context=render_skill_block(
-                    cfg.workflow_path.parent, issue.skills
-                ),
+                extra_context=skill_context,
             )
             await new_client.start_session(
                 initial_prompt=first_prompt,

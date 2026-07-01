@@ -8,10 +8,12 @@ stay interchangeable.
 Board mutations require `tracker.kind: file`. Read endpoints degrade to
 live-run info only for Linear / Jira boards.
 
-Security model: local operator tool. The server binds loopback by default;
-on top of that, mutating routes require a JSON content type (cross-origin
-HTML forms can't send one without a CORS preflight) and a loopback Host
-header (blocks DNS-rebinding).
+Security model: local operator tool. When the server is bound to loopback
+(the default), every `/api/` request must carry a loopback Host header —
+this blocks DNS-rebinding reads as well as writes. Mutating methods must
+additionally send a JSON content type, which forces a CORS preflight on
+cross-origin HTML/form attempts. Binding to a non-loopback interface is an
+explicit operator opt-in to network exposure and disables the Host check.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
@@ -27,11 +29,10 @@ from .errors import SymphonyError
 from .issue import Issue, registration_order_key
 from .logging import get_logger
 from .skills import list_skills, normalize_skill_names
-from .stats import stats_store_for
+from .stats import StatsStore, stats_store_for
 from .trackers.file import FileBoardTracker, parse_ticket_file
 from .orchestrator import Orchestrator
-from .workflow import ServiceConfig
-from .workflow.constants import SUPPORTED_AGENT_KINDS
+from .workflow import SUPPORTED_AGENT_KINDS, ServiceConfig
 from .workflow.mutate import (
     StateSpec,
     WorkflowMutationError,
@@ -50,7 +51,9 @@ _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _MAX_TITLE = 300
 _MAX_BODY = 128_000
 _MAX_LABELS = 20
-_ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
+_CREATE_ID_RETRIES = 3
+_ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+_LOOPBACK_BINDS = {"", "localhost", "127.0.0.1", "::1", "[::1]"}
 
 
 def _json_error(status: int, code: str, message: str) -> web.Response:
@@ -64,15 +67,27 @@ def _json_error(status: int, code: str, message: str) -> web.Response:
 # ---------------------------------------------------------------------------
 
 
+def _request_host(request: web.Request) -> str:
+    """Host header without the port — bracket-aware for IPv6 literals."""
+    raw = (request.host or "").strip().lower()
+    if raw.startswith("["):
+        return raw.split("]", 1)[0] + "]"
+    return raw.rsplit(":", 1)[0]
+
+
 @web.middleware
-async def _mutation_guard(request: web.Request, handler):
-    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.path.startswith(
-        "/api/"
-    ):
-        host = (request.host or "").rsplit(":", 1)[0].lower()
-        if host not in _ALLOWED_HOSTS:
-            return _json_error(403, "forbidden_host", f"host {request.host!r} not allowed")
-        if request.body_exists and request.content_type != "application/json":
+async def _api_guard(request: web.Request, handler):
+    if request.path.startswith("/api/"):
+        bind = str(request.app.get("bind_host") or "127.0.0.1").lower()
+        if bind in _LOOPBACK_BINDS and _request_host(request) not in _ALLOWED_HOSTS:
+            return _json_error(
+                403, "forbidden_host", f"host {request.host!r} not allowed"
+            )
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and request.body_exists
+            and request.content_type != "application/json"
+        ):
             return _json_error(
                 415, "unsupported_media_type", "mutations require application/json"
             )
@@ -95,6 +110,28 @@ async def _read_json(request: web.Request) -> dict[str, Any]:
             content_type="application/json",
         )
     return body
+
+
+def _wrap(handler: Callable[[web.Request], Awaitable[web.Response]]):
+    async def wrapped(request: web.Request) -> web.Response:
+        try:
+            return await handler(request)
+        except web.HTTPException:
+            raise
+        except SymphonyError as exc:
+            # Includes WorkflowMutationError — exc.code/.message are shaped
+            # for the UI ("workflow_mutation_error", verbatim reason).
+            return _json_error(400, exc.code, exc.message)
+        except Exception as exc:
+            log.warning(
+                "webapi_unhandled_error",
+                path=request.path,
+                method=request.method,
+                error=str(exc),
+            )
+            return _json_error(500, "internal_error", str(exc))
+
+    return wrapped
 
 
 class _Ctx:
@@ -122,7 +159,7 @@ class _Ctx:
             )
         return FileBoardTracker(cfg.tracker)
 
-    def stats(self):
+    def stats(self) -> StatsStore:
         return stats_store_for(self.workflow_dir() / ".symphony" / "stats.jsonl")
 
 
@@ -199,6 +236,21 @@ def _valid_states(cfg: ServiceConfig) -> dict[str, str]:
     }
 
 
+def _check_identifier(raw: str) -> str:
+    """Whitelist ticket identifiers before they touch the filesystem.
+
+    `find_path` builds `board_root / f"{identifier}.md"`; on Windows a
+    backslash in the identifier traverses directories, so every route
+    parameter must pass this gate (not just creation).
+    """
+    identifier = (raw or "").strip()
+    if not _IDENTIFIER_RE.match(identifier):
+        raise WorkflowMutationError(
+            "identifier must match ^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        )
+    return identifier
+
+
 def _check_title(raw: Any) -> str:
     if not isinstance(raw, str) or not raw.strip():
         raise WorkflowMutationError("title is required")
@@ -267,17 +319,42 @@ def _check_state(cfg: ServiceConfig, raw: Any) -> str:
     return canonical
 
 
+def _parse_state_specs(body: dict[str, Any]) -> list[StateSpec]:
+    raw_states = body.get("states")
+    if not isinstance(raw_states, list):
+        raise WorkflowMutationError("body must contain a `states` list")
+    specs: list[StateSpec] = []
+    for raw in raw_states:
+        if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+            raise WorkflowMutationError("each state needs at least a `name`")
+        raw_description = raw.get("description")
+        specs.append(
+            StateSpec(
+                name=raw["name"],
+                # None = "not provided, keep the current description";
+                # "" = explicit clear. See StateSpec.
+                description=raw_description
+                if isinstance(raw_description, str)
+                else None,
+                terminal=bool(raw.get("terminal")),
+                previous_name=(
+                    str(raw["previous_name"])
+                    if isinstance(raw.get("previous_name"), str)
+                    else None
+                ),
+            )
+        )
+    return specs
+
+
 # ---------------------------------------------------------------------------
-# route handlers
+# routes: board + issues
 # ---------------------------------------------------------------------------
 
 
-def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> None:
-    ctx = _Ctx(orchestrator)
-    app.middlewares.append(_mutation_guard)
-
-    # -- board ---------------------------------------------------------
-
+def _register_issue_routes(
+    app: web.Application, ctx: _Ctx, orchestrator: Orchestrator
+) -> None:
     async def handle_board(_request: web.Request) -> web.Response:
         cfg = ctx.config()
         issues: list[dict[str, Any]] = []
@@ -302,8 +379,6 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
             }
         )
 
-    # -- issues --------------------------------------------------------
-
     async def handle_issue_create(request: web.Request) -> web.Response:
         body = await _read_json(request)
         cfg = ctx.config()
@@ -314,15 +389,21 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
             if body.get("state")
             else (cfg.tracker.active_states[0] if cfg.tracker.active_states else "Todo")
         )
+        fields = {
+            "title": title,
+            "state": state,
+            "priority": _check_priority(body.get("priority")),
+            "labels": _check_labels(body.get("labels")),
+            "description": _check_description(body.get("description")),
+            "agent_kind": _check_agent_kind(body.get("agent_kind")) or None,
+            "skills": list(normalize_skill_names(body.get("skills") or [])),
+        }
         raw_identifier = body.get("identifier")
         if raw_identifier:
-            if not isinstance(raw_identifier, str) or not _IDENTIFIER_RE.match(
-                raw_identifier.strip()
-            ):
-                raise WorkflowMutationError(
-                    "identifier must match ^[A-Za-z][A-Za-z0-9_-]{0,63}$"
-                )
-            identifier = raw_identifier.strip()
+            if not isinstance(raw_identifier, str):
+                raise WorkflowMutationError("identifier must be a string")
+            identifier = _check_identifier(raw_identifier)
+            await asyncio.to_thread(tracker.create, identifier=identifier, **fields)
         else:
             prefix_raw = body.get("prefix")
             prefix = (
@@ -332,26 +413,32 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
             )
             if not re.match(r"^[A-Za-z][A-Za-z0-9]{0,15}$", prefix):
                 raise WorkflowMutationError("prefix must be 1-16 alphanumeric chars")
-            identifier = await asyncio.to_thread(tracker.next_identifier, prefix)
+
+            def _create_with_fresh_id() -> str:
+                # Two concurrent creates can race for the same generated id;
+                # `create` fails cleanly on collision, so retry with the next.
+                last_error: Exception | None = None
+                for _ in range(_CREATE_ID_RETRIES):
+                    candidate = tracker.next_identifier(prefix)
+                    try:
+                        tracker.create(identifier=candidate, **fields)
+                        return candidate
+                    except SymphonyError as exc:
+                        last_error = exc
+                raise last_error or WorkflowMutationError("could not allocate an id")
+
+            identifier = await asyncio.to_thread(_create_with_fresh_id)
         await asyncio.to_thread(
-            tracker.create,
-            identifier=identifier,
-            title=title,
-            state=state,
-            priority=_check_priority(body.get("priority")),
-            labels=_check_labels(body.get("labels")),
-            description=_check_description(body.get("description")),
-            agent_kind=_check_agent_kind(body.get("agent_kind")) or None,
-            skills=list(normalize_skill_names(body.get("skills") or [])),
-        )
-        ctx.stats().record_transition(
-            issue=identifier, from_state="", to_state=state.lower()
+            ctx.stats().record_transition,
+            issue=identifier,
+            from_state="",
+            to_state=state.lower(),
         )
         orchestrator.request_refresh()
         return web.json_response({"identifier": identifier, "state": state}, status=201)
 
     async def handle_issue_detail(request: web.Request) -> web.Response:
-        identifier = request.match_info["identifier"]
+        identifier = _check_identifier(request.match_info["identifier"])
         tracker = ctx.file_tracker()
         path = await asyncio.to_thread(tracker.find_path, identifier)
         if path is None:
@@ -365,7 +452,7 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
         )
 
     async def handle_issue_patch(request: web.Request) -> web.Response:
-        identifier = request.match_info["identifier"]
+        identifier = _check_identifier(request.match_info["identifier"])
         body = await _read_json(request)
         cfg = ctx.config()
         tracker = ctx.file_tracker()
@@ -404,7 +491,8 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
             return _json_error(400, "empty_patch", "no editable fields in body")
         await asyncio.to_thread(tracker.update_fields, identifier, **fields)
         if new_state is not None and new_state.lower() != current.state.lower():
-            ctx.stats().record_transition(
+            await asyncio.to_thread(
+                ctx.stats().record_transition,
                 issue=identifier,
                 from_state=current.state.lower(),
                 to_state=new_state.lower(),
@@ -413,7 +501,7 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
         return web.json_response({"identifier": identifier, "updated": sorted(fields)})
 
     async def handle_issue_delete(request: web.Request) -> web.Response:
-        identifier = request.match_info["identifier"]
+        identifier = _check_identifier(request.match_info["identifier"])
         tracker = ctx.file_tracker()
         if orchestrator.find_running_issue_id(identifier) is not None:
             return _json_error(
@@ -428,8 +516,21 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
         orchestrator.request_refresh()
         return web.json_response({"identifier": identifier, "deleted": True})
 
-    # -- workflow (columns + prompts + branch policy) -------------------
+    app.router.add_get("/api/v1/board", _wrap(handle_board))
+    app.router.add_post("/api/v1/issues", _wrap(handle_issue_create))
+    app.router.add_get("/api/v1/issues/{identifier}", _wrap(handle_issue_detail))
+    app.router.add_patch("/api/v1/issues/{identifier}", _wrap(handle_issue_patch))
+    app.router.add_delete("/api/v1/issues/{identifier}", _wrap(handle_issue_delete))
 
+
+# ---------------------------------------------------------------------------
+# routes: workflow (columns + prompts + branch policy)
+# ---------------------------------------------------------------------------
+
+
+def _register_workflow_routes(
+    app: web.Application, ctx: _Ctx, orchestrator: Orchestrator
+) -> None:
     async def handle_workflow_get(_request: web.Request) -> web.Response:
         cfg = ctx.config()
         return web.json_response(
@@ -451,30 +552,13 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
 
     async def handle_states_put(request: web.Request) -> web.Response:
         body = await _read_json(request)
-        raw_states = body.get("states")
-        if not isinstance(raw_states, list):
-            raise WorkflowMutationError("body must contain a `states` list")
-        specs: list[StateSpec] = []
-        for raw in raw_states:
-            if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
-                raise WorkflowMutationError("each state needs at least a `name`")
-            specs.append(
-                StateSpec(
-                    name=raw["name"],
-                    description=str(raw.get("description") or ""),
-                    terminal=bool(raw.get("terminal")),
-                    previous_name=(
-                        str(raw["previous_name"])
-                        if isinstance(raw.get("previous_name"), str)
-                        else None
-                    ),
-                )
-            )
-
+        specs = _parse_state_specs(body)
         cfg = ctx.config()
         tracker = ctx.file_tracker()
         # A running worker owns its ticket's state string — refuse edits
-        # that would rename or remove that state under it.
+        # that would rename or remove that state under it. (Best-effort:
+        # a worker dispatched during the write below is handled by the
+        # orchestrator's normal mid-run state reconciliation.)
         running_states = {
             i.state.lower() for i in orchestrator.iter_running_issues()
         }
@@ -490,25 +574,22 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
                     f"column {state!r} has a running worker; wait or pause first",
                 )
 
-        plan = await asyncio.to_thread(
-            apply_states_update, cfg.workflow_path, specs
-        )
-        # Migrate tickets before the next poll sees the new config.
+        plan = await asyncio.to_thread(apply_states_update, cfg.workflow_path, specs)
+        # Migrate tickets before the next poll sees the new config. Skip any
+        # ticket whose worker started while the write was in flight.
         migrated: dict[str, str] = {}
-        for old, new in plan.renamed.items():
+        skipped: list[str] = []
+        moves = [(old, new) for old, new in plan.renamed.items()]
+        moves.extend((old, plan.fallback_state) for old in plan.removed)
+        for old, target in moves:
             for issue in await asyncio.to_thread(
                 tracker.fetch_issues_by_states, [old]
             ):
-                await asyncio.to_thread(tracker.transition, issue.identifier, new)
-                migrated[issue.identifier] = new
-        for old in plan.removed:
-            for issue in await asyncio.to_thread(
-                tracker.fetch_issues_by_states, [old]
-            ):
-                await asyncio.to_thread(
-                    tracker.transition, issue.identifier, plan.fallback_state
-                )
-                migrated[issue.identifier] = plan.fallback_state
+                if orchestrator.find_running_issue_id(issue.identifier) is not None:
+                    skipped.append(issue.identifier)
+                    continue
+                await asyncio.to_thread(tracker.transition, issue.identifier, target)
+                migrated[issue.identifier] = target
         orchestrator.workflow_state.reload()
         orchestrator.request_refresh()
         return web.json_response(
@@ -517,6 +598,7 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
                 "removed": plan.removed,
                 "added": plan.added,
                 "migrated": migrated,
+                "skipped_running": skipped,
             }
         )
 
@@ -589,8 +671,22 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
 
         return web.json_response({"branches": await asyncio.to_thread(_branches)})
 
-    # -- skills / stats --------------------------------------------------
+    app.router.add_get("/api/v1/workflow", _wrap(handle_workflow_get))
+    app.router.add_put("/api/v1/workflow/states", _wrap(handle_states_put))
+    app.router.add_get("/api/v1/workflow/prompts/{state}", _wrap(handle_prompt_get))
+    app.router.add_put("/api/v1/workflow/prompts/{state}", _wrap(handle_prompt_put))
+    app.router.add_put("/api/v1/workflow/branch-policy", _wrap(handle_branch_policy_put))
+    app.router.add_get("/api/v1/git/branches", _wrap(handle_git_branches))
 
+
+# ---------------------------------------------------------------------------
+# routes: skills + stats + static SPA
+# ---------------------------------------------------------------------------
+
+
+def _register_meta_routes(
+    app: web.Application, ctx: _Ctx, orchestrator: Orchestrator
+) -> None:
     async def handle_skills(_request: web.Request) -> web.Response:
         skills = await asyncio.to_thread(list_skills, ctx.workflow_dir())
         return web.json_response(
@@ -623,35 +719,6 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
         }
         return web.json_response(aggregated)
 
-    # -- error mapping + registration ------------------------------------
-
-    def _wrap(handler):
-        async def wrapped(request: web.Request) -> web.Response:
-            try:
-                return await handler(request)
-            except WorkflowMutationError as exc:
-                return _json_error(400, "invalid_request", str(exc))
-            except SymphonyError as exc:
-                return _json_error(400, "symphony_error", str(exc))
-
-        return wrapped
-
-    app.router.add_get("/api/v1/board", _wrap(handle_board))
-    app.router.add_post("/api/v1/issues", _wrap(handle_issue_create))
-    app.router.add_get("/api/v1/issues/{identifier}", _wrap(handle_issue_detail))
-    app.router.add_patch("/api/v1/issues/{identifier}", _wrap(handle_issue_patch))
-    app.router.add_delete("/api/v1/issues/{identifier}", _wrap(handle_issue_delete))
-    app.router.add_get("/api/v1/workflow", _wrap(handle_workflow_get))
-    app.router.add_put("/api/v1/workflow/states", _wrap(handle_states_put))
-    app.router.add_get("/api/v1/workflow/prompts/{state}", _wrap(handle_prompt_get))
-    app.router.add_put("/api/v1/workflow/prompts/{state}", _wrap(handle_prompt_put))
-    app.router.add_put("/api/v1/workflow/branch-policy", _wrap(handle_branch_policy_put))
-    app.router.add_get("/api/v1/git/branches", _wrap(handle_git_branches))
-    app.router.add_get("/api/v1/skills", _wrap(handle_skills))
-    app.router.add_get("/api/v1/stats", _wrap(handle_stats))
-
-    # -- SPA -------------------------------------------------------------
-
     async def handle_index(_request: web.Request) -> web.StreamResponse:
         index = STATIC_DIR / "index.html"
         if not index.exists():
@@ -661,6 +728,16 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
             )
         return web.FileResponse(index)
 
+    app.router.add_get("/api/v1/skills", _wrap(handle_skills))
+    app.router.add_get("/api/v1/stats", _wrap(handle_stats))
     app.router.add_get("/", handle_index)
     if STATIC_DIR.is_dir():
         app.router.add_static("/static/", STATIC_DIR, show_index=False)
+
+
+def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> None:
+    ctx = _Ctx(orchestrator)
+    app.middlewares.append(_api_guard)
+    _register_issue_routes(app, ctx, orchestrator)
+    _register_workflow_routes(app, ctx, orchestrator)
+    _register_meta_routes(app, ctx, orchestrator)

@@ -146,6 +146,9 @@ def _now_iso() -> str:
 async def run_server(
     app: web.Application, host: str, port: int
 ) -> tuple[web.AppRunner, int]:
+    # The API guard middleware only enforces the loopback Host allowlist
+    # when the server itself is loopback-bound; record the bind address.
+    app["bind_host"] = host
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)
