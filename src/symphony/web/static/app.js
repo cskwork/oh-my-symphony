@@ -1170,6 +1170,10 @@
   }
 
   async function refreshBoard() {
+    // Same mid-drag hold as pollBoard: an async refresh landing while the
+    // user drags would rebuild the columns and cancel the HTML5 drag.
+    // The 5s poll picks the data up once the drag ends.
+    if (document.querySelector('.card.dragging')) return;
     try {
       const board = await api.getBoard();
       state.board = board;
