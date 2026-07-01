@@ -831,15 +831,19 @@
       el('div', { class: 'column-actions' }, actions),
     ]);
     const body = el('div', { class: 'column-body' });
-    body.addEventListener('dragover', (e) => { e.preventDefault(); body.classList.add('drag-over'); });
-    body.addEventListener('dragleave', () => body.classList.remove('drag-over'));
-    body.addEventListener('drop', (e) => {
+    for (const issue of issues) body.appendChild(buildCardEl(issue, live[issue.identifier], readOnly));
+    const column = el('div', { class: `column${col.terminal ? ' terminal' : ''}` }, [header, body]);
+    // Drop zone is the whole column (header + empty space included) — an
+    // empty column's body has almost no height, so a body-only listener
+    // makes cards impossible to drop onto empty lanes.
+    column.addEventListener('dragover', (e) => { e.preventDefault(); body.classList.add('drag-over'); });
+    column.addEventListener('dragleave', (e) => { if (!column.contains(e.relatedTarget)) body.classList.remove('drag-over'); });
+    column.addEventListener('drop', (e) => {
       e.preventDefault();
       body.classList.remove('drag-over');
       if (!readOnly) handleCardDrop(e, col.name);
     });
-    for (const issue of issues) body.appendChild(buildCardEl(issue, live[issue.identifier], readOnly));
-    return el('div', { class: `column${col.terminal ? ' terminal' : ''}` }, [header, body]);
+    return column;
   }
 
   function handleCardDrop(e, targetState) {
