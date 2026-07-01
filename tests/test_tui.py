@@ -1116,3 +1116,88 @@ def test_matches_filter_substring_on_id_title_labels() -> None:
     assert _matches_filter(issue, "gemini")
     assert _matches_filter(issue, "backend")
     assert not _matches_filter(issue, "frontend")
+
+
+# ---------------------------------------------------------------------------
+# new issue ('n') + stats ('s')
+# ---------------------------------------------------------------------------
+
+
+def _file_board_config(tmp_path: Path) -> ServiceConfig:
+    from dataclasses import replace as dc_replace
+
+    cfg = _make_config(active_states=("Todo", "In Progress"), terminal_states=("Done",))
+    tracker = dc_replace(
+        cfg.tracker, kind="file", board_root=tmp_path / "kanban"
+    )
+    return dc_replace(cfg, tracker=tracker, workflow_path=tmp_path / "WORKFLOW.md")
+
+
+@pytest.mark.asyncio
+async def test_n_opens_new_issue_modal_and_creates_ticket(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    from textual.widgets import Input as TextualInput
+
+    from symphony.tui import NewIssueScreen
+
+    cfg = _file_board_config(tmp_path)
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, NewIssueScreen)
+        app.screen.query_one("#ni-title", TextualInput).value = "wire the modal"
+        app.screen.query_one("#ni-skills", TextualInput).value = "tdd, tdd"
+        await pilot.pause()
+        await pilot.click("#ni-create")
+        await pilot.pause()
+        await asyncio.sleep(0.1)
+        await pilot.pause()
+    ticket = tmp_path / "kanban" / "TASK-1.md"
+    assert ticket.exists()
+    text = ticket.read_text(encoding="utf-8")
+    assert "title: wire the modal" in text
+    assert "state: Todo" in text
+    assert "- tdd" in text
+
+
+@pytest.mark.asyncio
+async def test_n_refuses_non_file_tracker(monkeypatch: Any) -> None:
+    from symphony.tui import NewIssueScreen
+
+    cfg = _make_config()  # linear tracker
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        assert not isinstance(app.screen, NewIssueScreen)
+
+
+@pytest.mark.asyncio
+async def test_s_opens_stats_screen(monkeypatch: Any, tmp_path: Path) -> None:
+    from symphony.stats import StatsStore
+    from symphony.tui import StatsScreen
+
+    cfg = _file_board_config(tmp_path)
+    store = StatsStore(tmp_path / ".symphony" / "stats.jsonl")
+    store.record_turn(
+        issue="T-1", state="todo", agent="claude",
+        input_tokens=10, cache_tokens=0, output_tokens=5, total_tokens=15,
+    )
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+        await asyncio.sleep(0.1)
+        await pilot.pause()
+        assert isinstance(app.screen, StatsScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, StatsScreen)

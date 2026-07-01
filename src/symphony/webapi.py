@@ -267,17 +267,6 @@ def _check_state(cfg: ServiceConfig, raw: Any) -> str:
     return canonical
 
 
-def _next_identifier(tracker: FileBoardTracker, prefix: str) -> str:
-    """`<PREFIX>-<n+1>` where n is the highest existing number for prefix."""
-    highest = 0
-    pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$", re.IGNORECASE)
-    for path in tracker.board_root.glob("*.md"):
-        match = pattern.match(path.stem)
-        if match:
-            highest = max(highest, int(match.group(1)))
-    return f"{prefix}-{highest + 1}"
-
-
 # ---------------------------------------------------------------------------
 # route handlers
 # ---------------------------------------------------------------------------
@@ -343,7 +332,7 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
             )
             if not re.match(r"^[A-Za-z][A-Za-z0-9]{0,15}$", prefix):
                 raise WorkflowMutationError("prefix must be 1-16 alphanumeric chars")
-            identifier = await asyncio.to_thread(_next_identifier, tracker, prefix)
+            identifier = await asyncio.to_thread(tracker.next_identifier, prefix)
         await asyncio.to_thread(
             tracker.create,
             identifier=identifier,

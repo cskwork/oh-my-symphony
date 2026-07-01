@@ -520,6 +520,16 @@ class FileBoardTracker:
         write_ticket_atomic(path, front, body)
         return path
 
+    def next_identifier(self, prefix: str) -> str:
+        """`<PREFIX>-<n+1>` where n is the highest existing number for prefix."""
+        highest = 0
+        pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$", re.IGNORECASE)
+        for path in self._root.glob("*.md"):
+            match = pattern.match(path.stem)
+            if match:
+                highest = max(highest, int(match.group(1)))
+        return f"{prefix}-{highest + 1}"
+
     def create(
         self,
         *,

@@ -104,12 +104,17 @@ async def client() -> AsyncIterator[TestClient]:
 # ---------------------------------------------------------------------------
 
 
-async def test_root_returns_text_hint(client: TestClient) -> None:
+async def test_root_serves_web_app(client: TestClient) -> None:
     resp = await client.get("/")
-    assert resp.status == 200
-    assert resp.headers["content-type"].startswith("text/plain")
     body = await resp.text()
-    assert body  # non-empty hint
+    if resp.status == 200:
+        # Packaged SPA present — index.html served.
+        assert resp.headers["content-type"].startswith("text/html")
+        assert "<html" in body.lower()
+    else:
+        # Assets missing (e.g. partial install) degrades to a clear 503.
+        assert resp.status == 503
+        assert "assets missing" in body
 
 
 async def test_state_route_returns_orchestrator_snapshot(client: TestClient) -> None:

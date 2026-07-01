@@ -47,7 +47,7 @@ from .helpers import (
     _matches_filter,
     _ordered_column_states,
 )
-from .screens import _RefreshNow
+from .screens import NewIssueScreen, StatsScreen, _RefreshNow
 from .widgets import DetailPane, FilterBar, IssueCard, Lane, StatsBar
 
 
@@ -110,6 +110,8 @@ class KanbanApp(App):
         Binding("a", "archive_focused", "Archive"),
         Binding("c", "confirm_done_focused", "Confirm done"),
         Binding("P", "toggle_pause_focused", "Pause/resume"),
+        Binding("n", "new_issue", "New issue"),
+        Binding("s", "stats", "Stats"),
         Binding("slash", "open_filter", "Filter"),
         Binding("escape", "escape", "Close filter / zoom", show=False),
     ]
@@ -596,6 +598,98 @@ class KanbanApp(App):
             client.update_state(issue, target_state)
         finally:
             client.close()
+
+    # ----- new issue ('n') + stats ('s') --------------------------------
+
+    def action_new_issue(self) -> None:
+        """Register a new ticket on the file board via a modal form."""
+        cfg = self._ws.current()
+        if cfg is None:
+            return
+        if cfg.tracker.kind != "file":
+            self.notify(
+                "issue creation from the TUI requires tracker.kind: file",
+                timeout=3,
+            )
+            return
+        from ..skills import list_skills
+        from ..workflow import SUPPORTED_AGENT_KINDS
+
+        skills = [s.name for s in list_skills(cfg.workflow_path.parent)]
+
+        def _on_result(form: dict[str, Any] | None) -> None:
+            if form:
+                self.run_worker(
+                    self._create_issue(cfg, form),
+                    thread=False,
+                    exclusive=False,
+                    group="create_issue",
+                )
+
+        self.push_screen(
+            NewIssueScreen(
+                states=list(cfg.tracker.active_states),
+                agent_kinds=sorted(SUPPORTED_AGENT_KINDS),
+                skills=skills,
+            ),
+            _on_result,
+        )
+
+    async def _create_issue(self, cfg: ServiceConfig, form: dict[str, Any]) -> None:
+        from ..stats import stats_store_for
+        from ..trackers.file import FileBoardTracker
+
+        def _create() -> str:
+            tracker = FileBoardTracker(cfg.tracker)
+            identifier = tracker.next_identifier("TASK")
+            tracker.create(
+                identifier=identifier,
+                title=form["title"],
+                state=form["state"],
+                priority=form["priority"],
+                labels=form["labels"],
+                description=form["description"],
+                agent_kind=form["agent_kind"] or None,
+                skills=form["skills"],
+            )
+            stats_store_for(
+                cfg.workflow_path.parent / ".symphony" / "stats.jsonl"
+            ).record_transition(
+                issue=identifier, from_state="", to_state=form["state"].lower()
+            )
+            return identifier
+
+        try:
+            identifier = await asyncio.to_thread(_create)
+        except Exception as exc:
+            log.warning("tui_create_issue_failed", error=str(exc))
+            self.notify(f"create failed: {exc}", timeout=4, severity="error")
+            return
+        self.notify(f"created {identifier}", timeout=2)
+        self._kick_tracker_refresh()
+
+    def action_stats(self) -> None:
+        cfg = self._ws.current()
+        if cfg is None:
+            return
+        self.run_worker(
+            self._open_stats(cfg), thread=False, exclusive=True, group="stats"
+        )
+
+    async def _open_stats(self, cfg: ServiceConfig) -> None:
+        from ..stats import stats_store_for
+
+        store = getattr(self._orch, "stats", None) or stats_store_for(
+            cfg.workflow_path.parent / ".symphony" / "stats.jsonl"
+        )
+        terminal = {s.lower() for s in cfg.tracker.terminal_states}
+        done_states = {"done"} if "done" in terminal else terminal
+        aggregate = await asyncio.to_thread(store.aggregate, 30, done_states)
+        casing = {
+            s.lower(): s
+            for s in (*cfg.tracker.active_states, *cfg.tracker.terminal_states)
+        }
+        self.push_screen(StatsScreen(aggregate, casing))
 
     # ----- pause / resume ---------------------------------------------
 
