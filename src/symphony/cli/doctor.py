@@ -220,7 +220,9 @@ def check_board_viewer(cfg: ServiceConfig) -> CheckResult:
         "warn",
         (
             f"{script} not found — `--viewer-port` will be a no-op. "
-            "Copy `tools/board-viewer/` from the symphony checkout if you want the web UI."
+            "The built-in web app on the orchestrator port (`--port`, default "
+            "9999) replaces it; the legacy `tools/board-viewer/` copy is only "
+            "needed for the separate read-only viewer."
         ),
     )
 

@@ -307,5 +307,7 @@ def test_board_viewer_warns_when_script_missing(tmp_path: Path) -> None:
     )
     result = check_board_viewer(cfg)
     assert result.status == "warn"
-    assert "tools/board-viewer/server.py" in result.message
+    # Windows renders the script path with backslashes — compare separator-
+    # agnostically so the assertion holds on every platform.
+    assert "tools/board-viewer/server.py" in result.message.replace("\\", "/")
     assert "no-op" in result.message

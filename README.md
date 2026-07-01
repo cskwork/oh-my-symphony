@@ -45,13 +45,18 @@ a Jira-style TUI you never have to leave your terminal for.
   The orchestrator, scheduler, retry policy, workspace lifecycle, and prompt
   renderer are all upstream — this fork is a thin layer that adds the four
   backends and the TUI.
+- **A real web app, not just a viewer.** The orchestrator port serves a
+  Linear-style board: register issues (with skills attached), drag cards
+  between columns, add / delete / rename columns, edit each column's stage
+  prompt, pick feature / merge branches, pause / resume workers, and read a
+  dedicated stats page (tokens per day, cycle time per column, per-agent
+  totals). All edits round-trip into `WORKFLOW.md` with your comments intact.
 - **Operator-grade tooling out of the box.** `symphony doctor` catches the
   five most common first-run failures (port collisions, missing CLIs,
   placeholder URLs, unwritable workspaces, missing board directories) in one
   pass. `symphony service
   start/stop/restart/logs` runs the orchestrator as a managed background
-  service. A web viewer adds **Pause / Resume** for running cards and a real
-  branch-picker for feature / merge branches.
+  service.
 
 ## Who is this for?
 
@@ -88,7 +93,7 @@ a Jira-style TUI you never have to leave your terminal for.
 │  blocked by D…   │                                                                                 ╰─────────────────────────────────╯
 ╰──────────────────╯
 
-q quit · r refresh · enter details · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · c confirm done · P pause/resume · / filter · ?
+q quit · r refresh · enter details · n new issue · s stats · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · c confirm done · P pause/resume · / filter · ?
 ```
 
 </details>
@@ -106,11 +111,14 @@ adds:
    - **Pi** — `pi --mode json -p ""` (JSONL events, per-turn subprocess with
      `--session` resume; supports Anthropic / OpenAI / Gemini / Bedrock backends
      under one CLI — see [pi.dev](https://pi.dev))
-2. A **Jira-style CLI Kanban TUI** built on [Textual](https://textual.textualize.io)
-   that replaces the upstream server-rendered HTML dashboard. Columns are
-   tracker states; cards show the active agent, turn count, last event, and
-   accumulated tokens. Cards are focusable, the mouse wheel scrolls each lane,
-   and pressing `enter` on a card opens a full-detail modal.
+2. A **Jira-style CLI Kanban TUI** built on [Textual](https://textual.textualize.io).
+   Columns are tracker states; cards show the active agent, turn count, last
+   event, and accumulated tokens. Cards are focusable, the mouse wheel
+   scrolls each lane, `enter` opens a full-detail modal, `n` registers a new
+   ticket, and `s` opens the stats screen.
+3. A **built-in web Kanban app** on the orchestrator port — issue CRUD with
+   per-ticket skills, drag-and-drop state moves, column add/delete/rename,
+   per-column prompt editing, branch policy, and a dedicated stats page.
 
 The orchestrator, scheduler, retry policy, workspace manager, tracker layer,
 and prompt renderer are unchanged from upstream — this fork is a thin layer
@@ -515,28 +523,70 @@ prompts:
 Symphony sends `base` plus only the prompt file for the ticket's current
 state, keeping each turn smaller than the old all-stage prompt. If the
 `prompts` block is absent, the inline body of `WORKFLOW.md` still works as
-the legacy fallback.
+the legacy fallback. Prompts are also editable in place from the web app's
+**Workflow** page — same files, no restart needed.
+
+## Skills — per-ticket instructions
+
+Drop a skill next to `WORKFLOW.md` and attach it to any ticket:
+
+```
+skills/
+└── tdd/
+    └── SKILL.md      # ---\n name: tdd\n description: test first\n--- + body
+```
+
+```yaml
+# kanban/TASK-7.md frontmatter
+skills: [tdd]
+```
+
+When the ticket dispatches, each attached skill's body is appended to the
+first-turn prompt under `## Attached skills`. Attach skills from the web
+app's issue modal, the TUI `n` form, or by hand in the frontmatter — the
+same ticket works identically either way. Unknown skill names are surfaced
+to the agent as "not found" instead of silently dropped.
 
 ---
 
 ## Run
 
-### Background service + JSON API
+### Web app + JSON API
 
 ```bash
 symphony ./WORKFLOW.md --port 9999
+# open http://127.0.0.1:9999/
 ```
 
-JSON API endpoints (unchanged from upstream):
+`/` serves the built-in web Kanban app (no build step, no signup, loopback
+only). From the browser you can:
 
-| Method | Path                       | Purpose                                      |
-|--------|----------------------------|----------------------------------------------|
-| GET    | `/api/v1/state`            | Snapshot — running, retrying, totals, limits |
-| GET    | `/api/v1/<identifier>`     | Issue detail (404 with structured error)     |
-| POST   | `/api/v1/refresh`          | Coalesced trigger of poll + reconcile        |
+- **Board** — create / edit / delete issues, drag cards between columns,
+  watch live run badges (turn count, tokens), pause / resume workers.
+- **Workflow** — add / delete / rename / reorder kanban columns and edit
+  each column's stage prompt. Changes write back into `WORKFLOW.md`
+  frontmatter with your comments preserved; tickets in renamed or removed
+  columns migrate automatically.
+- **Skills** — see the `skills/<name>/SKILL.md` library; attach skills per
+  ticket so their instructions ride along in that ticket's agent prompt.
+- **Stats** — tokens per day, throughput, per-column dwell time, per-agent
+  totals, average cycle time (from `.symphony/stats.jsonl`).
+- **Settings** — branch policy (feature base / merge target) from a real
+  local-branch dropdown.
 
-The HTML dashboard at `/` from upstream has been removed in this fork; the
-primary UI is the CLI Kanban below.
+JSON API endpoints:
+
+| Method | Path                              | Purpose                                      |
+|--------|-----------------------------------|----------------------------------------------|
+| GET    | `/api/v1/state`                   | Snapshot — running, retrying, totals, limits |
+| GET    | `/api/v1/board`                   | Columns + issues + live run info             |
+| POST/PATCH/DELETE | `/api/v1/issues[...]`  | Issue CRUD (file tracker)                    |
+| PUT    | `/api/v1/workflow/states`         | Column add / delete / rename / reorder       |
+| GET/PUT| `/api/v1/workflow/prompts/<state>`| Read / edit a column's stage prompt          |
+| GET    | `/api/v1/skills`                  | Available skills                             |
+| GET    | `/api/v1/stats?days=N`            | Aggregated run statistics                    |
+| POST   | `/api/v1/refresh`                 | Coalesced trigger of poll + reconcile        |
+| POST   | `/api/v1/<id>/pause` `/resume`    | Hold / release a running worker              |
 
 ### CLI Kanban TUI (primary UI)
 

@@ -8,6 +8,46 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — built-in web Kanban app (multica/Archon-style revamp)
+
+The orchestrator port now serves a full web app: the board is no longer
+read-only. Everything the operator previously edited by hand in WORKFLOW.md —
+kanban columns, per-stage prompts, branch policy — is editable from the
+browser (comment-preservingly, via ruamel.yaml round-trip), and issues are
+registered from the UI or the TUI with skills attached per ticket.
+
+### Added
+
+- **Web app at `/`** (`symphony --port 9999`, `symphony service start`):
+  Linear-style board with issue create/edit/delete, drag-and-drop state
+  moves, per-column "+", live run badges (turn count, tokens, pause/resume).
+  Vanilla HTML/CSS/JS served by the existing aiohttp server — no build step,
+  no CDN, no signup.
+- **User-editable workflow**: add / delete / rename / reorder kanban columns
+  and edit each column's stage prompt from the Workflow page. Writes go back
+  into WORKFLOW.md frontmatter with comments preserved; tickets in renamed or
+  removed columns migrate automatically; a column with a running worker
+  refuses edits (409).
+- **Skills**: drop `skills/<name>/SKILL.md` next to WORKFLOW.md, attach
+  skills to a ticket (web modal, TUI form, or `skills:` frontmatter), and the
+  orchestrator appends the skill bodies to that ticket's first-turn prompt.
+- **Stats page** + TUI `s` screen: tokens/day, done/day, per-column dwell
+  time, per-agent totals, avg cycle time — aggregated from a new append-only
+  `.symphony/stats.jsonl` event store (turns, transitions, run outcomes).
+- **TUI `n`**: register a new ticket without leaving the terminal.
+- REST API: `GET/POST/PATCH/DELETE /api/v1/issues*`, `GET /api/v1/board`,
+  `PUT /api/v1/workflow/states`, `GET/PUT /api/v1/workflow/prompts/<state>`,
+  `PUT /api/v1/workflow/branch-policy`, `GET /api/v1/skills`,
+  `GET /api/v1/stats`, `GET /api/v1/git/branches`.
+
+### Changed
+
+- `GET /` serves the web app instead of a plain-text hint (API endpoints are
+  unchanged). Mutating endpoints require `Content-Type: application/json`
+  and a loopback Host header (cross-origin form / DNS-rebinding guard).
+- `tools/board-viewer/` is deprecated in place; the built-in app replaces it.
+- New dependency: `ruamel.yaml` (comment-preserving WORKFLOW.md edits).
+
 ## [Unreleased] — supergoal verification discipline + hardening
 
 Ports the `supergoal` skill's verification discipline into Symphony's per-stage

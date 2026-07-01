@@ -1,4 +1,11 @@
-# Symphony Board Viewer
+# Symphony Board Viewer (legacy — superseded by the built-in web app)
+
+> **Deprecated.** Symphony 0.8부터 orchestrator HTTP 포트(`symphony --port 9999`,
+> 또는 `symphony service start`)가 완전한 웹 Kanban 앱을 직접 서빙합니다 —
+> 이슈 생성/수정/삭제, 컬럼 추가/삭제/이름변경, 스테이지 프롬프트 편집,
+> 스킬 첨부, 통계 페이지까지 포함. 이 디렉토리의 read-only 뷰어는 구버전
+> 호환용으로만 남아 있으며 새 기능은 추가되지 않습니다.
+> 브라우저에서 `http://127.0.0.1:9999/` 를 여세요.
 
 Symphony multi-agent orchestrator(headless 모드)와 sync되는 정적 HTML 기반 Kanban 보드 뷰어.
 브라우저에서 Symphony TUI를 모방하되, 기존 headless server와 동시에 떠도 race 없이 동작한다.

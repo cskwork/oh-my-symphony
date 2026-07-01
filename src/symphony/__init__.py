@@ -32,7 +32,10 @@ Layout (see ``AGENTS.md`` for full SPEC references):
         - ``cli.board``   — ``symphony board ...`` file-tracker helper
         - ``cli.doctor``  — ``symphony doctor`` WORKFLOW.md preflight checks
     - ``tui``           — Textual Kanban TUI
-    - ``server``        — optional HTTP JSON API
+    - ``server``        — HTTP server (web Kanban app + JSON API)
+    - ``webapi``        — web app REST routes + static SPA serving
+    - ``skills``        — SKILL.md discovery + prompt injection
+    - ``stats``         — run-stats event store + aggregation
 
 * Utilities (``symphony.utils``)
     - ``utils.archive``     — auto-archive helpers
@@ -44,4 +47,4 @@ Layout (see ``AGENTS.md`` for full SPEC references):
     - ``mock_codex``    — mock Codex app-server, runnable as ``python -m symphony.mock_codex``
 """
 
-__version__ = "0.7.2"
+__version__ = "0.8.0"
