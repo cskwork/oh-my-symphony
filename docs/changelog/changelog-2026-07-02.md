@@ -98,3 +98,16 @@ all CRITICAL/HIGH findings were fixed and regression-tested the same day:
   stats-store singleton key; per-request catch-all logging.
 - Deliberately NOT fixed: stats.jsonl rotation (greppable local file, small
   at realistic ticket volume — revisit if a board ever exceeds ~100k events).
+
+SPA JS review (verdict: XSS clean; two HIGH fixed):
+- **HIGH** — drawer state/priority/agent/skills controls kept showing a
+  failed edit; every field now reverts to the last saved value on PATCH
+  failure, matching title/labels.
+- **HIGH** — the 5s poll re-rendered the board mid-drag, removing the drag
+  source node and silently cancelling the HTML5 drag. The poll now always
+  fetches (so the connection dot stays truthful even while a form is
+  focused — the review's MEDIUM) but holds DOM updates while an overlay
+  input is focused or a `.dragging` card exists.
+- **MEDIUM** — labels lowercase client-side to mirror server normalization.
+- **LOW** — dead `_key`/`nextWfKey`/`pollTimer` removed; markdown links get
+  `noreferrer`.

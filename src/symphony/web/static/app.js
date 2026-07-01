@@ -94,7 +94,6 @@
     workflowDraft: null,
     openModalBackdrop: null,
     openMenu: null,
-    pollTimer: null,
     wfRerender: null,
   };
 
@@ -234,7 +233,7 @@
       const token = match[0];
       if (token.startsWith('[')) {
         const linkMatch = token.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
-        nodes.push(el('a', { href: linkMatch[2], target: '_blank', rel: 'noopener' }, linkMatch[1]));
+        nodes.push(el('a', { href: linkMatch[2], target: '_blank', rel: 'noopener noreferrer' }, linkMatch[1]));
       } else if (token.startsWith('**') || token.startsWith('__')) {
         nodes.push(el('strong', null, token.slice(2, -2)));
       } else if (token.startsWith('`')) {
@@ -293,9 +292,11 @@
   }
 
   function parseLabels(text) {
+    // Server lowercases labels on save — mirror that here so the drawer
+    // never shows casing the board chips won't.
     return String(text || '')
       .split(',')
-      .map((s) => s.trim())
+      .map((s) => s.trim().toLowerCase())
       .filter(Boolean);
   }
 
@@ -998,17 +999,31 @@
       el('button', { class: 'btn-icon', 'aria-label': 'Close', onClick: closeDrawer }, '✕'),
     ]);
 
+    // Every field passes a revert callback: a failed PATCH must snap the
+    // control back to the last saved value, never keep showing the edit.
     const stateSelect = buildStateSelect(detail.state);
-    stateSelect.addEventListener('change', () => commitField(detail.identifier, 'state', stateSelect.value, null, () => { detail.state = stateSelect.value; }));
+    stateSelect.addEventListener('change', () => commitField(
+      detail.identifier, 'state', stateSelect.value,
+      () => { stateSelect.value = detail.state; },
+      () => { detail.state = stateSelect.value; },
+    ));
 
     const prioritySelect = buildPrioritySelect(detail.priority);
     prioritySelect.addEventListener('change', () => {
       const value = prioritySelect.value === '' ? null : Number(prioritySelect.value);
-      commitField(detail.identifier, 'priority', value, null, () => { detail.priority = value; });
+      commitField(
+        detail.identifier, 'priority', value,
+        () => { prioritySelect.value = detail.priority == null ? '' : String(detail.priority); },
+        () => { detail.priority = value; },
+      );
     });
 
     const agentSelect = buildAgentSelect(detail.agent_kind);
-    agentSelect.addEventListener('change', () => commitField(detail.identifier, 'agent_kind', agentSelect.value, null, () => { detail.agent_kind = agentSelect.value; }));
+    agentSelect.addEventListener('change', () => commitField(
+      detail.identifier, 'agent_kind', agentSelect.value,
+      () => { agentSelect.value = detail.agent_kind || ''; },
+      () => { detail.agent_kind = agentSelect.value; },
+    ));
 
     const labelsInput = el('input', { class: 'input', type: 'text', value: detail.labels.join(', ') });
     const commitLabels = () => {
@@ -1020,9 +1035,15 @@
     labelsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') labelsInput.blur(); });
 
     const skillsBox = buildSkillsCheckboxes(detail.skills);
+    const resetSkillsBox = () => {
+      const saved = new Set(detail.skills);
+      for (const cb of skillsBox.querySelectorAll('input[type=checkbox]')) {
+        cb.checked = saved.has(cb.value);
+      }
+    };
     skillsBox.addEventListener('change', () => {
       const skills = collectCheckedSkills(skillsBox);
-      commitField(detail.identifier, 'skills', skills, null, () => { detail.skills = skills; });
+      commitField(detail.identifier, 'skills', skills, resetSkillsBox, () => { detail.skills = skills; });
     });
 
     const fieldsGrid = el('div', { class: 'drawer-fields' }, [
@@ -1284,12 +1305,6 @@
   // Page: Workflow
   // ------------------------------------------------------------------
 
-  let wfKeyCounter = 0;
-  function nextWfKey() {
-    wfKeyCounter += 1;
-    return `k${wfKeyCounter}`;
-  }
-
   async function renderWorkflowPage(container) {
     const page = el('div', { class: 'page page-workflow' });
     page.appendChild(el('div', { class: 'topbar' }, [el('h1', { class: 'page-title' }, 'Workflow')]));
@@ -1299,7 +1314,7 @@
     try {
       const wf = await api.getWorkflow();
       state.workflow = wf;
-      state.workflowDraft = wf.columns.map((c) => ({ ...c, _key: nextWfKey(), _originalName: c.name }));
+      state.workflowDraft = wf.columns.map((c) => ({ ...c, _originalName: c.name }));
       clearNode(body);
       body.appendChild(buildWorkflowEditor());
     } catch (err) {
@@ -1326,7 +1341,7 @@
     wrap.appendChild(el('button', {
       class: 'btn btn-ghost',
       onClick: () => {
-        state.workflowDraft.push({ name: '', description: '', terminal: false, has_prompt: false, _key: nextWfKey() });
+        state.workflowDraft.push({ name: '', description: '', terminal: false, has_prompt: false });
         state.wfRerender();
       },
     }, '+ Add column'));
@@ -1336,7 +1351,7 @@
         el('button', {
           class: 'btn btn-ghost',
           onClick: () => {
-            state.workflowDraft = state.workflow.columns.map((c) => ({ ...c, _key: nextWfKey(), _originalName: c.name }));
+            state.workflowDraft = state.workflow.columns.map((c) => ({ ...c, _originalName: c.name }));
             state.wfRerender();
           },
         }, 'Discard'),
@@ -1584,27 +1599,29 @@
   }
 
   async function pollBoard() {
-    if (isEditingFocused()) {
-      state.pollTimer = setTimeout(pollBoard, 5000);
-      return;
-    }
+    // Hold DOM updates while the user is mid-edit (overlay input focused)
+    // or mid-drag — a re-render would remove the drag-source node, which
+    // silently cancels an HTML5 drag. The fetch itself still runs so the
+    // connection indicator stays truthful.
+    const holdRender = isEditingFocused() || Boolean(document.querySelector('.card.dragging'));
     try {
       const board = await api.getBoard();
-      const firstLoad = !state.board;
-      state.board = board;
       state.connected = true;
-      const nameEl = document.getElementById('board-name');
-      if (nameEl) nameEl.textContent = board.board.name || 'symphony';
-      updateConnectionIndicator();
-      if (state.route === 'board') {
-        if (firstLoad || !document.getElementById('board-scroll')) renderRoute();
-        else renderBoardColumns(document.getElementById('board-scroll'));
+      if (!holdRender) {
+        const firstLoad = !state.board;
+        state.board = board;
+        const nameEl = document.getElementById('board-name');
+        if (nameEl) nameEl.textContent = board.board.name || 'symphony';
+        if (state.route === 'board') {
+          if (firstLoad || !document.getElementById('board-scroll')) renderRoute();
+          else renderBoardColumns(document.getElementById('board-scroll'));
+        }
       }
     } catch (_err) {
       state.connected = false;
-      updateConnectionIndicator();
     } finally {
-      state.pollTimer = setTimeout(pollBoard, 5000);
+      updateConnectionIndicator();
+      setTimeout(pollBoard, 5000);
     }
   }
 
