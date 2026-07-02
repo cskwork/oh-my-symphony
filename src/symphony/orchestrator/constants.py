@@ -35,6 +35,14 @@ STALL_FORCE_EJECT_GRACE_S = 30.0
 # still wins, and the first tick after start always sweeps once.
 ARCHIVE_SWEEP_INTERVAL_SEC = 300.0
 
+# R8 — escalation durability. When moving a retry-capped ticket to its
+# terminal state fails (tracker blip), the escalation is re-attempted on a
+# timer instead of silently discarding the claim — a discarded claim would
+# re-enter dispatch and restart the very retry storm the cap exists to stop.
+# Past the attempt bound the old discard behavior is the last resort.
+ESCALATION_RETRY_DELAY_MS = 10_000
+ESCALATION_MAX_ATTEMPTS = 5
+
 # R1 — tick-loop supervision. The per-tick guard turns any tick exception
 # into counters instead of a dead loop; consecutive failures past the
 # threshold flip health() to "degraded". The restart bound only matters for

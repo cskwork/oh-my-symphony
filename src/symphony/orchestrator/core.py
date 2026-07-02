@@ -71,6 +71,8 @@ from .constants import (
     AUTO_TRIAGE_TARGET_STATE,
     CONTINUATION_RETRY_DELAY_MS,
     EMPTY_TURN_LOOP_THRESHOLD,
+    ESCALATION_MAX_ATTEMPTS,
+    ESCALATION_RETRY_DELAY_MS,
     PAUSED_RETRY_HOLD_MS,
     RETRY_BASE_MS,
     STALL_FORCE_EJECT_GRACE_S,
@@ -191,6 +193,9 @@ class Orchestrator:
         self._consecutive_candidate_fetch_failures: int = 0
         self._registry_error_count: int = 0
         self._last_registry_error: str | None = None
+        # R8 — issue_id -> failed escalation attempts. Keeps a retry-capped
+        # ticket out of dispatch while its terminal-state move is retried.
+        self._pending_escalations: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # public accessors for API / TUI layers
@@ -1169,9 +1174,7 @@ class Orchestrator:
         # `_running ∪ _retry` lets the next tick re-evaluate eligibility
         # against the live tracker state — Blocked tickets stay skipped via
         # `_eligible`'s active-state check; recovered tickets dispatch.
-        in_flight_ids = (
-            set(self._running) | set(self._retry) | self._terminal_persist_pending
-        )
+        in_flight_ids = self._in_flight_ids()
         stale_claimed = self._claimed - in_flight_ids
         if stale_claimed:
             log.info(
@@ -3371,6 +3374,15 @@ class Orchestrator:
         debug.current_retry_attempt = attempt
         debug.current_attempt_kind = self._retry[issue_id].kind
 
+    def _in_flight_ids(self) -> set[str]:
+        """Issue ids the G1 claim-prune must treat as legitimately claimed."""
+        return (
+            set(self._running)
+            | set(self._retry)
+            | self._terminal_persist_pending
+            | set(self._pending_escalations)
+        )
+
     async def _escalate_max_retries(
         self,
         *,
@@ -3386,11 +3398,19 @@ class Orchestrator:
         state mentions ``block``/``human``). The ticket no longer cycles
         through ``_schedule_retry``; an operator inspecting the board
         sees both the state change and the explanatory comment.
+
+        R8 — a tracker failure here must not discard the claim: a pruned
+        claim re-enters dispatch and restarts the retry storm the cap
+        exists to stop. Failures re-attempt on a timer (bounded), with the
+        pending set holding the claim through the G1 prune meanwhile.
         """
+        if self._stopping:
+            return
         cfg = self._workflow_state.current()
         if cfg is None:
             self._claimed.discard(issue_id)
             self._retry.pop(issue_id, None)
+            self._pending_escalations.pop(issue_id, None)
             return
         target_state = ""
         for terminal in cfg.tracker.terminal_states:
@@ -3418,6 +3438,9 @@ class Orchestrator:
             f"Last error: {error or '<none>'}\n"
             "Ticket moved to a terminal state for a human to inspect."
         )
+        # The retry entry must not fire while the escalation is pending;
+        # the _pending_escalations entry keeps the claim alive through G1.
+        self._retry.pop(issue_id, None)
         try:
             await asyncio.to_thread(
                 self._tracker_call_append_note,
@@ -3440,15 +3463,41 @@ class Orchestrator:
                 target_state=target_state,
             )
         except Exception as exc:
+            attempts = self._pending_escalations.get(issue_id, 0) + 1
+            if attempts >= ESCALATION_MAX_ATTEMPTS:
+                log.error(
+                    "agent_retry_cap_escalation_abandoned",
+                    issue_id=issue_id,
+                    identifier=identifier,
+                    error=str(exc),
+                    escalation_attempts=attempts,
+                )
+                self._claimed.discard(issue_id)
+                self._pending_escalations.pop(issue_id, None)
+                return
+            self._pending_escalations[issue_id] = attempts
             log.warning(
                 "agent_retry_cap_escalation_failed",
                 issue_id=issue_id,
                 identifier=identifier,
                 error=str(exc),
+                escalation_attempt=attempts,
             )
-        finally:
-            self._claimed.discard(issue_id)
-            self._retry.pop(issue_id, None)
+            if self._loop is not None:
+                self._loop.call_later(
+                    ESCALATION_RETRY_DELAY_MS / 1000.0,
+                    lambda: asyncio.ensure_future(
+                        self._escalate_max_retries(
+                            issue_id=issue_id,
+                            identifier=identifier,
+                            attempt=attempt,
+                            error=error,
+                        )
+                    ),
+                )
+            return
+        self._claimed.discard(issue_id)
+        self._pending_escalations.pop(issue_id, None)
 
     async def _on_retry_timer(self, issue_id: str) -> None:
         retry = self._retry.pop(issue_id, None)
@@ -3585,7 +3634,7 @@ class Orchestrator:
                 self._tracker_call_states_by_ids, cfg, running_ids
             )
         except Exception as exc:
-            log.debug("reconciliation_state_refresh_failed", error=str(exc))
+            log.warning("reconciliation_state_refresh_failed", error=str(exc))
             return
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         active = {s.lower() for s in cfg.tracker.active_states}
@@ -3610,89 +3659,134 @@ class Orchestrator:
             # ticket would auto-unpause through retry-or-release.
             if self.is_paused(issue.id):
                 continue
-            state = normalize_state(issue.state)
-            if state in terminal:
-                last_seen = entry.last_codex_timestamp
-                age = (now - last_seen).total_seconds() if last_seen else None
-                if age is not None and age < RECONCILE_RECENT_EVENT_GRACE_S:
-                    # Active worker — let it exit on its own.
-                    log.info(
-                        "reconcile_skip_active_worker",
-                        issue_id=issue.id,
-                        identifier=issue.identifier,
-                        state=issue.state,
-                        last_event_age_s=round(age, 1),
-                    )
-                    continue
+            # R8 — one issue's cleanup failure (workspace op, merge gate)
+            # must not abort reconciliation for the rest of the board.
+            try:
+                await self._reconcile_one(
+                    issue,
+                    entry,
+                    cfg,
+                    active=active,
+                    terminal=terminal,
+                    now=now,
+                    recent_grace_s=RECONCILE_RECENT_EVENT_GRACE_S,
+                )
+            except Exception as exc:
+                log.warning(
+                    "reconcile_issue_failed",
+                    issue_id=issue.id,
+                    identifier=issue.identifier,
+                    error=str(exc),
+                )
+
+    async def _reconcile_one(
+        self,
+        issue: Issue,
+        entry: RunningEntry,
+        cfg: ServiceConfig,
+        *,
+        active: set[str],
+        terminal: set[str],
+        now: datetime,
+        recent_grace_s: float,
+    ) -> None:
+        state = normalize_state(issue.state)
+        if state in terminal:
+            last_seen = entry.last_codex_timestamp
+            age = (now - last_seen).total_seconds() if last_seen else None
+            if age is not None and age < recent_grace_s:
+                # Active worker — let it exit on its own.
                 log.info(
-                    "reconcile_terminate_terminal",
+                    "reconcile_skip_active_worker",
                     issue_id=issue.id,
                     identifier=issue.identifier,
                     state=issue.state,
-                    last_event_age_s=round(age, 1) if age is not None else None,
+                    last_event_age_s=round(age, 1),
                 )
-                if entry.worker_task is not None:
-                    entry.worker_task.cancel()
-                if self._workspace_manager is not None:
-                    if cfg.agent.auto_commit_on_done:
-                        # Snapshot before remove — `git worktree remove
-                        # --force` would otherwise discard whatever the
-                        # agent left uncommitted in the worktree.
-                        await _pkg.commit_workspace_on_done(
+                return
+            log.info(
+                "reconcile_terminate_terminal",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                state=issue.state,
+                last_event_age_s=round(age, 1) if age is not None else None,
+            )
+            if entry.worker_task is not None:
+                entry.worker_task.cancel()
+            if self._workspace_manager is not None:
+                if cfg.agent.auto_commit_on_done:
+                    # Snapshot before remove — `git worktree remove
+                    # --force` would otherwise discard whatever the
+                    # agent left uncommitted in the worktree.
+                    await _pkg.commit_workspace_on_done(
+                        entry.workspace_path,
+                        identifier=entry.issue.identifier,
+                        title=entry.issue.title,
+                        exit_reason="reconcile_terminate_terminal",
+                        state=issue.state,
+                    )
+                if (issue.state or "").strip().lower() == "done":
+                    merge_ok = await self._auto_merge_done_gate_or_block(
+                        cfg,
+                        issue,
+                        entry.workspace_path,
+                        debug_target=self._issue_debug.get(issue.id),
+                    )
+                    if merge_ok:
+                        await self._after_done_then_remove_per_policy(
+                            cfg,
                             entry.workspace_path,
                             identifier=entry.issue.identifier,
                             title=entry.issue.title,
-                            exit_reason="reconcile_terminate_terminal",
-                            state=issue.state,
-                        )
-                    if (issue.state or "").strip().lower() == "done":
-                        merge_ok = await self._auto_merge_done_gate_or_block(
-                            cfg,
-                            issue,
-                            entry.workspace_path,
                             debug_target=self._issue_debug.get(issue.id),
                         )
-                        if merge_ok:
-                            await self._after_done_then_remove_per_policy(
-                                cfg,
-                                entry.workspace_path,
-                                identifier=entry.issue.identifier,
-                                title=entry.issue.title,
-                                debug_target=self._issue_debug.get(issue.id),
-                            )
-                            # C5 — see _on_worker_exit for the rationale.
-                            self._maybe_run_wiki_sweep(
-                                cfg, identifier=entry.issue.identifier
-                            )
-                    else:
-                        # Non-Done terminal state (e.g. Cancelled, Blocked):
-                        # no after_done hook, just reap the workspace.
-                        await self._workspace_manager.remove(entry.workspace_path)
-            elif state in active:
-                # Update in-memory issue snapshot.
-                entry.issue = Issue(
-                    id=issue.id,
-                    identifier=issue.identifier or entry.issue.identifier,
-                    title=issue.title or entry.issue.title,
-                    description=entry.issue.description,
-                    priority=entry.issue.priority,
-                    state=issue.state,
-                    branch_name=entry.issue.branch_name,
-                    url=entry.issue.url,
-                    labels=entry.issue.labels,
-                    blocked_by=entry.issue.blocked_by,
-                    created_at=entry.issue.created_at,
-                    updated_at=entry.issue.updated_at,
-                )
-            else:
-                log.info(
-                    "reconcile_terminate_inactive",
-                    issue_id=issue.id,
-                    identifier=issue.identifier,
-                    state=issue.state,
-                )
-                if entry.worker_task is not None:
-                    entry.worker_task.cancel()
+                        # C5 — see _on_worker_exit for the rationale.
+                        self._maybe_run_wiki_sweep(
+                            cfg, identifier=entry.issue.identifier
+                        )
+                else:
+                    # Non-Done terminal state (e.g. Cancelled, Blocked):
+                    # no after_done hook, just reap the workspace.
+                    await self._workspace_manager.remove(entry.workspace_path)
+        elif state in active:
+            # Update in-memory issue snapshot.
+            entry.issue = Issue(
+                id=issue.id,
+                identifier=issue.identifier or entry.issue.identifier,
+                title=issue.title or entry.issue.title,
+                description=entry.issue.description,
+                priority=entry.issue.priority,
+                state=issue.state,
+                branch_name=entry.issue.branch_name,
+                url=entry.issue.url,
+                labels=entry.issue.labels,
+                blocked_by=entry.issue.blocked_by,
+                created_at=entry.issue.created_at,
+                updated_at=entry.issue.updated_at,
+            )
+        else:
+            # R8 — a state outside both active and terminal sets is
+            # out-of-workflow drift (column deleted or renamed remotely).
+            # Reap the workspace like the terminal path; leaking the
+            # worktree here was the old behavior's slot-adjacent leak.
+            log.info(
+                "reconcile_terminate_inactive",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                state=issue.state,
+            )
+            if entry.worker_task is not None:
+                entry.worker_task.cancel()
+            if self._workspace_manager is not None:
+                if cfg.agent.auto_commit_on_done:
+                    await _pkg.commit_workspace_on_done(
+                        entry.workspace_path,
+                        identifier=entry.issue.identifier,
+                        title=entry.issue.title,
+                        exit_reason="reconcile_terminate_inactive",
+                        state=issue.state,
+                    )
+                await self._workspace_manager.remove(entry.workspace_path)
 
     # ------------------------------------------------------------------
     # tracker access
