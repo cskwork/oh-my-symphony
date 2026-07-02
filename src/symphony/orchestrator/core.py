@@ -377,6 +377,16 @@ class Orchestrator:
                 }
         return None
 
+    def issue_attention(self, issue: Issue) -> dict[str, str] | None:
+        if issue.id not in self._turn_budget_exhausted:
+            return None
+        debug = self._issue_debug.get(issue.id, _IssueDebug())
+        return {
+            "kind": "budget_exhausted",
+            "label": "Budget exhausted",
+            "message": debug.last_error or "agent budget exhausted",
+        }
+
     def _running_row(self, issue_id: str, entry: RunningEntry) -> dict[str, Any]:
         debug = self._issue_debug.get(issue_id, _IssueDebug())
         total_turn_count = debug.completed_turn_count + entry.turn_count

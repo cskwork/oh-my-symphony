@@ -117,6 +117,10 @@ The orchestrator dispatches a worker for any ticket whose state is active.
 Terminal states stop dispatch. `Human Review` is terminal because a human must
 confirm before `Done`.
 
+The web board opens on active agent lanes. `Human Review`, `Done`, `Blocked`,
+and `Archive` stay visible in the compact **Review and parked** group until
+you switch to `All`.
+
 `max_concurrent_agents_by_state` can throttle expensive lanes, for example one
 Verify worker at a time when browser QA or integration tests contend for shared
 ports.

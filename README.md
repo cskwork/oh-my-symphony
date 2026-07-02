@@ -570,8 +570,9 @@ only). From the browser you can:
 - **Board** — create / edit / delete issues, drag cards between columns,
   watch live run badges (turn count, tokens), pause / resume workers, and
   skip Learn for tickets that do not need wiki write-back. The board defaults
-  to the four active agent lanes; use `All` to expand terminal lanes such as
-  `Human Review`, `Done`, `Blocked`, and `Archive`.
+  to the four active agent lanes; `Human Review`, `Done`, `Blocked`, and
+  `Archive` stay visible in the compact **Review and parked** group until
+  you switch to `All`.
 - **Workflow** — add / delete / rename / reorder kanban columns and edit
   each column's stage prompt. Changes write back into `WORKFLOW.md`
   frontmatter with your comments preserved; tickets in renamed or removed

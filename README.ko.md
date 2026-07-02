@@ -535,8 +535,8 @@ symphony ./WORKFLOW.md --port 9999
 
 - **Board** — 이슈 생성/수정/삭제, 드래그로 컬럼 이동, 실행 중 배지(턴 수,
   토큰), 워커 Pause / Resume, Learn 스킵. 기본 화면은 네 개의 active agent
-  lane만 보여주며, `All`을 누르면 `Human Review`, `Done`, `Blocked`,
-  `Archive` 같은 terminal lane까지 펼쳐진다.
+  lane만 보여주며, `Human Review`, `Done`, `Blocked`, `Archive`는 `All`로
+  펼치기 전까지 **Review and parked** 그룹에 작게 표시된다.
 - **Workflow** — 칸반 컬럼 추가/삭제/이름변경/순서변경, 컬럼별 스테이지
   프롬프트 편집. 변경은 주석을 보존한 채 `WORKFLOW.md` frontmatter로
   저장되고, 이름이 바뀌거나 삭제된 컬럼의 티켓은 자동 마이그레이션된다.

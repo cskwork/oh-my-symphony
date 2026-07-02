@@ -89,6 +89,7 @@
     connected: false,
     search: '',
     boardScope: 'active',
+    mobileColumnIndex: 0,
     statsDays: 30,
     drawerIssue: null,
     workflowDraft: null,
@@ -791,6 +792,7 @@
         type: 'button',
         onClick: () => {
           state.boardScope = value;
+          state.mobileColumnIndex = 0;
           renderRoute();
         },
       }, label),
@@ -812,6 +814,27 @@
     return state.boardScope === 'all' ? columns : activeColumns(columns);
   }
 
+  function isMobileBoardViewport() {
+    return window.matchMedia('(max-width: 720px)').matches;
+  }
+
+  function buildMobileLaneTabs(columns) {
+    const maxIndex = Math.max(columns.length - 1, 0);
+    if (state.mobileColumnIndex > maxIndex) state.mobileColumnIndex = maxIndex;
+    return el('div', { class: 'mobile-lane-tabs', role: 'tablist', 'aria-label': 'Active lanes' },
+      columns.map((col, index) => el('button', {
+        class: `mobile-lane-tab${index === state.mobileColumnIndex ? ' active' : ''}`,
+        type: 'button',
+        role: 'tab',
+        'aria-selected': index === state.mobileColumnIndex ? 'true' : 'false',
+        onClick: () => {
+          state.mobileColumnIndex = index;
+          renderBoardColumns(document.getElementById('board-scroll'));
+        },
+      }, col.name))
+    );
+  }
+
   function renderBoardColumns(scrollEl) {
     if (!scrollEl) return;
     clearNode(scrollEl);
@@ -827,10 +850,16 @@
       const bucket = byColumn.get(issue.state);
       if (bucket) bucket.push(issue);
     }
-    const layout = el('div', { class: `board-layout${state.boardScope === 'all' ? ' all-columns' : ''}` });
+    const visibleColumns = visibleBoardColumns(columns);
+    const mobileSingleLane = isMobileBoardViewport() && state.boardScope !== 'all';
+    const layout = el('div', { class: `board-layout${state.boardScope === 'all' ? ' all-columns' : ''}${mobileSingleLane ? ' mobile-single-lane' : ''}` });
     const grid = el('div', { class: 'board-columns' });
-    for (const col of visibleBoardColumns(columns)) grid.appendChild(buildColumnEl(col, byColumn.get(col.name) || [], live, board.read_only));
-    if (!board.read_only) grid.appendChild(el('div', { class: 'add-column-ghost', onClick: openAddColumnModal }, '+ Add column'));
+    if (mobileSingleLane) layout.appendChild(buildMobileLaneTabs(visibleColumns));
+    const columnsToRender = mobileSingleLane
+      ? visibleColumns.slice(state.mobileColumnIndex, state.mobileColumnIndex + 1)
+      : visibleColumns;
+    for (const col of columnsToRender) grid.appendChild(buildColumnEl(col, byColumn.get(col.name) || [], live, board.read_only));
+    if (!board.read_only && !mobileSingleLane) grid.appendChild(el('div', { class: 'add-column-ghost', onClick: openAddColumnModal }, '+ Add column'));
     layout.appendChild(grid);
     if (state.boardScope !== 'all') {
       const terminalGroups = columns
@@ -846,7 +875,7 @@
     const total = groups.reduce((sum, row) => sum + row.issues.length, 0);
     const section = el('section', { class: 'terminal-section', 'aria-label': 'Terminal states' });
     section.appendChild(el('div', { class: 'terminal-section-header' }, [
-      el('div', { class: 'terminal-section-title' }, 'Other states'),
+      el('div', { class: 'terminal-section-title' }, 'Review and parked'),
       el('span', { class: 'terminal-total' }, String(total)),
     ]));
     const body = el('div', { class: 'terminal-groups' });
@@ -916,6 +945,14 @@
     });
   }
 
+  function buildAttentionBadge(attention) {
+    if (!attention) return null;
+    return el('span', {
+      class: `chip-attention attention-${attention.kind || 'info'}`,
+      title: attention.message || attention.label || 'Attention required',
+    }, attention.label || 'Attention');
+  }
+
   function buildCardEl(issue, liveEntry, readOnly) {
     const card = el('div', {
       class: `card${liveEntry && liveEntry.paused ? ' paused' : ''}`,
@@ -938,6 +975,8 @@
     }
     for (const label of issue.labels) badges.appendChild(el('span', { class: 'chip-label' }, label));
     if (issue.agent_kind) badges.appendChild(el('span', { class: 'chip-agent' }, issue.agent_kind));
+    const attentionBadge = buildAttentionBadge(issue.attention);
+    if (attentionBadge) badges.appendChild(attentionBadge);
     if (badges.childNodes.length) card.appendChild(badges);
     if (!readOnly && isLearnState(issue.state) && !liveEntry) {
       card.appendChild(el('button', {
@@ -1119,6 +1158,12 @@
     container.appendChild(header);
     container.appendChild(titleInput);
     container.appendChild(fieldsGrid);
+    if (detail.attention) {
+      container.appendChild(el('div', { class: `drawer-attention attention-${detail.attention.kind || 'info'}` }, [
+        el('strong', null, detail.attention.label || 'Attention'),
+        el('span', null, detail.attention.message || ''),
+      ]));
+    }
     if (!detail.live && isLearnState(detail.state)) {
       container.appendChild(el('button', {
         class: 'btn btn-ghost',

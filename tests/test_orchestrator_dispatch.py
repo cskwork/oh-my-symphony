@@ -2488,6 +2488,24 @@ def test_normal_exit_does_not_continue_after_total_turn_budget():
     asyncio.run(_run())
 
 
+def test_issue_attention_reports_budget_exhaustion():
+    orch = _orch()
+    issue = _issue("MT-ATTN", state="In Progress")
+
+    assert orch.issue_attention(issue) is None
+
+    orch._turn_budget_exhausted.add(issue.id)
+    orch._issue_debug[issue.id] = _IssueDebug(
+        last_error="max_total_turns reached (1/1)"
+    )
+
+    assert orch.issue_attention(issue) == {
+        "kind": "budget_exhausted",
+        "label": "Budget exhausted",
+        "message": "max_total_turns reached (1/1)",
+    }
+
+
 def test_turn_budget_exhaustion_survives_next_tick_claim_prune(monkeypatch):
     """A budget-exhausted active ticket must not redispatch next poll.
 

@@ -25,6 +25,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+browser = [
+    "playwright>=1.48",
+]
 
 [project.scripts]
 symphony = "symphony.cli:main"
@@ -38,3 +41,6 @@ symphony = ["web/static/*", "web/static/*/*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "browser_e2e: browser-driven web UI tests; requires SYMPHONY_BROWSER_E2E=1 and Playwright browser binaries",
+]

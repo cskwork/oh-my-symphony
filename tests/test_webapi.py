@@ -92,6 +92,15 @@ class _StubOrchestrator:
     def iter_running_issues(self) -> tuple[Any, ...]:
         return ()
 
+    def issue_attention(self, issue: Any) -> dict[str, str] | None:
+        if issue.identifier == "SEED-1":
+            return {
+                "kind": "budget_exhausted",
+                "label": "Budget exhausted",
+                "message": "max_total_turns reached (1/1)",
+            }
+        return None
+
     def is_paused(self, _issue_id: str) -> bool:
         return False
 
@@ -153,7 +162,15 @@ async def test_board_returns_columns_and_issues(client: TestClient) -> None:
     assert todo["has_prompt"] is True
     assert payload["columns"][2]["terminal"] is True
     assert [i["identifier"] for i in payload["issues"]] == ["SEED-1"]
+    seed = payload["issues"][0]
+    assert seed["attention"]["kind"] == "budget_exhausted"
+    assert seed["attention"]["label"] == "Budget exhausted"
     assert payload["board"]["read_only"] is False
+
+
+async def test_issue_detail_includes_attention(client: TestClient) -> None:
+    detail = await (await client.get("/api/v1/issues/SEED-1")).json()
+    assert detail["attention"]["message"] == "max_total_turns reached (1/1)"
 
 
 async def test_create_issue_generates_identifier(client: TestClient) -> None:

@@ -168,7 +168,11 @@ class _Ctx:
 # ---------------------------------------------------------------------------
 
 
-def _issue_card(issue: Issue) -> dict[str, Any]:
+def _issue_card(
+    issue: Issue,
+    *,
+    attention: dict[str, str] | None = None,
+) -> dict[str, Any]:
     return {
         "identifier": issue.identifier,
         "title": issue.title,
@@ -180,6 +184,7 @@ def _issue_card(issue: Issue) -> dict[str, Any]:
         "blocked_by": [
             {"identifier": b.identifier, "state": b.state} for b in issue.blocked_by
         ],
+        "attention": attention,
         "created_at": issue.created_at.isoformat() if issue.created_at else None,
         "updated_at": issue.updated_at.isoformat() if issue.updated_at else None,
     }
@@ -363,7 +368,10 @@ def _register_issue_routes(
             tracker = FileBoardTracker(cfg.tracker)
             all_states = list(_valid_states(cfg).values())
             fetched = await asyncio.to_thread(tracker.fetch_issues_by_states, all_states)
-            issues = [_issue_card(i) for i in sorted(fetched, key=registration_order_key)]
+            issues = [
+                _issue_card(i, attention=orchestrator.issue_attention(i))
+                for i in sorted(fetched, key=registration_order_key)
+            ]
         return web.json_response(
             {
                 "board": {
@@ -445,7 +453,11 @@ def _register_issue_routes(
             return _json_error(404, "issue_not_found", f"unknown issue {identifier}")
         front, body_text = await asyncio.to_thread(parse_ticket_file, path)
         issue = await asyncio.to_thread(tracker.fetch_issue_full_by_id, identifier)
-        card = _issue_card(issue) if issue else {"identifier": identifier}
+        card = (
+            _issue_card(issue, attention=orchestrator.issue_attention(issue))
+            if issue
+            else {"identifier": identifier}
+        )
         live = _live_by_identifier(orchestrator).get(identifier)
         return web.json_response(
             {**card, "description": body_text, "frontmatter": front, "live": live}

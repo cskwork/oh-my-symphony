@@ -200,3 +200,39 @@ restart or explicit operator movement.
 Boards with custom active states or prompt mappings that still use `Explore`,
 `Plan`, `Critic`, `Review`, or `QA` need a manual `WORKFLOW.md` migration to the
 4-stage layout before adopting the new prompt templates.
+
+---
+
+# 2026-07-02 - post-E2E hardening research plan
+
+## Decision
+
+Create `docs/plans/2026-07-02-post-e2e-hardening-plan.md` as a follow-up plan,
+not implementation, because the 4-stage branch is already committed and pushed.
+The plan prioritizes tracked browser E2E and API smoke coverage first, then
+budget-exhausted UI, mobile lane controls, and terminal-state wording.
+
+- Rejected: folding these follow-ups into the shipped 4-stage commit. That would
+  obscure the already-verified pipeline migration.
+- Rejected: making browser E2E mandatory in default `pytest`. Browser binaries
+  and local sandbox behavior are too environment-sensitive for every developer
+  run.
+
+---
+
+# 2026-07-02 - post-E2E hardening implementation
+
+## Decision
+
+Ship the plan as additive hardening: optional Python Playwright E2E, a stdlib
+live API smoke script, budget-exhausted attention payloads, mobile active-lane
+tabs, and clearer terminal-state wording.
+
+- Rejected: parsing every smoke response as JSON. `/static/app.js` is plain
+  JavaScript, so the smoke helper now falls back to raw text for non-JSON
+  responses.
+- Rejected: applying grid-only mobile CSS to the board. The board uses flex
+  columns, so the mobile lane behavior changes rendered columns and flex sizing
+  directly while leaving `All` as the full editable board.
+- Rejected: duplicating README board text. The existing active-lane sentences
+  were refined in English and Korean to name **Review and parked**.
