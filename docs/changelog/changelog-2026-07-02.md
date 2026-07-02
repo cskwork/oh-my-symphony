@@ -272,3 +272,37 @@ the run terminal.
 - `.venv/bin/python -m pytest -q tests/test_run_registry.py tests/test_orchestrator_dispatch.py` -> 94 passed.
 - `.venv/bin/symphony doctor ./WORKFLOW.md` -> all PASS.
 - `.venv/bin/python -m pytest -q` -> 871 passed, 2 skipped.
+
+---
+
+# 2026-07-02 - reliability/availability/usability system-design plan
+
+## Decision
+
+Write `docs/plans/2026-07-02-reliability-availability-usability.md` from a
+same-day three-way code audit (orchestrator reliability; backend/tracker
+resilience; availability + usability surface). Sequenced into five phases:
+stop silent halts (tick-loop supervision, lease owner identity, health
+endpoint) → stop process leaks (process-group kill, codex EOF fast-fail) →
+external-call resilience (classified tracker retries, reconcile isolation) →
+durable state and board write locking → operator experience (attention
+taxonomy, doctor v2, run-history surface).
+
+- Rejected: multi-node HA, DB-backed board, in-process worker reattachment,
+  and a separate always-up status server — all conflict with the single-node
+  file-first ethos; rationale recorded in the plan's §8.
+
+## fix(web): prompt-editor textarea collapsed to intrinsic width
+
+`openPromptEditorModal` cleared the swap wrapper's class after load, so the
+textarea sat in a plain block div outside the `.prompt-modal-content` flex
+column and collapsed to its intrinsic ~20-col width (198px in a 760px modal),
+leaving the modal's right side empty. The wrapper now keeps a
+`.prompt-editor-body` flex-column class and `.prompt-textarea` gains
+`width: 100%` as a guard.
+
+- Rejected: widening the modal (`modal-xl`) — the root cause was the broken
+  flex chain, not modal width; widening is listed as a follow-up candidate.
+- Verified: headless Chrome against the browser-E2E server fixture — textarea
+  bounding box 198px → 720px; `tests/test_web_static_contract.py` +
+  `tests/test_webapi.py` -> 20 passed.
