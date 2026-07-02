@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
-from .._shell import resolve_bash, safe_proc_wait
+from .._shell import resolve_bash, terminate_process_tree
 from ..errors import (
     CodexNotFound,
     PortExit,
@@ -50,6 +50,7 @@ from . import (
     EVENT_TURN_FAILED,
     EVENT_TURN_INPUT_REQUIRED,
     EVENT_UNSUPPORTED_TOOL_CALL,
+    MALFORMED_LINE_LIMIT,
     BackendInit,
     BaseAgentBackend,
     ToolDescriptor,
@@ -308,6 +309,9 @@ class CodexAppServerBackend(BaseAgentBackend):
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
                 limit=MAX_LINE_BYTES,
+                # Own process group so terminate/kill reaches the agent CLI
+                # behind the bash wrapper (POSIX only).
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             raise CodexNotFound("bash not available", error=str(exc)) from exc
@@ -371,17 +375,7 @@ class CodexAppServerBackend(BaseAgentBackend):
         # the subprocess below, which is sufficient for cleanup.
         if self._process is not None:
             if self._process.returncode is None:
-                try:
-                    self._process.terminate()
-                except ProcessLookupError:
-                    pass
-                rc = await safe_proc_wait(self._process, timeout=2.0)
-                if rc is None and self._process.returncode is None:
-                    try:
-                        self._process.kill()
-                    except ProcessLookupError:
-                        pass
-                    await safe_proc_wait(self._process)
+                await terminate_process_tree(self._process)
         for task in (self._reader_task, self._stderr_task):
             if task is not None:
                 task.cancel()
@@ -611,6 +605,8 @@ class CodexAppServerBackend(BaseAgentBackend):
     async def _stdout_reader(self) -> None:
         assert self._process is not None and self._process.stdout is not None
         stdout = self._process.stdout
+        malformed_streak = 0
+        stream_corrupt: str | None = None
         while True:
             try:
                 line = await stdout.readline()
@@ -628,17 +624,36 @@ class CodexAppServerBackend(BaseAgentBackend):
                 msg = json.loads(text)
             except json.JSONDecodeError:
                 await self._emit(EVENT_MALFORMED, {"raw": text[:500]})
+                malformed_streak += 1
+                if malformed_streak >= MALFORMED_LINE_LIMIT:
+                    stream_corrupt = text
+                    break
                 continue
+            malformed_streak = 0
             if isinstance(msg, dict) and "id" in msg and msg["id"] in self._pending:
                 fut = self._pending.pop(msg["id"])
                 if not fut.done():
                     fut.set_result(msg)
                 continue
             await self._handle_notification(msg if isinstance(msg, dict) else {})
+        rc = self._process.returncode if self._process is not None else None
+        if stream_corrupt is not None:
+            reason = (
+                f"codex stream unreadable: {MALFORMED_LINE_LIMIT} consecutive "
+                f"malformed lines (last: {stream_corrupt[:200]!r})"
+            )
+        else:
+            reason = f"codex app-server closed stdout (rc={rc})"
         for fut in self._pending.values():
             if not fut.done():
-                fut.set_exception(PortExit("subprocess stdout closed"))
+                fut.set_exception(PortExit(reason))
         self._pending.clear()
+        # A crash mid-turn used to stall for the full turn timeout and be
+        # misreported as TurnTimeout — the completion waiter was never
+        # resolved on EOF. Fail it promptly with the real cause.
+        waiter = self._turn_completion_waiter
+        if waiter is not None and not waiter.done():
+            waiter.set_exception(TurnFailed(reason))
 
     async def _stderr_reader(self) -> None:
         assert self._process is not None and self._process.stderr is not None

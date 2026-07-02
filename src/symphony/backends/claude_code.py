@@ -28,7 +28,7 @@ import time
 from collections import deque
 from typing import Any
 
-from .._shell import resolve_bash, safe_proc_wait
+from .._shell import resolve_bash, safe_proc_wait, terminate_process_tree
 from ..errors import (
     PortExit,
     ResponseError,
@@ -43,6 +43,8 @@ from . import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
+    MALFORMED_LINE_LIMIT,
+    POST_STREAM_REAP_TIMEOUT_S,
     BackendInit,
     BaseAgentBackend,
     TurnResult,
@@ -86,6 +88,9 @@ class ClaudeCodeBackend(BaseAgentBackend):
         self._last_message: str = ""
         # Bounded stderr ring buffer — see PiBackend for the rationale.
         self._stderr_tail: deque[str] = deque(maxlen=20)
+        # Last bad line when MALFORMED_LINE_LIMIT consecutive lines failed
+        # to parse; run_turn turns it into a precise TurnFailed.
+        self._stream_corrupt: str | None = None
 
     # ------------------------------------------------------------------
     # AgentBackend lifecycle
@@ -101,17 +106,7 @@ class ClaudeCodeBackend(BaseAgentBackend):
         self._closed = True
         proc = self._active_proc
         if proc is not None and proc.returncode is None:
-            try:
-                proc.terminate()
-            except ProcessLookupError:
-                pass
-            rc = await safe_proc_wait(proc, timeout=2.0)
-            if rc is None and proc.returncode is None:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await safe_proc_wait(proc)
+            await terminate_process_tree(proc)
 
     @property
     def session_id(self) -> str | None:
@@ -178,6 +173,9 @@ class ClaudeCodeBackend(BaseAgentBackend):
                 stderr=asyncio.subprocess.PIPE,
                 env=os.environ.copy(),
                 limit=MAX_LINE_BYTES,
+                # Own process group so terminate/kill reaches the agent CLI
+                # behind the bash wrapper (POSIX only).
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             raise PortExit("bash not available", error=str(exc)) from exc
@@ -208,7 +206,21 @@ class ClaudeCodeBackend(BaseAgentBackend):
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("claude turn timed out") from exc
 
-            await safe_proc_wait(proc)
+            rc = await safe_proc_wait(proc, timeout=POST_STREAM_REAP_TIMEOUT_S)
+            if rc is None and proc.returncode is None:
+                # stdout closed but the process lingers — reap the tree
+                # instead of hanging the turn on an unbounded wait.
+                await terminate_process_tree(proc)
+            if self._stream_corrupt is not None:
+                err_msg = (
+                    f"claude stream unreadable: {MALFORMED_LINE_LIMIT} consecutive "
+                    f"malformed lines (last: {self._stream_corrupt[:200]!r})"
+                )
+                await self._emit(
+                    EVENT_TURN_FAILED,
+                    {"reason": err_msg, "stderr_tail": list(self._stderr_tail)},
+                )
+                raise TurnFailed(err_msg)
             if terminal is None:
                 # Stream ended without a `result` event — treat as failure.
                 stderr_blob = self._stderr_blob()
@@ -249,6 +261,8 @@ class ClaudeCodeBackend(BaseAgentBackend):
         """Read stream-json events; return the terminal `result` event or None."""
         assert proc.stdout is not None
         terminal: dict[str, Any] | None = None
+        self._stream_corrupt = None
+        malformed_streak = 0
         stderr_task = asyncio.create_task(self._drain_stderr(proc))
         try:
             while True:
@@ -268,7 +282,12 @@ class ClaudeCodeBackend(BaseAgentBackend):
                     msg = json.loads(text)
                 except json.JSONDecodeError:
                     await self._emit(EVENT_MALFORMED, {"raw": text[:500]})
+                    malformed_streak += 1
+                    if malformed_streak >= MALFORMED_LINE_LIMIT:
+                        self._stream_corrupt = text
+                        break
                     continue
+                malformed_streak = 0
                 if not isinstance(msg, dict):
                     continue
                 kind = msg.get("type")
@@ -332,20 +351,8 @@ class ClaudeCodeBackend(BaseAgentBackend):
         return joined if len(joined) <= 400 else joined[-400:]
 
     async def _reap(self, proc: asyncio.subprocess.Process) -> None:
-        """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""
-        if proc.returncode is not None:
-            return
-        try:
-            proc.terminate()
-        except ProcessLookupError:
-            return
-        rc = await safe_proc_wait(proc, timeout=2.0)
-        if rc is None and proc.returncode is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await safe_proc_wait(proc)
+        """Best-effort process-group teardown; mirrors `stop()`."""
+        await terminate_process_tree(proc)
 
     def _update_usage_absolute(self, usage: dict[str, Any]) -> None:
         # Each `result` event reports usage for that one turn — accumulate.

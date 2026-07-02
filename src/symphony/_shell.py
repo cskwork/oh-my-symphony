@@ -22,6 +22,7 @@ import asyncio
 import errno
 import os
 import shutil
+import signal
 import sys
 from functools import lru_cache
 from typing import Any
@@ -150,3 +151,73 @@ async def safe_proc_wait(proc: Any, *, timeout: float | None = None) -> int | No
         return await asyncio.wait_for(asyncio.to_thread(_blocking_wait), timeout=timeout)
     except asyncio.TimeoutError:
         return None
+
+
+def _signal_process_group(pid: int, sig: int) -> bool:
+    """Signal the child's process group; fall back to the single pid.
+
+    Requires the child to have been spawned with ``start_new_session=True``
+    so it leads its own group — otherwise ``killpg`` raises and we fall back
+    to signalling only the direct child (the pre-R2 behavior).
+    """
+    try:
+        os.killpg(pid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        try:
+            os.kill(pid, sig)
+            return True
+        except OSError:
+            return False
+
+
+def kill_process_group(pid: int) -> bool:
+    """Sync best-effort SIGKILL of a process group by pid.
+
+    For force-eject paths that hold only a recorded pid (no proc object to
+    reap through). The killed children are reaped by the asyncio child
+    watcher or become inherited zombies until process exit — still strictly
+    better than a live agent CLI burning tokens in a reused worktree.
+    """
+    if sys.platform == "win32":
+        return False
+    return _signal_process_group(pid, signal.SIGKILL)
+
+
+async def terminate_process_tree(
+    proc: Any, *, term_timeout: float = 2.0, kill_timeout: float = 5.0
+) -> int | None:
+    """SIGTERM -> wait -> SIGKILL -> wait, addressing the whole process group.
+
+    Backends spawn ``bash -lc <agent cli>``; signalling only the bash
+    wrapper (``proc.terminate()``) orphans the actual agent CLI and its
+    children, which keep running and burning tokens. Both waits are bounded
+    so a caller can never hang on an unreapable child; returns the exit
+    code, or ``None`` if the process could not be reaped in time.
+    """
+    if proc.returncode is not None:
+        return proc.returncode
+    pid = proc.pid
+    if sys.platform == "win32" or pid is None:
+        # No POSIX process groups — single-process ladder.
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+        rc = await safe_proc_wait(proc, timeout=term_timeout)
+        if rc is None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            rc = await safe_proc_wait(proc, timeout=kill_timeout)
+        return proc.returncode if proc.returncode is not None else rc
+
+    _signal_process_group(pid, signal.SIGTERM)
+    rc = await safe_proc_wait(proc, timeout=term_timeout)
+    if rc is None and proc.returncode is None:
+        _signal_process_group(pid, signal.SIGKILL)
+        rc = await safe_proc_wait(proc, timeout=kill_timeout)
+    return proc.returncode if proc.returncode is not None else rc

@@ -18,7 +18,7 @@ import uuid
 from collections import deque
 from typing import Any
 
-from .._shell import resolve_bash, safe_proc_wait
+from .._shell import resolve_bash, safe_proc_wait, terminate_process_tree
 from ..errors import (
     PortExit,
     ResponseError,
@@ -53,6 +53,14 @@ def _utc_iso() -> str:
 class GeminiBackend(BaseAgentBackend):
     """One subprocess per turn; parses Gemini JSON output."""
 
+    def is_progress_event(self, event: dict[str, Any]) -> bool:
+        """Gemini emits no mid-turn events (stdout is read in bulk at turn
+        end), so nothing on the OTHER_MESSAGE path counts as progress —
+        the stall clock runs from turn boundaries, bounded by the
+        per-turn timeout."""
+        del event
+        return False
+
     def __init__(self, init: BackendInit) -> None:
         validate_agent_cwd(init.cwd, init.workspace_root)
         self._gemini = init.cfg.gemini
@@ -81,17 +89,7 @@ class GeminiBackend(BaseAgentBackend):
         self._closed = True
         proc = self._active_proc
         if proc is not None and proc.returncode is None:
-            try:
-                proc.terminate()
-            except ProcessLookupError:
-                pass
-            rc = await safe_proc_wait(proc, timeout=2.0)
-            if rc is None and proc.returncode is None:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
-                await safe_proc_wait(proc)
+            await terminate_process_tree(proc)
 
     @property
     def session_id(self) -> str | None:
@@ -138,6 +136,9 @@ class GeminiBackend(BaseAgentBackend):
                 stderr=asyncio.subprocess.PIPE,
                 env=os.environ.copy(),
                 limit=MAX_LINE_BYTES,
+                # Own process group so terminate/kill reaches the agent CLI
+                # behind the bash wrapper (POSIX only).
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             raise PortExit("bash not available", error=str(exc)) from exc
@@ -291,20 +292,8 @@ class GeminiBackend(BaseAgentBackend):
         self._latest_usage["total_tokens"] += input_tokens + output_tokens
 
     async def _reap(self, proc: asyncio.subprocess.Process) -> None:
-        """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""
-        if proc.returncode is not None:
-            return
-        try:
-            proc.terminate()
-        except ProcessLookupError:
-            return
-        rc = await safe_proc_wait(proc, timeout=2.0)
-        if rc is None and proc.returncode is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            await safe_proc_wait(proc)
+        """Best-effort process-group teardown; mirrors `stop()`."""
+        await terminate_process_tree(proc)
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
         try:

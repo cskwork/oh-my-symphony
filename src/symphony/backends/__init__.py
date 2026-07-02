@@ -45,6 +45,15 @@ EVENT_MALFORMED = "malformed"
 EVENT_COMPACTION = "compaction"           # context compaction started/ended
 EVENT_AGENT_RETRY = "agent_retry"         # backend-internal auto-retry
 
+# R7 — stream robustness knobs shared by the line-streaming backends.
+# A stream that is nothing but garbage should fail with a parse error, not
+# degrade into the generic "no terminal event" message; sparse bad lines
+# (any valid line resets the streak) stay tolerated.
+MALFORMED_LINE_LIMIT = 10
+# Post-stream reap bound: a child that closes stdout but lingers used to
+# hang the turn forever on an untimed safe_proc_wait.
+POST_STREAM_REAP_TIMEOUT_S = 10.0
+
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
