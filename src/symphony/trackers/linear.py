@@ -20,11 +20,14 @@ from ..issue import (
     normalize_labels,
     parse_iso_timestamp,
 )
+from ..logging import get_logger
 from ..workflow import TrackerConfig
+from ._retry import send_with_retry
 
 
 PAGE_SIZE = 50  # §11.2
-NETWORK_TIMEOUT_SECONDS = 30.0  # §11.2
+MAX_PAGES = 20
+log = get_logger()
 
 
 _CANDIDATE_QUERY = """
@@ -211,7 +214,7 @@ class LinearClient:
         self._tracker = tracker
         self._owns_client = http_client is None
         self._client = http_client or httpx.Client(
-            timeout=NETWORK_TIMEOUT_SECONDS,
+            timeout=tracker.network_timeout_seconds,
             headers={
                 "Authorization": tracker.api_key,
                 "Content-Type": "application/json",
@@ -355,7 +358,9 @@ class LinearClient:
     ) -> list[Issue]:
         out: list[Issue] = []
         after: str | None = None
+        page_count = 0
         while True:
+            page_count += 1
             payload = self._post(
                 {
                     "query": query,
@@ -375,6 +380,9 @@ class LinearClient:
             page_info = issues_payload.get("pageInfo") or {}
             if not page_info.get("hasNextPage"):
                 break
+            if page_count >= MAX_PAGES:
+                log.warning("linear_pagination_max_pages", max_pages=MAX_PAGES)
+                break
             cursor = page_info.get("endCursor")
             if not cursor:
                 raise LinearMissingEndCursor("missing endCursor while paginating")
@@ -383,7 +391,9 @@ class LinearClient:
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = self._client.post(self._tracker.endpoint, json=body)
+            response = send_with_retry(
+                lambda: self._client.post(self._tracker.endpoint, json=body)
+            )
         except httpx.HTTPError as exc:
             raise LinearApiRequestError("transport failure", error=str(exc)) from exc
         if response.status_code != 200:

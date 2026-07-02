@@ -31,12 +31,15 @@ from ..issue import (
     normalize_labels,
     parse_iso_timestamp,
 )
+from ..logging import get_logger
 from ..workflow import TrackerConfig
+from ._retry import send_with_retry
 
 
 API_BASE = "/rest/api/3"
 PAGE_SIZE = 50  # mirrors Linear adapter; Jira allows up to 100.
-NETWORK_TIMEOUT_SECONDS = 30.0
+MAX_PAGES = 20
+log = get_logger()
 
 # Fields we explicitly request from /search/jql. Keep this list narrow so
 # pagination stays small and the response payload predictable.
@@ -192,7 +195,7 @@ class JiraClient:
         if http_client is None:
             self._client = httpx.Client(
                 base_url=self._site,
-                timeout=NETWORK_TIMEOUT_SECONDS,
+                timeout=tracker.network_timeout_seconds,
                 auth=httpx.BasicAuth(tracker.email, tracker.api_key),
                 headers={
                     "Accept": "application/json",
@@ -295,7 +298,9 @@ class JiraClient:
     ) -> list[Issue]:
         out: list[Issue] = []
         next_token: str | None = None
+        page_count = 0
         while True:
+            page_count += 1
             params: dict[str, Any] = {
                 "jql": jql,
                 "fields": fields,
@@ -315,6 +320,9 @@ class JiraClient:
                     _normalize_issue(node, site_url=self._site, minimal=minimal)
                 )
             if payload.get("isLast", True):
+                break
+            if page_count >= MAX_PAGES:
+                log.warning("jira_pagination_max_pages", max_pages=MAX_PAGES)
                 break
             token = payload.get("nextPageToken")
             if not isinstance(token, str) or not token:
@@ -357,7 +365,9 @@ class JiraClient:
         json: dict[str, Any] | None = None,
     ) -> httpx.Response:
         try:
-            response = self._client.request(method, path, params=params, json=json)
+            response = send_with_retry(
+                lambda: self._client.request(method, path, params=params, json=json)
+            )
         except httpx.HTTPError as exc:
             raise JiraApiRequestError(
                 "transport failure", method=method, path=path, error=str(exc)

@@ -130,6 +130,49 @@ def test_build_service_config_defaults(tmp_path, monkeypatch):
     assert cfg.prompt_template_for_state("Todo") == "Hello {{ issue.identifier }}"
 
 
+def test_build_service_config_reads_tracker_network_timeout_seconds(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: linear
+              project_slug: my-proj
+              api_key: lin_test_token
+              network_timeout_seconds: 7.5
+            ---
+            Body
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.tracker.network_timeout_seconds == 7.5
+
+
+def test_build_service_config_rejects_invalid_tracker_network_timeout_seconds(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: linear
+              project_slug: my-proj
+              api_key: lin_test_token
+              network_timeout_seconds: 0
+            ---
+            Body
+            """
+        ),
+    )
+
+    with pytest.raises(ConfigValidationError, match="tracker.network_timeout_seconds"):
+        build_service_config(load_workflow(path))
+
+
 def test_build_service_config_reads_branch_policy_fields(tmp_path):
     path = _write(
         tmp_path,

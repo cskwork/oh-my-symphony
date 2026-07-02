@@ -14,6 +14,7 @@ import json
 import httpx
 import pytest
 
+import symphony.trackers.jira as jira_module
 from symphony.errors import (
     JiraApiStatusError,
     JiraTransitionNotFound,
@@ -59,6 +60,25 @@ def _client(handler) -> JiraClient:
         headers={"Accept": "application/json", "Content-Type": "application/json"},
     )
     return JiraClient(_cfg(), http_client=http)
+
+
+def test_owned_http_client_uses_configured_network_timeout() -> None:
+    cfg = _cfg()
+    cfg = TrackerConfig(
+        kind=cfg.kind,
+        endpoint=cfg.endpoint,
+        api_key=cfg.api_key,
+        project_slug=cfg.project_slug,
+        active_states=cfg.active_states,
+        terminal_states=cfg.terminal_states,
+        email=cfg.email,
+        network_timeout_seconds=7.5,
+    )
+    client = JiraClient(cfg)
+    try:
+        assert client._client.timeout.connect == 7.5
+    finally:
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +174,37 @@ def test_fetch_candidate_issues_paginates_and_normalizes() -> None:
     assert "PROJ" in calls[0]["jql"]
     assert "To Do" in calls[0]["jql"] and "In Progress" in calls[0]["jql"]
     assert calls[1]["nextPageToken"] == "tok-2"
+
+
+def test_fetch_candidate_issues_stops_at_max_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    warnings: list[tuple[str, dict]] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "isLast": False,
+                "nextPageToken": f"tok-{calls}",
+                "issues": [],
+            },
+        )
+
+    monkeypatch.setattr(jira_module, "MAX_PAGES", 2)
+    monkeypatch.setattr(
+        jira_module.log,
+        "warning",
+        lambda message, **fields: warnings.append((message, fields)),
+    )
+    client = _client(handler)
+
+    assert client.fetch_candidate_issues() == []
+    assert calls == 2
+    assert warnings == [("jira_pagination_max_pages", {"max_pages": 2})]
 
 
 def test_fetch_issues_by_states_skips_empty_input() -> None:

@@ -26,6 +26,7 @@ from symphony.errors import (
     JiraUnknownPayload,
 )
 from symphony.issue import Issue
+import symphony.trackers._retry as retry_module
 from symphony.trackers.jira import (
     JiraClient,
     _adf_paragraphs,
@@ -345,21 +346,118 @@ class TestJqlBuilders:
 
 
 class TestRequestErrorMapping:
-    def test_transport_failure_wraps_in_jira_api_request_error(self) -> None:
+    def test_transport_failure_wraps_in_jira_api_request_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleeps: list[float] = []
+        calls = 0
+
         def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
             raise httpx.ConnectError("connection reset")
 
+        monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
         client = _client(handler)
         with pytest.raises(JiraApiRequestError):
             client.fetch_candidate_issues()
+        assert calls == 3
+        assert sleeps == [0.5, 1.0]
 
-    def test_non_2xx_search_raises_status_error(self) -> None:
+    def test_transport_failure_retries_then_returns_issues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleeps: list[float] = []
+        calls = 0
+
         def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ConnectError("connection reset")
+            return httpx.Response(200, json={"isLast": True, "issues": []})
+
+        monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
+        client = _client(handler)
+
+        assert client.fetch_candidate_issues() == []
+        assert calls == 2
+        assert sleeps == [0.5]
+
+    def test_rate_limit_retries_after_retry_after_then_returns_issues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleeps: list[float] = []
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(429, headers={"Retry-After": "2"})
+            return httpx.Response(200, json={"isLast": True, "issues": []})
+
+        monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
+        client = _client(handler)
+
+        assert client.fetch_candidate_issues() == []
+        assert calls == 2
+        assert sleeps == [2.0]
+
+    def test_rate_limit_retry_after_is_capped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleeps: list[float] = []
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(429, headers={"Retry-After": "99"})
+            return httpx.Response(200, json={"isLast": True, "issues": []})
+
+        monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
+        client = _client(handler)
+
+        assert client.fetch_candidate_issues() == []
+        assert sleeps == [30.0]
+
+    def test_server_error_retries_then_raises_status_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleeps: list[float] = []
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
             return httpx.Response(500, text="boom")
 
+        monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
         client = _client(handler)
         with pytest.raises(JiraApiStatusError):
             client.fetch_candidate_issues()
+        assert calls == 3
+        assert sleeps == [0.5, 1.0]
+
+    def test_client_error_fails_without_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleeps: list[float] = []
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(400, text="bad request")
+
+        monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
+        client = _client(handler)
+        with pytest.raises(JiraApiStatusError):
+            client.fetch_candidate_issues()
+        assert calls == 1
+        assert sleeps == []
 
     def test_non_object_payload_raises_unknown(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:

@@ -275,6 +275,204 @@ the run terminal.
 
 ---
 
+# 2026-07-02 - R2/R7 backend lifecycle hardening
+
+## Decision
+
+Finish the WIP backend lifecycle slice by treating the subprocess group as the
+shutdown unit for every agent backend. `stop()` still reaps through
+`symphony._shell.safe_proc_wait`, but the first signal is now process-group
+SIGTERM so the real agent CLI behind `bash -lc` does not keep running after the
+wrapper exits. Codex completion waiters failed by stdout EOF now emit
+`turn_failed` before re-raising, so crashes are visible immediately instead of
+silently bypassing event handling.
+
+Force-eject now consumes the generic backend `agent_pid` event field as the
+recorded process id and calls `kill_process_group` before scheduling the retry.
+That closes the zombie-worker case where the asyncio task is stuck on a
+non-cancellable await and `backend.stop()` will never run.
+
+- Rejected: restoring per-backend `safe_proc_wait` imports only to satisfy old
+  tests. The shell helper owns the process-tree contract, so tests patch
+  `symphony._shell.safe_proc_wait` and the signal helper at the root.
+- Rejected: changing `BaseAgentBackend.is_progress_event` to False. The base
+  default stays conservatively True as the existing regression guard records;
+  Pi and Gemini document their stricter backend-specific predicates instead.
+- Deferred: bounding Gemini `.read()` memory use. It is a real LOW-MED concern
+  but independent of the process-leak and EOF-fast-fail lifecycle slice.
+
+## Verification
+
+- `.venv/bin/python -m pytest -q tests/test_backends.py tests/test_orchestrator_dispatch.py -k 'stop_reaps_with_safe_proc_wait or backend_is_progress_event_defaults_to_true or force_eject'` -> 5 failed, 1 passed before the test-contract update.
+- `.venv/bin/python -m pytest -q tests/test_backends.py tests/test_backends_lifecycle.py tests/test_orchestrator_dispatch.py -k 'stop_reaps_with_safe_proc_wait or backend_is_progress_event or start_new_session or terminate_process_tree or completion_waiter or malformed or post_stream or force_eject or records_backend_agent_pid'` -> 18 passed, 166 deselected.
+- `.venv/bin/python -m pytest -q tests/test_backends.py tests/test_backends_lifecycle.py tests/test_orchestrator_dispatch.py` -> 184 passed.
+- `.venv/bin/python -m pytest -q` -> 907 passed, 2 skipped, 1 documented bootstrap failure (`server.port=9999` in use).
+- `.venv/bin/python -m pytest -q -k 'not test_bootstrap_creates_vault_skeleton'` -> 907 passed, 2 skipped, 1 deselected.
+- `.venv/bin/symphony doctor ./WORKFLOW.md` -> blocked in this sandbox: port 9999 is already in use, and `/Users/danny/symphony_workspaces` is outside the writable roots. An escalated rerun was rejected by policy.
+
+---
+
+# 2026-07-02 - OneShot bootstrap local-port hardening
+
+## Decision
+
+Make OneShot bootstrap own the local API port selection instead of assuming the
+operator can bind `9999`. Bootstrap now uses `9999` when it is free,
+auto-selects an available localhost port when the default is occupied, supports
+`SYMPHONY_ONESHOT_PORT=auto`, and rejects an explicitly requested occupied
+`SYMPHONY_ONESHOT_PORT=<port>` before writing `.oneshot/` or `WORKFLOW.md`.
+
+The selected port is substituted into generated `WORKFLOW.md` and
+`.oneshot/SYSTEM.md`, and the operator docs now read the generated port before
+launching or polling the API.
+
+- Rejected: killing the process that owns `9999`. Bootstrap should not destroy
+  unrelated operator state just to make tests pass.
+- Rejected: changing the repository's checked-in `WORKFLOW.md` port. That is a
+  local operator configuration, while the failing contract was the generated
+  OneShot workflow.
+- Rejected: deselecting the bootstrap test in the final suite. The root issue
+  was deterministic enough to fix in the generator.
+
+## Verification
+
+- `bash -n skills/symphony-oneshot/templates/bootstrap.sh` -> pass.
+- `.venv/bin/python -m pytest -q tests/skills/test_symphony_oneshot_bootstrap.py` -> 3 passed, 1 skipped.
+- `.venv/bin/python -m pytest -q` -> 909 passed, 2 skipped, 1 warning.
+- `git diff --check` -> pass.
+- `.venv/bin/symphony doctor ./WORKFLOW.md` -> still blocked by the live
+  operator environment: `127.0.0.1:9999` is occupied, and the sandbox cannot
+  write `/Users/danny/symphony_workspaces`. The required escalated rerun was
+  rejected by policy.
+- `SYMPHONY_BROWSER_E2E=1 .venv/bin/python -m pytest tests/test_web_browser_e2e.py -q -rs` -> 1 skipped because Playwright Chromium is not installed. The install command was requested and rejected by policy.
+
+---
+
+# 2026-07-02 - R4 classified tracker retries
+
+## Decision
+
+Add a shared tracker retry helper and route Jira `_request` plus Linear `_post`
+through it. The helper retries only transport failures and HTTP
+`429/500/502/503/504`, preserves existing tracker-specific exception types,
+honors numeric `Retry-After` capped at 30 seconds, and returns non-retryable
+responses to the caller's existing status handling.
+
+Jira and Linear pagination now stop after `MAX_PAGES=20` and log a warning
+instead of looping forever when an API keeps returning a next-page marker.
+Tracker HTTP timeout is now configurable as
+`tracker.network_timeout_seconds` with a default of `30.0`.
+
+- Rejected: wrapping all tracker failures in a new shared exception. Existing
+  callers and tests rely on `JiraApiStatusError`, `LinearApiStatusError`, and
+  the request-error variants.
+- Rejected: retrying all non-2xx statuses. `400/401/403/404` are validation or
+  auth problems and should fail immediately.
+- Rejected: making the helper async. Both clients are synchronous and already
+  run in executor threads, so sync `time.sleep` keeps the change small and
+  consistent with the current architecture.
+- Deferred: worker-outcome deterministic/transient classification. The
+  handoff's R4 tracker slice is now complete; backend outcome taxonomy belongs
+  with the later operator-attention and retry-state work.
+
+## Verification
+
+- `.venv/bin/python -m pytest -q tests/test_tracker_jira.py tests/test_tracker_jira_edges.py tests/test_tracker_linear_full.py tests/test_tracker_linear_archive.py tests/test_workflow.py` -> 126 passed.
+- `.venv/bin/python -m pytest -q` -> 922 passed, 2 skipped, 1 warning.
+- `.venv/bin/symphony doctor ./WORKFLOW.md` -> still blocked by live operator
+  environment: `127.0.0.1:9999` is occupied, and the sandbox cannot write
+  `/Users/danny/symphony_workspaces`.
+- `SYMPHONY_BROWSER_E2E=1 .venv/bin/python -m pytest tests/test_web_browser_e2e.py -q -rs` -> 1 skipped because Playwright Chromium is not installed; installed Chrome channel also aborts under the sandbox.
+
+---
+
+# 2026-07-02 - R5 file tracker locking and no-write reads
+
+## Decision
+
+Add file-board write serialization without changing the Markdown ticket format.
+Generated ticket creation now goes through
+`FileBoardTracker.create_with_next_identifier()`, which holds
+`.locks/allocator.lock` across ID scan and file creation. Web API and TUI
+generated-create paths use that API instead of `next_identifier()` followed by
+`create()`.
+
+Every file-tracker read-modify-write mutation now runs through a per-ticket
+lockfile under `.locks/<identifier>.lock`. The lock is separate from the
+ticket file because writes use `os.replace()`, which swaps the ticket inode and
+would weaken a lock held directly on the `.md` file. Before writing, the helper
+re-reads the ticket and re-applies the mutation when `(updated_at, mtime_ns)`
+moved.
+
+`parse_ticket_file()` still returns a healed in-memory view for Markdown
+accidentally inserted into frontmatter, but it no longer persists that repair
+during a read.
+
+- Rejected: locking only `next_identifier()`. The race is between ID selection
+  and file creation, so the public generated-create operation must be atomic.
+- Rejected: keeping the web API collision-retry loop as the only guard. Retry
+  hides collisions after they happen; the tracker should own allocation.
+- Rejected: flocking the ticket `.md` file directly. Atomic replace changes
+  the inode, so a stable lockfile is the safer coordination point.
+- Rejected: preserving write-on-read auto-heal. A board refresh should not
+  dirty the user's worktree or race with an agent edit.
+- Deferred: native Windows locking. POSIX uses `fcntl`; non-POSIX falls back
+  to the previous behavior and is documented as residual risk.
+
+## Verification
+
+- `.venv/bin/python -m pytest -q tests/test_tracker_file.py::test_parse_ticket_file_auto_heals_markdown_inside_front_matter` -> failed before implementation because parse rewrote the file; now covered in the file-tracker suite.
+- `.venv/bin/python -m pytest -q tests/test_tracker_file.py::test_create_with_next_identifier_is_unique_under_concurrent_calls` -> failed before implementation because the atomic generated-create API did not exist; now passes.
+- `.venv/bin/python -m pytest -q tests/test_tracker_file.py::test_append_note_preserves_concurrent_writes` -> failed before locking with only one concurrent note surviving; now passes.
+- `.venv/bin/python -m pytest -q tests/test_tracker_file.py` -> 35 passed.
+- `.venv/bin/python -m pytest -q tests/test_tracker_file.py tests/test_webapi.py` -> 54 passed.
+- `.venv/bin/python -m compileall -q src/symphony/trackers/file.py src/symphony/webapi.py src/symphony/tui/app.py` -> pass.
+- `.venv/bin/python -m pytest -q` -> 926 passed, 2 skipped, 1 warning.
+- `git diff --check` -> pass.
+- `.venv/bin/symphony doctor ./WORKFLOW.md` -> still blocked by the live
+  operator environment: `127.0.0.1:9999` is occupied, and the sandbox cannot
+  write `/Users/danny/symphony_workspaces`.
+- `SYMPHONY_BROWSER_E2E=1 .venv/bin/python -m pytest tests/test_web_browser_e2e.py -q -rs` -> 1 skipped because Playwright Chromium is not installed.
+- Delivery proof: `docs/changelog/2026-07-02-r5-file-tracker-locking-delivery-proof.md`.
+
+---
+
+# 2026-07-02 - R6 persisted safety valves
+
+## Decision
+
+Persist the orchestrator's crash-sensitive per-issue guards in the existing
+`.symphony/state.db` run registry. `issue_flags` stores `retry_attempt`,
+`budget_exhausted`, `paused`, and `updated_at` by issue id. Startup rehydrates
+those flags before dispatch eligibility runs, and runtime paths write through
+via `_registry_guard` when scheduling retries, marking a budget exhaustion, or
+pausing/resuming a worker.
+
+Retry attempts are cleared on clean worker exit and when a continuation retry
+is scheduled, so a successful retry does not poison the next restart. Budget
+exhaustion clears the retry attempt because the budget guard supersedes retry
+backoff.
+
+- Rejected: a separate JSON sidecar. The run registry already owns crash-safe
+  orchestrator state and has the existing busy-timeout/guard behavior.
+- Rejected: persisting pause in worker lease rows. Pauses survive worker exit,
+  so tying them to a particular active lease would drop the operator's hold
+  exactly when a retry is being parked.
+- Rejected: adding a new public resume path for budget exhaustion in this
+  slice. Existing behavior is an operator stop condition; R6 only preserves
+  that meaning across restart.
+
+## Verification
+
+- `.venv/bin/python -m pytest -q tests/test_run_registry.py::test_run_registry_persists_issue_flags_across_reopen tests/test_run_registry.py::test_run_registry_clears_issue_flags_independently tests/test_orchestrator_dispatch.py::test_persisted_issue_flags_block_dispatch_after_restart tests/test_orchestrator_dispatch.py::test_persisted_retry_attempt_drives_next_dispatch_and_cap tests/test_orchestrator_dispatch.py::test_pause_resume_write_through_issue_flags tests/test_orchestrator_dispatch.py::test_retry_schedule_write_through_and_continuation_clears_issue_flag tests/test_orchestrator_dispatch.py::test_total_turn_budget_exhaustion_write_through_issue_flags` -> 7 passed.
+- `.venv/bin/python -m pytest -q tests/test_run_registry.py tests/test_orchestrator_dispatch.py` -> 105 passed.
+- `.venv/bin/python -m pytest -q` -> 933 passed, 2 skipped, 1 warning.
+- `git diff --check` -> pass.
+- `SYMPHONY_BROWSER_E2E=1 .venv/bin/python -m pytest tests/test_web_browser_e2e.py -q -rs` -> 1 passed after installing Playwright Chromium and running outside the sandbox.
+- `.venv/bin/symphony doctor ./WORKFLOW.md` -> all PASS after stopping the stale local Symphony service that had been occupying port 9999.
+
+---
+
 # 2026-07-02 - reliability/availability/usability system-design plan
 
 ## Decision

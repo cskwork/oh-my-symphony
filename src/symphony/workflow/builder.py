@@ -183,6 +183,12 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     else:
         archive_after_days = archive_after_raw
 
+    network_timeout_seconds = _validated_positive_float_or_default(
+        tracker_raw.get("network_timeout_seconds"),
+        30.0,
+        name="tracker.network_timeout_seconds",
+    )
+
     archive_state_raw = tracker_raw.get("archive_state")
     archive_state = (
         archive_state_raw.strip()
@@ -206,6 +212,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         archive_state=archive_state,
         archive_after_days=archive_after_days,
         email=tracker_email,
+        network_timeout_seconds=network_timeout_seconds,
     )
 
     polling_raw = cfg.get("polling") or {}
@@ -573,6 +580,24 @@ def _validated_positive_or_default(value: Any, default: int, *, name: str) -> in
     if ivalue <= 0:
         raise ConfigValidationError(f"{name} must be a positive integer", value=value)
     return ivalue
+
+
+def _validated_positive_float_or_default(
+    value: Any, default: float, *, name: str
+) -> float:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ConfigValidationError(f"{name} must be a positive number", value=value)
+    try:
+        fvalue = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigValidationError(
+            f"{name} must be a positive number", value=value
+        ) from exc
+    if fvalue <= 0:
+        raise ConfigValidationError(f"{name} must be a positive number", value=value)
+    return fvalue
 
 
 def _validated_nonnegative_or_default(value: Any, default: int, *, name: str) -> int:

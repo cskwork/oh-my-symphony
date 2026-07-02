@@ -40,13 +40,20 @@ symphony doctor ./WORKFLOW.md
 bash skills/symphony-oneshot/templates/bootstrap.sh \
   "<user's one-shot prompt>"
 
-# 2. Launch headless on a free port
-symphony ./WORKFLOW.md --port 9999 2>> log/symphony.log &
+# 2. Launch headless on the port bootstrap wrote into WORKFLOW.md
+PORT=$(python3 - <<'PY'
+from pathlib import Path
+import re
+text = Path("WORKFLOW.md").read_text()
+print(re.search(r"(?m)^  port: (\d+)$", text).group(1))
+PY
+)
+symphony ./WORKFLOW.md --port "$PORT" 2>> log/symphony.log &
 
 # 3. Poll instead of tight-looping
 while true; do
-  state=$(curl -s http://127.0.0.1:9999/api/v1/state | jq -r '.issues[] | select(.identifier|startswith("DELIVER")) | .state' | head -1)
-  curl -s http://127.0.0.1:9999/api/v1/state | jq '.counts'
+  state=$(curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -r '.issues[] | select(.identifier|startswith("DELIVER")) | .state' | head -1)
+  curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq '.counts'
   case "$state" in
     Delivered) echo "delivered"; break ;;
     Blocked|Cancelled) echo "stopped: $state - see kanban/DELIVER-*.md ## Blocker"; break ;;
@@ -60,8 +67,10 @@ cat .oneshot/vault/verification.md
 cat .oneshot/vault/delivery.md
 ```
 
-If port `9999` is occupied, choose another port and keep the polling URL in
-sync.
+Bootstrap defaults to `9999`, auto-selects a free port when that default is
+occupied, and writes the selected value to `WORKFLOW.md`. To force a specific
+port, run bootstrap with `SYMPHONY_ONESHOT_PORT=<port>`; to always auto-select,
+use `SYMPHONY_ONESHOT_PORT=auto`.
 
 ## Deliver gate summary
 

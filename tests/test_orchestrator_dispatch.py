@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import symphony.orchestrator.core as core_module
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import Orchestrator, RunningEntry, _IssueDebug, _sort_for_dispatch_fifo
 from symphony.workspace import WorkspaceManager
@@ -383,7 +384,7 @@ from symphony.orchestrator import STALL_FORCE_EJECT_GRACE_S
 from symphony.orchestrator.run_registry import RunRegistry
 
 
-def test_reconcile_force_ejects_zombie_after_grace():
+def test_reconcile_force_ejects_zombie_after_grace(monkeypatch: pytest.MonkeyPatch):
     """Worker that didn't die from cancel must lose its slot after grace.
 
     Reproduces the OLV-003 zombie pattern: a worker stuck on a
@@ -394,6 +395,12 @@ def test_reconcile_force_ejects_zombie_after_grace():
     orch = _orch()
     zombie = _issue("MT-1", state="Todo")
     now = datetime.now(timezone.utc)
+    killed: list[int] = []
+    monkeypatch.setattr(
+        core_module,
+        "kill_process_group",
+        lambda pid: killed.append(pid) or True,
+    )
 
     async def _run() -> None:
         # `_schedule_retry` reads `self._loop` to compute the timer's
@@ -406,6 +413,7 @@ def test_reconcile_force_ejects_zombie_after_grace():
             worker_task=None,  # type: ignore[arg-type]
             workspace_path=Path("/tmp"),
             cancelled_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 5),
+            codex_app_server_pid=4242,
         )
         orch._running[zombie.id] = entry
         orch._claimed.add(zombie.id)
@@ -422,6 +430,7 @@ def test_reconcile_force_ejects_zombie_after_grace():
     assert zombie.id not in orch._claimed, "claim should be released"
     assert zombie.id in orch._retry, "force-eject must schedule a retry"
     assert orch._retry[zombie.id].error == "force_ejected_zombie"
+    assert killed == [4242], "force-eject must kill the recorded process group"
 
 
 def test_persisted_lease_blocks_fresh_orchestrator_dispatch(tmp_path, monkeypatch):
@@ -499,6 +508,168 @@ def test_worker_exit_releases_persisted_lease(tmp_path, monkeypatch):
 
     assert registry.has_active_lease(issue.id, now=datetime.now(timezone.utc)) is False
     assert registry.get_run(run_id).status == "normal"
+
+
+def test_persisted_issue_flags_block_dispatch_after_restart(tmp_path):
+    cfg = _make_config(workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws")
+    state_db = tmp_path / ".symphony" / "state.db"
+    paused = _issue("MT-PAUSED", state="Todo")
+    exhausted = _issue("MT-BUDGET", state="Todo")
+    registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+    registry.set_issue_flags(paused.id, paused=True)
+    registry.set_issue_flags(exhausted.id, budget_exhausted=True)
+    registry.close()
+
+    restarted = _orch()
+    restarted._ensure_run_registry(cfg)
+
+    assert restarted.is_paused(paused.id)
+    assert paused.id in restarted._paused_issue_ids
+    assert exhausted.id in restarted._turn_budget_exhausted
+    assert restarted._should_dispatch(paused, cfg) is False
+    assert restarted._should_dispatch(exhausted, cfg) is False
+
+
+def test_persisted_retry_attempt_drives_next_dispatch_and_cap(tmp_path, monkeypatch):
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+        active_states=("Todo",),
+    )
+    cfg = replace(cfg, agent=replace(cfg.agent, max_retries=3))
+    state_db = tmp_path / ".symphony" / "state.db"
+    issue = _issue("MT-RETRY", state="Todo")
+    registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+    registry.set_issue_flags(issue.id, retry_attempt=3)
+    registry.close()
+    restarted = _orch()
+
+    dispatched: list[tuple[str, int | None, str | None]] = []
+    escalated: list[int] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(captured_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append((captured_issue.id, attempt, attempt_kind))
+
+    async def _escalate(**kwargs):
+        escalated.append(kwargs["attempt"])
+
+    async def _run() -> None:
+        restarted._loop = asyncio.get_running_loop()
+        monkeypatch.setattr(restarted._workflow_state, "reload", lambda: (cfg, None))
+        monkeypatch.setattr(restarted._workflow_state, "current", lambda: cfg)
+        monkeypatch.setattr(restarted, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(restarted, "_archive_sweep", _archive)
+        monkeypatch.setattr(restarted, "_dispatch", _dispatch)
+        monkeypatch.setattr(restarted, "_escalate_max_retries", _escalate)
+
+        await restarted._on_tick()
+        assert dispatched == [(issue.id, 3, "retry")]
+
+        restarted._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=dispatched[0][1] + 1,
+            delay_ms=1,
+            error="boom",
+        )
+        await asyncio.sleep(0)
+
+    asyncio.run(_run())
+
+    assert escalated == [4]
+
+
+def test_pause_resume_write_through_issue_flags(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-PAUSE", state="Todo")
+
+    async def _run() -> None:
+        orch._run_registry = registry
+        _install_running_entry(orch, issue)
+
+        assert orch.pause_worker(issue.id) is True
+        flags = registry.get_issue_flags(issue.id)
+        assert flags is not None
+        assert flags.paused is True
+
+        assert orch.resume_worker(issue.id) is True
+        assert registry.get_issue_flags(issue.id) is None
+
+    asyncio.run(_run())
+
+
+def test_retry_schedule_write_through_and_continuation_clears_issue_flag(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-RETRY-FLAG", state="Todo")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=2,
+            delay_ms=60_000,
+            error="worker_exit: boom",
+        )
+        flags = registry.get_issue_flags(issue.id)
+        assert flags is not None
+        assert flags.retry_attempt == 2
+
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=1,
+            delay_ms=60_000,
+            error=None,
+            kind="continuation",
+        )
+        assert registry.get_issue_flags(issue.id) is None
+
+        for retry in list(orch._retry.values()):
+            retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_total_turn_budget_exhaustion_write_through_issue_flags(tmp_path, monkeypatch):
+    cfg = _replace_agent_field(
+        _make_config(
+            max_concurrent=1,
+            workflow_path=tmp_path / "WORKFLOW.md",
+            workspace_root=tmp_path / "ws",
+        ),
+        max_total_turns=2,
+    )
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-BUDGET-FLAG", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        debug = orch._issue_debug.setdefault(issue.id, _IssueDebug())
+        debug.completed_turn_count = 2
+
+        await orch._on_worker_exit(issue.id, reason="normal", error=None)
+
+    asyncio.run(_run())
+
+    flags = registry.get_issue_flags(issue.id)
+    assert flags is not None
+    assert flags.budget_exhausted is True
+    assert flags.retry_attempt is None
 
 
 def test_reconcile_first_stall_only_cancels():
@@ -759,6 +930,36 @@ def test_on_codex_event_user_role_other_message_does_not_advance_progress():
 
         assert entry.last_progress_timestamp is not None
         assert entry.last_progress_timestamp > baseline
+
+    asyncio.run(_run())
+
+
+def test_on_codex_event_records_backend_agent_pid():
+    """All backends stamp `agent_pid`; force-eject uses the recorded pid."""
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        entry = RunningEntry(
+            issue=issue,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=Path("/tmp"),
+        )
+        orch._running[issue.id] = entry
+
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"type": "user"},
+                "agent_pid": 4242,
+            },
+        )
+
+        assert entry.codex_app_server_pid == 4242
 
     asyncio.run(_run())
 

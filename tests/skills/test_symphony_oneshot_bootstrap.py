@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +82,28 @@ def _stub_agent_cli(bin_dir: Path, name: str = "claude") -> None:
         stub.chmod(0o755)
 
 
+def _hermetic_project(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    project = tmp_path / "project"
+    project.mkdir()
+    # Make the dir look like the oh-my-symphony repo so the script's warn guard
+    # passes; the marker file is enough for its `grep -qE name = "...symphony"`.
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "oh-my-symphony"\n', encoding="utf-8"
+    )
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    env = dict(os.environ)
+    env["HOME"] = str(fake_home)  # keep ~/symphony_workspaces inside the sandbox
+
+    # Doctor's agent-CLI check needs `claude` on PATH; CI has no agent CLI, so
+    # stub one (never invoked) and prepend it so the run stays self-contained.
+    stub_bin = tmp_path / "bin"
+    _stub_agent_cli(stub_bin)
+    env["PATH"] = str(stub_bin) + os.pathsep + env.get("PATH", "")
+    return project, env
+
+
 def test_bootstrap_script_exists() -> None:
     assert BOOTSTRAP.is_file(), f"missing bootstrap script: {BOOTSTRAP}"
 
@@ -105,24 +128,7 @@ def test_bootstrap_seeds_gate_files_statically() -> None:
 )
 def test_bootstrap_creates_vault_skeleton(tmp_path: Path) -> None:
     """With the CLI, run bootstrap hermetically and assert the real skeleton."""
-    project = tmp_path / "project"
-    project.mkdir()
-    # Make the dir look like the oh-my-symphony repo so the script's warn guard
-    # passes; the marker file is enough for its `grep -qE name = "...symphony"`.
-    (project / "pyproject.toml").write_text(
-        '[project]\nname = "oh-my-symphony"\n', encoding="utf-8"
-    )
-
-    fake_home = tmp_path / "home"
-    fake_home.mkdir()
-    env = dict(os.environ)
-    env["HOME"] = str(fake_home)  # keep ~/symphony_workspaces inside the sandbox
-
-    # Doctor's agent-CLI check needs `claude` on PATH; CI has no agent CLI, so
-    # stub one (never invoked) and prepend it so the run stays self-contained.
-    stub_bin = tmp_path / "bin"
-    _stub_agent_cli(stub_bin)
-    env["PATH"] = str(stub_bin) + os.pathsep + env.get("PATH", "")
+    project, env = _hermetic_project(tmp_path)
 
     result = subprocess.run(
         # resolve_bash(): on Windows, a bare "bash" can resolve to the WSL
@@ -148,3 +154,43 @@ def test_bootstrap_creates_vault_skeleton(tmp_path: Path) -> None:
         # vault_file is repo-relative (".oneshot/vault/..."); resolve under project.
         path = project / vault_file
         assert path.is_file(), f"bootstrap did not create gate file {path}"
+
+    workflow_text = (project / "WORKFLOW.md").read_text(encoding="utf-8")
+    system_text = (project / ".oneshot" / "SYSTEM.md").read_text(encoding="utf-8")
+    assert "__ONESHOT_ROOT__" not in workflow_text
+    assert "__ONESHOT_PORT__" not in workflow_text
+    assert "__ONESHOT_PORT__" not in system_text
+
+    match = re.search(r"(?m)^  port: (\d+)$", workflow_text)
+    assert match, "generated WORKFLOW.md did not contain a numeric server port"
+    port = match.group(1)
+    assert f"127.0.0.1:{port}/api/v1/..." in system_text
+
+
+@pytest.mark.skipif(
+    shutil.which("symphony") is None,
+    reason="symphony CLI not on PATH — cannot run bootstrap end to end",
+)
+def test_bootstrap_rejects_explicit_busy_port(tmp_path: Path) -> None:
+    """An operator-selected occupied port must fail before writing a bad workflow."""
+    project, env = _hermetic_project(tmp_path)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen()
+        port = str(sock.getsockname()[1])
+        env["SYMPHONY_ONESHOT_PORT"] = port
+
+        result = subprocess.run(
+            [resolve_bash(), BOOTSTRAP.as_posix(), "test prompt"],
+            cwd=project,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    assert result.returncode == 1
+    assert f"requested SYMPHONY_ONESHOT_PORT={port} is not available" in result.stderr
+    assert not (project / "WORKFLOW.md").exists()
+    assert not (project / ".oneshot").exists()

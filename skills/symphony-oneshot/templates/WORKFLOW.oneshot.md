@@ -64,7 +64,7 @@ codex:
   turn_sandbox_policy: workspace-write
 
 server:
-  port: 9999
+  port: __ONESHOT_PORT__
 ---
 
 This template intentionally keeps the lane rules inline so `bootstrap.sh`

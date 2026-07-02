@@ -12,6 +12,7 @@ set -euo pipefail
 
 PROMPT="${1:-}"
 FORCE="${FORCE:-0}"
+REQUESTED_PORT="${SYMPHONY_ONESHOT_PORT:-9999}"
 
 if [ -z "$PROMPT" ]; then
   echo "usage: bash bootstrap.sh \"<one-shot prompt>\"" >&2
@@ -35,6 +36,46 @@ if ! command -v symphony >/dev/null 2>&1; then
   exit 1
 fi
 
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
+
+port_free() {
+  [ -n "$PYTHON_BIN" ] || return 1
+  "$PYTHON_BIN" - "$1" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        raise SystemExit(1)
+PY
+}
+
+pick_free_port() {
+  [ -n "$PYTHON_BIN" ] || return 1
+  "$PYTHON_BIN" - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+if [ "$REQUESTED_PORT" = "auto" ]; then
+  SYMPHONY_PORT="$(pick_free_port)"
+elif port_free "$REQUESTED_PORT"; then
+  SYMPHONY_PORT="$REQUESTED_PORT"
+elif [ -z "${SYMPHONY_ONESHOT_PORT:-}" ] && [ -n "$PYTHON_BIN" ]; then
+  SYMPHONY_PORT="$(pick_free_port)"
+  echo "info: port 9999 is occupied; using available port $SYMPHONY_PORT" >&2
+else
+  echo "error: requested SYMPHONY_ONESHOT_PORT=$REQUESTED_PORT is not available" >&2
+  exit 1
+fi
+
 if [ -d "$PROJECT_ROOT/.oneshot" ] && [ "$FORCE" != "1" ]; then
   echo "abort: $PROJECT_ROOT/.oneshot already exists." >&2
   echo "       Re-run with FORCE=1 to clobber, or move/remove the dir manually." >&2
@@ -53,7 +94,7 @@ mkdir -p "$PROJECT_ROOT/log"
 mkdir -p "$PROJECT_ROOT/kanban"
 
 # 2. Constitution + raw prompt + project root marker
-cp "$SKILL_DIR/SYSTEM.md" "$PROJECT_ROOT/.oneshot/SYSTEM.md"
+sed "s|__ONESHOT_PORT__|$SYMPHONY_PORT|g" "$SKILL_DIR/SYSTEM.md" > "$PROJECT_ROOT/.oneshot/SYSTEM.md"
 printf "%s\n" "$PROMPT" > "$PROJECT_ROOT/.oneshot/prompt.md"
 echo "$PROJECT_ROOT" > "$PROJECT_ROOT/.oneshot/.project_root"
 
@@ -78,17 +119,20 @@ cat > "$PROJECT_ROOT/.oneshot/vault/contracts.md" <<EOF
 <!-- Will be filled in by the Plan lane. -->
 EOF
 
-# 5. WORKFLOW.md — substitute __ONESHOT_ROOT__ with the absolute project path
+# 5. WORKFLOW.md — substitute placeholders with the generated local settings
 if [ -f "$PROJECT_ROOT/WORKFLOW.md" ]; then
   cp "$PROJECT_ROOT/WORKFLOW.md" "$PROJECT_ROOT/WORKFLOW.md.bak.$(date +%s)"
   echo "info: prior WORKFLOW.md backed up" >&2
 fi
 # sed -i needs an empty backup ext on macOS; use a temp + mv to be portable
-sed "s|__ONESHOT_ROOT__|$PROJECT_ROOT|g" "$SKILL_DIR/WORKFLOW.oneshot.md" > "$PROJECT_ROOT/WORKFLOW.md"
+sed \
+  -e "s|__ONESHOT_ROOT__|$PROJECT_ROOT|g" \
+  -e "s|__ONESHOT_PORT__|$SYMPHONY_PORT|g" \
+  "$SKILL_DIR/WORKFLOW.oneshot.md" > "$PROJECT_ROOT/WORKFLOW.md"
 
 # Sanity: make sure substitution actually happened
-if grep -q '__ONESHOT_ROOT__' "$PROJECT_ROOT/WORKFLOW.md"; then
-  echo "error: __ONESHOT_ROOT__ placeholder still present in WORKFLOW.md after substitution" >&2
+if grep -qE '__ONESHOT_ROOT__|__ONESHOT_PORT__' "$PROJECT_ROOT/WORKFLOW.md" "$PROJECT_ROOT/.oneshot/SYSTEM.md"; then
+  echo "error: OneShot placeholder still present after substitution" >&2
   exit 1
 fi
 
@@ -120,6 +164,7 @@ cat <<EOF
 ✓ WORKFLOW.md installed (any prior one backed up)
 ✓ INTAKE-1 created in lane: Brief
 ✓ Project root pinned: $PROJECT_ROOT (also written to .oneshot/.project_root)
+✓ Local API port: $SYMPHONY_PORT
 
 Next step:
 
@@ -127,10 +172,10 @@ Next step:
   symphony tui ./WORKFLOW.md
 
   # headless (recommended when an orchestrator session is driving)
-  symphony ./WORKFLOW.md --port 9999 2>> log/symphony.log &
+  symphony ./WORKFLOW.md --port $SYMPHONY_PORT 2>> log/symphony.log &
 
 Then poll:
-  curl -s http://127.0.0.1:9999/api/v1/state | jq '.counts'
+  curl -s http://127.0.0.1:$SYMPHONY_PORT/api/v1/state | jq '.counts'
 
 The loop is done when DELIVER-1 reaches state 'Delivered' AND
 .oneshot/vault/delivery.md exists. For browser apps,

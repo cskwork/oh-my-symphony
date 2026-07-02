@@ -12,7 +12,7 @@ moves are:
 - `symphony board mv` (force a transition only if necessary)
 - `symphony board ls / show` (read state)
 - `cat .oneshot/vault/*` (read the vault)
-- `curl http://127.0.0.1:9999/api/v1/...` (poll the API)
+- `curl http://127.0.0.1:__ONESHOT_PORT__/api/v1/...` (poll the API)
 
 If you find yourself running `npm`, editing `src/`, writing tests, or
 producing the QA report — STOP. You're a worker, not the orchestrator.

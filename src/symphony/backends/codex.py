@@ -532,6 +532,9 @@ class CodexAppServerBackend(BaseAgentBackend):
         except asyncio.TimeoutError as exc:
             await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
             raise TurnTimeout("turn timed out waiting for completion") from exc
+        except TurnFailed as exc:
+            await self._emit(EVENT_TURN_FAILED, {"reason": str(exc)})
+            raise
         final_turn = _coerce_turn(final)
         return final_turn or turn
 

@@ -21,6 +21,8 @@ import json
 import httpx
 import pytest
 
+import symphony.trackers._retry as retry_module
+import symphony.trackers.linear as linear_module
 from symphony.errors import (
     LinearApiRequestError,
     LinearApiStatusError,
@@ -47,6 +49,24 @@ def _cfg() -> TrackerConfig:
 def _client(handler) -> LinearClient:
     transport = httpx.MockTransport(handler)
     return LinearClient(_cfg(), http_client=httpx.Client(transport=transport))
+
+
+def test_owned_http_client_uses_configured_network_timeout() -> None:
+    cfg = _cfg()
+    cfg = TrackerConfig(
+        kind=cfg.kind,
+        endpoint=cfg.endpoint,
+        api_key=cfg.api_key,
+        project_slug=cfg.project_slug,
+        active_states=cfg.active_states,
+        terminal_states=cfg.terminal_states,
+        network_timeout_seconds=7.5,
+    )
+    client = LinearClient(cfg)
+    try:
+        assert client._client.timeout.connect == 7.5
+    finally:
+        client.close()
 
 
 def _issue(uuid: str = "u-1", state: str = "Done") -> Issue:
@@ -164,6 +184,43 @@ def test_fetch_candidate_issues_paginates_through_cursor_and_normalizes() -> Non
     assert second.identifier == "TEAM-3"
     assert second.labels == ()
     assert second.blocked_by == ()
+
+
+def test_fetch_candidate_issues_stops_at_max_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    warnings: list[tuple[str, dict]] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "issues": {
+                        "nodes": [],
+                        "pageInfo": {
+                            "hasNextPage": True,
+                            "endCursor": f"cursor-{calls}",
+                        },
+                    }
+                }
+            },
+        )
+
+    monkeypatch.setattr(linear_module, "MAX_PAGES", 2)
+    monkeypatch.setattr(
+        linear_module.log,
+        "warning",
+        lambda message, **fields: warnings.append((message, fields)),
+    )
+    client = _client(handler)
+
+    assert client.fetch_candidate_issues() == []
+    assert calls == 2
+    assert warnings == [("linear_pagination_max_pages", {"max_pages": 2})]
 
 
 def test_paginate_raises_when_has_next_page_but_end_cursor_missing() -> None:
@@ -411,22 +468,110 @@ def test_update_state_with_empty_issue_id_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_post_raises_request_error_on_transport_failure() -> None:
+def _empty_issues_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"data": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}},
+    )
+
+
+def test_post_raises_request_error_on_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    calls = 0
+
     def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         raise httpx.ConnectError("dial tcp: i/o timeout")
 
+    monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
     client = _client(handler)
     with pytest.raises(LinearApiRequestError):
         client.fetch_candidate_issues()
+    assert calls == 3
+    assert sleeps == [0.5, 1.0]
 
 
-def test_post_raises_status_error_on_non_200() -> None:
+def test_post_transport_failure_retries_then_returns_issues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    calls = 0
+
     def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError("dial tcp: i/o timeout")
+        return _empty_issues_response()
+
+    monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
+    client = _client(handler)
+
+    assert client.fetch_candidate_issues() == []
+    assert calls == 2
+    assert sleeps == [0.5]
+
+
+def test_post_rate_limit_retries_after_retry_after_then_returns_issues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"})
+        return _empty_issues_response()
+
+    monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
+    client = _client(handler)
+
+    assert client.fetch_candidate_issues() == []
+    assert calls == 2
+    assert sleeps == [2.0]
+
+
+def test_post_retries_server_error_then_raises_status_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(500, text="server explosion")
 
+    monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
     client = _client(handler)
     with pytest.raises(LinearApiStatusError):
         client.fetch_candidate_issues()
+    assert calls == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_post_client_error_fails_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, text="bad request")
+
+    monkeypatch.setattr(retry_module, "sleep_with_jitter", sleeps.append)
+    client = _client(handler)
+    with pytest.raises(LinearApiStatusError):
+        client.fetch_candidate_issues()
+    assert calls == 1
+    assert sleeps == []
 
 
 def test_post_raises_unknown_payload_on_non_json_body() -> None:

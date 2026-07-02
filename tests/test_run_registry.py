@@ -223,3 +223,46 @@ def test_run_registry_migrates_legacy_schema_and_reclaims_null_owner(
     )
     assert [r.run_id for r in reclaimed] == ["legacy-run"]
     assert registry.has_active_lease("id-MT-1", now=now + timedelta(seconds=2)) is False
+
+
+def test_run_registry_persists_issue_flags_across_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    now = datetime(2026, 7, 2, 1, 0, tzinfo=timezone.utc)
+    registry = RunRegistry(path)
+
+    registry.set_issue_flags(
+        "id-MT-1",
+        retry_attempt=3,
+        budget_exhausted=True,
+        paused=True,
+        now=now,
+    )
+    registry.close()
+
+    reopened = RunRegistry(path)
+    flags = reopened.get_issue_flags("id-MT-1")
+
+    assert flags is not None
+    assert flags.issue_id == "id-MT-1"
+    assert flags.retry_attempt == 3
+    assert flags.budget_exhausted is True
+    assert flags.paused is True
+    assert flags.updated_at == now
+
+
+def test_run_registry_clears_issue_flags_independently(tmp_path: Path) -> None:
+    registry = RunRegistry(tmp_path / "state.db")
+    registry.set_issue_flags(
+        "id-MT-1", retry_attempt=2, budget_exhausted=True, paused=True
+    )
+
+    registry.clear_issue_flags("id-MT-1", retry_attempt=True, paused=True)
+    flags = registry.get_issue_flags("id-MT-1")
+
+    assert flags is not None
+    assert flags.retry_attempt is None
+    assert flags.budget_exhausted is True
+    assert flags.paused is False
+
+    registry.clear_issue_flags("id-MT-1", budget_exhausted=True)
+    assert registry.get_issue_flags("id-MT-1") is None

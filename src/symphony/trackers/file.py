@@ -35,10 +35,16 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback.
+    fcntl = None  # type: ignore[assignment]
 
 import yaml
 
@@ -74,6 +80,30 @@ _CANONICAL_FRONT_MATTER_KEYS = {
     "created_at",
     "updated_at",
 }
+_LOCK_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_GENERATED_ID_ATTEMPTS = 100
+_TicketMutation = Callable[
+    [dict[str, Any], str], tuple[dict[str, Any], str] | None
+]
+_CasToken = tuple[Any, int | None]
+
+
+@contextmanager
+def _exclusive_lock(path: Path) -> Iterator[None]:
+    if os.name != "posix" or fcntl is None:
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _lock_name(value: str) -> str:
+    return _LOCK_NAME_RE.sub("_", value).strip("._") or "ticket"
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +144,7 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def _auto_heal_markdown_in_front_matter(
-    path: Path, lines: list[str], end: int
+    _path: Path, lines: list[str], end: int
 ) -> tuple[dict[str, Any], str] | None:
     """Repair a common ticket corruption: Markdown inserted before YAML close."""
     yaml_lines: list[str] = []
@@ -165,7 +195,6 @@ def _auto_heal_markdown_in_front_matter(
 
     original_body = "\n".join(lines[end + 1 :]).strip()
     body = "\n\n".join(part for part in (moved_text, original_body) if part)
-    write_ticket_atomic(path, front, body)
     return front, body
 
 
@@ -254,6 +283,13 @@ def _file_mtime_iso(path: Path) -> str | None:
     except OSError:
         return None
     return datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+
+
+def _file_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
 
 
 def serialize_ticket(front: dict[str, Any], body: str) -> str:
@@ -350,6 +386,15 @@ class FileBoardTracker:
         self._active = {s.lower() for s in tracker.active_states}
         self._terminal = {s.lower() for s in tracker.terminal_states}
         self._root.mkdir(parents=True, exist_ok=True)
+
+    def _lock_path(self, name: str) -> Path:
+        return self._root / ".locks" / f"{_lock_name(name)}.lock"
+
+    def _allocator_lock_path(self) -> Path:
+        return self._lock_path("allocator")
+
+    def _ticket_lock_path(self, identifier: str) -> Path:
+        return self._lock_path(identifier)
 
     def close(self) -> None:
         return None
@@ -449,14 +494,67 @@ class FileBoardTracker:
                 return path
         return None
 
-    def transition(self, identifier: str, new_state: str) -> Path:
+    def _mutate_ticket(
+        self,
+        identifier: str,
+        mutate: _TicketMutation,
+        *,
+        missing_ok: bool = False,
+    ) -> Path | None:
         path = self.find_path(identifier)
         if path is None:
+            if missing_ok:
+                return None
             raise SymphonyError("ticket not found", identifier=identifier)
-        front, body = parse_ticket_file(path)
-        front["state"] = new_state
-        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with _exclusive_lock(self._ticket_lock_path(identifier)):
+            path = self.find_path(identifier)
+            if path is None:
+                if missing_ok:
+                    return None
+                raise SymphonyError("ticket not found", identifier=identifier)
+            seen_mtime_ns = _file_mtime_ns(path)
+            front, body = parse_ticket_file(path)
+            seen_token = (front.get("updated_at"), seen_mtime_ns)
+            result = mutate(front, body)
+            if result is None:
+                return path
+            new_front, new_body = result
+            self._write_ticket_with_updated_at_cas(
+                path, seen_token, mutate, new_front, new_body
+            )
+            return path
+
+    def _write_ticket_with_updated_at_cas(
+        self,
+        path: Path,
+        seen_token: _CasToken,
+        mutate: _TicketMutation,
+        front: dict[str, Any],
+        body: str,
+    ) -> None:
+        for _ in range(3):
+            latest_front, latest_body = parse_ticket_file(path)
+            latest_token = (latest_front.get("updated_at"), _file_mtime_ns(path))
+            if latest_token == seen_token:
+                write_ticket_atomic(path, front, body)
+                return
+            seen_token = latest_token
+            result = mutate(latest_front, latest_body)
+            if result is None:
+                return
+            front, body = result
         write_ticket_atomic(path, front, body)
+
+    def transition(self, identifier: str, new_state: str) -> Path:
+        def mutate(front: dict[str, Any], body: str) -> tuple[dict[str, Any], str]:
+            front["state"] = new_state
+            front["updated_at"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            return front, body
+
+        path = self._mutate_ticket(identifier, mutate)
+        assert path is not None
         return path
 
     def update_state(self, issue: Issue, target_state: str) -> None:
@@ -474,28 +572,36 @@ class FileBoardTracker:
         self.transition(issue.identifier, target_state)
 
     def _strip_orchestrator_warning_sections(self, identifier: str) -> None:
-        path = self.find_path(identifier)
-        if path is None:
-            return
-        front, body = parse_ticket_file(path)
-        stripped = _strip_warning_blocks(body)
-        if stripped != body:
-            write_ticket_atomic(path, front, stripped)
+        def mutate(
+            front: dict[str, Any], body: str
+        ) -> tuple[dict[str, Any], str] | None:
+            stripped = _strip_warning_blocks(body)
+            if stripped == body:
+                return None
+            return front, stripped
+
+        self._mutate_ticket(identifier, mutate, missing_ok=True)
 
     def append_note(self, issue: Issue, heading: str, body: str) -> None:
         """Append an orchestrator-authored Markdown note to a ticket file."""
-        path = self.find_path(issue.identifier)
-        if path is None:
-            raise SymphonyError("ticket not found", identifier=issue.identifier)
-        front, existing_body = parse_ticket_file(path)
-        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         clean_heading = heading.strip().lstrip("#").strip() or "Note"
         clean_body = body.strip()
-        note = f"## {clean_heading}"
-        if clean_body:
-            note = f"{note}\n\n{clean_body}"
-        combined = "\n\n".join(part for part in (existing_body.strip(), note) if part)
-        write_ticket_atomic(path, front, combined)
+
+        def mutate(
+            front: dict[str, Any], existing_body: str
+        ) -> tuple[dict[str, Any], str]:
+            front["updated_at"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            note = f"## {clean_heading}"
+            if clean_body:
+                note = f"{note}\n\n{clean_body}"
+            combined = "\n\n".join(
+                part for part in (existing_body.strip(), note) if part
+            )
+            return front, combined
+
+        self._mutate_ticket(issue.identifier, mutate)
 
     def record_agent_kind(self, identifier: str, agent_kind: str) -> Path | None:
         """Write ``agent_kind`` to ticket frontmatter when missing.
@@ -506,22 +612,27 @@ class FileBoardTracker:
         New writes use the nested shape to match :meth:`create`.
         ``updated_at`` bumps only when the file is actually modified.
         """
-        path = self.find_path(identifier)
-        if path is None:
-            return None
-        front, body = parse_ticket_file(path)
-        if _parse_agent_kind(front):
-            return path
         normalized = agent_kind.strip().lower()
-        if not normalized:
-            return path
-        front["agent"] = {"kind": normalized}
-        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        write_ticket_atomic(path, front, body)
-        return path
+
+        def mutate(
+            front: dict[str, Any], body: str
+        ) -> tuple[dict[str, Any], str] | None:
+            if _parse_agent_kind(front) or not normalized:
+                return None
+            front["agent"] = {"kind": normalized}
+            front["updated_at"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            return front, body
+
+        return self._mutate_ticket(identifier, mutate, missing_ok=True)
 
     def next_identifier(self, prefix: str) -> str:
         """`<PREFIX>-<n+1>` where n is the highest existing number for prefix."""
+        with _exclusive_lock(self._allocator_lock_path()):
+            return self._next_identifier_unlocked(prefix)
+
+    def _next_identifier_unlocked(self, prefix: str) -> str:
         highest = 0
         pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$", re.IGNORECASE)
         for path in self._root.glob("*.md"):
@@ -529,6 +640,39 @@ class FileBoardTracker:
             if match:
                 highest = max(highest, int(match.group(1)))
         return f"{prefix}-{highest + 1}"
+
+    def create_with_next_identifier(
+        self,
+        prefix: str,
+        *,
+        title: str,
+        state: str = "Todo",
+        priority: int | None = None,
+        labels: list[str] | None = None,
+        description: str = "",
+        agent_kind: str | None = None,
+        skills: list[str] | None = None,
+    ) -> tuple[str, Path]:
+        with _exclusive_lock(self._allocator_lock_path()):
+            last_error: Exception | None = None
+            for _ in range(_GENERATED_ID_ATTEMPTS):
+                identifier = self._next_identifier_unlocked(prefix)
+                try:
+                    path = self.create(
+                        identifier=identifier,
+                        title=title,
+                        state=state,
+                        priority=priority,
+                        labels=labels,
+                        description=description,
+                        agent_kind=agent_kind,
+                        skills=skills,
+                    )
+                except SymphonyError as exc:
+                    last_error = exc
+                    continue
+                return identifier, path
+        raise last_error or SymphonyError("could not allocate ticket id", prefix=prefix)
 
     def create(
         self,
@@ -543,8 +687,32 @@ class FileBoardTracker:
         skills: list[str] | None = None,
     ) -> Path:
         path = self._root / f"{identifier}.md"
-        if path.exists():
-            raise SymphonyError("ticket already exists", identifier=identifier)
+        with _exclusive_lock(self._ticket_lock_path(identifier)):
+            if path.exists():
+                raise SymphonyError("ticket already exists", identifier=identifier)
+            front = self._new_ticket_front(
+                identifier=identifier,
+                title=title,
+                state=state,
+                priority=priority,
+                labels=labels,
+                agent_kind=agent_kind,
+                skills=skills,
+            )
+            write_ticket_atomic(path, front, description)
+            return path
+
+    def _new_ticket_front(
+        self,
+        *,
+        identifier: str,
+        title: str,
+        state: str,
+        priority: int | None,
+        labels: list[str] | None,
+        agent_kind: str | None,
+        skills: list[str] | None,
+    ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         front: dict[str, Any] = {
             "id": identifier,
@@ -561,8 +729,7 @@ class FileBoardTracker:
         normalized_skills = normalize_skill_names(list(skills or []))
         if normalized_skills:
             front["skills"] = list(normalized_skills)
-        write_ticket_atomic(path, front, description)
-        return path
+        return front
 
     def update_fields(
         self,
@@ -582,35 +749,37 @@ class FileBoardTracker:
         `description` replaces the Markdown body. `agent_kind=""` clears the
         per-ticket agent override; `clear_priority=True` drops priority.
         """
-        path = self.find_path(identifier)
-        if path is None:
-            raise SymphonyError("ticket not found", identifier=identifier)
-        front, body = parse_ticket_file(path)
-        if title is not None:
-            front["title"] = title
-        if state is not None:
-            front["state"] = state
-        if priority is not None:
-            front["priority"] = priority
-        elif clear_priority:
-            front.pop("priority", None)
-        if labels is not None:
-            front["labels"] = [str(item) for item in labels]
-        if skills is not None:
-            normalized = normalize_skill_names(skills)
-            if normalized:
-                front["skills"] = list(normalized)
-            else:
-                front.pop("skills", None)
-        if agent_kind is not None:
-            cleaned = agent_kind.strip().lower()
-            front.pop("agent_kind", None)
-            if cleaned:
-                front["agent"] = {"kind": cleaned}
-            else:
-                front.pop("agent", None)
-        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        write_ticket_atomic(path, front, body if description is None else description)
+        def mutate(front: dict[str, Any], body: str) -> tuple[dict[str, Any], str]:
+            if title is not None:
+                front["title"] = title
+            if state is not None:
+                front["state"] = state
+            if priority is not None:
+                front["priority"] = priority
+            elif clear_priority:
+                front.pop("priority", None)
+            if labels is not None:
+                front["labels"] = [str(item) for item in labels]
+            if skills is not None:
+                normalized = normalize_skill_names(skills)
+                if normalized:
+                    front["skills"] = list(normalized)
+                else:
+                    front.pop("skills", None)
+            if agent_kind is not None:
+                cleaned = agent_kind.strip().lower()
+                front.pop("agent_kind", None)
+                if cleaned:
+                    front["agent"] = {"kind": cleaned}
+                else:
+                    front.pop("agent", None)
+            front["updated_at"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            return front, body if description is None else description
+
+        path = self._mutate_ticket(identifier, mutate)
+        assert path is not None
         return path
 
     def delete(self, identifier: str) -> Path:

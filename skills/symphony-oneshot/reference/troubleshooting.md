@@ -18,13 +18,20 @@ the API. If you need to change code, dispatch a Build ticket.
 # Diagnose
 symphony doctor ./WORKFLOW.md
 ps aux | grep symphony
-curl -s http://127.0.0.1:9999/api/v1/state | jq '.counts, .running'
+PORT=$(python3 - <<'PY'
+from pathlib import Path
+import re
+text = Path("WORKFLOW.md").read_text()
+print(re.search(r"(?m)^  port: (\d+)$", text).group(1))
+PY
+)
+curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq '.counts, .running'
 tail -50 log/symphony.log
 ```
 
 Common causes:
-- Server not running → `symphony ./WORKFLOW.md --port 9999 2>> log/symphony.log &`
-- Port collision → `lsof -ti :9999 | xargs -r kill` then restart
+- Server not running → `symphony ./WORKFLOW.md --port "$PORT" 2>> log/symphony.log &`
+- Port collision → rerun bootstrap with `FORCE=1 SYMPHONY_ONESHOT_PORT=auto`, or set an explicit free `SYMPHONY_ONESHOT_PORT=<port>`
 - `agent.kind` mismatched to installed CLI → `which claude`/`which codex`
 - `tracker.active_states` doesn't include the lane name (e.g. typo `Build` vs `build`) → fix YAML
 
@@ -32,7 +39,7 @@ Common causes:
 
 ```bash
 # Find the failing ticket and read its workspace logs
-curl -s http://127.0.0.1:9999/api/v1/state | jq '.errors'
+curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq '.errors'
 ls ~/symphony_workspaces/<TICKET-ID>/.symphony/
 ```
 
@@ -127,7 +134,8 @@ Mitigations:
 ## I want to abort the run
 
 ```bash
-lsof -ti :9999 | xargs -r kill   # stop orchestrator
+# Stop the orchestrator process you launched for this WORKFLOW.md.
+ps aux | grep 'symphony ./WORKFLOW.md'
 symphony board ls                 # see what's where
 # Optionally archive vault for later inspection
 mv .oneshot .oneshot.aborted-$(date +%s)

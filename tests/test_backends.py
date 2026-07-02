@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import shlex
 import uuid
 from dataclasses import replace
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+import symphony._shell as shell_module
 import symphony.backends.claude_code as claude_module
 import symphony.backends.codex as codex_module
 import symphony.backends.gemini as gemini_module
@@ -47,7 +49,7 @@ from symphony.backends.pi import (
     _extract_failure_reason,
     _extract_text as _pi_extract_text,
 )
-from symphony.errors import ConfigValidationError
+from symphony.errors import ConfigValidationError, TurnFailed
 from symphony.workflow import (
     AgentConfig,
     ClaudeConfig,
@@ -305,18 +307,25 @@ async def test_codex_stop_reaps_with_safe_proc_wait(
     proc = _FakeProcess()
     backend._process = proc  # type: ignore[assignment]
     calls: list[int] = []
+    signals: list[tuple[int, int]] = []
 
     async def fake_safe_proc_wait(process, *, timeout=None):
         calls.append(process.pid)
         process.returncode = 0
         return 0
 
-    monkeypatch.setattr(codex_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+    monkeypatch.setattr(shell_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(
+        shell_module,
+        "_signal_process_group",
+        lambda pid, sig: signals.append((pid, sig)) or True,
+    )
 
     await backend.stop()
 
-    assert proc.terminated is True
+    assert proc.terminated is False
     assert proc.killed is False
+    assert signals == [(proc.pid, signal.SIGTERM)]
     assert calls == [proc.pid]
 
 
@@ -334,18 +343,25 @@ async def test_gemini_stop_reaps_with_safe_proc_wait(
     proc = _FakeProcess()
     backend._active_proc = proc  # type: ignore[assignment]
     calls: list[int] = []
+    signals: list[tuple[int, int]] = []
 
     async def fake_safe_proc_wait(process, *, timeout=None):
         calls.append(process.pid)
         process.returncode = 0
         return 0
 
-    monkeypatch.setattr(gemini_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+    monkeypatch.setattr(shell_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(
+        shell_module,
+        "_signal_process_group",
+        lambda pid, sig: signals.append((pid, sig)) or True,
+    )
 
     await backend.stop()
 
-    assert proc.terminated is True
+    assert proc.terminated is False
     assert proc.killed is False
+    assert signals == [(proc.pid, signal.SIGTERM)]
     assert calls == [proc.pid]
 
 
@@ -363,18 +379,25 @@ async def test_pi_stop_reaps_with_safe_proc_wait(
     proc = _FakeProcess()
     backend._active_proc = proc  # type: ignore[assignment]
     calls: list[int] = []
+    signals: list[tuple[int, int]] = []
 
     async def fake_safe_proc_wait(process, *, timeout=None):
         calls.append(process.pid)
         process.returncode = 0
         return 0
 
-    monkeypatch.setattr(pi_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+    monkeypatch.setattr(shell_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(
+        shell_module,
+        "_signal_process_group",
+        lambda pid, sig: signals.append((pid, sig)) or True,
+    )
 
     await backend.stop()
 
-    assert proc.terminated is True
+    assert proc.terminated is False
     assert proc.killed is False
+    assert signals == [(proc.pid, signal.SIGTERM)]
     assert calls == [proc.pid]
 
 
@@ -1199,6 +1222,42 @@ async def test_codex_turn_completed_notification_resolves_waiter(
     assert payload["turn"]["status"] == "completed"
 
 
+@pytest.mark.asyncio
+async def test_codex_completion_turn_failed_emits_failure_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict] = []
+
+    def on_event(event: dict) -> "asyncio.Future[None]":
+        events.append(event)
+        fut: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+        fut.set_result(None)
+        return fut
+
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=on_event)
+    )
+
+    async def fake_request(method, params, *, timeout_s=None):
+        del method, params, timeout_s
+        return {"turn": {"id": "tn1", "status": "inProgress"}}
+
+    completion: asyncio.Future[dict] = asyncio.get_event_loop().create_future()
+    completion.set_exception(TurnFailed("codex app-server closed stdout (rc=1)"))
+    monkeypatch.setattr(backend, "_request", fake_request)
+
+    with pytest.raises(TurnFailed, match="closed stdout"):
+        await backend._send_turn_and_resolve({}, completion)
+
+    assert events[-1]["event"] == EVENT_TURN_FAILED
+    assert events[-1]["payload"]["reason"] == (
+        "turn_failed: codex app-server closed stdout (rc=1)"
+    )
+
+
 # ---- Codex terminal-status raising -------------------------------------
 # Regression guard: `_raise_for_terminal_status` is async and *must* be
 # awaited. A prior refactor dropped the `await` and silently turned every
@@ -1713,28 +1772,29 @@ def test_claude_backend_is_progress_event_filters_to_assistant(tmp_path: Path) -
     assert backend.is_progress_event({}) is False
 
 
-def test_pi_backend_is_progress_event_defaults_to_true(tmp_path: Path) -> None:
+def test_pi_backend_is_progress_event_filters_to_model_lifecycle(tmp_path: Path) -> None:
     cfg = _make_cfg("pi", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
     cwd.mkdir()
     backend = PiBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
-    assert backend.is_progress_event({"type": "assistant"}) is True
-    assert backend.is_progress_event({"type": "tool_result"}) is True
-    assert backend.is_progress_event({}) is True
+    assert backend.is_progress_event({"type": "message_end"}) is True
+    assert backend.is_progress_event({"type": "turn_start"}) is True
+    assert backend.is_progress_event({"type": "tool_execution_end"}) is False
+    assert backend.is_progress_event({}) is False
 
 
-def test_gemini_backend_is_progress_event_defaults_to_true(tmp_path: Path) -> None:
+def test_gemini_backend_is_progress_event_is_always_false(tmp_path: Path) -> None:
     cfg = _make_cfg("gemini", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
     cwd.mkdir()
     backend = GeminiBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
-    assert backend.is_progress_event({"type": "assistant"}) is True
-    assert backend.is_progress_event({"type": "tool_result"}) is True
-    assert backend.is_progress_event({}) is True
+    assert backend.is_progress_event({"type": "assistant"}) is False
+    assert backend.is_progress_event({"type": "message_end"}) is False
+    assert backend.is_progress_event({}) is False
 
 
 def test_codex_backend_is_progress_event_filters_to_assistant(tmp_path: Path) -> None:

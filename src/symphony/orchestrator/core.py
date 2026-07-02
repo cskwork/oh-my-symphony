@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .. import __version__
+from .._shell import kill_process_group
 from ..backends import (
     EVENT_AGENT_RETRY,
     EVENT_COMPACTION,
@@ -122,6 +123,7 @@ class Orchestrator:
         self._running: dict[str, RunningEntry] = {}
         self._claimed: set[str] = set()
         self._retry: dict[str, RetryEntry] = {}
+        self._persisted_retry_attempts: dict[str, int] = {}
         self._completed: set[str] = set()
         # C5 — `Done`-transition counter for the periodic wiki sweep. Lives
         # in-process; restart resets it (acceptable — the sweep is a
@@ -254,6 +256,47 @@ class Orchestrator:
         expired = self._registry_guard("expire_stale", registry.expire_stale, 0)
         if expired:
             log.info("run_leases_expired_on_start", count=expired, path=str(path))
+        flags = self._registry_guard("list_issue_flags", registry.list_issue_flags, [])
+        self._rehydrate_issue_flags(flags)
+
+    def _rehydrate_issue_flags(self, flags: list[Any]) -> None:
+        self._persisted_retry_attempts.clear()
+        for flag in flags:
+            issue_id = flag.issue_id
+            if flag.budget_exhausted:
+                self._turn_budget_exhausted.add(issue_id)
+            if flag.paused:
+                self._paused_issue_ids.add(issue_id)
+            if flag.retry_attempt is not None:
+                self._persisted_retry_attempts[issue_id] = int(flag.retry_attempt)
+                debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
+                debug.current_retry_attempt = int(flag.retry_attempt)
+                debug.current_attempt_kind = "retry"
+
+    def _set_issue_flags(self, issue_id: str, **flags: Any) -> None:
+        registry = self._run_registry
+        if registry is None:
+            return
+        self._registry_guard(
+            "set_issue_flags",
+            lambda: registry.set_issue_flags(issue_id, **flags),
+            None,
+        )
+
+    def _clear_issue_flags(self, issue_id: str, **flags: bool) -> None:
+        registry = self._run_registry
+        if registry is None:
+            return
+        self._registry_guard(
+            "clear_issue_flags",
+            lambda: registry.clear_issue_flags(issue_id, **flags),
+            None,
+        )
+
+    def _mark_budget_exhausted(self, issue_id: str) -> None:
+        self._turn_budget_exhausted.add(issue_id)
+        self._persisted_retry_attempts.pop(issue_id, None)
+        self._set_issue_flags(issue_id, budget_exhausted=True, retry_attempt=None)
 
     def _has_active_run_lease(self, issue_id: str) -> bool:
         if self._run_registry is None:
@@ -766,6 +809,7 @@ class Orchestrator:
         if issue_id in self._paused_issue_ids:
             return False
         self._paused_issue_ids.add(issue_id)
+        self._set_issue_flags(issue_id, paused=True)
         event = self._pause_events.get(issue_id)
         if event is None:
             event = asyncio.Event()
@@ -792,6 +836,7 @@ class Orchestrator:
         if issue_id not in self._paused_issue_ids:
             return False
         self._paused_issue_ids.discard(issue_id)
+        self._clear_issue_flags(issue_id, paused=True)
         event = self._pause_events.get(issue_id)
         if event is not None and not event.is_set():
             event.set()
@@ -1230,7 +1275,13 @@ class Orchestrator:
                     cfg, issue, other_identifier, overlap
                 )
                 continue
-            self._dispatch(issue, cfg, attempt=None)
+            persisted_attempt = self._persisted_retry_attempts.get(issue.id)
+            self._dispatch(
+                issue,
+                cfg,
+                attempt=persisted_attempt,
+                attempt_kind="retry" if persisted_attempt is not None else None,
+            )
 
         now_monotonic = time.monotonic()
         if (
@@ -2669,7 +2720,7 @@ class Orchestrator:
                 entry.last_codex_timestamp = datetime.now(timezone.utc)
         else:
             entry.last_codex_timestamp = datetime.now(timezone.utc)
-        pid = event.get("codex_app_server_pid")
+        pid = event.get("codex_app_server_pid") or event.get("agent_pid")
         if isinstance(pid, int):
             entry.codex_app_server_pid = pid
         payload = event.get("payload") or {}
@@ -2873,6 +2924,7 @@ class Orchestrator:
                 # on the next tick (verified live on olive-clone 2026-05-20).
                 if issue_id not in self._paused_issue_ids:
                     self._paused_issue_ids.add(issue_id)
+                    self._set_issue_flags(issue_id, paused=True)
                     pause_event = self._pause_events.get(issue_id)
                     if pause_event is None:
                         pause_event = asyncio.Event()
@@ -3073,6 +3125,8 @@ class Orchestrator:
 
         if reason == "normal":
             cfg = self._workflow_state.current()
+            self._persisted_retry_attempts.pop(issue_id, None)
+            self._clear_issue_flags(issue_id, retry_attempt=True)
             if entry.hit_token_budget:
                 if cfg is not None:
                     before_state = normalize_state(entry.issue.state)
@@ -3089,7 +3143,7 @@ class Orchestrator:
                             to_state=after_state,
                         )
                     else:
-                        self._turn_budget_exhausted.add(issue_id)
+                        self._mark_budget_exhausted(issue_id)
                         self._claimed.add(issue_id)
                         cap = entry.token_budget_cap or self._token_cap_for_entry(
                             cfg, entry
@@ -3118,7 +3172,7 @@ class Orchestrator:
                         )
                         return
                 else:
-                    self._turn_budget_exhausted.add(issue_id)
+                    self._mark_budget_exhausted(issue_id)
                     self._claimed.add(issue_id)
                     debug.last_error = (
                         "max_total_tokens reached; workflow config unavailable"
@@ -3127,7 +3181,7 @@ class Orchestrator:
 
             max_total_turns = cfg.agent.max_total_turns if cfg is not None else 60
             if debug.completed_turn_count >= max_total_turns:
-                self._turn_budget_exhausted.add(issue_id)
+                self._mark_budget_exhausted(issue_id)
                 self._claimed.add(issue_id)
                 debug.last_error = (
                     f"max_total_turns reached "
@@ -3281,6 +3335,15 @@ class Orchestrator:
         """
         self._running.pop(issue_id, None)
         self._claimed.discard(issue_id)
+        if entry.codex_app_server_pid is not None:
+            killed = kill_process_group(entry.codex_app_server_pid)
+            log.warning(
+                "force_eject_killed_process_group",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                pid=entry.codex_app_server_pid,
+                killed=killed,
+            )
         self._finish_run_lease(issue_id, entry, "force_ejected_zombie")
         pause_event = self._pause_events.pop(issue_id, None)
         if pause_event is not None and not pause_event.is_set():
@@ -3352,6 +3415,8 @@ class Orchestrator:
                     error=error,
                 )
             )
+            self._persisted_retry_attempts.pop(issue_id, None)
+            self._clear_issue_flags(issue_id, retry_attempt=True)
             return
         existing = self._retry.pop(issue_id, None)
         if existing is not None:
@@ -3373,6 +3438,12 @@ class Orchestrator:
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.current_retry_attempt = attempt
         debug.current_attempt_kind = self._retry[issue_id].kind
+        if self._retry[issue_id].kind == "continuation":
+            self._persisted_retry_attempts.pop(issue_id, None)
+            self._clear_issue_flags(issue_id, retry_attempt=True)
+        else:
+            self._persisted_retry_attempts[issue_id] = attempt
+            self._set_issue_flags(issue_id, retry_attempt=attempt)
 
     def _in_flight_ids(self) -> set[str]:
         """Issue ids the G1 claim-prune must treat as legitimately claimed."""
@@ -3521,6 +3592,8 @@ class Orchestrator:
         if cfg is None:
             self._claimed.discard(issue_id)
             self._paused_issue_ids.discard(issue_id)
+            self._persisted_retry_attempts.pop(issue_id, None)
+            self._clear_issue_flags(issue_id, retry_attempt=True, paused=True)
             return
         try:
             candidates = await self._fetch_candidates(cfg)
@@ -3542,6 +3615,8 @@ class Orchestrator:
             # filtered out by workflow change); drop any pause flag so
             # we don't leak it across the resurrection of the same id.
             self._paused_issue_ids.discard(issue_id)
+            self._persisted_retry_attempts.pop(issue_id, None)
+            self._clear_issue_flags(issue_id, retry_attempt=True, paused=True)
             log.info("retry_release", issue_id=issue_id, identifier=retry.identifier)
             return
         if not self._eligible(match, cfg, owning_retry=True):

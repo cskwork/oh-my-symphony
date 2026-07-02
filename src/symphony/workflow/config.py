@@ -58,6 +58,9 @@ class TrackerConfig:
     # ignore this field. Defaults to empty so existing callers stay
     # source-compatible.
     email: str = ""
+    # Timeout used by Jira/Linear HTTP clients for each network operation.
+    # File tracker ignores this field.
+    network_timeout_seconds: float = 30.0
 
 
 @dataclass(frozen=True)

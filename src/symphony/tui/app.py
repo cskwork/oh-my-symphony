@@ -688,9 +688,8 @@ class KanbanApp(App):
 
         def _create() -> str:
             tracker = FileBoardTracker(cfg.tracker)
-            identifier = tracker.next_identifier("TASK")
-            tracker.create(
-                identifier=identifier,
+            identifier, _ = tracker.create_with_next_identifier(
+                "TASK",
                 title=form["title"],
                 state=form["state"],
                 priority=form["priority"],

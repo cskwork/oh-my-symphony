@@ -51,7 +51,6 @@ _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _MAX_TITLE = 300
 _MAX_BODY = 128_000
 _MAX_LABELS = 20
-_CREATE_ID_RETRIES = 3
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 _LOOPBACK_BINDS = {"", "localhost", "127.0.0.1", "::1", "[::1]"}
 
@@ -422,20 +421,9 @@ def _register_issue_routes(
             if not re.match(r"^[A-Za-z][A-Za-z0-9]{0,15}$", prefix):
                 raise WorkflowMutationError("prefix must be 1-16 alphanumeric chars")
 
-            def _create_with_fresh_id() -> str:
-                # Two concurrent creates can race for the same generated id;
-                # `create` fails cleanly on collision, so retry with the next.
-                last_error: Exception | None = None
-                for _ in range(_CREATE_ID_RETRIES):
-                    candidate = tracker.next_identifier(prefix)
-                    try:
-                        tracker.create(identifier=candidate, **fields)
-                        return candidate
-                    except SymphonyError as exc:
-                        last_error = exc
-                raise last_error or WorkflowMutationError("could not allocate an id")
-
-            identifier = await asyncio.to_thread(_create_with_fresh_id)
+            identifier, _ = await asyncio.to_thread(
+                tracker.create_with_next_identifier, prefix, **fields
+            )
         await asyncio.to_thread(
             ctx.stats().record_transition,
             issue=identifier,

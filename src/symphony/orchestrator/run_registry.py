@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from ..issue import Issue
 
@@ -32,6 +32,18 @@ class RunRecord:
     last_progress_at: datetime | None
     owner_pid: int | None = None
     owner_boot_id: str | None = None
+
+
+@dataclass(frozen=True)
+class IssueFlags:
+    issue_id: str
+    retry_attempt: int | None
+    budget_exhausted: bool
+    paused: bool
+    updated_at: datetime
+
+
+_UNSET = object()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -276,6 +288,70 @@ class RunRegistry:
             raise KeyError(run_id)
         return _record(row)
 
+    def get_issue_flags(self, issue_id: str) -> IssueFlags | None:
+        row = self._connect().execute(
+            "SELECT * FROM issue_flags WHERE issue_id = ?",
+            (issue_id,),
+        ).fetchone()
+        return _issue_flags(row) if row is not None else None
+
+    def list_issue_flags(self) -> list[IssueFlags]:
+        rows = self._connect().execute(
+            "SELECT * FROM issue_flags ORDER BY issue_id"
+        ).fetchall()
+        return [_issue_flags(row) for row in rows]
+
+    def set_issue_flags(
+        self,
+        issue_id: str,
+        *,
+        retry_attempt: int | None | object = _UNSET,
+        budget_exhausted: bool | object = _UNSET,
+        paused: bool | object = _UNSET,
+        now: datetime | None = None,
+    ) -> None:
+        existing = self.get_issue_flags(issue_id)
+        next_retry_attempt = (
+            existing.retry_attempt if existing is not None else None
+        )
+        next_budget_exhausted = (
+            existing.budget_exhausted if existing is not None else False
+        )
+        next_paused = existing.paused if existing is not None else False
+        if retry_attempt is not _UNSET:
+            next_retry_attempt = retry_attempt  # type: ignore[assignment]
+        if budget_exhausted is not _UNSET:
+            next_budget_exhausted = bool(budget_exhausted)
+        if paused is not _UNSET:
+            next_paused = bool(paused)
+        self._write_issue_flags(
+            issue_id,
+            retry_attempt=next_retry_attempt,
+            budget_exhausted=next_budget_exhausted,
+            paused=next_paused,
+            now=now,
+        )
+
+    def clear_issue_flags(
+        self,
+        issue_id: str,
+        *,
+        retry_attempt: bool = False,
+        budget_exhausted: bool = False,
+        paused: bool = False,
+        now: datetime | None = None,
+    ) -> None:
+        existing = self.get_issue_flags(issue_id)
+        if existing is None:
+            return
+        self._write_issue_flags(
+            issue_id,
+            retry_attempt=None if retry_attempt else existing.retry_attempt,
+            budget_exhausted=False if budget_exhausted else existing.budget_exhausted,
+            paused=False if paused else existing.paused,
+            now=now,
+        )
+
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -326,6 +402,51 @@ class RunRegistry:
             CREATE INDEX IF NOT EXISTS idx_runs_issue_status_lease
             ON runs(issue_id, status, lease_expires_at)
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS issue_flags (
+                issue_id TEXT PRIMARY KEY,
+                retry_attempt INTEGER,
+                budget_exhausted INTEGER NOT NULL DEFAULT 0,
+                paused INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    def _write_issue_flags(
+        self,
+        issue_id: str,
+        *,
+        retry_attempt: int | None,
+        budget_exhausted: bool,
+        paused: bool,
+        now: datetime | None,
+    ) -> None:
+        conn = self._connect()
+        if retry_attempt is None and not budget_exhausted and not paused:
+            conn.execute("DELETE FROM issue_flags WHERE issue_id = ?", (issue_id,))
+            return
+        updated_at = _iso(_utc(now))
+        conn.execute(
+            """
+            INSERT INTO issue_flags (
+                issue_id, retry_attempt, budget_exhausted, paused, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(issue_id) DO UPDATE SET
+                retry_attempt = excluded.retry_attempt,
+                budget_exhausted = excluded.budget_exhausted,
+                paused = excluded.paused,
+                updated_at = excluded.updated_at
+            """,
+            (
+                issue_id,
+                retry_attempt,
+                1 if budget_exhausted else 0,
+                1 if paused else 0,
+                updated_at,
+            ),
         )
 
     def _active_issue_locked(
@@ -389,4 +510,16 @@ def _record(row: sqlite3.Row) -> RunRecord:
         last_progress_at=_parse(row["last_progress_at"]),
         owner_pid=int(owner_pid) if owner_pid is not None else None,
         owner_boot_id=row["owner_boot_id"],
+    )
+
+
+def _issue_flags(row: sqlite3.Row) -> IssueFlags:
+    return IssueFlags(
+        issue_id=str(row["issue_id"]),
+        retry_attempt=(
+            int(row["retry_attempt"]) if row["retry_attempt"] is not None else None
+        ),
+        budget_exhausted=bool(row["budget_exhausted"]),
+        paused=bool(row["paused"]),
+        updated_at=_parse(row["updated_at"]) or datetime.now(timezone.utc),
     )

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
+import symphony.trackers.file as file_tracker_module
 from symphony.errors import SymphonyError
 from symphony.trackers.file import (
     FileBoardTracker,
@@ -158,27 +161,28 @@ def test_unterminated_front_matter_raises(tmp_path):
 
 
 def test_parse_ticket_file_auto_heals_markdown_inside_front_matter(tmp_path):
+    original_text = textwrap.dedent(
+        """\
+        ---
+        id: DEV-1
+        title: Heal misplaced triage
+        state: In Progress
+
+        ## Triage
+
+        ticket is actionable; routing to Explore.
+        labels: [product, api]
+        blocked_by:
+          - identifier: DEV-0
+            state: Done
+        ---
+        Existing body.
+        """
+    )
     path = _write(
         tmp_path,
         "DEV-1.md",
-        textwrap.dedent(
-            """\
-            ---
-            id: DEV-1
-            title: Heal misplaced triage
-            state: In Progress
-
-            ## Triage
-
-            ticket is actionable; routing to Explore.
-            labels: [product, api]
-            blocked_by:
-              - identifier: DEV-0
-                state: Done
-            ---
-            Existing body.
-            """
-        ),
+        original_text,
     )
 
     front, body = parse_ticket_file(path)
@@ -189,10 +193,7 @@ def test_parse_ticket_file_auto_heals_markdown_inside_front_matter(tmp_path):
     assert body.startswith("## Triage\n\nticket is actionable")
     assert "Existing body." in body
 
-    healed_text = path.read_text(encoding="utf-8")
-    front_text = healed_text.split("---", 2)[1]
-    assert "## Triage" not in front_text
-    assert "labels:" in front_text
+    assert path.read_text(encoding="utf-8") == original_text
 
 
 def test_fetch_candidate_filters_by_active(tmp_path):
@@ -293,6 +294,40 @@ def test_create_and_transition_round_trip(tmp_path):
         "---\nid: X-2\ntitle: t\nstate: Todo\n---\nbody\n", encoding="utf-8"
     )
     assert fbt.find_path("X-2") == odd
+
+
+def test_create_with_next_identifier_is_unique_under_concurrent_calls(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    barrier = threading.Barrier(12)
+    identifiers: list[str] = []
+    errors: list[BaseException] = []
+    guard = threading.Lock()
+
+    def worker(index: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            identifier, _ = fbt.create_with_next_identifier(
+                "TASK", title=f"Task {index}"
+            )
+            with guard:
+                identifiers.append(identifier)
+        except BaseException as exc:
+            with guard:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+    assert {int(identifier.split("-", 1)[1]) for identifier in identifiers} == set(
+        range(1, 13)
+    )
+    files = {path.stem for path in root.glob("*.md")}
+    assert files == set(identifiers)
 
 
 def test_g5_strip_conflict_and_budget_sections_on_active_restore(tmp_path):
@@ -582,6 +617,123 @@ def test_append_note_protocol_hook_records_budget_reason(tmp_path):
     assert front["state"] == "Review"
     assert "## Budget Exceeded" in body
     assert "5100001/5000000" in body
+
+
+def test_append_note_preserves_concurrent_writes(tmp_path, monkeypatch):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="X-CONCURRENT", title="t", state="Review")
+    issue = issue_from_file(path)
+    assert issue is not None
+
+    original_write = file_tracker_module.write_ticket_atomic
+
+    def slow_write(path: Path, front: dict[str, object], body: str) -> None:
+        time.sleep(0.02)
+        original_write(path, front, body)
+
+    monkeypatch.setattr(file_tracker_module, "write_ticket_atomic", slow_write)
+    barrier = threading.Barrier(8)
+    errors: list[BaseException] = []
+    guard = threading.Lock()
+
+    def worker(index: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            fbt.append_note(issue, f"Note {index}", f"body {index}")
+        except BaseException as exc:
+            with guard:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+    _, body = parse_ticket_file(path)
+    for index in range(8):
+        assert f"## Note {index}" in body
+        assert f"body {index}" in body
+
+
+def test_append_note_reapplies_when_updated_at_moves_before_write(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(
+        identifier="X-CAS",
+        title="t",
+        state="Review",
+        description="Original body.",
+    )
+    issue = issue_from_file(path)
+    assert issue is not None
+
+    original_parse = file_tracker_module.parse_ticket_file
+    original_write = file_tracker_module.write_ticket_atomic
+    injected = False
+
+    def parse_with_external_update(candidate: Path) -> tuple[dict[str, object], str]:
+        nonlocal injected
+        front, body = original_parse(candidate)
+        if candidate == path and not injected:
+            injected = True
+            external_front = dict(front)
+            external_front["updated_at"] = "2099-01-01T00:00:00Z"
+            original_write(candidate, external_front, "External body.")
+        return front, body
+
+    monkeypatch.setattr(
+        file_tracker_module, "parse_ticket_file", parse_with_external_update
+    )
+
+    fbt.append_note(issue, "Note", "operator note")
+
+    _, body = original_parse(path)
+    assert "External body." in body
+    assert "## Note" in body
+    assert "operator note" in body
+
+
+def test_append_note_reapplies_when_file_changes_without_updated_at_delta(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(
+        identifier="X-CAS-MTIME",
+        title="t",
+        state="Review",
+        description="Original body.",
+    )
+    issue = issue_from_file(path)
+    assert issue is not None
+
+    original_parse = file_tracker_module.parse_ticket_file
+    original_write = file_tracker_module.write_ticket_atomic
+    injected = False
+
+    def parse_with_external_update(candidate: Path) -> tuple[dict[str, object], str]:
+        nonlocal injected
+        front, body = original_parse(candidate)
+        if candidate == path and not injected:
+            injected = True
+            original_write(candidate, dict(front), "External same-stamp body.")
+        return front, body
+
+    monkeypatch.setattr(
+        file_tracker_module, "parse_ticket_file", parse_with_external_update
+    )
+
+    fbt.append_note(issue, "Note", "operator note")
+
+    _, body = original_parse(path)
+    assert "External same-stamp body." in body
+    assert "## Note" in body
+    assert "operator note" in body
 
 
 def test_serialize_round_trip(tmp_path):
