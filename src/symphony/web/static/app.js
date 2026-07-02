@@ -610,7 +610,7 @@
     try {
       const data = await api.getPrompt(stateName);
       clearNode(modalBody);
-      modalBody.className = '';
+      modalBody.className = 'prompt-editor-body';
       const errorBox = el('div', { class: 'modal-error', style: 'display:none;' });
       const textarea = el('textarea', { class: 'textarea prompt-textarea', spellcheck: false }, data.content);
       const saveBtn = el('button', {

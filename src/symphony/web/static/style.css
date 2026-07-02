@@ -722,8 +722,12 @@ a { color: inherit; }
 .confirm-message { margin: 0; line-height: 1.5; }
 
 .prompt-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+/* Swap wrapper inside .prompt-modal-content — must stay a flex column so the
+   textarea stretches to the modal width instead of its intrinsic ~20 cols. */
+.prompt-editor-body { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
 .prompt-textarea {
   flex: 1;
+  width: 100%;
   min-height: 46vh;
   font-family: var(--font-mono);
   font-size: 12.5px;
