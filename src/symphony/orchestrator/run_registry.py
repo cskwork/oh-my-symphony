@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 from ..issue import Issue
 
 
 DEFAULT_LEASE_TTL = timedelta(minutes=5)
+
+# Bound how long a locked database can stall a caller. Registry ops run
+# inline on the event loop (sqlite connections are thread-affine), so this
+# is the worst-case tick delay a contended WAL database can inflict.
+SQLITE_BUSY_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -23,15 +30,43 @@ class RunRecord:
     workspace_path: Path
     lease_expires_at: datetime | None
     last_progress_at: datetime | None
+    owner_pid: int | None = None
+    owner_boot_id: str | None = None
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # PermissionError and friends: the pid exists but isn't ours.
+        # Unknown errors default to "alive" — the safe direction is to
+        # honor the lease until its TTL rather than double-dispatch.
+        return True
+    return True
 
 
 class RunRegistry:
     """Persist one active dispatch lease per issue in `.symphony/state.db`."""
 
-    def __init__(self, path: Path, lease_ttl: timedelta = DEFAULT_LEASE_TTL) -> None:
+    def __init__(
+        self,
+        path: Path,
+        lease_ttl: timedelta = DEFAULT_LEASE_TTL,
+        *,
+        owner_pid: int | None = None,
+        boot_id: str | None = None,
+    ) -> None:
         self._path = path
         self._lease_ttl = lease_ttl
         self._conn: sqlite3.Connection | None = None
+        # Owner identity lets a restarted process distinguish "a dead
+        # process's leftover lease" (reclaim now) from "a live peer's lease"
+        # (honor until TTL). The boot id is unique per registry instance so
+        # our own live leases are never self-reclaimed.
+        self._owner_pid = owner_pid if owner_pid is not None else os.getpid()
+        self._boot_id = boot_id or uuid.uuid4().hex
         self._ensure_schema()
 
     @property
@@ -68,8 +103,9 @@ class RunRegistry:
                 INSERT INTO runs (
                     run_id, issue_id, identifier, title, state, attempt,
                     attempt_kind, agent_kind, workspace_path, status, started_at,
-                    updated_at, lease_expires_at, last_progress_at, completed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, NULL)
+                    updated_at, lease_expires_at, last_progress_at, completed_at,
+                    owner_pid, owner_boot_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, NULL, ?, ?)
                 """,
                 (
                     run_id,
@@ -85,6 +121,8 @@ class RunRegistry:
                     _iso(now),
                     _iso(expires),
                     _iso(now),
+                    self._owner_pid,
+                    self._boot_id,
                 ),
             )
             conn.execute("COMMIT")
@@ -178,6 +216,57 @@ class RunRegistry:
             conn.execute("ROLLBACK")
             raise
 
+    def reclaim_dead_owner_leases(
+        self,
+        now: datetime | None = None,
+        *,
+        pid_alive: Callable[[int], bool] | None = None,
+    ) -> list[RunRecord]:
+        """Free unexpired leases whose owner process is gone.
+
+        A crashed process's last heartbeat can push `lease_expires_at` up to
+        a full TTL into the future; without this pass a restart cannot
+        re-dispatch the interrupted ticket for minutes. Leases owned by this
+        registry instance (same boot id) or by a live pid are left alone —
+        the safe direction for pid reuse is to wait out the TTL.
+        Reclaimed rows get status 'orphaned' (distinct from TTL 'expired')
+        so a later recovery pass can decide about their workspaces.
+        """
+        now = _utc(now)
+        alive = pid_alive or _pid_alive
+        conn = self._connect()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                """
+                SELECT * FROM runs
+                WHERE status = 'active' AND lease_expires_at > ?
+                ORDER BY started_at, run_id
+                """,
+                (_iso(now),),
+            ).fetchall()
+            reclaimed: list[RunRecord] = []
+            for row in rows:
+                if row["owner_boot_id"] == self._boot_id:
+                    continue
+                pid = row["owner_pid"]
+                if pid is not None and alive(int(pid)):
+                    continue
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'orphaned', updated_at = ?, completed_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (_iso(now), _iso(now), row["run_id"]),
+                )
+                reclaimed.append(_record(row))
+            conn.execute("COMMIT")
+            return reclaimed
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
     def get_run(self, run_id: str) -> RunRecord:
         row = self._connect().execute(
             "SELECT * FROM runs WHERE run_id = ?",
@@ -190,7 +279,9 @@ class RunRegistry:
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(self._path, timeout=30.0, isolation_level=None)
+            self._conn = sqlite3.connect(
+                self._path, timeout=SQLITE_BUSY_TIMEOUT_S, isolation_level=None
+            )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -215,10 +306,21 @@ class RunRegistry:
                 updated_at TEXT NOT NULL,
                 lease_expires_at TEXT,
                 last_progress_at TEXT,
-                completed_at TEXT
+                completed_at TEXT,
+                owner_pid INTEGER,
+                owner_boot_id TEXT
             )
             """
         )
+        # Migrate pre-owner databases in place; NULL owners read as
+        # "unknown, presumed dead" in reclaim_dead_owner_leases.
+        existing = {
+            row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "owner_pid" not in existing:
+            conn.execute("ALTER TABLE runs ADD COLUMN owner_pid INTEGER")
+        if "owner_boot_id" not in existing:
+            conn.execute("ALTER TABLE runs ADD COLUMN owner_boot_id TEXT")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_runs_issue_status_lease
@@ -276,6 +378,7 @@ def _parse(value: str | None) -> datetime | None:
 
 
 def _record(row: sqlite3.Row) -> RunRecord:
+    owner_pid = row["owner_pid"]
     return RunRecord(
         run_id=str(row["run_id"]),
         issue_id=str(row["issue_id"]),
@@ -284,4 +387,6 @@ def _record(row: sqlite3.Row) -> RunRecord:
         workspace_path=Path(str(row["workspace_path"])),
         lease_expires_at=_parse(row["lease_expires_at"]),
         last_progress_at=_parse(row["last_progress_at"]),
+        owner_pid=int(owner_pid) if owner_pid is not None else None,
+        owner_boot_id=row["owner_boot_id"],
     )

@@ -80,6 +80,10 @@ class RunningEntry:
     state_at_turn_start: str = ""
     codex_app_server_pid: int | None = None
     last_error: str | None = None
+    # Set when a lease heartbeat found a conflicting active holder and
+    # re-acquisition failed. The worker is being stopped; the flag keeps the
+    # per-tick heartbeat from re-attempting acquisition on every tick.
+    lease_lost: bool = False
     # Set to `now` the first time stall detection cancels this worker. Used
     # by the next reconcile tick to escalate from "cancel sent" to "force
     # eject" if the worker is stuck on a non-cancellable await.

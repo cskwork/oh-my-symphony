@@ -35,6 +35,15 @@ STALL_FORCE_EJECT_GRACE_S = 30.0
 # still wins, and the first tick after start always sweeps once.
 ARCHIVE_SWEEP_INTERVAL_SEC = 300.0
 
+# R1 — tick-loop supervision. The per-tick guard turns any tick exception
+# into counters instead of a dead loop; consecutive failures past the
+# threshold flip health() to "degraded". The restart bound only matters for
+# BaseException escapes (per-tick guard catches Exception): past the bound
+# the loop stays down but visibly so.
+TICK_DEGRADED_AFTER_CONSECUTIVE_FAILURES = 3
+TICK_LOOP_MAX_RESTARTS = 3
+TICK_FAILURE_BACKOFF_MAX_S = 30.0
+
 # G2 — empty-response loop guard. Three consecutive `EVENT_TURN_COMPLETED`
 # events whose turn produced no fresh preview text trigger the escalation
 # path (`empty_response_loop` budget kind). The threshold is conservative

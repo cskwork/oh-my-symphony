@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .. import __version__
 from ..backends import (
     EVENT_AGENT_RETRY,
     EVENT_COMPACTION,
@@ -73,6 +74,9 @@ from .constants import (
     PAUSED_RETRY_HOLD_MS,
     RETRY_BASE_MS,
     STALL_FORCE_EJECT_GRACE_S,
+    TICK_DEGRADED_AFTER_CONSECUTIVE_FAILURES,
+    TICK_FAILURE_BACKOFF_MAX_S,
+    TICK_LOOP_MAX_RESTARTS,
     WAIT_AGE_BUMP_MIN,
     _TOKEN_EMA_ALPHA,
 )
@@ -176,6 +180,17 @@ class Orchestrator:
         # tolerant inside StatsStore, so hooks never guard beyond None.
         self._stats: StatsStore | None = None
         self._run_registry: RunRegistry | None = None
+        # R1/A1 — supervision + health counters. One bad tick must degrade
+        # the tick, never kill the loop; these counters make the difference
+        # between "idle and healthy" and "silently dead" observable.
+        self._last_tick_completed_at: datetime | None = None
+        self._consecutive_tick_failures: int = 0
+        self._tick_error_count: int = 0
+        self._tick_loop_restarts: int = 0
+        self._last_tick_error: str | None = None
+        self._consecutive_candidate_fetch_failures: int = 0
+        self._registry_error_count: int = 0
+        self._last_registry_error: str | None = None
 
     # ------------------------------------------------------------------
     # public accessors for API / TUI layers
@@ -189,42 +204,154 @@ class Orchestrator:
     def stats(self) -> StatsStore | None:
         return self._stats
 
+    def _registry_guard(self, op: str, fn: Callable[[], Any], default: Any) -> Any:
+        """Run one registry op; a broken registry degrades, never raises.
+
+        The lease is a secondary guard on top of the in-process `_running`/
+        `_claimed` sets, so registry failures fail-open (callers get
+        `default`) and surface through health() instead of killing the tick.
+        """
+        try:
+            result = fn()
+        except Exception as exc:
+            self._registry_error_count += 1
+            self._last_registry_error = f"{op}: {exc}"
+            log.error("run_registry_error", op=op, error=str(exc))
+            return default
+        self._last_registry_error = None
+        return result
+
     def _ensure_run_registry(self, cfg: ServiceConfig) -> None:
         path = cfg.workflow_path.parent / ".symphony" / "state.db"
         if self._run_registry is not None and self._run_registry.path == path:
             return
         if self._run_registry is not None:
             self._run_registry.close()
-        self._run_registry = RunRegistry(path)
-        expired = self._run_registry.expire_stale()
+        try:
+            self._run_registry = RunRegistry(path)
+        except Exception as exc:
+            self._run_registry = None
+            self._registry_error_count += 1
+            self._last_registry_error = f"open: {exc}"
+            log.error("run_registry_open_failed", path=str(path), error=str(exc))
+            return
+        registry = self._run_registry
+        reclaimed = self._registry_guard(
+            "reclaim_dead_owner", registry.reclaim_dead_owner_leases, []
+        )
+        if reclaimed:
+            log.info(
+                "run_leases_reclaimed_dead_owner",
+                count=len(reclaimed),
+                identifiers=[r.identifier for r in reclaimed],
+                path=str(path),
+            )
+        expired = self._registry_guard("expire_stale", registry.expire_stale, 0)
         if expired:
             log.info("run_leases_expired_on_start", count=expired, path=str(path))
 
     def _has_active_run_lease(self, issue_id: str) -> bool:
         if self._run_registry is None:
             return False
-        return self._run_registry.has_active_lease(issue_id)
+        registry = self._run_registry
+        return bool(
+            self._registry_guard(
+                "has_active_lease", lambda: registry.has_active_lease(issue_id), False
+            )
+        )
 
     def _heartbeat_run_lease(
         self, issue_id: str, entry: RunningEntry, *, progress: datetime | None = None
-    ) -> None:
-        if self._run_registry is None or not entry.run_id:
-            return
-        self._run_registry.heartbeat(
-            issue_id=issue_id,
-            run_id=entry.run_id,
-            progress_at=progress,
+    ) -> bool:
+        """Refresh the entry's lease; returns False only on a real conflict.
+
+        A missed heartbeat means the row is no longer active — either the
+        lease TTL lapsed (e.g. a blocked tick) or a peer replaced it. A
+        healthy worker should not keep running leaseless, so try to take a
+        fresh lease; only an actual conflicting holder returns False.
+        """
+        registry = self._run_registry
+        if registry is None or not entry.run_id:
+            return True
+        ok = self._registry_guard(
+            "heartbeat",
+            lambda: registry.heartbeat(
+                issue_id=issue_id,
+                run_id=entry.run_id,
+                progress_at=progress,
+            ),
+            True,
         )
+        if ok:
+            return True
+        if entry.lease_lost:
+            return False
+        new_run_id = self._registry_guard(
+            "reacquire",
+            lambda: registry.acquire_run(
+                entry.issue,
+                workspace_path=entry.workspace_path,
+                attempt=entry.retry_attempt,
+                attempt_kind="reacquired",
+                agent_kind=entry.agent_kind,
+            ),
+            "",
+        )
+        if new_run_id == "":
+            # Registry error mid-reacquire: keep the worker; health is
+            # already flagged degraded by the guard.
+            return True
+        if new_run_id:
+            entry.run_id = new_run_id
+            log.warning(
+                "run_lease_reacquired",
+                issue_id=issue_id,
+                issue_identifier=entry.issue.identifier,
+                run_id=new_run_id,
+            )
+            return True
+        entry.lease_lost = True
+        log.error(
+            "run_lease_conflict",
+            issue_id=issue_id,
+            issue_identifier=entry.issue.identifier,
+        )
+        return False
+
+    def _heartbeat_running_leases(self) -> None:
+        """Per-tick lease refresh; a conflicting holder stops our worker.
+
+        Cancelling stamps `cancelled_at`, so the existing two-stage
+        reconcile (cancel -> force-eject after grace) owns the cleanup if
+        the worker is stuck on a non-cancellable await.
+        """
+        for issue_id, entry in list(self._running.items()):
+            if self._heartbeat_run_lease(issue_id, entry):
+                continue
+            task = entry.worker_task
+            if task is not None and not task.done() and entry.cancelled_at is None:
+                log.error(
+                    "worker_cancelled_lease_conflict",
+                    issue_id=issue_id,
+                    issue_identifier=entry.issue.identifier,
+                )
+                task.cancel()
+                entry.cancelled_at = datetime.now(timezone.utc)
 
     def _finish_run_lease(
         self, issue_id: str, entry: RunningEntry, status: str
     ) -> None:
-        if self._run_registry is None or not entry.run_id:
+        registry = self._run_registry
+        if registry is None or not entry.run_id:
             return
-        self._run_registry.complete_run(
-            issue_id=issue_id,
-            run_id=entry.run_id,
-            status=status,
+        self._registry_guard(
+            "complete_run",
+            lambda: registry.complete_run(
+                issue_id=issue_id,
+                run_id=entry.run_id,
+                status=status,
+            ),
+            None,
         )
 
     def _try_acquire_run_lease(
@@ -236,15 +363,24 @@ class Orchestrator:
         attempt_kind: str,
         agent_kind: str,
     ) -> str | None:
-        if self._run_registry is None:
+        registry = self._run_registry
+        if registry is None:
             return ""
-        run_id = self._run_registry.acquire_run(
-            issue,
-            workspace_path=workspace_path,
-            attempt=attempt,
-            attempt_kind=attempt_kind,
-            agent_kind=agent_kind,
+        run_id = self._registry_guard(
+            "acquire_run",
+            lambda: registry.acquire_run(
+                issue,
+                workspace_path=workspace_path,
+                attempt=attempt,
+                attempt_kind=attempt_kind,
+                agent_kind=agent_kind,
+            ),
+            "",
         )
+        if run_id == "":
+            # Registry error: dispatch proceeds leaseless (same as
+            # registry-disabled) and health reports degraded.
+            return ""
         if run_id:
             return run_id
         log.info(
@@ -287,7 +423,46 @@ class Orchestrator:
         )
         self._ensure_run_registry(cfg)
         await self._startup_terminal_cleanup(cfg)
+        self._spawn_tick_loop()
+
+    def _spawn_tick_loop(self) -> None:
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
+        self._tick_task.add_done_callback(self._on_tick_task_done)
+
+    def _on_tick_task_done(self, task: asyncio.Task[None]) -> None:
+        """R1 — the tick loop must not die silently.
+
+        The per-tick guard in `_tick_loop` catches `Exception`, so only a
+        `BaseException` (or a bug in the loop scaffolding itself) lands
+        here. Restart a bounded number of times; past the bound, stay dead
+        but visibly so via health().
+        """
+        if task is not self._tick_task:
+            # A stale callback from a superseded loop must not double-restart.
+            return
+        if self._stopping or task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        self._tick_error_count += 1
+        self._last_tick_error = str(exc) or type(exc).__name__
+        if self._tick_loop_restarts >= TICK_LOOP_MAX_RESTARTS:
+            log.error(
+                "tick_loop_dead",
+                error=self._last_tick_error,
+                error_type=type(exc).__name__,
+                restarts=self._tick_loop_restarts,
+            )
+            return
+        self._tick_loop_restarts += 1
+        log.error(
+            "tick_loop_restarted",
+            error=self._last_tick_error,
+            error_type=type(exc).__name__,
+            restart=self._tick_loop_restarts,
+        )
+        self._spawn_tick_loop()
 
     async def stop(self) -> None:
         self._stopping = True
@@ -380,6 +555,67 @@ class Orchestrator:
                 "default_agent_kind": cfg.agent.kind if cfg is not None else "",
                 "branch_policy": self._branch_policy_snapshot(cfg),
             },
+            "health": self._health_summary(),
+        }
+
+    def health(self) -> dict[str, Any]:
+        """A1 — liveness/degradation surface for /api/v1/health.
+
+        Cheap by design: reads counters only, no tracker or registry I/O,
+        so the endpoint stays truthful even while the tick loop is wedged.
+        """
+        now = datetime.now(timezone.utc)
+        tick_task = self._tick_task
+        tick_started = tick_task is not None
+        tick_alive = tick_task is not None and not tick_task.done()
+        last = self._last_tick_completed_at
+        degraded_reasons: list[str] = []
+        if tick_started and not tick_alive and not self._stopping:
+            degraded_reasons.append("tick_loop_dead")
+        if self._consecutive_tick_failures >= TICK_DEGRADED_AFTER_CONSECUTIVE_FAILURES:
+            degraded_reasons.append("tick_failures")
+        if (
+            self._consecutive_candidate_fetch_failures
+            >= TICK_DEGRADED_AFTER_CONSECUTIVE_FAILURES
+        ):
+            degraded_reasons.append("tracker_fetch_failures")
+        if self._last_registry_error is not None:
+            degraded_reasons.append("run_registry_error")
+        return {
+            "status": "degraded" if degraded_reasons else "ok",
+            "degraded_reasons": degraded_reasons,
+            "version": __version__,
+            "generated_at": _utc_iso_z(),
+            "tick": {
+                "alive": tick_alive,
+                "started": tick_started,
+                "last_completed_at": last.isoformat() if last is not None else None,
+                "seconds_since_last": (
+                    round((now - last).total_seconds(), 1) if last is not None else None
+                ),
+                "consecutive_failures": self._consecutive_tick_failures,
+                "error_count": self._tick_error_count,
+                "loop_restarts": self._tick_loop_restarts,
+                "last_error": self._last_tick_error,
+            },
+            "tracker": {
+                "consecutive_fetch_failures": self._consecutive_candidate_fetch_failures,
+            },
+            "run_registry": {
+                "enabled": self._run_registry is not None,
+                "error_count": self._registry_error_count,
+                "last_error": self._last_registry_error,
+            },
+            "counts": {"running": len(self._running), "retrying": len(self._retry)},
+        }
+
+    def _health_summary(self) -> dict[str, Any]:
+        full = self.health()
+        return {
+            "status": full["status"],
+            "degraded_reasons": full["degraded_reasons"],
+            "tick_alive": full["tick"]["alive"],
+            "last_tick_completed_at": full["tick"]["last_completed_at"],
         }
 
     def _branch_policy_snapshot(self, cfg: ServiceConfig | None) -> dict[str, Any]:
@@ -854,7 +1090,31 @@ class Orchestrator:
     async def _tick_loop(self) -> None:
         # Fire an immediate tick.
         while not self._stopping:
-            await self._on_tick()
+            try:
+                await self._on_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # R1 — one bad tick degrades the tick, never the loop. The
+                # counters feed health(); the bounded pause keeps a hot
+                # failure (e.g. a refresh-spammed tick event) from spinning.
+                self._tick_error_count += 1
+                self._consecutive_tick_failures += 1
+                self._last_tick_error = str(exc) or type(exc).__name__
+                log.error(
+                    "tick_failed",
+                    error=self._last_tick_error,
+                    error_type=type(exc).__name__,
+                    consecutive=self._consecutive_tick_failures,
+                )
+                backoff_s = min(
+                    2.0 ** (self._consecutive_tick_failures - 1),
+                    TICK_FAILURE_BACKOFF_MAX_S,
+                )
+                await asyncio.sleep(backoff_s)
+            else:
+                self._consecutive_tick_failures = 0
+                self._last_tick_completed_at = datetime.now(timezone.utc)
             cfg = self._workflow_state.current()
             poll_ms = cfg.poll_interval_ms if cfg is not None else 30_000
             try:
@@ -891,10 +1151,10 @@ class Orchestrator:
             self._workspace_manager.update_reuse_policy(cfg.workspace_reuse_policy)
             self._workspace_manager.update_hook_env(_branch_hook_env(cfg))
         self._ensure_run_registry(cfg)
-        for issue_id, entry in list(self._running.items()):
-            self._heartbeat_run_lease(issue_id, entry)
+        self._heartbeat_running_leases()
         if self._run_registry is not None:
-            expired = self._run_registry.expire_stale()
+            registry = self._run_registry
+            expired = self._registry_guard("expire_stale", registry.expire_stale, 0)
             if expired:
                 log.info("run_leases_expired", count=expired)
 
@@ -938,9 +1198,15 @@ class Orchestrator:
         try:
             candidates = await self._fetch_candidates(cfg)
         except Exception as exc:
-            log.warning("candidate_fetch_failed", error=str(exc))
+            self._consecutive_candidate_fetch_failures += 1
+            log.warning(
+                "candidate_fetch_failed",
+                error=str(exc),
+                consecutive=self._consecutive_candidate_fetch_failures,
+            )
             await self._notify_observers()
             return
+        self._consecutive_candidate_fetch_failures = 0
 
         for issue in self._sort_with_wait_age_bump(candidates, cfg):
             if await self._auto_triage_todo_if_actionable(issue, cfg):

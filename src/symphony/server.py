@@ -137,6 +137,10 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
             )
         return web.json_response({"tasks": out})
 
+    async def handle_health(_request: web.Request) -> web.Response:
+        return web.json_response(orchestrator.health())
+
+    app.router.add_get("/api/v1/health", handle_health)
     app.router.add_get("/api/v1/state", handle_state)
     app.router.add_get("/api/v1/refresh", handle_method_not_allowed)
     app.router.add_post("/api/v1/refresh", handle_refresh)
