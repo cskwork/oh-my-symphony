@@ -93,19 +93,82 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _fail_startup(log, event: str, sentence: str, **fields) -> int:
+    """U3 — structured event for logs plus one actionable sentence.
+
+    The headless run path used to emit only key=value events
+    (`workflow_load_failed error=...`), which read as machine noise next
+    to the friendly sentences the service path prints for the same
+    failures.
+    """
+    log.error(event, **fields)
+    print(f"symphony: {sentence}", file=sys.stderr)
+    return 1
+
+
+def _startup_preflight_failures(cfg) -> list[str]:
+    """A2 — doctor-lite before the orchestrator starts.
+
+    Only the checks whose failure is otherwise deferred and cryptic: a
+    missing agent CLI fails at first dispatch, the shipped after_create
+    placeholder fails every dispatch with rc=128. The full check set
+    stays in `symphony doctor`.
+    """
+    from .doctor import check_after_create_hook, check_agent_cli
+
+    failures: list[str] = []
+    for check in (check_agent_cli(cfg), check_after_create_hook(cfg)):
+        if check.status == "fail":
+            failures.append(f"{check.name}: {check.message}")
+    return failures
+
+
 async def _run(args: argparse.Namespace) -> int:
     log = configure_logging(args.log_level)
 
     workflow_path = resolve_workflow_path(args.workflow)
     if not workflow_path.exists():
-        log.error("workflow_path_missing", path=str(workflow_path))
-        return 1
+        return _fail_startup(
+            log,
+            "workflow_path_missing",
+            f"WORKFLOW.md not found at {workflow_path}. Pass a path "
+            "(`symphony ./WORKFLOW.md`) or run `symphony board init` to "
+            "scaffold a new board.",
+            path=str(workflow_path),
+        )
 
     state = WorkflowState(workflow_path)
     cfg, err = state.reload()
     if cfg is None:
-        log.error("workflow_load_failed", error=str(err))
-        return 1
+        return _fail_startup(
+            log,
+            "workflow_load_failed",
+            f"WORKFLOW.md could not be loaded: {err}. Fix the YAML "
+            f"frontmatter and re-run; `symphony doctor {workflow_path}` "
+            "pinpoints most configuration mistakes.",
+            error=str(err),
+        )
+
+    if args.tui and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return _fail_startup(
+            log,
+            "tui_requires_tty",
+            "the TUI needs an interactive terminal. Run without --tui for "
+            "headless mode, or use `symphony service start` and open the "
+            "web board instead.",
+        )
+
+    preflight_failures = _startup_preflight_failures(cfg)
+    if preflight_failures:
+        for failure in preflight_failures:
+            print(f"symphony: {failure}", file=sys.stderr)
+        return _fail_startup(
+            log,
+            "startup_preflight_failed",
+            f"fix the above and re-run; `symphony doctor {workflow_path}` "
+            "runs the full check set.",
+            failures=len(preflight_failures),
+        )
 
     # CLI flag wins over WORKFLOW.md; both default to on for the macOS
     # "lock the screen on me and I lose the run" case the user flagged.
@@ -120,10 +183,16 @@ async def _run(args: argparse.Namespace) -> int:
     try:
         await orchestrator.start()
     except SymphonyError as exc:
-        log.error("startup_failed", error=str(exc))
         if keep_awake is not None:
             keep_awake.stop()
-        return 1
+        return _fail_startup(
+            log,
+            "startup_failed",
+            f"orchestrator startup failed: {exc}. "
+            f"`symphony doctor {workflow_path}` checks ports, the agent "
+            "CLI, and tracker configuration.",
+            error=str(exc),
+        )
 
     # Register the progress writer BEFORE any subsequent `await` so the
     # first tick's `_notify_observers` sees it. CLI flag > WORKFLOW.md
@@ -152,8 +221,30 @@ async def _run(args: argparse.Namespace) -> int:
     runner = None
     if server_port is not None:
         app = build_app(orchestrator)
-        runner, bound = await run_server(app, args.host, server_port)
+        try:
+            runner, bound = await run_server(app, args.host, server_port)
+        except OSError as exc:
+            # A2 — EADDRINUSE used to escape as a raw traceback after the
+            # orchestrator had already started.
+            await orchestrator.stop()
+            if keep_awake is not None:
+                keep_awake.stop()
+            return _fail_startup(
+                log,
+                "http_port_unavailable",
+                f"port {server_port} on {args.host} is already in use or "
+                f"cannot be bound ({exc}). Stop the other process "
+                f"(`lsof -ti :{server_port}`), pick a different --port, or "
+                "check `symphony service status`.",
+                host=args.host,
+                port=server_port,
+                error=str(exc),
+            )
         log.info("http_extension_active", host=args.host, port=bound)
+        print(
+            f"symphony: board ready at http://{args.host}:{bound}",
+            file=sys.stderr,
+        )
     else:
         # Surfaces the silent-no-HTTP case so the operator immediately sees
         # why board-viewer / API consumers can't reach this instance.
