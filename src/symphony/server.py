@@ -1,13 +1,14 @@
 """HTTP server: web Kanban app + JSON API.
 
 `/` serves the built-in web board (see `webapi.py` for the REST surface:
-board/issue CRUD, workflow column + prompt editing, skills, stats). The
+board/issue CRUD, workflow column + prompt editing, stats). The
 endpoints below predate the web app and remain for scripts and the TUI:
 
     GET  /api/v1/state           — runtime snapshot
     GET  /api/v1/<identifier>    — issue debug detail
     POST /api/v1/refresh         — trigger immediate poll/reconcile
     POST /api/v1/<id>/pause|resume
+    POST /api/v1/<id>/skip-learn
 """
 
 from __future__ import annotations
@@ -97,6 +98,20 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
             }
         )
 
+    async def handle_skip_learn(request: web.Request) -> web.Response:
+        identifier = request.match_info.get("identifier", "")
+        changed, message = await orchestrator.skip_learn(identifier)
+        if not changed:
+            status = 404 if message.startswith("unknown issue") else 409
+            return _error_response(status, "learn_skip_rejected", message)
+        return web.json_response(
+            {
+                "issue_identifier": identifier,
+                "skipped": True,
+                "message": message,
+            }
+        )
+
     async def handle_method_not_allowed(request: web.Request) -> web.Response:
         return _error_response(405, "method_not_allowed", request.method)
 
@@ -126,12 +141,13 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
     app.router.add_get("/api/v1/refresh", handle_method_not_allowed)
     app.router.add_post("/api/v1/refresh", handle_refresh)
     app.router.add_get("/api/v1/_debug/tasks", handle_debug_tasks)
-    # Web app routes (board/issues/workflow/skills/stats + static SPA).
+    # Web app routes (board/issues/workflow/stats + static SPA).
     # Registered before the `{identifier}` catch-alls below so named routes
     # like /api/v1/board resolve to their handlers, not to issue lookup.
     register_web_routes(app, orchestrator)
     app.router.add_post("/api/v1/{identifier}/pause", handle_pause)
     app.router.add_post("/api/v1/{identifier}/resume", handle_resume)
+    app.router.add_post("/api/v1/{identifier}/skip-learn", handle_skip_learn)
     app.router.add_get("/api/v1/{identifier}", handle_issue)
 
     return app

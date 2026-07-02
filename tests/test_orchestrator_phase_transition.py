@@ -120,7 +120,7 @@ def _make_config(
     *,
     max_turns: int = 5,
     max_attempts: int = 3,
-    active_states: tuple[str, ...] = ("Todo", "Explore", "In Progress", "Review"),
+    active_states: tuple[str, ...] = ("Todo", "In Progress", "Verify", "Learn"),
     prompt_template: str | None = None,
     prompts: PromptConfig | None = None,
 ) -> ServiceConfig:
@@ -187,12 +187,55 @@ def _make_config(
     )
 
 
+_CONTRACT_CLEAN_BODY = """
+## Plan
+- build it
+
+## Acceptance Tests
+- pytest -q
+
+## Done Signals
+- behavior visible
+
+## Implementation
+- changed source
+
+## Self-Critique
+- checked edge paths
+
+## Security Audit
+| check | verdict | evidence |
+| --- | --- | --- |
+| secrets | pass | n/a |
+
+## Review
+clean
+
+## QA Evidence
+- pytest -q rc=0
+
+## AC Scorecard
+| signal | source | result | evidence |
+| --- | --- | --- | --- |
+| ac-1 | pytest | pass | MT-1/qa/version.log |
+
+## Merge Status
+merged
+
+## Wiki Updates
+- docs/llm-wiki/mt-1.md
+
+## Human Review
+ready
+"""
+
+
 def _make_issue(state: str = "Todo") -> Issue:
     return Issue(
         id="iss-1",
         identifier="MT-1",
         title="phase transition fixture",
-        description=None,
+        description=_CONTRACT_CLEAN_BODY,
         priority=2,
         state=state,
         blocked_by=(),
@@ -208,6 +251,10 @@ def _orch(tmp_path: Path) -> Orchestrator:
 
 
 def _seed_running_entry(o: Orchestrator, issue: Issue, tmp_path: Path) -> None:
+    (tmp_path / "docs" / issue.identifier / "work").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / issue.identifier / "work" / "notes.md").write_text("ok")
+    (tmp_path / "docs" / issue.identifier / "qa").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / issue.identifier / "qa" / "version.log").write_text("ok")
     o._running[issue.id] = RunningEntry(
         issue=issue,
         started_at=datetime.now(timezone.utc),
@@ -256,7 +303,7 @@ def _install_state_sequence(
             id="iss-1",
             identifier="MT-1",
             title="phase transition fixture",
-            description=None,
+            description=_CONTRACT_CLEAN_BODY,
             priority=2,
             state=next_state,
             blocked_by=(),
@@ -614,7 +661,7 @@ def test_phase_transition_resets_session_id_on_running_entry(
     monkeypatch.setattr(_FakeBackend, "run_turn", _capture_run_turn)
 
     _install_fake_backend(monkeypatch)
-    _install_state_sequence(monkeypatch, ["Review", "Done"])
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
@@ -665,7 +712,7 @@ def test_phase_transition_resets_token_high_water_marks(
 
     monkeypatch.setattr(_FakeBackend, "run_turn", _snapshot_on_second)
     _install_fake_backend(monkeypatch)
-    _install_state_sequence(monkeypatch, ["Review", "Done"])
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
@@ -683,7 +730,7 @@ def test_phase_transition_resets_token_high_water_marks(
 
 
 # ---------------------------------------------------------------------------
-# Rewind detection — Review/QA → In Progress
+# Rewind detection - Verify/Learn -> In Progress
 # ---------------------------------------------------------------------------
 
 
@@ -691,32 +738,27 @@ def test_is_rewind_transition_pure_function() -> None:
     """Predicate covers the canonical rewind paths and rejects the rest."""
     from symphony.orchestrator import _is_rewind_transition
 
-    # Canonical rewinds defined by WORKFLOW.md hard rules.
-    assert _is_rewind_transition("review", "in progress") is True
-    assert _is_rewind_transition("qa", "in progress") is True
-    assert _is_rewind_transition("in progress", "plan") is True
+    assert _is_rewind_transition("verify", "in progress") is True
+    assert _is_rewind_transition("learn", "in progress") is True
     # Forward transitions are NEVER rewinds.
-    assert _is_rewind_transition("todo", "explore") is False
-    assert _is_rewind_transition("explore", "plan") is False
-    assert _is_rewind_transition("plan", "in progress") is False
-    assert _is_rewind_transition("in progress", "review") is False
-    assert _is_rewind_transition("review", "qa") is False
-    assert _is_rewind_transition("qa", "learn") is False
+    assert _is_rewind_transition("todo", "in progress") is False
+    assert _is_rewind_transition("in progress", "verify") is False
+    assert _is_rewind_transition("verify", "learn") is False
     # Same-state self-loops are not transitions at all.
     assert _is_rewind_transition("in progress", "in progress") is False
     # Backward jumps to states OTHER than In Progress are out of scope.
-    assert _is_rewind_transition("review", "explore") is False
-    assert _is_rewind_transition("qa", "explore") is False
+    assert _is_rewind_transition("verify", "todo") is False
+    assert _is_rewind_transition("learn", "verify") is False
 
 
-def test_review_rewind_renders_is_rewind_in_first_prompt(
+def test_verify_rewind_renders_is_rewind_in_first_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the state goes Review → In Progress mid-worker, the rebuilt
+    """When the state goes Verify -> In Progress mid-worker, the rebuilt
     backend's first-turn prompt must carry `is_rewind=True` so WORKFLOW
     templates can branch the retry preamble."""
     cfg = _make_config(max_turns=5)
-    issue = _make_issue(state="Review")
+    issue = _make_issue(state="Verify")
     o = _orch(tmp_path)
     _seed_running_entry(o, issue, tmp_path)
 
@@ -744,14 +786,14 @@ def test_review_rewind_renders_is_rewind_in_first_prompt(
 def test_forward_transition_does_not_set_is_rewind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Todo → Explore (forward) must NOT flip is_rewind."""
+    """Todo -> In Progress (forward) must NOT flip is_rewind."""
     cfg = _make_config(max_turns=5)
     issue = _make_issue(state="Todo")
     o = _orch(tmp_path)
     _seed_running_entry(o, issue, tmp_path)
 
     instances = _install_fake_backend(monkeypatch)
-    _install_state_sequence(monkeypatch, ["Explore", "Done"])
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
@@ -771,25 +813,17 @@ def test_contract_validation_uses_fresh_ticket_body(
 ) -> None:
     cfg = _make_config(
         max_turns=4,
-        active_states=("Review", "QA"),
+        active_states=("In Progress", "Verify"),
     )
-    issue = _make_issue(state="Review")
+    issue = _make_issue(state="In Progress")
     o = _orch(tmp_path)
     _seed_running_entry(o, issue, tmp_path)
     _install_fake_backend(monkeypatch)
-    good_review = """
-## Security Audit
-| check | verdict |
-| --- | --- |
-| secrets | pass |
-
-## Review
-Looks good. Routing to QA.
-"""
+    good_body = _CONTRACT_CLEAN_BODY
     refreshes = [
-        replace(issue, state="QA", description=""),
-        replace(issue, state="QA", description=good_review),
-        replace(issue, state="Done", description=good_review),
+        replace(issue, state="Verify", description=""),
+        replace(issue, state="Verify", description=good_body),
+        replace(issue, state="Done", description=good_body),
     ]
 
     async def _refresh(_self, _cfg, _issue_id):  # noqa: ANN001
@@ -827,17 +861,17 @@ def test_contract_failure_rebuilds_at_producing_state(
 ) -> None:
     cfg = _make_config(
         max_turns=4,
-        active_states=("Review", "QA"),
+        active_states=("In Progress", "Verify"),
     )
-    issue = _make_issue(state="Review")
+    issue = _make_issue(state="In Progress")
     o = _orch(tmp_path)
     _seed_running_entry(o, issue, tmp_path)
     instances = _install_fake_backend(monkeypatch)
-    stale_qa = replace(issue, state="QA", description="")
+    stale_verify = replace(issue, state="Verify", description="")
     refreshes = [
-        stale_qa,  # after the Review turn moves forward
-        stale_qa,  # contract preflight still sees the failing body
-        stale_qa,  # tracker read after update can be stale on remote trackers
+        stale_verify,  # after the In Progress turn moves forward
+        stale_verify,  # contract preflight still sees the failing body
+        stale_verify,  # tracker read after update can be stale on remote trackers
         replace(issue, state="Done", description=""),
     ]
 
@@ -868,8 +902,8 @@ def test_contract_failure_rebuilds_at_producing_state(
         for call in inst.calls
         if call[0] == "start_session"
     ]
-    assert updates == ["Review"]
-    assert "state=Review" in prompts[1]
+    assert updates == ["In Progress"]
+    assert "state=In Progress" in prompts[1]
     assert "rewind=True" in prompts[1]
 
 
@@ -877,21 +911,21 @@ def test_rewind_budget_blocks_fourth_rewind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = _make_config(max_turns=12, max_attempts=3)
-    issue = _make_issue(state="Review")
+    issue = _make_issue(state="Verify")
     o = _orch(tmp_path)
     _seed_running_entry(o, issue, tmp_path)
     instances = _install_fake_backend(monkeypatch)
     _install_state_sequence(
         monkeypatch,
-        [
-            "In Progress",  # rewind 1
-            "Review",
-            "In Progress",  # rewind 2
-            "Review",
-            "In Progress",  # rewind 3
-            "Review",
-            "In Progress",  # rewind 4 => Blocked, no rebuild
-            "Done",
+            [
+                "In Progress",  # rewind 1
+                "Verify",
+                "In Progress",  # rewind 2
+                "Verify",
+                "In Progress",  # rewind 3
+                "Verify",
+                "In Progress",  # rewind 4 => Blocked, no rebuild
+                "Done",
         ],
     )
     updates: list[tuple[str, str]] = []
@@ -920,13 +954,13 @@ def test_rewind_budget_zero_disables_blocking(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = _make_config(max_turns=10, max_attempts=0)
-    issue = _make_issue(state="Review")
+    issue = _make_issue(state="Verify")
     o = _orch(tmp_path)
     _seed_running_entry(o, issue, tmp_path)
     _install_fake_backend(monkeypatch)
     _install_state_sequence(
         monkeypatch,
-        ["In Progress", "Review", "In Progress", "Review", "In Progress", "Done"],
+        ["In Progress", "Verify", "In Progress", "Verify", "In Progress", "Done"],
     )
     updates: list[tuple[str, str]] = []
 

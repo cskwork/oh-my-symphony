@@ -18,7 +18,7 @@ tracker:
     - Reproduce
     - Todo
     - "In Progress"
-    - Review
+    - Verify
     - "Deploy Ready"
     - Deployed
     - Verified
@@ -49,24 +49,24 @@ prompts:
   stages:
     Reproduce: ./docs/symphony-prompts/file/stages/reproduce.md
     Todo: ./docs/symphony-prompts/file/stages/todo.md
-    Review: ./docs/symphony-prompts/file/stages/review.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
     "Deploy Ready": ./docs/symphony-prompts/file/stages/deploy-ready.md
     Deployed: ./docs/symphony-prompts/file/stages/deployed.md
 ```
 
 At runtime Symphony assembles `base` plus only the current state's stage
-file. A ticket entering `Review` automatically receives `review.md` on the
+file. A ticket entering `Verify` automatically receives `verify.md` on the
 next fresh first-turn prompt; unrelated lane rules are not sent.
 
 Stage prompt files are still strict Liquid templates, so they can use the
 same variables as the legacy body:
 
 ```liquid
-## Stage: Review
+## Stage: Verify
 
 You are reviewing {{ issue.identifier }}: {{ issue.title }}.
 
-- Read the diff against `main`. Check tests, security, style.
+- Read the diff against `main`. Check tests, security, style, and merge proof.
 - Append `## Review` with findings.
 - If green, set `state` to `Deploy Ready`. Otherwise set `state` to `In Progress`.
 ```
@@ -88,9 +88,9 @@ Current state: {{ issue.state }}.
 - Do NOT fix anything. Stop after the test fails reliably.
 - When done, set the ticket `state` to `Todo`.
 
-{% elsif issue.state == "Review" %}
-## Stage: Review
-- Read the diff against `main`. Check tests, security, style.
+{% elsif issue.state == "Verify" %}
+## Stage: Verify
+- Read the diff against `main`. Check tests, security, style, and merge proof.
 - Append `## Review` with findings.
 - If green, set `state` to `Deploy Ready`. Otherwise `state` to `In Progress`.
 
@@ -119,10 +119,10 @@ files so each turn stays focused and smaller.
 
 | Want                                                | Status | Workaround                                                                  |
 |-----------------------------------------------------|--------|-----------------------------------------------------------------------------|
-| Per-state agent kind (e.g. claude for Review, codex for Implement) | ❌      | Use per-ticket `agent.kind` frontmatter for exceptions; use stage prompts for lane-specific behavior. |
-| Per-state turn limits / timeouts                    | ❌      | Globals (`agent.max_turns`, `<kind>.turn_timeout_ms`). PR territory to add. |
-| Auto-progression without an agent edit              | ❌      | The agent itself rewrites `kanban/<ID>.md` `state:` to advance.             |
-| Hard ordering between lanes                         | ⚠      | Use `blocked_by` in ticket frontmatter; advisory only.                      |
+| Per-state agent kind (e.g. claude for Verify, codex for In Progress) | no | Use per-ticket `agent.kind` frontmatter for exceptions; use stage prompts for lane-specific behavior. |
+| Per-state turn limits / timeouts                    | no | Globals (`agent.max_turns`, `<kind>.turn_timeout_ms`). PR territory to add. |
+| Auto-progression without an agent edit              | partial | Only operator controls such as Skip Learn do this. Other lanes require the agent to rewrite `kanban/<ID>.md` `state:`. |
+| Hard ordering between lanes                         | partial | Use `blocked_by` in ticket frontmatter; advisory only.                      |
 
 ## Available template variables
 

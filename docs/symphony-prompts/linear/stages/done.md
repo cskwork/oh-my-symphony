@@ -1,50 +1,33 @@
-### DONE  -- when state is `Done`
+### DONE -- when state is `Done`
 
-**Allowed tools (advisory).** Read full ticket history and prior sections. Post tracker comments only (As-Is -> To-Be Report, Merge Status, Merge Missing). Run read-only commands; invoke fallback merge commands only if Learn left Merge Missing. Do NOT edit source — the ticket has already shipped.
+**Allowed tools (advisory).** Read full ticket history and prior sections. Write ticket comments only. Run read-only commands. Do NOT edit source; the ticket has already shipped.
 
-Terminal. QA passed and the Learn Merge Gate already merged the feature branch into the target branch. Post the comments below, then stop.
+Terminal. Verify passed, the Verify Merge Gate recorded `## Merge Status`, Learn either wrote wiki updates or was operator-skipped, and a human confirmed Done.
 
-1. Post a final comment with `## As-Is -> To-Be Report` in this exact structure:
+1. Append `## As-Is -> To-Be Report` in this exact structure:
 
    ```
    ## As-Is -> To-Be Report
 
    ### As-Is
-   - <prior behaviour, with evidence: response payload, log line, screenshot link>
+   - <prior behaviour, with evidence>
 
    ### To-Be
-   - <new behaviour, with the matching piece of evidence>
+   - <new behaviour, with matching evidence>
 
    ### Reasoning
-   - Why this approach over the alternatives considered.
-   - Trade-offs accepted (performance, complexity, scope).
-   - Follow-ups intentionally deferred (with linked tickets).
+   - Why this approach over alternatives.
+   - Trade-offs accepted.
+   - Follow-ups intentionally deferred.
 
    ### Evidence
-   - Commands run during QA, with exit codes.
-   - Test names, PR-attached artefacts.
-   - Links to log lines or dashboards.
-   - `docs/{{ issue.identifier }}/reproduce/` — bug reproduction (bug label only).
-   - `docs/{{ issue.identifier }}/explore/` — exploration boost notes.
-   - `docs/{{ issue.identifier }}/work/` — user-facing feature/bug docs.
-   - `docs/{{ issue.identifier }}/verify/` — review HTTP baseline/PR artefacts.
-   - `docs/{{ issue.identifier }}/qa/` — QA durable specs, traces, logs.
+   - Commands run during Verify, with exit codes.
+   - Test names, file paths, artefact locations.
+   - `docs/{{ issue.identifier }}/reproduce/` -- bug reproduction, if any.
+   - `docs/{{ issue.identifier }}/work/` -- implementation notes.
+   - `docs/{{ issue.identifier }}/qa/` -- review, QA, and merge evidence.
    ```
 
-2. Post a separate `## Merge Status` comment confirming the target branch and merge evidence. If the Learn Merge Gate used a PR, include the PR URL and target branch.
-
-3. If merge evidence is missing, do not invent it. Post `## Merge Missing` with the fallback commands below and move the issue to `Blocked` until the merge is completed:
-
-   ```sh
-   # From the host repo root (parent of the worktree):
-   git -C "${SYMPHONY_WORKFLOW_DIR:-<host-repo>}" merge --no-ff symphony/{{ issue.identifier }}
-   ```
-
-   ```sh
-   git -C "${SYMPHONY_WORKFLOW_DIR:-<host-repo>}" push -u origin symphony/{{ issue.identifier }}
-   gh pr create --head symphony/{{ issue.identifier }} --base main \
-     --title "{{ issue.identifier }}: {{ issue.title }}"
-   ```
-
-4. `hooks.after_done` (if configured in `WORKFLOW.md`) fires automatically post-squash; any post-Done auto-merge is only a compatibility fallback for older prompts.
-5. Leave state as `Done` and stop.
+2. Append `## Merge Status` confirming the target branch and merge evidence. If Verify left merge evidence missing, do not invent it; append `## Merge Missing`, set state to `Blocked`, and stop.
+3. `hooks.after_done` (if configured in `WORKFLOW.md`) fires automatically after Done handling.
+4. Leave state as `Done` and stop.

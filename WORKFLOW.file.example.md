@@ -2,8 +2,8 @@
 tracker:
   kind: file
   board_root: ./kanban
-  active_states: [Todo, Explore, Plan, "In Progress", Critic, Review, QA, Learn]
-  terminal_states: ["Human Review", Done, Cancelled, Blocked, Archive]
+  active_states: [Todo, "In Progress", Verify, Learn]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
   # Auto-archive sweep — terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on each poll tick.
   # Set `archive_after_days: 0` to disable the sweep (TUI `a` hotkey still
@@ -12,14 +12,10 @@ tracker:
   archive_after_days: 30
   # Optional one-line legend rendered under each TUI column header.
   state_descriptions:
-    Todo: "Triage; route to Explore"
-    Explore: "Brief from docs/llm-wiki + git + code"
-    Plan: "Lock the implementation plan"
-    "In Progress": "TDD loop, draft PR"
-    Critic: "Fresh agent writes failing tests for spec gaps"
-    Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
-    QA: "Execute real code, capture evidence"
-    Learn: "Distill learnings, update docs/llm-wiki"
+    Todo: "Triage; route to In Progress"
+    "In Progress": "Plan + TDD implementation + self-critique"
+    Verify: "Review + QA + Merge Gate"
+    Learn: "Wiki write-back; S to skip"
     "Human Review": "Human confirms agent work before Done"
     Done: "Human-confirmed complete"
     Archive: "Auto-archived after 30 days idle"
@@ -45,7 +41,7 @@ hooks:
   # Default: each ticket gets its own git worktree of the host repo on a
   # symphony/<ID> branch. Product changes and docs/ artefacts stay on that
   # branch; Symphony merges it back with an explicit --no-ff merge commit
-  # when the ticket reaches Done after Human Review confirmation.
+  # in Verify before Learn and Human Review.
   #
   # If your code lives in a *different* remote than the WORKFLOW.md repo,
   # replace the worktree commands with `git clone <remote> .` instead.
@@ -200,29 +196,26 @@ agent:
   max_total_tokens: 100000000
   max_total_tokens_by_state:
     "In Progress": 500000000
-    QA: 500000000
+    Verify: 500000000
   budget_exhausted_state: Blocked
-  # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
+  # Soft cap for Verify/Learn rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
-  # Route obvious Todo tickets with Acceptance Criteria to Explore without
+  # Route obvious Todo tickets with Acceptance Criteria to In Progress without
   # spending a model turn. Bug/blocked/ambiguous tickets still run Todo.
   auto_triage_actionable_todo: true
   max_concurrent_agents_by_state:
     Todo: 1
-    Explore: 1
-    Plan: 1
     "In Progress": 1
-    Review: 1
-    QA: 1
+    Verify: 1
     Learn: 1
   # Snapshot the workspace into one git commit when a ticket reaches Done.
   # Reuses any enclosing git repo; otherwise runs `git init` first. Set to
   # false to opt out (e.g. workspace is a real repo you don't want touched).
   auto_commit_on_done: true
-  # Merge policy for the Learn -> Human Review gate. Learn must merge the
+  # Merge policy for the Verify -> Learn gate. Verify must merge the
   # `symphony/<ID>` feature branch into the target branch before setting
-  # Human Review. A human then confirms Done from the TUI (`c`) or board
-  # viewer button. kanban/ is a host-owned board link, so if it appears in the
+  # Learn. A human later confirms Done from the TUI (`c`) or board viewer
+  # button. kanban/ is a host-owned board link, so if it appears in the
   # feature-branch diff the merge is blocked as leaked workspace plumbing.
   # docs/ is intentionally branch-local and merges normally. The post-Done
   # auto-merge remains a best-effort fallback for older prompts.
@@ -287,12 +280,8 @@ prompts:
   base: ./docs/symphony-prompts/file/base.md
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
-    Explore: ./docs/symphony-prompts/file/stages/explore.md
-    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
-    Critic: ./docs/symphony-prompts/file/stages/critic.md
-    Review: ./docs/symphony-prompts/file/stages/review.md
-    QA: ./docs/symphony-prompts/file/stages/qa.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
     Learn: ./docs/symphony-prompts/file/stages/learn.md
     Done: ./docs/symphony-prompts/file/stages/done.md
 

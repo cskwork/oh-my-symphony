@@ -46,8 +46,9 @@ from .helpers import (
     _card_sort_key,
     _matches_filter,
     _ordered_column_states,
+    _stage_position,
 )
-from .screens import NewIssueScreen, StatsScreen, _RefreshNow
+from .screens import EditIssueScreen, NewIssueScreen, StatsScreen, _RefreshNow
 from .widgets import DetailPane, FilterBar, IssueCard, Lane, StatsBar
 
 
@@ -109,8 +110,10 @@ class KanbanApp(App):
         Binding("L", "toggle_language", "Language"),
         Binding("a", "archive_focused", "Archive"),
         Binding("c", "confirm_done_focused", "Confirm done"),
+        Binding("S", "skip_learn_focused", "Skip Learn"),
         Binding("P", "toggle_pause_focused", "Pause/resume"),
         Binding("n", "new_issue", "New issue"),
+        Binding("e", "edit_focused", "Edit issue"),
         Binding("s", "stats", "Stats"),
         Binding("slash", "open_filter", "Filter"),
         Binding("escape", "escape", "Close filter / zoom", show=False),
@@ -173,7 +176,12 @@ class KanbanApp(App):
                 for state_label in ordered:
                     key = normalize_state(state_label)
                     color = STATE_COLOR.get(key, "white")
-                    lane = Lane(state_label, color, descriptions.get(key))
+                    lane = Lane(
+                        state_label,
+                        color,
+                        descriptions.get(key),
+                        stage_pos=_stage_position(state_label, cfg),
+                    )
                     if key in self._terminal_keys:
                         lane.add_class("-terminal")
                     self._lanes[key] = lane
@@ -313,7 +321,8 @@ class KanbanApp(App):
             "1-9 zoom lane · 0/esc reset · "
             f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
             "d density · p detail-pane · ]/[ focus detail/board · "
-            "L language · a archive · c confirm done · P pause/resume · / filter · "
+            "L language · a archive · c confirm done · S skip Learn · "
+            "P pause/resume · n new · e edit · / filter · "
             "tab focus · j/k scroll · g/G top/bottom · "
             f"lang={lang}"
         )
@@ -589,6 +598,41 @@ class KanbanApp(App):
         self.notify(f"confirmed {issue.identifier} as Done", timeout=2)
         self._kick_tracker_refresh()
 
+    def action_skip_learn_focused(self) -> None:
+        """Move a Learn card to Human Review without running Learn."""
+        focused = self.focused
+        if not isinstance(focused, IssueCard):
+            self.notify("focus a card first", timeout=2)
+            return
+        issue = focused.issue
+        if normalize_state(issue.state) != "learn":
+            self.notify(
+                f"only Learn cards can be skipped (state={issue.state})",
+                timeout=3,
+            )
+            return
+        self.run_worker(
+            self._skip_learn_issue(issue),
+            thread=False,
+            exclusive=False,
+            group="skip_learn",
+        )
+
+    async def _skip_learn_issue(self, issue: Issue) -> None:
+        try:
+            changed, message = await self._orch.skip_learn(issue.identifier)
+        except Exception as exc:
+            log.warning(
+                "tui_skip_learn_failed", identifier=issue.identifier, error=str(exc)
+            )
+            self.notify(f"skip failed: {exc}", timeout=4, severity="error")
+            return
+        if not changed:
+            self.notify(message, timeout=4, severity="warning")
+            return
+        self.notify(message, timeout=2)
+        self._kick_tracker_refresh()
+
     @staticmethod
     def _call_update_state(
         cfg: ServiceConfig, issue: Issue, target_state: str
@@ -619,13 +663,7 @@ class KanbanApp(App):
         )
 
     async def _open_new_issue(self, cfg: ServiceConfig) -> None:
-        from ..skills import list_skills
         from ..workflow import SUPPORTED_AGENT_KINDS
-
-        skills = [
-            s.name
-            for s in await asyncio.to_thread(list_skills, cfg.workflow_path.parent)
-        ]
 
         def _on_result(form: dict[str, Any] | None) -> None:
             if form:
@@ -640,7 +678,6 @@ class KanbanApp(App):
             NewIssueScreen(
                 states=list(cfg.tracker.active_states),
                 agent_kinds=sorted(SUPPORTED_AGENT_KINDS),
-                skills=skills,
             ),
             _on_result,
         )
@@ -660,7 +697,6 @@ class KanbanApp(App):
                 labels=form["labels"],
                 description=form["description"],
                 agent_kind=form["agent_kind"] or None,
-                skills=form["skills"],
             )
             stats_store_for(
                 cfg.workflow_path.parent / ".symphony" / "stats.jsonl"
@@ -676,6 +712,88 @@ class KanbanApp(App):
             self.notify(f"create failed: {exc}", timeout=4, severity="error")
             return
         self.notify(f"created {identifier}", timeout=2)
+        self._kick_tracker_refresh()
+
+    def action_edit_focused(self) -> None:
+        """Edit the focused file-board ticket in a modal."""
+        focused = self.focused
+        if not isinstance(focused, IssueCard):
+            self.notify("focus a card first", timeout=2)
+            return
+        cfg = self._ws.current()
+        if cfg is None:
+            return
+        if cfg.tracker.kind != "file":
+            self.notify(
+                "issue editing from the TUI requires tracker.kind: file",
+                timeout=3,
+            )
+            return
+        issue = focused.issue
+        if self._orch.find_running_issue_id(issue.identifier) is not None:
+            self.notify(
+                f"{issue.identifier} is running; wait before editing",
+                timeout=3,
+                severity="warning",
+            )
+            return
+
+        def _on_result(form: dict[str, Any] | None) -> None:
+            if form:
+                self.run_worker(
+                    self._update_issue(cfg, issue, form),
+                    thread=False,
+                    exclusive=False,
+                    group="edit_issue",
+                )
+
+        from ..workflow import SUPPORTED_AGENT_KINDS
+
+        self.push_screen(
+            EditIssueScreen(
+                issue,
+                states=list(cfg.tracker.active_states) + list(cfg.tracker.terminal_states),
+                agent_kinds=sorted(SUPPORTED_AGENT_KINDS),
+            ),
+            _on_result,
+        )
+
+    async def _update_issue(
+        self, cfg: ServiceConfig, issue: Issue, form: dict[str, Any]
+    ) -> None:
+        from ..stats import stats_store_for
+        from ..trackers.file import FileBoardTracker
+
+        def _update() -> None:
+            tracker = FileBoardTracker(cfg.tracker)
+            tracker.update_fields(
+                issue.identifier,
+                title=form["title"],
+                description=form["description"],
+                state=form["state"],
+                priority=form["priority"],
+                clear_priority=form["priority"] is None,
+                labels=form["labels"],
+                agent_kind=form["agent_kind"],
+            )
+            if normalize_state(form["state"]) != normalize_state(issue.state):
+                stats_store_for(
+                    cfg.workflow_path.parent / ".symphony" / "stats.jsonl"
+                ).record_transition(
+                    issue=issue.identifier,
+                    from_state=issue.state.lower(),
+                    to_state=form["state"].lower(),
+                )
+
+        try:
+            await asyncio.to_thread(_update)
+        except Exception as exc:
+            log.warning(
+                "tui_update_issue_failed", identifier=issue.identifier, error=str(exc)
+            )
+            self.notify(f"edit failed: {exc}", timeout=4, severity="error")
+            return
+        self.notify(f"updated {issue.identifier}", timeout=2)
         self._kick_tracker_refresh()
 
     def action_stats(self) -> None:
@@ -763,7 +881,7 @@ class KanbanApp(App):
             # changing each tick, so we re-render even when the same card
             # is still focused.
             self._last_focused_card_id = focused.id
-            pane.show_for(focused.issue, focused.status)
+            pane.show_for(focused.issue, focused.status, focused.stage_pos)
             return
         # Focus may have shifted INTO the pane itself (user pressed `]` to
         # scroll the description). Keep showing the previously focused card
@@ -776,7 +894,7 @@ class KanbanApp(App):
         ):
             card = self._find_card_by_id(self._last_focused_card_id)
             if card is not None:
-                pane.show_for(card.issue, card.status)
+                pane.show_for(card.issue, card.status, card.stage_pos)
             return
         if self._last_focused_card_id is not None:
             self._last_focused_card_id = None

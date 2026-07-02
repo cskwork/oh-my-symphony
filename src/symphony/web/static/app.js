@@ -2,7 +2,7 @@
  * oh-my-symphony board — vanilla SPA (no build step, no framework).
  * Sections: api / state / dom helpers / markdown / utils / toast /
  * overlays (modal, drawer, popover) / shared form fields / router /
- * pages (board, stats, workflow, skills, settings) / poll loop / bootstrap.
+ * pages (board, stats, workflow, settings) / poll loop / bootstrap.
  */
 (function () {
   'use strict';
@@ -60,10 +60,10 @@
     putPrompt: (stateName, content) => apiRequest(`/workflow/prompts/${encodeURIComponent(stateName)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
     putBranchPolicy: (payload) => apiRequest('/workflow/branch-policy', { method: 'PUT', body: JSON.stringify(payload) }),
     getBranches: () => apiRequest('/git/branches'),
-    getSkills: () => apiRequest('/skills'),
     getStats: (days) => apiRequest(`/stats?days=${encodeURIComponent(days)}`),
     pause: (id) => apiRequest(`/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
     resume: (id) => apiRequest(`/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+    skipLearn: (id) => apiRequest(`/${encodeURIComponent(id)}/skip-learn`, { method: 'POST' }),
     refresh: () => apiRequest('/refresh', { method: 'POST' }),
   };
 
@@ -71,7 +71,7 @@
   // State store
   // ------------------------------------------------------------------
 
-  const ROUTES = ['board', 'stats', 'workflow', 'skills', 'settings'];
+  const ROUTES = ['board', 'stats', 'workflow', 'settings'];
 
   const PRIORITY_META = {
     0: { label: 'Urgent', short: 'P0', className: 'p0' },
@@ -85,10 +85,10 @@
     route: 'board',
     board: null,
     workflow: null,
-    skills: [],
     branches: [],
     connected: false,
     search: '',
+    boardScope: 'active',
     statsDays: 30,
     drawerIssue: null,
     workflowDraft: null,
@@ -306,6 +306,10 @@
     return found ? found.name : lowerName;
   }
 
+  function isLearnState(name) {
+    return String(name || '').trim().toLowerCase() === 'learn';
+  }
+
   // ------------------------------------------------------------------
   // Toast system
   // ------------------------------------------------------------------
@@ -505,24 +509,6 @@
     return el('select', { class: 'select' }, options);
   }
 
-  function buildSkillsCheckboxes(selectedNames) {
-    const selected = new Set(selectedNames || []);
-    const box = el('div', { class: 'checkbox-grid' });
-    if (!state.skills.length) {
-      box.appendChild(el('div', { class: 'form-hint' }, 'No skills configured'));
-      return box;
-    }
-    for (const skill of state.skills) {
-      const checkbox = el('input', { type: 'checkbox', value: skill.name, checked: selected.has(skill.name) });
-      box.appendChild(el('label', { class: 'checkbox-item' }, [checkbox, el('span', null, skill.name)]));
-    }
-    return box;
-  }
-
-  function collectCheckedSkills(box) {
-    return Array.from(box.querySelectorAll('input[type=checkbox]:checked')).map((c) => c.value);
-  }
-
   // ------------------------------------------------------------------
   // Workflow mutation helpers (shared by Board column menu + Workflow page)
   // ------------------------------------------------------------------
@@ -693,9 +679,6 @@
       case 'workflow':
         renderWorkflowPage(view);
         break;
-      case 'skills':
-        renderSkillsPage(view);
-        break;
       case 'settings':
         renderSettingsPage(view);
         break;
@@ -774,6 +757,7 @@
 
   function buildBoardTopbar() {
     const readOnly = Boolean(state.board && state.board.board.read_only);
+    const hasTerminalColumns = Boolean(state.board && state.board.columns.some((c) => c.terminal));
     const search = el('input', {
       type: 'text',
       id: 'board-search',
@@ -785,18 +769,47 @@
         renderBoardColumns(document.getElementById('board-scroll'));
       },
     });
+    const rightControls = [];
+    if (hasTerminalColumns) rightControls.push(buildBoardScopeToggle());
+    if (!readOnly) rightControls.push(el('button', { class: 'btn btn-primary', onClick: () => openIssueModal() }, '+ New Issue'));
     const bar = el('div', { class: 'topbar' }, [
       el('div', { class: 'topbar-left' }, [search]),
-      el('div', { class: 'topbar-right' }, readOnly ? [] : [el('button', { class: 'btn btn-primary', onClick: () => openIssueModal() }, '+ New Issue')]),
+      el('div', { class: 'topbar-right' }, rightControls),
     ]);
     if (!readOnly) return bar;
     return el('div', { class: 'topbar-wrap' }, [el('div', { class: 'banner banner-info' }, 'Linear/Jira boards are read-only here.'), bar]);
+  }
+
+  function buildBoardScopeToggle() {
+    const options = [
+      ['active', 'Active'],
+      ['all', 'All'],
+    ];
+    return el('div', { class: 'segmented board-scope-toggle', role: 'group', 'aria-label': 'Board columns' }, options.map(([value, label]) =>
+      el('button', {
+        class: `segmented-btn${state.boardScope === value ? ' active' : ''}`,
+        type: 'button',
+        onClick: () => {
+          state.boardScope = value;
+          renderRoute();
+        },
+      }, label),
+    ));
   }
 
   function matchesSearch(issue, query) {
     if (issue.identifier.toLowerCase().includes(query)) return true;
     if (issue.title.toLowerCase().includes(query)) return true;
     return issue.labels.some((l) => l.toLowerCase().includes(query));
+  }
+
+  function activeColumns(columns) {
+    const active = columns.filter((c) => !c.terminal);
+    return active.length ? active : columns;
+  }
+
+  function visibleBoardColumns(columns) {
+    return state.boardScope === 'all' ? columns : activeColumns(columns);
   }
 
   function renderBoardColumns(scrollEl) {
@@ -814,10 +827,51 @@
       const bucket = byColumn.get(issue.state);
       if (bucket) bucket.push(issue);
     }
+    const layout = el('div', { class: `board-layout${state.boardScope === 'all' ? ' all-columns' : ''}` });
     const grid = el('div', { class: 'board-columns' });
-    for (const col of columns) grid.appendChild(buildColumnEl(col, byColumn.get(col.name) || [], live, board.read_only));
+    for (const col of visibleBoardColumns(columns)) grid.appendChild(buildColumnEl(col, byColumn.get(col.name) || [], live, board.read_only));
     if (!board.read_only) grid.appendChild(el('div', { class: 'add-column-ghost', onClick: openAddColumnModal }, '+ Add column'));
-    scrollEl.appendChild(grid);
+    layout.appendChild(grid);
+    if (state.boardScope !== 'all') {
+      const terminalGroups = columns
+        .filter((col) => col.terminal)
+        .map((col) => ({ col, issues: byColumn.get(col.name) || [] }))
+        .filter((row) => row.issues.length > 0);
+      if (terminalGroups.length) layout.appendChild(buildTerminalSectionEl(terminalGroups, live, board.read_only));
+    }
+    scrollEl.appendChild(layout);
+  }
+
+  function buildTerminalSectionEl(groups, live, readOnly) {
+    const total = groups.reduce((sum, row) => sum + row.issues.length, 0);
+    const section = el('section', { class: 'terminal-section', 'aria-label': 'Terminal states' });
+    section.appendChild(el('div', { class: 'terminal-section-header' }, [
+      el('div', { class: 'terminal-section-title' }, 'Other states'),
+      el('span', { class: 'terminal-total' }, String(total)),
+    ]));
+    const body = el('div', { class: 'terminal-groups' });
+    for (const { col, issues } of groups) body.appendChild(buildTerminalGroupEl(col, issues, live, readOnly));
+    section.appendChild(body);
+    return section;
+  }
+
+  function buildTerminalGroupEl(col, issues, live, readOnly) {
+    const group = el('div', { class: 'terminal-group' });
+    group.appendChild(el('div', { class: 'terminal-group-header' }, [
+      el('div', { class: 'column-title-wrap' }, [
+        el('span', { class: 'state-dot', style: `background:${hashColor(col.name)}` }),
+        el('span', { class: 'column-title' }, col.name),
+      ]),
+      el('span', { class: 'column-count' }, String(issues.length)),
+    ]));
+    const body = el('div', { class: 'terminal-card-list' });
+    for (const issue of issues) {
+      const card = buildCardEl(issue, live[issue.identifier], readOnly);
+      card.classList.add('terminal-card');
+      body.appendChild(card);
+    }
+    group.appendChild(body);
+    return group;
   }
 
   function buildColumnEl(col, issues, live, readOnly) {
@@ -883,9 +937,17 @@
       badges.appendChild(el('span', { class: `badge-priority ${meta.className}` }, `${meta.short} ${meta.label}`));
     }
     for (const label of issue.labels) badges.appendChild(el('span', { class: 'chip-label' }, label));
-    for (const skill of issue.skills) badges.appendChild(el('span', { class: 'chip-skill' }, `⚡ ${skill}`));
     if (issue.agent_kind) badges.appendChild(el('span', { class: 'chip-agent' }, issue.agent_kind));
     if (badges.childNodes.length) card.appendChild(badges);
+    if (!readOnly && isLearnState(issue.state) && !liveEntry) {
+      card.appendChild(el('button', {
+        class: 'btn btn-ghost btn-sm card-action',
+        onClick: async (e) => {
+          e.stopPropagation();
+          await runControlAction(api.skipLearn, issue.identifier, 'Skipped Learn');
+        },
+      }, 'Skip Learn'));
+    }
     if (liveEntry) card.appendChild(buildLiveRow(liveEntry));
     return card;
   }
@@ -913,7 +975,6 @@
     const stateSelect = buildStateSelect(defaults.state);
     const prioritySelect = buildPrioritySelect(null);
     const labelsInput = el('input', { class: 'input', type: 'text', placeholder: 'label-one, label-two' });
-    const skillsBox = buildSkillsCheckboxes([]);
     const agentSelect = buildAgentSelect('');
     const prefixInput = el('input', { class: 'input', type: 'text', placeholder: 'TASK', maxlength: 16 });
 
@@ -922,7 +983,6 @@
       field('Description', descInput),
       fieldRow([field('State', stateSelect), field('Priority', prioritySelect)]),
       field('Labels', labelsInput),
-      field('Skills', skillsBox),
       fieldRow([field('Agent', agentSelect), field('ID prefix', prefixInput)]),
     ]);
 
@@ -939,7 +999,6 @@
           state: stateSelect.value,
           priority: prioritySelect.value === '' ? null : Number(prioritySelect.value),
           labels: parseLabels(labelsInput.value),
-          skills: collectCheckedSkills(skillsBox),
           agent_kind: agentSelect.value,
           prefix: prefixInput.value.trim() || 'TASK',
         });
@@ -1034,26 +1093,12 @@
     labelsInput.addEventListener('blur', commitLabels);
     labelsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') labelsInput.blur(); });
 
-    const skillsBox = buildSkillsCheckboxes(detail.skills);
-    const resetSkillsBox = () => {
-      const saved = new Set(detail.skills);
-      for (const cb of skillsBox.querySelectorAll('input[type=checkbox]')) {
-        cb.checked = saved.has(cb.value);
-      }
-    };
-    skillsBox.addEventListener('change', () => {
-      const skills = collectCheckedSkills(skillsBox);
-      commitField(detail.identifier, 'skills', skills, resetSkillsBox, () => { detail.skills = skills; });
-    });
-
     const fieldsGrid = el('div', { class: 'drawer-fields' }, [
       field('State', stateSelect),
       field('Priority', prioritySelect),
       field('Agent', agentSelect),
       field('Labels', labelsInput),
     ]);
-    const skillsField = field('Skills', skillsBox);
-    skillsField.style.gridColumn = '1 / -1';
 
     const deleteBtn = el('button', {
       class: 'btn btn-danger-outline',
@@ -1074,7 +1119,14 @@
     container.appendChild(header);
     container.appendChild(titleInput);
     container.appendChild(fieldsGrid);
-    container.appendChild(skillsField);
+    if (!detail.live && isLearnState(detail.state)) {
+      container.appendChild(el('button', {
+        class: 'btn btn-ghost',
+        onClick: async () => {
+          await runControlAction(api.skipLearn, detail.identifier, 'Skipped Learn');
+        },
+      }, 'Skip Learn'));
+    }
     if (detail.live) container.appendChild(buildLiveSection(detail));
     container.appendChild(buildDescriptionSection(detail));
     container.appendChild(el('div', { class: 'drawer-meta' }, [
@@ -1461,52 +1513,6 @@
   }
 
   // ------------------------------------------------------------------
-  // Page: Skills
-  // ------------------------------------------------------------------
-
-  function countSkillUsage(issues, columns) {
-    const terminalNames = new Set((columns || []).filter((c) => c.terminal).map((c) => c.name));
-    const counts = new Map();
-    for (const issue of issues || []) {
-      if (terminalNames.has(issue.state)) continue;
-      for (const skill of issue.skills || []) counts.set(skill, (counts.get(skill) || 0) + 1);
-    }
-    return counts;
-  }
-
-  async function renderSkillsPage(container) {
-    const page = el('div', { class: 'page page-skills' });
-    page.appendChild(el('div', { class: 'topbar' }, [el('h1', { class: 'page-title' }, 'Skills')]));
-    const body = el('div', { class: 'skills-body' }, [buildSkeletonBlock()]);
-    page.appendChild(body);
-    container.appendChild(page);
-    try {
-      const [skillsResp, board] = await Promise.all([api.getSkills(), state.board ? Promise.resolve(state.board) : api.getBoard()]);
-      state.skills = skillsResp.skills;
-      if (!state.board) state.board = board;
-      clearNode(body);
-      if (!state.skills.length) {
-        body.appendChild(el('div', { class: 'empty-state' }, 'Create skills/<name>/SKILL.md next to WORKFLOW.md — attached skills are injected into the agent prompt for that ticket.'));
-        return;
-      }
-      const usage = countSkillUsage(state.board.issues, state.board.columns);
-      const grid = el('div', { class: 'skills-grid' });
-      for (const skill of state.skills) {
-        const count = usage.get(skill.name) || 0;
-        grid.appendChild(el('div', { class: 'skill-card' }, [
-          el('div', { class: 'skill-card-name' }, `⚡ ${skill.name}`),
-          el('div', { class: 'skill-card-desc' }, skill.description || 'No description'),
-          el('div', { class: 'skill-card-usage' }, `${count} open issue${count === 1 ? '' : 's'}`),
-        ]));
-      }
-      body.appendChild(grid);
-    } catch (err) {
-      clearNode(body);
-      body.appendChild(el('div', { class: 'empty-state' }, `Could not load skills: ${err.message}`));
-    }
-  }
-
-  // ------------------------------------------------------------------
   // Page: Settings
   // ------------------------------------------------------------------
 
@@ -1660,20 +1666,10 @@
     });
   }
 
-  async function loadSkillsQuietly() {
-    try {
-      const resp = await api.getSkills();
-      state.skills = resp.skills;
-    } catch (_err) {
-      state.skills = [];
-    }
-  }
-
   function boot() {
     wireGlobalShortcuts();
     handleRouteChange();
     pollBoard();
-    loadSkillsQuietly();
   }
 
   document.addEventListener('DOMContentLoaded', boot);

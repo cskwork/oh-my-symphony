@@ -319,14 +319,20 @@ a { color: inherit; }
   flex: 1;
   min-height: 0;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
   padding: 20px 24px;
+}
+
+.board-layout {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 .board-columns {
   display: flex;
   gap: 16px;
-  height: 100%;
   align-items: flex-start;
 }
 
@@ -411,6 +417,70 @@ a { color: inherit; }
 
 .add-column-ghost:hover { background: var(--surface-2); color: var(--text); }
 
+.terminal-section {
+  width: max-content;
+  min-width: min(100%, 920px);
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: 12px;
+  overflow-x: auto;
+}
+
+.terminal-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.terminal-section-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.terminal-total {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.terminal-groups {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.terminal-group {
+  width: 236px;
+  flex: 0 0 236px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 8px;
+}
+
+.terminal-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.terminal-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -424,6 +494,7 @@ a { color: inherit; }
 .card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
 .card.dragging { opacity: .45; }
 .card.paused { opacity: .58; }
+.card.terminal-card { cursor: pointer; }
 
 .card-id {
   font-family: var(--font-mono);
@@ -440,6 +511,12 @@ a { color: inherit; }
 }
 
 .card-badges { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+
+.card-action {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
 
 .badge-priority {
   font-size: 10.5px;
@@ -473,15 +550,6 @@ a { color: inherit; }
   padding: 2px 8px;
   border-radius: 999px;
   color: var(--text-secondary);
-}
-
-.chip-skill {
-  border: 1px solid #c4b5fd;
-  color: #7c3aed;
-  background: #faf5ff;
-  font-size: 10.5px;
-  padding: 2px 8px;
-  border-radius: 999px;
 }
 
 .chip-agent {
@@ -639,18 +707,6 @@ a { color: inherit; }
 .form-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 .form-hint { font-size: 12px; color: var(--text-muted); }
 
-.checkbox-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 6px;
-  max-height: 140px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px;
-}
-
-.checkbox-item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
 .confirm-message { margin: 0; line-height: 1.5; }
 
 .prompt-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
@@ -845,7 +901,7 @@ a { color: inherit; }
 /* Stats page                                                               */
 /* ---------------------------------------------------------------------- */
 
-.stats-content, .workflow-body, .skills-body, .settings-body { padding: 20px 24px; overflow-y: auto; flex: 1; min-height: 0; }
+.stats-content, .workflow-body, .settings-body { padding: 20px 24px; overflow-y: auto; flex: 1; min-height: 0; }
 
 .stat-grid {
   display: grid;
@@ -980,27 +1036,6 @@ a { color: inherit; }
 .kv-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
 .kv-label { color: var(--text-muted); }
 .kv-value { font-family: var(--font-mono); font-size: 12px; text-align: right; word-break: break-all; }
-
-/* ---------------------------------------------------------------------- */
-/* Skills page                                                              */
-/* ---------------------------------------------------------------------- */
-
-.skills-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 14px;
-}
-
-.skill-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 16px;
-}
-
-.skill-card-name { font-weight: 600; margin-bottom: 6px; }
-.skill-card-desc { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 10px; }
-.skill-card-usage { font-size: 11.5px; color: var(--text-muted); }
 
 /* ---------------------------------------------------------------------- */
 /* Responsive                                                               */

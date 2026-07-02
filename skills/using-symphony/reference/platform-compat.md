@@ -114,7 +114,7 @@ than putting tickets into a permanent retry loop.
 1. Run `pytest -q` first — the suite encodes the parity invariants.
 2. Run `symphony doctor ./WORKFLOW.md`. All checks should be PASS.
 3. Create a smoke board (`symphony board init ./kanban_smoke && symphony
-   board new MINI-1 "..."`), point a `WORKFLOW.smoke.md` at it with
+   board new MINI-1 "..."`), point an `examples/WORKFLOW.smoke.md` at it with
    `: noop` hooks, and launch headless on a free port. Watch
    `log/symphony.log` for `dispatch → hook_completed → agent_session_started
    → agent_turn_completed`. If all four fire, the orchestrator + backend

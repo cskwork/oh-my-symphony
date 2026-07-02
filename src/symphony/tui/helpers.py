@@ -106,6 +106,22 @@ def _ordered_column_states(cfg: ServiceConfig) -> list[str]:
     return ordered
 
 
+def _stage_position(
+    state: str, cfg: ServiceConfig | None
+) -> tuple[int, int] | None:
+    if cfg is None:
+        return None
+    active = list(cfg.tracker.active_states)
+    total = len(active)
+    if total == 0:
+        return None
+    state_key = normalize_state(state)
+    for idx, name in enumerate(active, start=1):
+        if normalize_state(name) == state_key:
+            return idx, total
+    return None
+
+
 def _compact_rate_limits(rl: dict[str, Any]) -> str:
     parts: list[str] = []
     for key, value in rl.items():

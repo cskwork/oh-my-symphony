@@ -47,7 +47,13 @@ from .helpers import (
     _silent_seconds,
     _truncate,
 )
-from .screens import NewIssueScreen, StatsScreen, TicketDetailScreen, _RefreshNow
+from .screens import (
+    EditIssueScreen,
+    NewIssueScreen,
+    StatsScreen,
+    TicketDetailScreen,
+    _RefreshNow,
+)
 from .widgets import DetailPane, FilterBar, IssueCard, Lane, StatsBar
 from .app import KanbanApp, KanbanTUI
 
@@ -61,6 +67,7 @@ __all__ = [
     "IssueCard",
     "Lane",
     "StatsBar",
+    "EditIssueScreen",
     "NewIssueScreen",
     "StatsScreen",
     "TicketDetailScreen",

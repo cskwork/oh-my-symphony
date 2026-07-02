@@ -77,12 +77,14 @@ class IssueCard(Static):
         language: str,
         *,
         density: str = DENSITY_RICH,
+        stage_pos: tuple[int, int] | None = None,
     ) -> None:
         super().__init__("")
         self._issue = issue
         self._status = status
         self._language = language
         self._density = density
+        self._stage_pos = stage_pos
         self.id = f"card-{_safe_id(issue.id)}"
         self._refresh_body()
 
@@ -98,6 +100,10 @@ class IssueCard(Static):
     def density(self) -> str:
         return self._density
 
+    @property
+    def stage_pos(self) -> tuple[int, int] | None:
+        return self._stage_pos
+
     def update_status(self, status: _CardStatus) -> None:
         self._status = status
         self._refresh_body()
@@ -106,6 +112,12 @@ class IssueCard(Static):
         if density == self._density:
             return
         self._density = density
+        self._refresh_body()
+
+    def set_stage_pos(self, stage_pos: tuple[int, int] | None) -> None:
+        if stage_pos == self._stage_pos:
+            return
+        self._stage_pos = stage_pos
         self._refresh_body()
 
     def _refresh_body(self) -> None:
@@ -132,6 +144,8 @@ class IssueCard(Static):
         color = STATE_COLOR.get(normalize_state(issue.state), "white")
         line = Text()
         line.append(issue.identifier, style=f"bold {color}")
+        if self._stage_pos:
+            line.append(f" [{self._stage_pos[0]}/{self._stage_pos[1]}]", style="dim")
         if status.runtime == "running" and status.paused:
             line.append(" ⏸", style="bold bright_magenta")
         elif status.runtime == "running":
@@ -148,6 +162,8 @@ class IssueCard(Static):
             silent_s = _silent_seconds(status.last_event_at)
             if silent_s is not None and silent_s >= SILENT_THRESHOLD_S:
                 line.append(f"  silent {int(silent_s)}s", style="bold yellow")
+        elif normalize_state(issue.state) == "learn":
+            line.append("  S skip", style="dim magenta")
         if status.tokens:
             line.append(f"  {status.tokens:,}t", style="dim cyan")
         return line
@@ -159,6 +175,8 @@ class IssueCard(Static):
         color = STATE_COLOR.get(normalize_state(issue.state), "white")
 
         title = Text(issue.identifier, style=f"bold {color}")
+        if self._stage_pos:
+            title.append(f" [{self._stage_pos[0]}/{self._stage_pos[1]}]", style="dim")
         if status.runtime == "running" and status.paused:
             title.append("  ⏸", style="bold bright_magenta")
         elif status.runtime == "running":
@@ -216,6 +234,8 @@ class IssueCard(Static):
                     f"{t('card.blocked_by', language)} {', '.join(blocker_names)}",
                     style="dim red",
                 )
+        elif normalize_state(issue.state) == "learn":
+            meta.append("S to skip Learn", style="dim magenta")
         elif issue.labels:
             meta.append("  ".join(f"#{l}" for l in issue.labels[:3]), style="dim")
 
@@ -276,11 +296,19 @@ class Lane(Vertical):
 
     can_focus = True
 
-    def __init__(self, state_label: str, color: str, legend: str | None) -> None:
+    def __init__(
+        self,
+        state_label: str,
+        color: str,
+        legend: str | None,
+        *,
+        stage_pos: tuple[int, int] | None = None,
+    ) -> None:
         super().__init__()
         self._state_label = state_label
         self._color = color
         self._legend = legend
+        self._stage_pos = stage_pos
         self._title = Static("", classes="lane-title")
         self._legend_widget = Static(legend or "", classes="lane-legend")
         self._scroll = VerticalScroll()
@@ -308,8 +336,11 @@ class Lane(Vertical):
 
     def set_count(self, count: int) -> None:
         self._card_count = count
-        self._title.update(Text(f"{self._state_label} ({count})", style=f"bold {self._color}"))
-        self.border_title = f"{self._state_label} ({count})"
+        label = self._state_label
+        if self._stage_pos:
+            label = f"{label} [{self._stage_pos[0]}/{self._stage_pos[1]}]"
+        self._title.update(Text(f"{label} ({count})", style=f"bold {self._color}"))
+        self.border_title = f"{label} ({count})"
 
     def render_cards(
         self,
@@ -341,8 +372,17 @@ class Lane(Vertical):
             if existing_card is not None:
                 existing_card.update_status(status)
                 existing_card.set_density(density)
+                existing_card.set_stage_pos(self._stage_pos)
                 continue
-            self._scroll.mount(IssueCard(issue, status, language, density=density))
+            self._scroll.mount(
+                IssueCard(
+                    issue,
+                    status,
+                    language,
+                    density=density,
+                    stage_pos=self._stage_pos,
+                )
+            )
         # Stale cards (issue moved to another lane / closed) get removed.
         for stale_id, stale_card in existing.items():
             if stale_id not in wanted_ids:
@@ -477,15 +517,24 @@ class DetailPane(Vertical):
     def is_open(self) -> bool:
         return self.has_class("-visible")
 
-    def show_for(self, issue: Issue, status: _CardStatus) -> None:
+    def show_for(
+        self,
+        issue: Issue,
+        status: _CardStatus,
+        stage_pos: tuple[int, int] | None = None,
+    ) -> None:
         color = STATE_COLOR.get(normalize_state(issue.state), "white")
         title = Text(issue.identifier, style=f"bold {color}")
+        if stage_pos:
+            title.append(f" [{stage_pos[0]}/{stage_pos[1]}]", style="dim")
         if issue.title:
             title.append(f"  {issue.title}", style="white")
         self._title.update(title)
 
         meta = Text()
         meta.append(f"state={issue.state}", style="dim")
+        if stage_pos:
+            meta.append(f"  stage={stage_pos[0]}/{stage_pos[1]}", style="dim")
         if issue.priority:
             meta.append(f"  P{issue.priority}", style="bright_red bold")
         if issue.labels:

@@ -1,15 +1,15 @@
 """End-to-end Symphony agent lifecycle: Todo -> Human Review golden path.
 
 Existing tests cover *one* phase transition at a time. This file walks an
-issue through the full canonical 7-state pipeline
-(Todo -> Explore -> In Progress -> Review -> QA -> Learn -> Human Review) and
+issue through the full canonical 4-active-state pipeline
+(Todo -> In Progress -> Verify -> Learn -> Human Review) and
 asserts the *expected outputs at each phase boundary*:
 
 1. A fresh backend is built per phase (state changes => session rebuild).
 2. Each phase's first prompt uses the stage-specific prompt template.
 3. The freshly rendered first prompt reaches `start_session` (not `run_turn`).
 4. `run_turn` on the freshly built backend carries `is_continuation=False`.
-5. Session ids are distinct across all 6 transitions.
+5. Session ids are distinct across all 4 active phases.
 6. `WorkspaceManager.after_run_best_effort` fires once per phase.
 7. On the final Human Review refresh the worker exits cleanly, the running slot
    is released, and no retry entry survives.
@@ -55,10 +55,8 @@ from symphony.workflow import (
 
 CANONICAL_ACTIVE_STATES = (
     "Todo",
-    "Explore",
     "In Progress",
-    "Review",
-    "QA",
+    "Verify",
     "Learn",
 )
 TERMINAL_STATES = ("Human Review", "Done", "Cancelled", "Blocked")
@@ -130,10 +128,8 @@ def _make_lifecycle_config(*, max_turns: int = 12) -> ServiceConfig:
     base_template = "BASE id={{ issue.identifier }}"
     stage_templates: dict[str, str] = {
         "todo": "TODO_BODY state={{ issue.state }}",
-        "explore": "EXPLORE_BODY state={{ issue.state }}",
         "in progress": "INPROGRESS_BODY state={{ issue.state }}",
-        "review": "REVIEW_BODY state={{ issue.state }}",
-        "qa": "QA_BODY state={{ issue.state }}",
+        "verify": "VERIFY_BODY state={{ issue.state }}",
         "learn": "LEARN_BODY state={{ issue.state }}",
     }
     return ServiceConfig(
@@ -193,17 +189,29 @@ def _make_lifecycle_config(*, max_turns: int = 12) -> ServiceConfig:
     )
 
 
-# A ticket body satisfying the v0.6.7 contract evaluator for Review and
-# QA producing-stage rewinds. Without these sections every Review->QA and
-# QA->Learn transition would trip `evaluate_contract`, rewind the ticket,
-# and then fail trying to look it up in a tracker that has no on-disk
-# record. We are testing the orchestrator's lifecycle wiring, not the
-# contract validator (which has its own tests in test_orchestrator_contracts).
+# A ticket body satisfying the 4-stage contract evaluator. Without these
+# sections every In Progress->Verify or Verify->Learn transition would trip
+# `evaluate_contract`. We are testing lifecycle wiring, not contract parsing.
 _CONTRACT_CLEAN_BODY = (
+    "## Plan\n"
+    "- build it\n"
+    "\n"
+    "## Acceptance Tests\n"
+    "- pytest -q\n"
+    "\n"
+    "## Done Signals\n"
+    "- behavior visible\n"
+    "\n"
+    "## Implementation\n"
+    "- changed source\n"
+    "\n"
+    "## Self-Critique\n"
+    "- checked edge paths\n"
+    "\n"
     "## Security Audit\n"
-    "| risk | finding | severity |\n"
+    "| check | verdict | evidence |\n"
     "| --- | --- | --- |\n"
-    "| auth | none | n/a |\n"
+    "| secrets | pass | n/a |\n"
     "\n"
     "## Review\n"
     "Clean pass.\n"
@@ -212,9 +220,18 @@ _CONTRACT_CLEAN_BODY = (
     "All green.\n"
     "\n"
     "## AC Scorecard\n"
-    "| ac | status |\n"
-    "| --- | --- |\n"
-    "| ac-1 | pass |\n"
+    "| signal | source | result | evidence |\n"
+    "| --- | --- | --- | --- |\n"
+    "| ac-1 | pytest | pass | LIFE-1/qa/version.log |\n"
+    "\n"
+    "## Merge Status\n"
+    "merged\n"
+    "\n"
+    "## Wiki Updates\n"
+    "- docs/llm-wiki/lifecycle.md\n"
+    "\n"
+    "## Human Review\n"
+    "ready for operator confirmation\n"
 )
 
 
@@ -238,6 +255,10 @@ def _orch(tmp_path: Path) -> Orchestrator:
 
 
 def _seed_running(o: Orchestrator, issue: Issue, tmp_path: Path) -> None:
+    (tmp_path / "docs" / issue.identifier / "work").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / issue.identifier / "work" / "notes.md").write_text("ok")
+    (tmp_path / "docs" / issue.identifier / "qa").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / issue.identifier / "qa" / "version.log").write_text("ok")
     o._running[issue.id] = RunningEntry(
         issue=issue,
         started_at=datetime.now(timezone.utc),
@@ -316,12 +337,12 @@ def test_full_todo_to_done_pipeline_rebuilds_backend_per_phase(
     instances = _install_backend_factory(monkeypatch)
     # After the first run_turn (Todo), the scripted refresh walks through
     # every remaining canonical state and then exits at Human Review.
-    _install_state_walk(monkeypatch, ["Explore", "In Progress", "Review", "QA", "Learn", "Human Review"])
+    _install_state_walk(monkeypatch, ["In Progress", "Verify", "Learn", "Human Review"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
-    # 6 transitions => 6 backends total (Todo, Explore, In Progress, Review, QA, Learn).
-    assert len(instances) == 6, f"expected 6 backends, got {len(instances)}"
+    # 4 active phases => 4 backends total (Todo, In Progress, Verify, Learn).
+    assert len(instances) == 4, f"expected 4 backends, got {len(instances)}"
 
     # Every backend went through factory -> start -> initialize ->
     # start_session before any run_turn (no race / no skipped lifecycle).
@@ -341,13 +362,11 @@ def test_full_todo_to_done_pipeline_rebuilds_backend_per_phase(
         for call in inst.calls
         if call[0] == "start_session"
     ]
-    assert len(first_prompts) == 6
+    assert len(first_prompts) == 4
     expected_stage_markers = [
         "TODO_BODY state=Todo",
-        "EXPLORE_BODY state=Explore",
         "INPROGRESS_BODY state=In Progress",
-        "REVIEW_BODY state=Review",
-        "QA_BODY state=QA",
+        "VERIFY_BODY state=Verify",
         "LEARN_BODY state=Learn",
     ]
     for prompt, marker in zip(first_prompts, expected_stage_markers):
@@ -359,7 +378,7 @@ def test_full_todo_to_done_pipeline_rebuilds_backend_per_phase(
 
     # Session ids are distinct per phase (rebuild really happened).
     session_ids = [inst.session_id for inst in instances]
-    assert len(set(session_ids)) == 6, f"expected 6 unique session ids, got {session_ids}"
+    assert len(set(session_ids)) == 4, f"expected 4 unique session ids, got {session_ids}"
 
     # Phase-transition rule: when the backend was just rebuilt, the
     # first run_turn must NOT be flagged as continuation.
@@ -373,7 +392,7 @@ def test_full_todo_to_done_pipeline_rebuilds_backend_per_phase(
     # Workspace `after_run` fires once per backend (i.e. once per phase).
     fake_ws = o._workspace_manager
     assert isinstance(fake_ws, _FakeWorkspaceManager)
-    assert len(fake_ws.after_run_paths) == 6
+    assert len(fake_ws.after_run_paths) == 4
     assert all(p == tmp_path for p in fake_ws.after_run_paths)
 
     # Clean exit: no zombie running slot, no surprise retry.
@@ -396,26 +415,25 @@ def test_lifecycle_stops_each_intermediate_backend_exactly_once(
     o = _orch(tmp_path)
     _seed_running(o, issue, tmp_path)
     instances = _install_backend_factory(monkeypatch)
-    _install_state_walk(monkeypatch, ["Explore", "In Progress", "Review", "QA", "Learn", "Human Review"])
+    _install_state_walk(monkeypatch, ["In Progress", "Verify", "Learn", "Human Review"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
     stop_counts = [sum(1 for c in inst.calls if c[0] == "stop") for inst in instances]
-    assert stop_counts == [1, 1, 1, 1, 1, 1], stop_counts
+    assert stop_counts == [1, 1, 1, 1], stop_counts
 
 
-def test_lifecycle_renders_in_progress_template_after_explore(
+def test_lifecycle_renders_verify_template_after_in_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Partial walk: confirm the In Progress phase gets the correct body
-    even when the worker is born mid-pipeline (state=Explore on entry)."""
+    """Partial walk: confirm Verify gets the correct body when born mid-pipeline."""
 
     cfg = _make_lifecycle_config(max_turns=12)
-    issue = _make_issue(state="Explore")
+    issue = _make_issue(state="In Progress")
     o = _orch(tmp_path)
     _seed_running(o, issue, tmp_path)
     instances = _install_backend_factory(monkeypatch)
-    _install_state_walk(monkeypatch, ["In Progress", "Done"])
+    _install_state_walk(monkeypatch, ["Verify", "Done"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
@@ -426,11 +444,9 @@ def test_lifecycle_renders_in_progress_template_after_explore(
         for c in inst.calls
         if c[0] == "start_session"
     ]
-    assert "EXPLORE_BODY state=Explore" in prompts[0]
-    assert "INPROGRESS_BODY state=In Progress" in prompts[1]
-    # Cross-pollution check: the Explore template must not bleed into
-    # the In Progress prompt.
-    assert "EXPLORE_BODY" not in prompts[1]
+    assert "INPROGRESS_BODY state=In Progress" in prompts[0]
+    assert "VERIFY_BODY state=Verify" in prompts[1]
+    assert "INPROGRESS_BODY" not in prompts[1]
 
 
 def test_lifecycle_done_callback_uses_registered_running_id(
@@ -450,7 +466,7 @@ def test_lifecycle_done_callback_uses_registered_running_id(
     # Walk the lifecycle; the FINAL refresh returns a *different* tracker
     # id alongside the Done state. If cleanup keyed off that id the
     # original running slot would leak.
-    real_walk = ["Explore", "In Progress", "Review", "QA", "Learn"]
+    real_walk = ["In Progress", "Verify", "Learn"]
     counter = {"i": 0}
 
     async def _refresh(self, cfg, issue_id):  # noqa: ANN001

@@ -1,13 +1,11 @@
-"""Stage-contract validators for Plan/Review/QA/Done transitions.
+"""Stage-contract validators for the 4-stage Symphony pipeline.
 
 The Symphony stage prompts encode contracts in narrative form:
 
-- Plan must produce `## Plan`, `## Acceptance Tests`, `## Done Signals`.
-- Critic must produce either a clean `## Critic` (no gaps) or the rewind
-  pair `## Surfaced Requirements` + `## Critic Tests` (rewind to In Progress).
-- Review must produce a 7-row `## Security Audit` table and either
-  `## Review` (clean pass) or `## Review Findings` (rewind to In Progress).
-- QA must produce `## QA Evidence` and `## AC Scorecard`.
+- In Progress must produce planning, acceptance, done-signal,
+  implementation, and self-critique sections plus durable work artefacts.
+- Verify must produce review, security, QA, scorecard, and merge evidence.
+- Learn must produce the human handoff and wiki write-back record.
 - Done must produce `## As-Is -> To-Be Report` and `## Merge Status`, and
   the artefact directories named in `## Evidence` must actually contain
   files on disk.
@@ -91,22 +89,21 @@ class ContractResult:
 # Each producing stage maps to the section headings that MUST be present
 # (with non-empty bodies) in the ticket markdown before the next stage is
 # allowed to dispatch.
-_PLAN_REQUIRED = ("## Plan", "## Acceptance Tests", "## Done Signals")
-_REVIEW_REQUIRED_AUDIT = "## Security Audit"
-_REVIEW_OUTCOMES = ("## Review", "## Review Findings")
+_IN_PROGRESS_REQUIRED = (
+    "## Plan",
+    "## Acceptance Tests",
+    "## Done Signals",
+    "## Implementation",
+    "## Self-Critique",
+)
+_VERIFY_REQUIRED_AUDIT = "## Security Audit"
+_VERIFY_REQUIRED = ("## QA Evidence", "## AC Scorecard", "## Merge Status")
+_VERIFY_OUTCOMES = ("## Review", "## Review Findings")
 _REVIEW_CLEAN = "## Review"
 _REVIEW_FINDINGS = "## Review Findings"
-_QA_REQUIRED = ("## QA Evidence", "## AC Scorecard")
 _QA_SCORECARD = "## AC Scorecard"
+_LEARN_REQUIRED = ("## Human Review", "## Wiki Updates")
 _DONE_REQUIRED = ("## As-Is -> To-Be Report", "## Merge Status")
-
-# Critic produces EITHER a rewind pair (`## Surfaced Requirements` +
-# `## Critic Tests`, when it found gaps and bounced the ticket back to
-# In Progress) OR a clean `## Critic` ("no surfaced requirements"). Same
-# either/or shape as `_REVIEW_OUTCOMES`: a clean pass needs no rewind
-# sections; a rewind needs both.
-_CRITIC_REQUIRED = ("## Surfaced Requirements", "## Critic Tests")
-_CRITIC_CLEAN = "## Critic"
 
 # Result/verdict cells that count as "not a clean pass". Compared
 # case-insensitively after stripping whitespace and surrounding backticks.
@@ -126,96 +123,85 @@ def evaluate_contract(
 ) -> ContractResult:
     """Evaluate the producing stage's contract against the ticket body.
 
-    Returns a passing result for stages outside the v0.6.7 enforcement
-    set (Explore, In Progress, Learn). The orchestrator wires the
-    failing result into a rewind: the caller appends `result.note` and
-    moves state back to the producing stage.
+    Stages outside the 4-stage enforcement set pass through. The
+    orchestrator wires a failing result into a rewind by appending
+    `result.note` and moving state back to the producing stage.
     """
     state = (producing_state or "").strip().lower()
     body = ticket_body or ""
 
-    if state == "plan":
-        missing = _missing_sections(body, _PLAN_REQUIRED)
-        return _build_result(producing_state, missing)
+    if state == "in progress":
+        return _evaluate_in_progress_contract(
+            producing_state, body, identifier, docs_root
+        )
 
-    if state == "critic":
-        # A clean `## Critic` (no gaps) needs no rewind sections. Otherwise
-        # the rewind pair (`## Surfaced Requirements` + `## Critic Tests`)
-        # must both be present — list whichever is absent.
-        if _section_present_nonempty(body, _CRITIC_CLEAN):
-            return _build_result(producing_state, [])
-        missing = _missing_sections(body, _CRITIC_REQUIRED)
-        # H5 ledger-realness (hard): a rewind turn (`## Surfaced
-        # Requirements` present) must also write the durable ledger on disk
-        # — appending the sections without the file is the same skipped-step
-        # gap S2 closed for QA/Review evidence. No-op without a docs_root.
-        if (
-            docs_root is not None
-            and identifier
-            and _section_present_nonempty(body, _CRITIC_REQUIRED[0])
-        ):
-            ledger = docs_root / identifier / "critic" / "surfaced-requirements.md"
-            if not ledger.exists():
-                missing.append(
-                    f"surfaced-requirements ledger `{ledger}` missing"
-                )
-        return _build_result(producing_state, missing)
+    if state == "verify":
+        return _evaluate_verify_contract(producing_state, body, identifier, docs_root)
 
-    if state == "review":
-        missing: list[str] = []
-        if not _section_present_nonempty(body, _REVIEW_REQUIRED_AUDIT):
-            missing.append(_REVIEW_REQUIRED_AUDIT)
-        # Either a clean `## Review` OR a rewind-triggering `## Review
-        # Findings` counts as a valid outcome. Missing both means the
-        # reviewer produced nothing actionable.
-        if not any(_section_present_nonempty(body, name) for name in _REVIEW_OUTCOMES):
-            missing.append(_REVIEW_OUTCOMES[0])
-        # S2 security-fail consistency (hard): a `fail` Security Audit row
-        # paired with a clean `## Review` (not `## Review Findings`) is
-        # self-contradictory. Only meaningful once the audit table exists.
-        if _REVIEW_REQUIRED_AUDIT not in missing and _security_has_fail_verdict(body):
-            has_clean = _section_present_nonempty(body, _REVIEW_CLEAN)
-            has_findings = _section_present_nonempty(body, _REVIEW_FINDINGS)
-            if has_clean and not has_findings:
-                missing.append(
-                    "`## Security Audit` has a `fail` verdict but the body "
-                    "is a clean `## Review` (expected `## Review Findings`)"
-                )
-        # S2 evidence-path realness (hard): every cited path must exist.
-        missing.extend(_cited_paths_exist(body, docs_root, identifier))
+    if state == "learn":
+        missing = _missing_sections(body, _LEARN_REQUIRED)
         return _build_result(producing_state, missing)
-
-    if state == "qa":
-        missing = _missing_sections(body, _QA_REQUIRED)
-        # S2 evidence-path realness (hard): cited AC Scorecard paths must
-        # exist under docs_root.
-        missing.extend(_cited_paths_exist(body, docs_root, identifier))
-        # H2 bug-repro closure (hard): a bug ticket whose `reproduce/` dir
-        # Todo populated must close the loop with `qa/repro-after.log`.
-        missing.extend(_bug_repro_closed(docs_root, identifier))
-        # S2 scorecard consistency (soft this release): a non-passing
-        # result cell is a warning, not a rewind — passed stays True.
-        scorecard_problems = _scorecard_all_pass(body)[1]
-        return _build_result(producing_state, missing, warnings=scorecard_problems)
 
     if state == "done":
-        missing = _missing_sections(body, _DONE_REQUIRED)
-        # Done additionally requires the artefact directories named in
-        # the prompt's `## Evidence` block to contain at least one file
-        # apiece. Missing files surface as a single descriptive entry —
-        # the operator only needs one notification per Done attempt.
-        if docs_root is not None and identifier:
-            for required_dir in ("qa", "work"):
-                target = docs_root / identifier / required_dir
-                if not _directory_has_files(target):
-                    missing.append(
-                        f"artefact directory `{target}` missing or empty"
-                    )
-        return _build_result(producing_state, missing)
+        return _evaluate_done_contract(producing_state, body, identifier, docs_root)
 
-    # Explore, In Progress, Learn, and any future state pass through —
-    # not in the enforcement bundle.
     return ContractResult(passed=True)
+
+
+def _evaluate_in_progress_contract(
+    producing_state: str,
+    body: str,
+    identifier: str,
+    docs_root: Path | None,
+) -> ContractResult:
+    missing = _missing_sections(body, _IN_PROGRESS_REQUIRED)
+    if docs_root is not None and identifier:
+        work_dir = docs_root / identifier / "work"
+        if not _directory_has_files(work_dir):
+            missing.append(f"artefact directory `{work_dir}` missing or empty")
+    return _build_result(producing_state, missing)
+
+
+def _evaluate_verify_contract(
+    producing_state: str,
+    body: str,
+    identifier: str,
+    docs_root: Path | None,
+) -> ContractResult:
+    missing = _missing_sections(body, _VERIFY_REQUIRED)
+    if not _section_present_nonempty(body, _VERIFY_REQUIRED_AUDIT):
+        missing.append(_VERIFY_REQUIRED_AUDIT)
+    if not any(_section_present_nonempty(body, name) for name in _VERIFY_OUTCOMES):
+        missing.append(_VERIFY_OUTCOMES[0])
+
+    if _VERIFY_REQUIRED_AUDIT not in missing and _security_has_fail_verdict(body):
+        has_clean = _section_present_nonempty(body, _REVIEW_CLEAN)
+        has_findings = _section_present_nonempty(body, _REVIEW_FINDINGS)
+        if has_clean and not has_findings:
+            missing.append(
+                "`## Security Audit` has a `fail` verdict but the body "
+                "is a clean `## Review` (expected `## Review Findings`)"
+            )
+
+    missing.extend(_cited_paths_exist(body, docs_root, identifier))
+    missing.extend(_bug_repro_closed(docs_root, identifier))
+    scorecard_problems = _scorecard_all_pass(body)[1]
+    return _build_result(producing_state, missing, warnings=scorecard_problems)
+
+
+def _evaluate_done_contract(
+    producing_state: str,
+    body: str,
+    identifier: str,
+    docs_root: Path | None,
+) -> ContractResult:
+    missing = _missing_sections(body, _DONE_REQUIRED)
+    if docs_root is not None and identifier:
+        for required_dir in ("qa", "work"):
+            target = docs_root / identifier / required_dir
+            if not _directory_has_files(target):
+                missing.append(f"artefact directory `{target}` missing or empty")
+    return _build_result(producing_state, missing)
 
 
 def _missing_sections(body: str, required: tuple[str, ...]) -> list[str]:
@@ -331,7 +317,7 @@ def _security_has_fail_verdict(body: str) -> bool:
     The audit table is `check | verdict | evidence`; the verdict is the
     second column. Rows with fewer columns are skipped defensively.
     """
-    for row in _parse_markdown_table(body, _REVIEW_REQUIRED_AUDIT):
+    for row in _parse_markdown_table(body, _VERIFY_REQUIRED_AUDIT):
         if len(row) < 2:
             continue
         if _normalize_cell(row[1]) in _SECURITY_FAIL_TOKENS:
@@ -375,7 +361,7 @@ def _cited_paths_exist(
     if docs_root is None or not identifier:
         return []
     missing: list[str] = []
-    for heading in (_QA_SCORECARD, _REVIEW_REQUIRED_AUDIT):
+    for heading in (_QA_SCORECARD, _VERIFY_REQUIRED_AUDIT):
         for row in _parse_markdown_table(body, heading):
             if not row:
                 continue

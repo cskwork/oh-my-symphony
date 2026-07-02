@@ -8,6 +8,39 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 4-stage pipeline simplification
+
+### Changed
+
+- Default active workflow is now `Todo -> In Progress -> Verify -> Learn`,
+  followed by `Human Review` and `Done`. `Plan`, `Critic`, `Review`, and `QA`
+  are folded into In Progress and Verify contracts.
+- Verify owns Review, QA, and Merge Gate, and is never skipped. Learn is
+  lightweight wiki write-back and can be operator-skipped to Human Review with
+  a `## Learn Skipped` audit note.
+- Root examples now keep only the current workflow files; demo/smoke/Jira
+  workflow examples and demo boards live under `examples/`.
+
+### Added
+
+- TUI stage badges (`[n/4]`), multiline ticket creation, focused-ticket edit
+  modal (`e`), and Learn skip hotkey (`S`).
+- Web and API Learn skip controls:
+  `POST /api/v1/{identifier}/skip-learn` and
+  `POST /api/v1/issues/{identifier}/skip-learn`.
+
+### Removed
+
+- Dedicated skills UI surfaces (web route/nav/forms and TUI create/detail
+  fields). `skills:` frontmatter, `Issue.skills`, and prompt injection remain
+  for power users and backward compatibility.
+
+### Breaking
+
+- Existing custom `WORKFLOW.md` files that still name `Explore`, `Plan`,
+  `Critic`, `Review`, or `QA` must migrate their active states and prompt stage
+  mapping to the 4-stage layout before using the new default prompts.
+
 ## [0.8.0] — built-in web Kanban app (multica/Archon-style revamp)
 
 The orchestrator port now serves a full web app: the board is no longer

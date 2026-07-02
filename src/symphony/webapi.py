@@ -28,7 +28,7 @@ from aiohttp import web
 from .errors import SymphonyError
 from .issue import Issue, registration_order_key
 from .logging import get_logger
-from .skills import list_skills, normalize_skill_names
+from .skills import normalize_skill_names
 from .stats import StatsStore, stats_store_for
 from .trackers.file import FileBoardTracker, parse_ticket_file
 from .orchestrator import Orchestrator
@@ -516,11 +516,24 @@ def _register_issue_routes(
         orchestrator.request_refresh()
         return web.json_response({"identifier": identifier, "deleted": True})
 
+    async def handle_issue_skip_learn(request: web.Request) -> web.Response:
+        identifier = _check_identifier(request.match_info["identifier"])
+        changed, message = await orchestrator.skip_learn(identifier)
+        if not changed:
+            status = 404 if message.startswith("unknown issue") else 409
+            return _json_error(status, "learn_skip_rejected", message)
+        return web.json_response(
+            {"identifier": identifier, "skipped": True, "message": message}
+        )
+
     app.router.add_get("/api/v1/board", _wrap(handle_board))
     app.router.add_post("/api/v1/issues", _wrap(handle_issue_create))
     app.router.add_get("/api/v1/issues/{identifier}", _wrap(handle_issue_detail))
     app.router.add_patch("/api/v1/issues/{identifier}", _wrap(handle_issue_patch))
     app.router.add_delete("/api/v1/issues/{identifier}", _wrap(handle_issue_delete))
+    app.router.add_post(
+        "/api/v1/issues/{identifier}/skip-learn", _wrap(handle_issue_skip_learn)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -680,24 +693,13 @@ def _register_workflow_routes(
 
 
 # ---------------------------------------------------------------------------
-# routes: skills + stats + static SPA
+# routes: stats + static SPA
 # ---------------------------------------------------------------------------
 
 
 def _register_meta_routes(
     app: web.Application, ctx: _Ctx, orchestrator: Orchestrator
 ) -> None:
-    async def handle_skills(_request: web.Request) -> web.Response:
-        skills = await asyncio.to_thread(list_skills, ctx.workflow_dir())
-        return web.json_response(
-            {
-                "skills": [
-                    {"name": s.name, "description": s.description} for s in skills
-                ],
-                "root": str(ctx.workflow_dir() / "skills"),
-            }
-        )
-
     async def handle_stats(request: web.Request) -> web.Response:
         try:
             days = int(request.query.get("days", "30"))
@@ -728,7 +730,6 @@ def _register_meta_routes(
             )
         return web.FileResponse(index)
 
-    app.router.add_get("/api/v1/skills", _wrap(handle_skills))
     app.router.add_get("/api/v1/stats", _wrap(handle_stats))
     app.router.add_get("/", handle_index)
     if STATIC_DIR.is_dir():

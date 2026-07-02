@@ -2,8 +2,8 @@
 tracker:
   kind: file
   board_root: ./kanban
-  active_states: [Todo, Explore, Plan, "In Progress", Critic, Review, QA, Learn]
-  terminal_states: ["Human Review", Done, Cancelled, Blocked, Archive]
+  active_states: [Todo, "In Progress", Verify, Learn]
+  terminal_states: ["Human Review", Done, Blocked, Archive, Cancelled]
   # Auto-archive sweep: terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on the next poll.
   # Set `archive_after_days: 0` to disable the sweep (manual `a` hotkey
@@ -12,14 +12,10 @@ tracker:
   archive_state: Archive
   archive_after_days: 30
   state_descriptions:
-    Todo: "Triage; route to Explore"
-    Explore: "Brief from llm-wiki + git + code"
-    Plan: "Lock implementation plan"
-    "In Progress": "TDD loop, draft branch"
-    Critic: "Fresh agent writes failing tests for spec gaps"
-    Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
-    QA: "pytest -q + real-CLI smoke"
-    Learn: "Distill learnings, update llm-wiki"
+    Todo: "Triage; route to In Progress"
+    "In Progress": "Plan + TDD implementation + self-critique"
+    Verify: "Review + QA + Merge Gate"
+    Learn: "Wiki write-back; S to skip"
     "Human Review": "Human confirms agent work before Done"
     Done: "Human-confirmed complete"
     Archive: "Auto-archived after 30 days idle"
@@ -52,7 +48,7 @@ hooks:
   # to Done.
   #
   # IMPORTANT: only host-owned board roots such as kanban/ are symlinked
-  # back to the host repo. docs/ stays branch-local so review/QA evidence
+  # back to the host repo. docs/ stays branch-local so Verify evidence
   # and wiki updates are reviewable deliverables.
   # Body extracted to scripts/symphony-setup-worktree.sh so the hook stays
   # one line and the worktree-setup logic is versioned, lintable, and
@@ -242,32 +238,28 @@ agent:
   max_concurrent_agents: 1
   max_turns: 100
   max_retry_backoff_ms: 300000
-  # Soft cap on stage rewinds (Review→In Progress + QA→In Progress
+  # Soft cap on stage rewinds (Verify/Learn -> In Progress
   # combined). Symphony increments this counter at phase-transition time;
   # on the (max_attempts+1)th rewind, it moves the ticket to Blocked
   # instead of starting another In Progress pass. Set to 0 to disable.
   max_attempts: 3
   # File-board optimization: obvious Todo tickets with Acceptance Criteria
-  # are routed to Explore by Symphony itself, saving a model turn. Bug tickets,
-  # blocked tickets, and underspecified tickets still run the Todo prompt.
+  # are routed to In Progress by Symphony itself, saving a model turn. Bug
+  # tickets, blocked tickets, and underspecified tickets still run Todo.
   auto_triage_actionable_todo: true
   max_concurrent_agents_by_state:
     Todo: 1
-    Explore: 1
-    Plan: 1
     "In Progress": 1
-    Review: 1
-    QA: 1
+    Verify: 1
     Learn: 1
   max_total_tokens: 100000000
   max_total_tokens_by_state:
     "In Progress": 500000000
-    QA: 500000000
-  # Merge policy for the Learn -> Human Review gate. Learn must merge the
+    Verify: 500000000
+  # Merge policy for the Verify -> Learn gate. Verify must merge the
   # `symphony/<ID>` feature branch into the target branch before setting
-  # Human Review. A human then confirms the card to Done from the TUI (`c`)
-  # or board viewer button. The post-Done auto-merge remains a best-effort
-  # fallback for older prompts.
+  # Learn. A human later confirms the card to Done from the TUI (`c`) or
+  # board viewer button.
   auto_merge_on_done: true
   # Branch/ref used as the start point for new `symphony/<ID>` feature
   # branches. Empty string = current host branch. The board viewer can
@@ -318,19 +310,19 @@ pi:
   resume_across_turns: true
 
 qa:
-  # Boot recipe for As-Is/To-Be HTTP runs. The QA prompt prefers these
+  # Boot recipe for As-Is/To-Be HTTP runs. The Verify prompt prefers these
   # over re-discovering boot details per ticket. Leave any field blank
   # to fall back to the prompt's heuristics.
   boot:
-    # Shell command that boots the API in the foreground. The QA agent
+    # Shell command that boots the API in the foreground. The Verify agent
     # runs it twice (As-Is in a sibling worktree, To-Be in the current
     # worktree) on the two distinct ports below, with `SYMPHONY_QA_PORT`
     # exported. Use that variable to bind the port.
     command: ""
     # Optional health-check URL — `${PORT}` is replaced with the run's
-    # port. The QA agent polls until 200 OK before sending payloads.
+    # port. The Verify agent polls until 200 OK before sending payloads.
     health_url: ""
-    # Two ports the QA agent binds, one per build. Pick free ports that
+    # Two ports the Verify agent binds, one per build. Pick free ports that
     # don't collide with anything on the host.
     asis_port: 8801
     tobe_port: 8802
@@ -338,11 +330,11 @@ qa:
     # both runs. Keep secrets out of WORKFLOW.md — reference $VARs.
     env: {}
     # Optional docker-compose / docker-compose-like file to bring up
-    # before booting. Tear-down is the QA agent's responsibility.
+    # before booting. Tear-down is the Verify agent's responsibility.
     compose_file: ""
-  # Performance regression budget. The QA prompt records latency for
+  # Performance regression budget. The Verify prompt records latency for
   # every payload on As-Is and To-Be; if To-Be exceeds As-Is by more
-  # than `latency_factor` (e.g. 2.0 = 2× slower) on any payload, QA
+  # than `latency_factor` (e.g. 2.0 = 2× slower) on any payload, Verify
   # fails with `## QA Failure`. Set to 0 to disable.
   regression_budget:
     latency_factor: 2.0
@@ -360,12 +352,8 @@ prompts:
   base: ./docs/symphony-prompts/file/base.md
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
-    Explore: ./docs/symphony-prompts/file/stages/explore.md
-    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
-    Critic: ./docs/symphony-prompts/file/stages/critic.md
-    Review: ./docs/symphony-prompts/file/stages/review.md
-    QA: ./docs/symphony-prompts/file/stages/qa.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
     Learn: ./docs/symphony-prompts/file/stages/learn.md
     Done: ./docs/symphony-prompts/file/stages/done.md
 

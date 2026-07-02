@@ -99,11 +99,8 @@ prompts:
   base: ./docs/symphony-prompts/file/base.md
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
-    Explore: ./docs/symphony-prompts/file/stages/explore.md
-    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
-    Review: ./docs/symphony-prompts/file/stages/review.md
-    QA: ./docs/symphony-prompts/file/stages/qa.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
     Learn: ./docs/symphony-prompts/file/stages/learn.md
     Done: ./docs/symphony-prompts/file/stages/done.md
 ```
@@ -308,12 +305,13 @@ from the lane name alone.
 
 ```yaml
 tracker:
-  active_states: [Todo, "In Progress", Review]
+  active_states: [Todo, "In Progress", Verify, Learn]
   terminal_states: [Done, Cancelled, Blocked]
   state_descriptions:
-    Todo: "Triage: read PR + decide next action"
-    "In Progress": "Apply fix locally, run tests"
-    Review: "Self-review the diff before Done"
+    Todo: "Triage: decide if actionable"
+    "In Progress": "Plan, implement, and self-critique"
+    Verify: "Review, QA, and merge proof"
+    Learn: "Write back docs, then Human Review"
     Cancelled: "Junk / stale / agent-rejected"
 ```
 

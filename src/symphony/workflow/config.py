@@ -84,7 +84,7 @@ class AgentConfig:
     max_retry_backoff_ms: int
     max_concurrent_agents_by_state: dict[str, int]
     max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
-    # Soft cap for Review/QA rewinds back into In Progress. 0 disables.
+    # Soft cap for Verify/Learn rewinds back into In Progress. 0 disables.
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
     # Cap on auto-retries scheduled after a worker exits with a non-normal
     # outcome (timeout, crash, transient backend error). On exhaustion the
@@ -94,8 +94,8 @@ class AgentConfig:
     # default) so it surfaces on the board instead of looping silently.
     # 0 disables the cap (legacy behaviour: retry forever with backoff).
     max_retries: int = DEFAULT_MAX_RETRIES
-    # File-board optimization: actionable Todo tickets can be routed to Explore
-    # by the orchestrator without spending a model turn on one-line triage.
+    # File-board optimization: actionable Todo tickets can be routed to
+    # In Progress without spending a model turn on one-line triage.
     auto_triage_actionable_todo: bool = True
     # When a ticket reaches the Done state cleanly, snapshot the workspace
     # into a single git commit (`git init` if no enclosing repo found).

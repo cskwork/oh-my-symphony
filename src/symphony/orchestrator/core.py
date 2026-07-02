@@ -506,6 +506,43 @@ class Orchestrator:
                 return issue_id
         return None
 
+    async def skip_learn(self, identifier: str) -> tuple[bool, str]:
+        """Move an idle Learn ticket to Human Review with an audit note."""
+        cfg = self._workflow_state.current()
+        if cfg is None:
+            cfg, err = self._workflow_state.reload()
+            if cfg is None:
+                return False, f"workflow config unavailable: {err}"
+
+        if self.find_running_issue_id(identifier) is not None:
+            return False, f"{identifier} has a running worker; wait or pause first"
+
+        issue = await asyncio.to_thread(
+            self._tracker_call_fetch_issue_full_by_id, cfg, identifier
+        )
+        if issue is None:
+            return False, f"unknown issue {identifier}"
+        if normalize_state(issue.state) != "learn":
+            return False, f"only Learn tickets can be skipped (state={issue.state})"
+        if self.find_running_issue_id(identifier) is not None:
+            return False, f"{identifier} started running; retry after it stops"
+
+        await asyncio.to_thread(
+            self._tracker_call_append_note,
+            cfg,
+            issue,
+            "Learn Skipped",
+            "Operator skipped wiki write-back from the Learn lane.",
+        )
+        await asyncio.to_thread(
+            self._tracker_call_update_state,
+            cfg,
+            issue,
+            "Human Review",
+        )
+        self.request_refresh()
+        return True, f"moved {identifier} to Human Review"
+
     def _retry_row(self, entry: RetryEntry) -> dict[str, Any]:
         return {
             "issue_id": entry.issue_id,
@@ -802,10 +839,6 @@ class Orchestrator:
             now_release = datetime.now(timezone.utc)
             for stale_id in stale_claimed:
                 self._claim_released_at[stale_id] = now_release
-        stale_turn_budget = self._turn_budget_exhausted - in_flight_ids
-        if stale_turn_budget:
-            self._turn_budget_exhausted -= stale_turn_budget
-
         try:
             validate_for_dispatch(cfg)
         except SymphonyError as exc:
@@ -950,6 +983,16 @@ class Orchestrator:
         finally:
             client.close()
 
+    @staticmethod
+    def _tracker_call_fetch_issue_full_by_id(
+        cfg: ServiceConfig, identifier: str
+    ) -> Issue | None:
+        client = build_tracker_client(cfg)
+        try:
+            return client.fetch_issue_full_by_id(identifier)
+        finally:
+            client.close()
+
     # ------------------------------------------------------------------
     # candidate selection (§8.2)
     # ------------------------------------------------------------------
@@ -1051,11 +1094,11 @@ class Orchestrator:
 
     def _available_slots(self, cfg: ServiceConfig) -> int:
         # Retry-pending tickets count against the slot budget so a ticket
-        # holds its slot through the full Todo → Done lifecycle. Without
+        # holds its slot through the full Todo -> Done lifecycle. Without
         # this, the 1s `CONTINUATION_RETRY_DELAY_MS` window between a
         # worker exiting and its retry firing would let another ticket
         # claim the slot — surfacing as "OLV-005 starts while OLV-002 is
-        # still in Review" even though `max_concurrent_agents == 1`.
+        # still in Verify" even though `max_concurrent_agents == 1`.
         in_flight = len(self._running) + len(self._retry)
         return max(cfg.agent.max_concurrent_agents - in_flight, 0)
 
@@ -1636,9 +1679,9 @@ class Orchestrator:
                             # bookkeeping below still apply.
                             if not is_rewind:
                                 if prev_phase_state in {
-                                    "plan",
-                                    "review",
-                                    "qa",
+                                    "in progress",
+                                    "verify",
+                                    "learn",
                                     "done",
                                 }:
                                     # IMPORTANT: contract eval reads
@@ -1668,7 +1711,7 @@ class Orchestrator:
                                     producing_state=prev_phase_state,
                                     ticket_body=issue.description or "",
                                     identifier=issue.identifier,
-                                    docs_root=workspace.path,
+                                    docs_root=workspace.path / "docs",
                                 )
                                 if not contract.passed:
                                     log.warning(

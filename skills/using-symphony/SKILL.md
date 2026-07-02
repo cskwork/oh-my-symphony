@@ -25,8 +25,9 @@ lanes, prompts, hooks, workspace roots, and agent backends.
 - Ticket IDs are an ordering contract. For multi-ticket work, create
   `TASK-001`, then `TASK-002`, then `TASK-003` in task-list order; Symphony
   sorts by stable numeric suffix before mutable fields like priority.
-- The default Learn prompt expects the `symphony/<ID>` branch to be merged into
-  the configured target branch before the ticket moves to `Done`.
+- The default Verify prompt expects the `symphony/<ID>` branch to be merged or
+  proven ready against the configured target branch before the ticket moves to
+  `Learn`.
 
 ## Non-Negotiable Preflight
 
@@ -46,10 +47,9 @@ unwritable workspaces, and missing board directories.
   skill pointers, `docs/symphony-prompts`, and platform entry files. Do not
   leave the operator with only a bare `WORKFLOW.md`; read
   `reference/bootstrapping.md` for the exact bundle.
-- Preserve the shipped 8-stage pipeline (`Todo`, `Explore`, `Plan`,
-  `In Progress`, `Review`, `QA`, `Learn`, `Done`) unless the user explicitly
-  requests a smaller workflow. If you change lanes, update both
-  `tracker.active_states` and `prompts.stages`.
+- Preserve the shipped four active lanes (`Todo`, `In Progress`, `Verify`,
+  `Learn`) unless the user explicitly requests a custom workflow. If you change
+  lanes, update both `tracker.active_states` and `prompts.stages`.
 - Pick the prompt flavor that matches the tracker:
   `tracker.kind: file` uses `docs/symphony-prompts/file/...`;
   `tracker.kind: linear` uses `docs/symphony-prompts/linear/...`.

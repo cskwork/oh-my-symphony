@@ -35,12 +35,9 @@ log = get_logger()
 def _is_rewind_transition(prev_state: str, current_state: str) -> bool:
     """True when a phase transition is moving backwards in the pipeline.
 
-    `Review → In Progress`, `QA → In Progress`, and the Plan-missing
-    `In Progress → Plan` correction all rewind by design — see WORKFLOW.md
-    hard rules. The agent re-entering a prior stage this way needs an
-    explicit template cue: dispatch-level `attempt` only fires on full
-    worker re-dispatch, so an in-flight rewind inside a single worker run
-    would otherwise have no signal beyond the markdown trail itself.
+    Verify and Learn are the only 4-stage pipeline rewinds. Contract
+    failures still force a rewind at the caller even when the state pair
+    itself is not in this static map.
     """
     return (prev_state, current_state) in _REWIND_TRANSITIONS
 
@@ -110,7 +107,7 @@ def _is_auto_triage_todo_candidate(issue: Issue, cfg: ServiceConfig) -> bool:
         return False
     if normalize_state(issue.state) != "todo":
         return False
-    if not any(normalize_state(s) == "explore" for s in cfg.tracker.active_states):
+    if not any(normalize_state(s) == "in progress" for s in cfg.tracker.active_states):
         return False
     if issue.blocked_by:
         return False

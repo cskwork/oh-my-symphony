@@ -46,9 +46,9 @@
   프롬프트 렌더러는 모두 업스트림 그대로이며 — 이 포크는 네 개의 백엔드와
   TUI를 더한 얇은 레이어다.
 - **뷰어가 아니라 진짜 웹 앱.** 오케스트레이터 포트가 Linear 스타일 보드를
-  직접 서빙한다: 이슈 등록(스킬 첨부 포함), 드래그로 컬럼 이동, 컬럼
-  추가/삭제/이름변경, 컬럼별 스테이지 프롬프트 편집, 브랜치 정책 선택,
-  워커 Pause / Resume, 그리고 전용 통계 페이지(일별 토큰, 컬럼별 체류 시간,
+  직접 서빙한다: 이슈 등록, 드래그로 컬럼 이동, 컬럼 추가/삭제/이름변경,
+  컬럼별 스테이지 프롬프트 편집, 브랜치 정책 선택, 워커 Pause / Resume,
+  Learn 스킵, 그리고 전용 통계 페이지(일별 토큰, 컬럼별 체류 시간,
   에이전트별 합계)까지. 모든 편집은 주석을 보존한 채 `WORKFLOW.md`로
   왕복 저장된다.
 - **운영자급 도구가 기본 제공.** `symphony doctor`는 첫 실행에서 가장 흔한
@@ -75,11 +75,11 @@
   agent=codex  tracker=linear  workflow=WORKFLOW.md  lang=en   running=2  retrying=1   │  tokens in=84,200 out=27,640 total=111,840
                                                                                        │  rate-limits=requests_remaining=4823, tokens_remaining=1.2M
 
-╭── Todo (3) ──────╮ ╭── In Progress (2) ──╮ ╭── Review (1) ──╮ ╭── Done (2) ──╮ ╭── Archive (1) ──╮ ╭── detail ───────────────────────╮
-│  DEMO-120  P1    │ │  DEMO-104  ●  P1    │ │  DEMO-122  P3  │ │  DEMO-088    │ │  DEMO-074       │ │  DEMO-104                       │
-│  Migrate auth …  │ │  Fix race condi…    │ │  Doc: contri…  │ │  Drop dead-… │ │  Old experim…   │ │  Fix race condition in pagina…  │
-│  #backend …      │ │  turn 4  20,180t    │ │  #docs         │ │  DEMO-091    │ │                 │ │                                 │
-│                  │ │  Patched cursor…    │ ╰────────────────╯ │  Bump deps…  │ ╰─────────────────╯ │  state=In Progress              │
+╭── Todo [1/4] (3) ╮ ╭── In Progress [2/4] ╮ ╭── Verify [3/4] ╮ ╭── Learn [4/4] ╮ ╭── Done (2) ──╮ ╭── detail ───────────────────────╮
+│  DEMO-120 [1/4]  │ │  DEMO-104 [2/4] ●   │ │  DEMO-122 [3/4]│ │  DEMO-123     │ │  DEMO-088    │ │  DEMO-104 [2/4]                 │
+│  Migrate auth …  │ │  Fix race condi…    │ │  Review + QA   │ │  S skip       │ │  Drop dead-… │ │  Fix race condition in pagina…  │
+│  #backend …      │ │  turn 4  20,180t    │ │  #docs         │ │  Wiki notes   │ │  DEMO-091    │ │                                 │
+│                  │ │  Patched cursor…    │ ╰────────────────╯ ╰───────────────╯ │  Bump deps…  │ │  state=In Progress              │
 │  DEMO-111  ↻ P2  │ │                     │                    ╰──────────────╯                     │  runtime=running                │
 │  Refactor cach…  │ │  DEMO-098  ●  P2    │                                                         │  turn=4                         │
 │  retry #2  tur…  │ │  Add /api/sear…     │                                                         │  in=14,200  out=5,980           │
@@ -89,7 +89,7 @@
 │  blocked by D…   │                                                                                 ╰─────────────────────────────────╯
 ╰──────────────────╯
 
-q quit · r refresh · enter details · n new issue · s stats · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · / filter · ?
+q quit · r refresh · enter details · n new · e edit · s stats · S skip Learn · P pause/resume · / filter · ?
 ```
 
 </details>
@@ -110,9 +110,9 @@ q quit · r refresh · enter details · n new issue · s stats · 1-9 zoom lane 
 2. [Textual](https://textual.textualize.io) 기반 **Jira 스타일 CLI 칸반 TUI**.
    컬럼은 트래커 상태이고, 카드는 현재 에이전트, 턴 수, 마지막 이벤트, 누적
    토큰을 보여준다. 카드는 포커스할 수 있고, 마우스 휠로 각 레인을 스크롤하며,
-   카드에서 `enter`를 누르면 전체 상세 모달이, `n`으로 새 티켓 등록,
-   `s`로 통계 화면이 열린다.
-3. 오케스트레이터 포트에 내장된 **웹 칸반 앱** — 티켓별 스킬을 첨부한 이슈
+   카드에서 `enter`를 누르면 전체 상세 모달이, `n`으로 멀티라인 새 티켓 등록,
+   `e`로 포커스 티켓 편집, `S`로 Learn 스킵, `s`로 통계 화면이 열린다.
+3. 오케스트레이터 포트에 내장된 **웹 칸반 앱** — 이슈 CRUD, Learn 스킵,
    CRUD, 드래그 앤 드롭 상태 이동, 컬럼 추가/삭제/이름변경, 컬럼별 프롬프트
    편집, 브랜치 정책, 전용 통계 페이지.
 
@@ -159,7 +159,7 @@ CLI에서 파일 보드 티켓을 만들 때는
 
 파일 보드 워크플로에서 `agent.auto_triage_actionable_todo`는 기본값이
 `true`다: 본문과 `Acceptance Criteria` 섹션이 있는 Todo 티켓은 모델 턴을 쓰지 않고
-한 줄짜리 `## Triage` 노트와 함께 Explore로 이동한다. 버그 티켓, 블록된 티켓,
+한 줄짜리 `## Triage` 노트와 함께 In Progress로 이동한다. 버그 티켓, 블록된 티켓,
 모호한 티켓, 그리고 Linear 트래커는 여전히 Todo 프롬프트를 사용한다.
 
 ## Install
@@ -196,8 +196,8 @@ pip install -e ".[dev]"
 cat > WORKFLOW.md <<'YAML'
 ---
 tracker: { kind: file, board_root: ./kanban,
-           active_states: [Todo, "In Progress"],
-           terminal_states: [Done, Cancelled, Blocked] }
+           active_states: [Todo, "In Progress", Verify, Learn],
+           terminal_states: ["Human Review", Done, Blocked, Archive] }
 polling: { interval_ms: 5000 }
 workspace: { root: ~/symphony_workspaces }
 hooks:
@@ -286,8 +286,8 @@ cp WORKFLOW.file.example.md WORKFLOW.md
 tracker:
   kind: file
   board_root: ./kanban
-  active_states: [Todo, "In Progress"]
-  terminal_states: [Done, Cancelled, Blocked]
+  active_states: [Todo, "In Progress", Verify, Learn]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
 
 workspace:
   root: ~/symphony_workspaces
@@ -384,12 +384,12 @@ _Updated: 2026-05-16 14:22:31 UTC_
 |--------------|---------|
 | Todo         | OLV-005, OLV-006 |
 | In Progress  | OLV-002 (8m12s · 12k tok) |
-| Review       | OLV-001 |
+| Verify       | OLV-001 |
 | Done         | OLV-003, OLV-004 |
 
 ## Recent transitions
 - `2026-05-16 14:22:31Z`  **OLV-002**  Todo → In Progress
-- `2026-05-16 14:18:04Z`  **OLV-001**  In Progress → Review
+- `2026-05-16 14:18:04Z`  **OLV-001**  In Progress → Verify
 ```
 
 위치나 한도는 `WORKFLOW.md` frontmatter(또는 `--progress-md-path`)로 재정의한다:
@@ -510,9 +510,10 @@ prompts:
   base: ./docs/symphony-prompts/file/base.md
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
-    Explore: ./docs/symphony-prompts/file/stages/explore.md
-    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
+    Learn: ./docs/symphony-prompts/file/stages/learn.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
 ```
 
 Symphony는 `base`와 티켓의 현재 상태에 해당하는 프롬프트 파일만 보내, 각 턴을
@@ -533,12 +534,12 @@ symphony ./WORKFLOW.md --port 9999
 `/`는 내장 웹 칸반 앱을 서빙한다(빌드 단계 없음, 가입 없음, 루프백 전용):
 
 - **Board** — 이슈 생성/수정/삭제, 드래그로 컬럼 이동, 실행 중 배지(턴 수,
-  토큰), 워커 Pause / Resume.
+  토큰), 워커 Pause / Resume, Learn 스킵. 기본 화면은 네 개의 active agent
+  lane만 보여주며, `All`을 누르면 `Human Review`, `Done`, `Blocked`,
+  `Archive` 같은 terminal lane까지 펼쳐진다.
 - **Workflow** — 칸반 컬럼 추가/삭제/이름변경/순서변경, 컬럼별 스테이지
   프롬프트 편집. 변경은 주석을 보존한 채 `WORKFLOW.md` frontmatter로
   저장되고, 이름이 바뀌거나 삭제된 컬럼의 티켓은 자동 마이그레이션된다.
-- **Skills** — `skills/<name>/SKILL.md` 라이브러리. 티켓에 첨부하면 해당
-  티켓의 에이전트 프롬프트에 스킬 본문이 주입된다.
 - **Stats** — 일별 토큰, 처리량, 컬럼별 체류 시간, 에이전트별 합계, 평균
   사이클 타임 (`.symphony/stats.jsonl` 기반).
 - **Settings** — 실제 로컬 브랜치 드롭다운으로 브랜치 정책 설정.
@@ -552,10 +553,10 @@ JSON API 엔드포인트:
 | POST/PATCH/DELETE | `/api/v1/issues[...]`  | 이슈 CRUD (file tracker)                     |
 | PUT    | `/api/v1/workflow/states`         | 컬럼 추가 / 삭제 / 이름변경 / 순서변경        |
 | GET/PUT| `/api/v1/workflow/prompts/<state>`| 컬럼 스테이지 프롬프트 조회 / 편집            |
-| GET    | `/api/v1/skills`                  | 사용 가능한 스킬 목록                         |
 | GET    | `/api/v1/stats?days=N`            | 집계된 실행 통계                              |
 | POST   | `/api/v1/refresh`                 | poll + reconcile 즉시 트리거                  |
 | POST   | `/api/v1/<id>/pause` `/resume`    | 실행 중 워커 보류 / 재개                      |
+| POST   | `/api/v1/<id>/skip-learn`         | idle Learn 티켓을 Human Review로 이동         |
 
 ### CLI Kanban TUI (primary UI)
 

@@ -1,17 +1,21 @@
-### IMPLEMENT  -- when state is `In Progress`
+### IMPLEMENT -- when state is `In Progress`
 
-**Allowed tools (advisory).** Read full repo + docs + ticket. Write source within the agreed Plan scope, `docs/{{ issue.identifier }}/work/`, and tracker comments. Run tests, formatters, `git add` / `git commit` (Symphony commits at turn end). Do NOT push branches, merge, or open PRs beyond the draft PR below — the Learn Merge Gate handles integration.
+**Allowed tools (advisory).** Read full repo + docs + ticket. Write source, tests, `docs/{{ issue.identifier }}/work/`, and ticket comments. Run tests and formatters. Do NOT push, merge, or open PRs; Verify owns the Merge Gate.
 
-Ship the smallest change that satisfies the brief.
+Plan, build, and self-check in one stage. Ship the smallest correct change.
 
-1. **Conflict pre-check.** List Linear active issues (state `In Progress`, `Review`, or `QA`) and read their `docs/<other-id>/explore/` Touched Files for overlap with this ticket's `## Touched Files`. On overlap: transition state to `Blocked`, post a `## Conflict` comment with the other issue id, overlapping path(s), and a one-line reason ("waiting on <ID> to finish editing <path>"); STOP.
-2. **Read the plan first.** Re-read the latest `## Plan` and `docs/{{ issue.identifier }}/plan/implementation-plan.md` if it exists. That plan should be enough to implement. Use Explore notes, llm-wiki, or other docs only as reference material when the plan is ambiguous or incomplete. If `## Plan` is missing: transition state to `Plan`, post `## Plan Missing`, stop. If the most recent comment is a QA Failure or Review Findings comment, scope this turn to ONLY those flagged items — no drive-by changes. Fresh context — the markdown and Linear comments are the contract.
-   - **Critic rewind.** Most recent comment is a Surfaced Requirements comment (with Critic Tests): make exactly those failing tests pass with the smallest change, add no code no red test requires, break no passing test, then mark each row `fixed` (or why-still-`open`) in `docs/{{ issue.identifier }}/critic/surfaced-requirements.md`.
-3. Implement the chosen option from `## Plan` (on rewind: only the flagged items). Reopen the plan only if the brief got a fact wrong — post a one-line note and proceed.
-4. TDD loop: write the failing test the brief specified, make it pass, refactor. No production code without a test exercising it.
-5. Write user-facing docs at `docs/{{ issue.identifier }}/work/feature.md` (`bug.md` if the ticket carries the `bug` label): what changed, how a user observes it, knobs/flags. Plain language, no jargon.
-6. Write one concise commit subject to `.symphony/commit-message.txt` (Symphony commits it after the turn). Open a draft PR. Post an Implementation comment with the PR link, intent per change, and decisions worth recording.
-7. Set the next state by difficulty (Plan's `## Difficulty`; treat a missing section as `standard`):
-   - Plan declared `## Difficulty: trivial` AND this is **not** a `bug` ticket → transition state to `Review` (skip Critic — the visible tests already cover this single-spot change).
-   - Otherwise (`standard` / `complex`, or any `bug` ticket regardless of difficulty) → transition state to `Critic`.
-   Post a one-line `## Pipeline Route` comment recording the choice and why, so any elision is never silent — e.g. `trivial, non-bug → Review (Critic skipped)` or `standard → Critic`. A `bug` ticket may never skip Critic+QA: state this in the route when difficulty was `trivial` but the `bug` label forced the full path.
+1. Read `docs/llm-wiki/INDEX.md` first when it exists. Reuse current knowledge before broad repo search.
+2. If the CLI supports subagents (for example Claude Code Task tool), delegate broad exploration, repo search, or verification sweeps to fresh-context subagents and keep the main context focused on ticket, plan, and diff. If no subagent support exists, do the same work locally and keep notes brief.
+3. Produce or refresh these sections before editing source:
+   - `## Plan` -- concrete implementation steps.
+   - `## Acceptance Tests` -- one proof per acceptance criterion.
+   - `## Done Signals` -- exact signals that prove completion.
+   - `## Difficulty` -- `trivial`, `standard`, or `complex` with one-line rationale.
+4. TDD loop: write the failing test the brief implies, make it pass, refactor. No production code without a test or an explicit `chore` rationale.
+5. Save durable work notes under `docs/{{ issue.identifier }}/work/` (at least one file). For user-visible behavior, explain how a user observes the change.
+6. Append `## Implementation` with intent per change and decisions worth recording.
+7. Self-critique before moving on: re-read the ticket/spec, check null/empty/boundary/error paths, add any missing tests, and append `## Self-Critique`.
+8. Append `## Pipeline Route`: always route to `Verify`. Record whether Verify may use the trivial non-runtime QA short path, but never skip Verify.
+9. Set state to `Verify`.
+
+On rewind: `$SYMPHONY_REWIND_SCOPE` may contain JSON rows from `## Review Findings` or `## QA Failure`. Limit this turn to those rows unless a one-line `## Scope Expansion` explains why more files are required.

@@ -1,6 +1,6 @@
-You are picking up issue {{ issue.identifier }}: {{ issue.title }}.
+You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.
-{% if attempt %}Retry attempt {{ attempt }}. Read the previous Linear comment thread first — the most recent Resolution, Blocker, QA Failure, or Review Findings comment — and fix the root cause, not the symptom.{% endif %}{% if is_rewind %}Rewind turn from a Review or QA finding. Read the most recent Review Findings or QA Failure comment first; fix exactly those items, do NOT open new scope. Agent context is fresh: only the Linear comment thread and `docs/{{ issue.identifier }}/` survive.{% endif %}
+{% if attempt %}Retry attempt {{ attempt }}. Read the previous `## Resolution`, `## Blocker`, `## QA Failure`, or `## Review Findings` section first; fix the root cause, not the symptom.{% endif %}{% if is_rewind %}Rewind turn from a Verify or Learn finding. Read the most recent `## Review Findings`, `## QA Failure`, or `## Learn Defect` section first; fix exactly those items, do NOT open new scope. Agent context is fresh: only the ticket body and `docs/{{ issue.identifier }}/` survive.{% endif %}
 
 {% if issue.description %}
 ## Description
@@ -11,151 +11,100 @@ Current state: {{ issue.state }}.
 {% if issue.labels %}Labels: {{ issue.labels | join: ", " }}{% endif %}
 
 {% if issue.blocked_by %}
-This issue depends on:
+This ticket depends on:
 {% for blocker in issue.blocked_by %}- {{ blocker.identifier }} ({{ blocker.state }})
 {% endfor %}
 {% endif %}
 
-## Production pipeline (eight stages, no skipping)
+## Production pipeline (4 active stages)
 
 Honour the gate matching `{{ issue.state }}`. One stage = one transition; never jump ahead.
 
 ```
-  Todo  ->  Explore  ->  Plan  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Merge Gate  ->  Human Review  ->  Done
-                              ^   \                ^    \                ^
-                              |    +-> Blocked     |     +-> Blocked     |
-                              |                    |                     |
-                              +-- Review CRITICAL/HIGH/MEDIUM rewinds here|
-                              +-- QA failure rewinds here ---------------+
+  Todo  ->  In Progress  ->  Verify  ->  Learn  ->  Human Review  ->  Done
+                 ^              |          |
+                 |              |          +-> operator may skip Learn to Human Review
+                 +--------------+------------- Verify/Learn defects rewind here
 ```
 
-- `docs/llm-wiki/` — domain knowledge base: one Markdown entry per topic + `INDEX.md`. Explore reads it before new work; Learn writes back after QA passes (the first Learn creates the directory).
-- Plan turns Explore's candidates into one executable `## Plan`; In Progress must read that plan before editing code.
-- Learn's Merge Gate handles feature-branch integration before `Human Review`; `Done` requires human confirmation from the TUI or web viewer.
-- `docs/{{ issue.identifier }}/` — this ticket's evidence root (artefact policy: Hard rules below). Learn writes to `${LLM_WIKI_PATH:-./docs/llm-wiki}/<topic>.md`, a sibling under the same `docs/` root.
-- State transitions and stage notes go through the `linear_graphql` tool: `issueUpdate` for state changes, `commentCreate` for the per-stage notes. One comment per stage.
+- `docs/llm-wiki/` is the reusable knowledge base. In Progress reads it before broad repo work; Learn writes back after Verify passes.
+- `docs/{{ issue.identifier }}/` is this ticket's evidence root. Use `reproduce/`, `work/`, and `qa/` inside it; overflow details go to `details.md` in the relevant folder.
+- Ticket file: `kanban/{{ issue.identifier }}.md`. Transition = edit the YAML front matter `state:` field; narrative = append body sections.
+- Verify is never skipped. Trivial non-runtime work may shorten QA evidence, but the ticket still goes through Verify.
+- Learn is lightweight wiki write-back. Only the operator may skip it with the TUI/web skip action; agents do not self-skip by jumping to Human Review.
 {% if token_budget %}
 - Token budget: keep this turn under {{ token_budget }} completion tokens (stage EMA: {{ token_ema }}). Cut narration, never evidence.
 {% endif %}
 
-## Audience & writing style (every comment you post)
+## Audience & writing style
 {% if language == 'ko' %}
-Readers include non-developers (PM / 기획자). Plain-language header first, code detail after; a non-dev must grasp what/why/how in ~30 seconds.
+Readers include non-developers (PM / 기획자). Plain-language header first, code detail after.
 
-**Plain-Korean header (mandatory, first lines of every stage comment
-except the one-line Triage):**
+Use this header at the start of every non-trivial section except `## Triage`:
 
 ```
 **무엇**: <한 줄, 비-개발자도 이해 가능한 한국어>
 **왜**: <한 줄, 사용자/시스템에 어떤 가치/위험이 있는지>
-**As-Is → To-Be**:
+**As-Is -> To-Be**:
 - As-Is: <한 줄, 이 단계 시작 전 상태>
 - To-Be: <한 줄, 이 단계 종료 후 상태>
 ```
 
-Then the stage body, within these caps. Overflow goes to
-`docs/{{ issue.identifier }}/<stage>/details.md` plus one final link
-line: `_세부: docs/<id>/<stage>/details.md_`.
-
-| Comment / Stage section | Body cap (after header)                | What goes in details.md            |
-|-------------------------|----------------------------------------|-------------------------------------|
-| Triage comment          | 1-2 lines total (no header needed)     | n/a                                 |
-| `## Domain Brief`       | ≤ 12 lines                             | extra path:line citations, vendor docs, full file walks |
-| `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches, deep trade-offs |
-| `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text         |
-| `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
-| Implementation comment  | ≤ 10 lines (PR link + touched files)   | per-file change list, helper names, dataclass shapes |
-| Review comment          | ≤ 6 rows in severity table (1 line each) | full check-list reasoning, fix diffs |
-| Review Findings comment | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
-| QA Evidence comment     | header + commands + 1-line `**판정**` + AC table | raw pytest/curl/Playwright output |
-| `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
-| `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
-| `## Human Review`       | ≤ 18 lines across all 6 sub-sections   | full evidence dump under docs/      |
-| As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |
-
-**Style rules:**
-
-- Cite the top 1-3 `path:line` anchors only; no function signatures,
-  field lists, diff hunks, or per-line walks. Extra citations and raw
-  command output go to `docs/{{ issue.identifier }}/<stage>/details.md`
-  (or the per-stage artefact folders), not the comment.
-- 헤더와 요약 줄은 한국어; code spans (`path:line`, identifiers, command
-  output)는 영어 그대로. 코드 심볼을 한국어로 번역하지 않는다.
-- Jargon needs one short parenthetical for a 기획자
-  ("`Columns`(가로 정렬 컴포넌트)"); longer explanations go to `details.md`.
-- One thing per bullet. No nested bullets. No multi-paragraph items.
-- Show, don't tell. "200 passed" beats "all tests passed".
-- The Plain-Korean headers alone (skipping every technical body) must
-  tell the entire ticket end-to-end.
+헤더와 요약 줄은 한국어; code spans (`path:line`, identifiers, commands)는 영어 그대로 둔다.
 {% else %}
-Readers include non-developers (PMs and product managers). Plain-language header first, code detail after; a non-dev must grasp what/why/how in ~30 seconds.
+Readers include non-developers (PMs and product managers). Plain-language header first, code detail after.
 
-**Plain-language header (mandatory, first lines of every stage comment
-except the one-line Triage):**
+Use this header at the start of every non-trivial section except `## Triage`:
 
 ```
 **What**: <one line, understandable by a non-developer>
-**Why**: <one line, what value or risk this carries for the user/system>
-**As-Is → To-Be**:
+**Why**: <one line, value or risk for the user/system>
+**As-Is -> To-Be**:
 - As-Is: <one line, state before this stage>
 - To-Be: <one line, state after this stage>
 ```
 
-Then the stage body, within these caps. Overflow goes to
-`docs/{{ issue.identifier }}/<stage>/details.md` plus one final link
-line: `_details: docs/<id>/<stage>/details.md_`.
-
-| Comment / Stage section | Body cap (after header)                | What goes in details.md            |
-|-------------------------|----------------------------------------|-------------------------------------|
-| Triage comment          | 1-2 lines total (no header needed)     | n/a                                 |
-| `## Domain Brief`       | ≤ 12 lines                             | extra path:line citations, vendor docs, full file walks |
-| `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches, deep trade-offs |
-| `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text         |
-| `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
-| Implementation comment  | ≤ 10 lines (PR link + touched files)   | per-file change list, helper names, dataclass shapes |
-| Review comment          | ≤ 6 rows in severity table (1 line each) | full check-list reasoning, fix diffs |
-| Review Findings comment | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
-| QA Evidence comment     | header + commands + 1-line `**Verdict**` + AC table | raw pytest/curl/Playwright output |
-| `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
-| `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
-| `## Human Review`       | ≤ 18 lines across all 6 sub-sections   | full evidence dump under docs/      |
-| As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |
-
-**Style rules:**
-
-- Cite the top 1-3 `path:line` anchors only; no function signatures,
-  field lists, diff hunks, or per-line walks. Extra citations and raw
-  command output go to `docs/{{ issue.identifier }}/<stage>/details.md`
-  (or the per-stage artefact folders), not the comment.
-- Plain-language header and summary lines in English; code spans
-  (`path:line`, identifiers, command output) stay as-is — never translate
-  code symbols.
-- Jargon needs one short parenthetical for a non-developer; longer
-  explanations go to `details.md`.
-- One thing per bullet. No nested bullets. No multi-paragraph items.
-- Show, don't tell. "200 passed" beats "all tests passed".
-- The Plain-language headers alone (skipping every technical body) must
-  tell the entire ticket end-to-end.
+Plain-language headers and summary lines stay in English; code spans (`path:line`, identifiers, commands) stay as-is.
 {% endif %}
+
+Keep sections compact. Overflow goes to `docs/{{ issue.identifier }}/<stage>/details.md` plus one link line.
+
+| Section | Body cap | Overflow |
+|---|---:|---|
+| `## Triage` | 1-2 lines | n/a |
+| `## Reproduction` | command + 3-10 line failure excerpt | raw trace/log under `reproduce/` |
+| `## Plan` | <= 10 lines | full task list, risk notes |
+| `## Acceptance Tests` | <= 10 bullets | setup/fixtures |
+| `## Done Signals` | <= 8 bullets | payloads, long logs |
+| `## Difficulty` | 1 line verdict + 1 line why | n/a |
+| `## Implementation` | <= 10 lines | per-file details |
+| `## Self-Critique` | <= 8 lines | full review notes |
+| `## Pipeline Route` | 1 line | n/a |
+| `## Security Audit` | exactly 7 rows | per-check rationale |
+| `## Review` | <= 6 lines | full checklist |
+| `## Review Findings` | <= 6 severity rows | details under `qa/details.md` |
+| `## QA Evidence` | commands + result summary | raw output under `qa/` |
+| `## QA Failure` | <= 6 rows | raw output under `qa/` |
+| `## AC Scorecard` | 1 row per acceptance criterion | raw proof under `qa/` |
+| `## Merge Status` | <= 6 lines | command logs under `qa/merge.log` |
+| `## Learnings` | 3-4 bullets | extended rationale |
+| `## Wiki Updates` | <= 4 lines | wiki files are source of truth |
+| `## Learn Skipped` | 1 line, orchestrator only | n/a |
+| `## Human Review` | <= 18 lines across sub-sections | full evidence dump under docs |
+| `## As-Is -> To-Be Report` | <= 20 lines | full evidence dump under docs |
+
+Style rules:
+
+- Cite the top 1-3 `path:line` anchors only. Extra citations and raw command output go to `details.md`.
+- One thing per bullet. No nested bullets. No multi-paragraph items.
+- Show, do not tell: `200 passed` beats `all tests passed`.
 
 ## Hard rules
 
-- Never skip a stage. Never mark `Done` without a QA Evidence comment, a
-  successful Learn Merge Gate into the target branch, and explicit human
-  confirmation from `Human Review`.
-- Never silence failing tests or hide errors. Fix the root cause or move
-  to `Blocked`.
-- Touch only what the issue requires. No drive-by refactors.
-- Every artefact lives under `docs/{{ issue.identifier }}/<stage>/`
-  (`mkdir -p` it yourself) — never in `qa-artifacts/`, `runs/`, ad-hoc
-  `tests/e2e/<name>/`, or sibling `docs/` files. Learn's `docs/llm-wiki/`
-  write-back is a sibling under `docs/`, not under this ticket's root.
-- Backward transitions are pipeline, not failure: `Review → In Progress`
-  (CRITICAL/HIGH/MEDIUM findings) and `QA → In Progress` (test/spec
-  failure, including any server-reported HIGH issue). Each rewind starts
-  the next In Progress turn with a fresh agent context; only the Linear
-  comment thread and `docs/{{ issue.identifier }}/` carry over — what you
-  didn't write down is gone.
-- Rewind cap: Symphony counts every rewind at runtime; exceeding
-  `agent.max_attempts` ({{ agent.max_attempts }}) moves the issue to
-  `Blocked`. `max_attempts: 0` disables the cap.
+- Never skip Verify. Never mark `Done` without `## QA Evidence`, `## Merge Status`, and explicit human confirmation from Human Review.
+- Never silence failing tests, hide errors, or add fake success paths. Fix the root cause or move the ticket to `Blocked`.
+- Touch only what the ticket requires. No drive-by refactors.
+- Record non-trivial decisions in `docs/changelog/changelog-YYYY-MM-DD.md` (append; do not overwrite).
+- Every ticket artefact lives under `docs/{{ issue.identifier }}/`; do not create ad-hoc sibling evidence folders.
+- Backward transitions are pipeline, not failure: `Verify -> In Progress` for review/QA defects, and `Learn -> In Progress` only when Learn discovers a real defect. Each rewind starts with fresh context; only the ticket body and `docs/{{ issue.identifier }}/` carry over.
+- Rewind cap: Symphony counts every rewind at runtime; exceeding `agent.max_attempts` ({{ agent.max_attempts }}) moves the ticket to `Blocked`. `max_attempts: 0` disables the cap.

@@ -3,8 +3,8 @@ tracker:
   kind: linear
   project_slug: my-team-project
   api_key: $LINEAR_API_KEY
-  active_states: [Todo, Explore, Plan, "In Progress", Critic, Review, QA, Learn]
-  terminal_states: [Closed, Cancelled, Canceled, Duplicate, "Human Review", Done, Archive]
+  active_states: [Todo, "In Progress", Verify, Learn]
+  terminal_states: ["Human Review", Done, Blocked, Archive, Closed, Cancelled, Canceled, Duplicate]
   # Auto-archive sweep — terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on each poll tick.
   # Set `archive_after_days: 0` to disable the sweep (TUI `a` hotkey still
@@ -13,14 +13,10 @@ tracker:
   archive_after_days: 30
   # Optional one-line legend rendered under each TUI column header.
   state_descriptions:
-    Todo: "Triage; route to Explore"
-    Explore: "Brief from docs/llm-wiki + git + code"
-    Plan: "Lock the implementation plan"
-    "In Progress": "TDD loop, draft PR"
-    Critic: "Fresh agent writes failing tests for spec gaps"
-    Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
-    QA: "Execute real code, capture evidence"
-    Learn: "Distill learnings, update docs/llm-wiki"
+    Todo: "Triage; route to In Progress"
+    "In Progress": "Plan + TDD implementation + self-critique"
+    Verify: "Review + QA + Merge Gate"
+    Learn: "Wiki write-back; S to skip"
     "Human Review": "Human confirms agent work before Done"
     Done: "Human-confirmed complete"
     Archive: "Auto-archived after 30 days idle"
@@ -41,9 +37,9 @@ workspace:
 hooks:
   # Default: attach the per-ticket workspace as a git worktree of the
   # host repo on a symphony/<ID> branch. The host working tree is never
-  # touched while the ticket is active. The default Learn gate merges the
-  # feature branch into the target branch before the ticket can move to Human
-  # Review. A human then confirms Done from the TUI (`c`) or board viewer.
+  # touched while the ticket is active. The default Verify gate merges the
+  # feature branch into the target branch before the ticket can move to Learn.
+  # A human later confirms Done from the TUI (`c`) or board viewer.
   #
   # If your code lives in a *different* remote than where WORKFLOW.md
   # sits (common with Linear setups where the config repo is config-only),
@@ -182,13 +178,13 @@ agent:
   # active-state ticket from restarting forever and wasting tokens.
   max_total_turns: 200
   # Hard token ceiling by workflow state. The global cap is the default for
-  # Review/Learn; In Progress and QA get larger build/verification budgets.
+  # Learn; In Progress and Verify get larger build/verification budgets.
   max_total_tokens: 100000000
   max_total_tokens_by_state:
     "In Progress": 500000000
-    QA: 500000000
+    Verify: 500000000
   budget_exhausted_state: Blocked
-  # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
+  # Soft cap for Verify/Learn rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
   # Cap on auto-retries scheduled after a worker exits with a non-normal
   # outcome (timeout, crash, transient backend error). On exhaustion the
@@ -198,17 +194,14 @@ agent:
   # cap (legacy: retry forever with exponential backoff).
   max_retries: 3
   # File-board only: route obvious Todo tickets with Acceptance Criteria to
-  # Explore without spending a model turn. Bug/blocked/ambiguous tickets still
-  # run the Todo prompt.
+  # In Progress without spending a model turn. Bug/blocked/ambiguous tickets
+  # still run Todo.
   auto_triage_actionable_todo: true
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
     Todo: 1
-    Explore: 1
-    Plan: 1
     "In Progress": 1
-    Review: 1
-    QA: 1
+    Verify: 1
     Learn: 1
   # When a ticket reaches Done cleanly, snapshot the workspace into one
   # git commit (`<identifier>: <title>`). If the workspace is nested
@@ -216,9 +209,8 @@ agent:
   # runs first. Set to false if your workspace is an existing repo with
   # strict commit-style rules you don't want auto-touched.
   auto_commit_on_done: true
-  # Merge policy for the Learn -> Human Review gate. Learn must merge the
-  # `symphony/<ID>` feature branch into this target before setting Human Review.
-  # The post-Done auto-merge remains a best-effort fallback for older prompts.
+  # Merge policy for the Verify -> Learn gate. Verify must merge the
+  # `symphony/<ID>` feature branch into this target before setting Learn.
   auto_merge_on_done: true
   # Branch/ref used as the start point for new `symphony/<ID>` feature
   # branches. Empty string = current host branch. The board viewer can
@@ -328,12 +320,8 @@ prompts:
   base: ./docs/symphony-prompts/linear/base.md
   stages:
     Todo: ./docs/symphony-prompts/linear/stages/todo.md
-    Explore: ./docs/symphony-prompts/linear/stages/explore.md
-    Plan: ./docs/symphony-prompts/linear/stages/plan.md
     "In Progress": ./docs/symphony-prompts/linear/stages/in-progress.md
-    Critic: ./docs/symphony-prompts/linear/stages/critic.md
-    Review: ./docs/symphony-prompts/linear/stages/review.md
-    QA: ./docs/symphony-prompts/linear/stages/qa.md
+    Verify: ./docs/symphony-prompts/linear/stages/verify.md
     Learn: ./docs/symphony-prompts/linear/stages/learn.md
     Done: ./docs/symphony-prompts/linear/stages/done.md
 

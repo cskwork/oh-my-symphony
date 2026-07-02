@@ -24,7 +24,7 @@ class SlackConfig:
     # Empty tuple = notify on every state transition (default ask).
     # Populated = notify only when the *target* state matches one of these
     # (case-insensitive). Lets PMs subscribe to ``["Done", "Blocked"]``
-    # without seeing every Explore/Plan handoff.
+    # without seeing every active-stage handoff.
     notify_on_states: tuple[str, ...] = ()
     # Per-target-state message overrides; key is the lowercased state name.
     # See :mod:`symphony.notifications.events` for available placeholders.

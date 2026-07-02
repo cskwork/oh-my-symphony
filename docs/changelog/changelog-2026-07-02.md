@@ -111,3 +111,92 @@ SPA JS review (verdict: XSS clean; two HIGH fixed):
 - **MEDIUM** — labels lowercase client-side to mirror server normalization.
 - **LOW** — dead `_key`/`nextWfKey`/`pollTimer` removed; markdown links get
   `noreferrer`.
+
+---
+
+# 2026-07-02 — 4-stage pipeline simplification
+
+## Goal
+
+Collapse the default agent pipeline from many operator-visible lanes into four
+active states: `Todo`, `In Progress`, `Verify`, and `Learn`. Keep the quality
+gates, but move them inside fewer stages so the board is easier to scan.
+
+## Decisions
+
+### 1. Merge stages, not just UI groups
+
+`Plan` and `Critic` are now sections inside `In Progress`; `Review`, `QA`, and
+Merge Gate are sections inside `Verify`. The contract validator follows the
+same state names, so the UI, prompt, and state machine describe one real
+workflow.
+
+- Rejected: grouping old lanes visually while keeping old state names. That
+  would make the web/TUI simpler but leave retries, contracts, and prompts
+  harder to explain.
+- Rejected: skipping Verify for trivial tickets. Verify owns Merge Gate, so
+  skipping it risks shipping unmerged or unreviewed work.
+
+### 2. Keep Learn lightweight and skippable
+
+Learn is now only wiki write-back and Human Review handoff. Operators can skip
+it from the TUI (`S`) or web/API, which appends `## Learn Skipped` and moves the
+ticket to `Human Review` without starting an agent turn.
+
+- Rejected: deleting Learn. The wiki write-back is still useful when work
+  produces durable repository knowledge.
+- Rejected: letting running Learn workers be skipped. The skip action refuses
+  running tickets to avoid racing worker-owned ticket writes.
+
+### 3. Remove skills UI but preserve the engine
+
+The web nav/page, web create/detail controls, and TUI create/detail controls no
+longer expose skills. Existing `skills:` ticket frontmatter still round-trips
+through the backend and prompt injection remains intact for power users.
+
+- Rejected: deleting `skills.py` and `Issue.skills`. That would break existing
+  boards and remove a useful advanced feature.
+
+### 4. Move demos under `examples/`
+
+The repo root now keeps the current workflow examples; demo/smoke/Jira files
+and demo boards live under `examples/`. Moved workflows use `../docs/...`
+prompt/wiki paths because workflow-relative resolution changes after the move.
+
+### 5. Keep tracked fixtures on the new defaults
+
+Docs-only test fixtures now point at the retained `verify.md` prompt instead of
+removed stage filenames. That keeps tracked fixtures from teaching removed
+default lanes while preserving custom-state tests that intentionally exercise
+arbitrary board names.
+
+### 6. Make the web board default to active work
+
+The web board now opens on the four active lanes only. Non-empty terminal lanes
+render as a compact terminal group, and the `All` toggle expands every
+configured column when an operator needs full board surgery.
+
+- Rejected: deleting terminal states from `/api/v1/board`. They are still
+  workflow data and are needed for scripts, stats, and manual recovery.
+- Rejected: always showing `Human Review` as a fifth full lane. It is operator
+  work, not agent pipeline work, so the compact group keeps the 4-stage board
+  promise while leaving review cards visible.
+
+### 7. Preserve exhausted turn-budget guards across polls
+
+Full E2E exposed a redispatch loop: a Learn ticket that hit
+`max_total_turns` was marked exhausted, then the next stale-claim prune removed
+that guard and dispatched the same ticket again. `_claimed` still prunes when no
+worker owns the ticket, but `_turn_budget_exhausted` now remains until process
+restart or explicit operator movement.
+
+- Rejected: making the E2E harness tolerate repeated dispatch. The loop burns
+  agent turns and hides a real scheduler bug.
+- Rejected: moving every exhausted ticket to `Blocked` by default. Existing
+  boards rely on `agent.budget_exhausted_state` as an opt-in persistence policy.
+
+## Breaking Change
+
+Boards with custom active states or prompt mappings that still use `Explore`,
+`Plan`, `Critic`, `Review`, or `QA` need a manual `WORKFLOW.md` migration to the
+4-stage layout before adopting the new prompt templates.

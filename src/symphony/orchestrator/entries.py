@@ -74,8 +74,8 @@ class RunningEntry:
     # EVENT_TURN_COMPLETED time — but the agent may already have flipped
     # `state:` in the ticket body before the turn ends, so the sample would
     # land under the destination state, not the source. Live claude demo
-    # 2026-05-17 reproduced this: Explore turn cost recorded under "plan",
-    # Plan turn cost under "in progress", etc.
+    # 2026-05-17 reproduced this on the old long pipeline; the same hazard
+    # applies to Todo -> In Progress -> Verify transitions.
     state_at_turn_start: str = ""
     codex_app_server_pid: int | None = None
     last_error: str | None = None

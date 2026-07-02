@@ -24,7 +24,7 @@ ln -s ../../skills/symphony-oneshot "$TARGET/.claude/skills/symphony-oneshot"
 chmod +x "$TARGET/tui-open.sh"
 ```
 
-> ⚠ The board viewer (HTML/web UI at `--viewer-port`) auto-detects
+> Warning: The board viewer (HTML/web UI at `--viewer-port`) auto-detects
 > `<workflow-dir>/tools/board-viewer/server.py`. If that script is missing,
 > `symphony service start` silently skips spawning the viewer — no error,
 > no warning, just an absent `started board viewer pid=...` line and a
@@ -66,12 +66,13 @@ python3.12 -m venv .venv
 `WORKFLOW.example.md` ships with the supported production flow:
 
 ```text
-Todo -> Explore -> Plan -> In Progress -> Review -> QA -> Learn -> Done
+Todo -> In Progress -> Verify -> Learn -> Human Review -> Done
 ```
 
 Do not trim it to a smaller lane set unless the user explicitly asks. The base
-prompt names these stages, QA evidence is part of the Done gate, and Learn
-writes back to `docs/llm-wiki/` for future tickets.
+prompt names these stages, Verify is the compulsory review/QA/merge gate, and
+Learn writes back to `docs/llm-wiki/` for future tickets. Operators may skip an
+idle Learn card to `Human Review`; agents should not self-skip it.
 
 If the target project truly needs a different workflow, edit these together:
 

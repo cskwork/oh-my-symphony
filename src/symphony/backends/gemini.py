@@ -3,8 +3,8 @@
 Drives `gemini -p "" --output-format json` once per turn. Symphony mints a
 session UUID at `start_session`; turn 1 passes it via `--session-id`, and
 same-state continuation turns resume it via `--resume`. The orchestrator
-rebuilds backends on phase transitions, so Explore → Plan and other state
-changes naturally get a fresh Gemini session.
+rebuilds backends on phase transitions, so Todo -> In Progress and other
+state changes naturally get a fresh Gemini session.
 """
 
 from __future__ import annotations

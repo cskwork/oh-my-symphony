@@ -7,16 +7,14 @@ Replace placeholders `<...>` with your values. One file per service you want orc
 tracker:
   kind: file
   board_root: ./.symphony/kanban
-  active_states: [Todo, Explore, "In Progress", Review, QA, Learn]
+  active_states: [Todo, "In Progress", Verify, Learn]
   terminal_states: [Closed, Cancelled, Canceled, Duplicate, Done, Archive, Blocked]
   archive_state: Archive
   archive_after_days: 30
   state_descriptions:
-    Todo: "Triage; route to Explore"
-    Explore: "Brief from docs + existing code"
-    "In Progress": "TDD loop, draft fix"
-    Review: "Read diff, fix CRITICAL/HIGH"
-    QA: "Build + run tests, capture evidence"
+    Todo: "Triage; route to In Progress"
+    "In Progress": "Plan, build, and self-critique"
+    Verify: "Review, QA, and merge proof"
     Learn: "Distill learnings, append to docs/"
     Done: "As-Is -> To-Be report"
     Archive: "Auto-archived after 30 days idle"
@@ -72,10 +70,8 @@ prompts:
   base: ./.symphony/prompts/base.md
   stages:
     Todo: ./.symphony/prompts/stages/todo.md
-    Explore: ./.symphony/prompts/stages/explore.md
     "In Progress": ./.symphony/prompts/stages/in-progress.md
-    Review: ./.symphony/prompts/stages/review.md
-    QA: ./.symphony/prompts/stages/qa.md
+    Verify: ./.symphony/prompts/stages/verify.md
     Learn: ./.symphony/prompts/stages/learn.md
     Done: ./.symphony/prompts/stages/done.md
 
@@ -103,7 +99,7 @@ tui:
 ---
 
 Service: **<svc-name>** (`<service-subdir>`). Base branch: `<base-branch>`. Branch prefix: `<branch-prefix>/`.
-Build gate (QA stage): `<build-command>` (e.g. `./gradlew :build -x test` or `npm run build`).
+Build gate (Verify stage): `<build-command>` (e.g. `./gradlew :build -x test` or `npm run build`).
 ```
 
 ## Placeholders to fill

@@ -327,13 +327,13 @@ async def test_branch_policy_put_validates_and_persists(
 
 
 # ---------------------------------------------------------------------------
-# skills + stats
+# removed skills endpoint + stats
 # ---------------------------------------------------------------------------
 
 
-async def test_skills_endpoint_lists_board_skills(client: TestClient) -> None:
-    payload = await (await client.get("/api/v1/skills")).json()
-    assert payload["skills"] == [{"name": "tdd", "description": "test first"}]
+async def test_skills_endpoint_is_not_exposed(client: TestClient) -> None:
+    resp = await client.get("/api/v1/skills")
+    assert resp.status == 404
 
 
 async def test_stats_endpoint_counts_created_issue(client: TestClient) -> None:

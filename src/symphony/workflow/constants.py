@@ -19,15 +19,16 @@ LINEAR_API_KEY_ENV = "LINEAR_API_KEY"
 JIRA_API_TOKEN_ENV = "JIRA_API_TOKEN"
 JIRA_EMAIL_ENV = "JIRA_EMAIL"
 
-DEFAULT_ACTIVE_STATES = ("Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn")
+DEFAULT_ACTIVE_STATES = ("Todo", "In Progress", "Verify", "Learn")
 DEFAULT_TERMINAL_STATES = (
-    "Closed",
-    "Cancelled",
-    "Canceled",
-    "Duplicate",
     "Human Review",
     "Done",
     "Archive",
+    "Blocked",
+    "Cancelled",
+    "Canceled",
+    "Closed",
+    "Duplicate",
 )
 DEFAULT_BOARD_ROOT_NAME = "board"
 DEFAULT_POLL_INTERVAL_MS = 30_000

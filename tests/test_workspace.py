@@ -137,7 +137,7 @@ async def test_after_create_failure_surfaces_stderr(tmp_path):
 
 
 # Regression guard for the cross-platform symlink helper embedded in
-# WORKFLOW.md / WORKFLOW.file.example.md / WORKFLOW.smoke.md. On Windows
+# WORKFLOW.md / WORKFLOW.file.example.md / examples/WORKFLOW.smoke.md. On Windows
 # Git Bash without admin/Developer Mode, `ln -s` silently copies the
 # source; the agent's edits then never propagate to the host board and
 # the tracker re-dispatches forever. The helper falls back to a Windows

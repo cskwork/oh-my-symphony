@@ -46,11 +46,12 @@ a Jira-style TUI you never have to leave your terminal for.
   renderer are all upstream — this fork is a thin layer that adds the four
   backends and the TUI.
 - **A real web app, not just a viewer.** The orchestrator port serves a
-  Linear-style board: register issues (with skills attached), drag cards
+  Linear-style board: register issues, drag cards
   between columns, add / delete / rename columns, edit each column's stage
-  prompt, pick feature / merge branches, pause / resume workers, and read a
-  dedicated stats page (tokens per day, cycle time per column, per-agent
-  totals). All edits round-trip into `WORKFLOW.md` with your comments intact.
+  prompt, pick feature / merge branches, pause / resume workers, skip Learn
+  when no wiki write-back is needed, and read a dedicated stats page (tokens
+  per day, cycle time per column, per-agent totals). All edits round-trip into
+  `WORKFLOW.md` with your comments intact.
 - **Operator-grade tooling out of the box.** `symphony doctor` catches the
   five most common first-run failures (port collisions, missing CLIs,
   placeholder URLs, unwritable workspaces, missing board directories) in one
@@ -79,11 +80,11 @@ a Jira-style TUI you never have to leave your terminal for.
   agent=codex  tracker=linear  workflow=WORKFLOW.md  lang=en   running=2  retrying=1   │  tokens in=84,200 out=27,640 total=111,840
                                                                                        │  rate-limits=requests_remaining=4823, tokens_remaining=1.2M
 
-╭── Todo (3) ──────╮ ╭── In Progress (2) ──╮ ╭── Review (1) ──╮ ╭── Done (2) ──╮ ╭── Archive (1) ──╮ ╭── detail ───────────────────────╮
-│  DEMO-120  P1    │ │  DEMO-104  ●  P1    │ │  DEMO-122  P3  │ │  DEMO-088    │ │  DEMO-074       │ │  DEMO-104                       │
-│  Migrate auth …  │ │  Fix race condi…    │ │  Doc: contri…  │ │  Drop dead-… │ │  Old experim…   │ │  Fix race condition in pagina…  │
-│  #backend …      │ │  turn 4  20,180t    │ │  #docs         │ │  DEMO-091    │ │                 │ │                                 │
-│                  │ │  Patched cursor…    │ ╰────────────────╯ │  Bump deps…  │ ╰─────────────────╯ │  state=In Progress              │
+╭── Todo [1/4] (3) ╮ ╭── In Progress [2/4] ╮ ╭── Verify [3/4] ╮ ╭── Learn [4/4] ╮ ╭── Done (2) ──╮ ╭── detail ───────────────────────╮
+│  DEMO-120 [1/4]  │ │  DEMO-104 [2/4] ●   │ │  DEMO-122 [3/4]│ │  DEMO-123     │ │  DEMO-088    │ │  DEMO-104 [2/4]                 │
+│  Migrate auth …  │ │  Fix race condi…    │ │  Review + QA   │ │  S skip       │ │  Drop dead-… │ │  Fix race condition in pagina…  │
+│  #backend …      │ │  turn 4  20,180t    │ │  #docs         │ │  Wiki notes   │ │  DEMO-091    │ │                                 │
+│                  │ │  Patched cursor…    │ ╰────────────────╯ ╰───────────────╯ │  Bump deps…  │ │  state=In Progress              │
 │  DEMO-111  ↻ P2  │ │                     │                    ╰──────────────╯                     │  runtime=running                │
 │  Refactor cach…  │ │  DEMO-098  ●  P2    │                                                         │  turn=4                         │
 │  retry #2  tur…  │ │  Add /api/sear…     │                                                         │  in=14,200  out=5,980           │
@@ -93,7 +94,7 @@ a Jira-style TUI you never have to leave your terminal for.
 │  blocked by D…   │                                                                                 ╰─────────────────────────────────╯
 ╰──────────────────╯
 
-q quit · r refresh · enter details · n new issue · s stats · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · c confirm done · P pause/resume · / filter · ?
+q quit · r refresh · enter details · n new · e edit · s stats · S skip Learn · P pause/resume · / filter · ?
 ```
 
 </details>
@@ -115,10 +116,11 @@ adds:
    Columns are tracker states; cards show the active agent, turn count, last
    event, and accumulated tokens. Cards are focusable, the mouse wheel
    scrolls each lane, `enter` opens a full-detail modal, `n` registers a new
-   ticket, and `s` opens the stats screen.
+   ticket with a multiline body, `e` edits the focused ticket, `S` skips Learn,
+   and `s` opens the stats screen.
 3. A **built-in web Kanban app** on the orchestrator port — issue CRUD with
-   per-ticket skills, drag-and-drop state moves, column add/delete/rename,
-   per-column prompt editing, branch policy, and a dedicated stats page.
+   drag-and-drop state moves, Learn skip, column add/delete/rename, per-column
+   prompt editing, branch policy, and a dedicated stats page.
 
 The orchestrator, scheduler, retry policy, workspace manager, tracker layer,
 and prompt renderer are unchanged from upstream — this fork is a thin layer
@@ -163,7 +165,7 @@ When creating file-board tickets from the CLI, use
 
 For file-board workflows, `agent.auto_triage_actionable_todo` defaults to
 `true`: a Todo ticket with a body and an `Acceptance Criteria` section moves to
-Explore with a one-line `## Triage` note without spending a model turn. Bug
+In Progress with a one-line `## Triage` note without spending a model turn. Bug
 tickets, blocked tickets, ambiguous tickets, and Linear trackers still use the
 Todo prompt.
 
@@ -291,8 +293,8 @@ Four blocks matter for first-run sanity:
 tracker:
   kind: file
   board_root: ./kanban
-  active_states: [Todo, "In Progress"]
-  terminal_states: [Done, Cancelled, Blocked]
+  active_states: [Todo, "In Progress", Verify, Learn]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
 
 workspace:
   root: ~/symphony_workspaces
@@ -315,6 +317,9 @@ prompts:
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
+    Learn: ./docs/symphony-prompts/file/stages/learn.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
 ```
 
 > ⚠ The shipped `WORKFLOW.example.md` / `WORKFLOW.file.example.md` default to
@@ -392,12 +397,12 @@ _Updated: 2026-05-16 14:22:31 UTC_
 |--------------|---------|
 | Todo         | OLV-005, OLV-006 |
 | In Progress  | OLV-002 (8m12s · 12k tok) |
-| Review       | OLV-001 |
+| Verify       | OLV-001 |
 | Done         | OLV-003, OLV-004 |
 
 ## Recent transitions
 - `2026-05-16 14:22:31Z`  **OLV-002**  Todo → In Progress
-- `2026-05-16 14:18:04Z`  **OLV-001**  In Progress → Review
+- `2026-05-16 14:18:04Z`  **OLV-001**  In Progress → Verify
 ```
 
 Override location or limits via `WORKFLOW.md` frontmatter (or `--progress-md-path`):
@@ -515,9 +520,10 @@ prompts:
   base: ./docs/symphony-prompts/file/base.md
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
-    Explore: ./docs/symphony-prompts/file/stages/explore.md
-    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
+    Learn: ./docs/symphony-prompts/file/stages/learn.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
 ```
 
 Symphony sends `base` plus only the prompt file for the ticket's current
@@ -526,7 +532,7 @@ state, keeping each turn smaller than the old all-stage prompt. If the
 the legacy fallback. Prompts are also editable in place from the web app's
 **Workflow** page — same files, no restart needed.
 
-## Skills — per-ticket instructions
+## Skills — frontmatter-only power user instructions
 
 Drop a skill next to `WORKFLOW.md` and attach it to any ticket:
 
@@ -542,10 +548,10 @@ skills: [tdd]
 ```
 
 When the ticket dispatches, each attached skill's body is appended to the
-first-turn prompt under `## Attached skills`. Attach skills from the web
-app's issue modal, the TUI `n` form, or by hand in the frontmatter — the
-same ticket works identically either way. Unknown skill names are surfaced
-to the agent as "not found" instead of silently dropped.
+first-turn prompt under `## Attached skills`. Skills are no longer exposed in
+the web/TUI issue forms; add them by hand in frontmatter when you need this
+advanced behavior. Unknown skill names are surfaced to the agent as "not
+found" instead of silently dropped.
 
 ---
 
@@ -562,13 +568,14 @@ symphony ./WORKFLOW.md --port 9999
 only). From the browser you can:
 
 - **Board** — create / edit / delete issues, drag cards between columns,
-  watch live run badges (turn count, tokens), pause / resume workers.
+  watch live run badges (turn count, tokens), pause / resume workers, and
+  skip Learn for tickets that do not need wiki write-back. The board defaults
+  to the four active agent lanes; use `All` to expand terminal lanes such as
+  `Human Review`, `Done`, `Blocked`, and `Archive`.
 - **Workflow** — add / delete / rename / reorder kanban columns and edit
   each column's stage prompt. Changes write back into `WORKFLOW.md`
   frontmatter with your comments preserved; tickets in renamed or removed
   columns migrate automatically.
-- **Skills** — see the `skills/<name>/SKILL.md` library; attach skills per
-  ticket so their instructions ride along in that ticket's agent prompt.
 - **Stats** — tokens per day, throughput, per-column dwell time, per-agent
   totals, average cycle time (from `.symphony/stats.jsonl`).
 - **Settings** — branch policy (feature base / merge target) from a real
@@ -583,10 +590,10 @@ JSON API endpoints:
 | POST/PATCH/DELETE | `/api/v1/issues[...]`  | Issue CRUD (file tracker)                    |
 | PUT    | `/api/v1/workflow/states`         | Column add / delete / rename / reorder       |
 | GET/PUT| `/api/v1/workflow/prompts/<state>`| Read / edit a column's stage prompt          |
-| GET    | `/api/v1/skills`                  | Available skills                             |
 | GET    | `/api/v1/stats?days=N`            | Aggregated run statistics                    |
 | POST   | `/api/v1/refresh`                 | Coalesced trigger of poll + reconcile        |
 | POST   | `/api/v1/<id>/pause` `/resume`    | Hold / release a running worker              |
+| POST   | `/api/v1/<id>/skip-learn`         | Move idle Learn ticket to Human Review       |
 
 ### CLI Kanban TUI (primary UI)
 

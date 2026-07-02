@@ -10,8 +10,8 @@ from __future__ import annotations
 import re
 
 
-AUTO_TRIAGE_TARGET_STATE = "Explore"
-AUTO_TRIAGE_NOTE = "Ticket is actionable; routing to Explore."
+AUTO_TRIAGE_TARGET_STATE = "In Progress"
+AUTO_TRIAGE_NOTE = "Ticket is actionable; routing to In Progress."
 _AUTO_TRIAGE_ACCEPTANCE_RE = re.compile(r"\bacceptance\s+criteria\b", re.IGNORECASE)
 _AUTO_TRIAGE_TRIAGE_RE = re.compile(r"^##\s+Triage\b", re.IGNORECASE | re.MULTILINE)
 
@@ -55,10 +55,8 @@ WAIT_AGE_BUMP_MIN = 10.0
 # `normalize_state` lowercases its input, so compare in lowercase.
 _REWIND_TRANSITIONS = frozenset(
     {
-        ("critic", "in progress"),
-        ("review", "in progress"),
-        ("qa", "in progress"),
-        ("in progress", "plan"),
+        ("verify", "in progress"),
+        ("learn", "in progress"),
     }
 )
 

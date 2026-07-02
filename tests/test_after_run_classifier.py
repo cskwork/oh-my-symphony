@@ -110,7 +110,7 @@ def test_docs_only_carve_out_clears_marker():
         "LICENSE.MIT",
         "NOTICE",
         "AGENTS.md",
-        "docs/symphony-prompts/file/stages/plan.md",
+        "docs/symphony-prompts/file/stages/verify.md",
     ):
         assert _classify(staged) == "", f"failed for: {staged!r}"
 

@@ -7,7 +7,7 @@
 #
 # What it does:
 #   1) Creates $WORKSPACE_ROOT/.symphony/{kanban,workspaces,prompts,logs}/
-#   2) Copies upstream 7-stage prompts from $SYMPHONY_HOME/docs/symphony-prompts/file/
+#   2) Copies upstream 4-stage prompts from $SYMPHONY_HOME/docs/symphony-prompts/file/
 #   3) Appends .symphony/ to $WORKSPACE_ROOT/.gitignore if missing
 #   4) Registers bidirectional permissions.additionalDirectories
 #      in both .claude/settings.local.json files (needs jq)
@@ -41,7 +41,7 @@ echo "[ok] created .symphony/ skeleton in $ABS_WORKSPACE_ROOT"
 SRC_PROMPTS="$ABS_SYMPHONY_HOME/docs/symphony-prompts/file"
 if [[ -d "$SRC_PROMPTS" ]]; then
   cp -Rf "$SRC_PROMPTS/." "$ABS_WORKSPACE_ROOT/.symphony/prompts/"
-  echo "[ok] copied upstream 7-stage prompts into .symphony/prompts/"
+  echo "[ok] copied upstream 4-stage prompts into .symphony/prompts/"
 else
   echo "[warn] upstream prompts not found at $SRC_PROMPTS — skipping prompt copy" >&2
 fi

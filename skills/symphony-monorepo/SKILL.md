@@ -1,6 +1,6 @@
 ---
 name: symphony-monorepo
-description: Use when bootstrapping Symphony into an existing monorepo (multi-service Git repo) so each ticket gets an isolated git worktree workspace, the upstream 7-stage prompts are installed, and Claude Code permissions are wired up bidirectionally. Triggers on "set up symphony in my monorepo", "bootstrap symphony workspaces", "WORKFLOW.md per service", "worktree hooks", "symphony monorepo".
+description: Use when bootstrapping Symphony into an existing monorepo (multi-service Git repo) so each ticket gets an isolated git worktree workspace, the upstream 4-stage prompts are installed, and Claude Code permissions are wired up bidirectionally. Triggers on "set up symphony in my monorepo", "bootstrap symphony workspaces", "WORKFLOW.md per service", "worktree hooks", "symphony monorepo".
 ---
 
 # Symphony for Monorepos
@@ -15,7 +15,7 @@ For operator-level usage (creating tickets, running TUI, triaging failures) see 
 |------|-----|
 | `workspace.root` inside the git repo → Symphony tries to init nested repo → `returncode=128` | Use a sibling `.symphony/workspaces/` and a worktree-based `after_create` hook |
 | Spawned child Claude inherits parent hooks/skills → 47k token cache_creation per spawn + `read_timeout` storms | `--setting-sources project` on `claude.command` |
-| Backend worktree cannot Read/Grep sibling services → Plan stage hallucinates | `--add-dir "$SYMPHONY_WORKFLOW_DIR"` (monorepo root, not narrower) |
+| Backend worktree cannot Read/Grep sibling services -> In Progress plan hallucinates | `--add-dir "$SYMPHONY_WORKFLOW_DIR"` (monorepo root, not narrower) |
 | Jinja `{{ issue.identifier }}` evaluates as literal inside hook shell | Use `$(basename "$PWD")` for ticket id, `$SYMPHONY_WORKFLOW_DIR` for repo root |
 | Same branch already checked out elsewhere → worktree add fails or resets work | Pre-check `git worktree list --porcelain`, skip if occupied |
 | Claude Code blocks file access outside cwd when symphony repo is sibling to workspace | Bidirectional `permissions.additionalDirectories` in `.claude/settings.local.json` |
@@ -37,7 +37,7 @@ WORKSPACE_ROOT=/path/to/your/monorepo \
 What the script does (all idempotent):
 
 1. Creates `$WORKSPACE_ROOT/.symphony/{kanban,workspaces,prompts,logs}/`
-2. Copies upstream 7-stage prompts from `$SYMPHONY_HOME/docs/symphony-prompts/file/` into `.symphony/prompts/`
+2. Copies upstream 4-stage prompts from `$SYMPHONY_HOME/docs/symphony-prompts/file/` into `.symphony/prompts/`
 3. Appends `.symphony/` to `$WORKSPACE_ROOT/.gitignore` if missing
 4. Registers bidirectional `permissions.additionalDirectories` in both `.claude/settings.local.json` files so Claude Code can read across the two repos
 5. Symlinks this skill (and the host repo's other symphony skills) into `$WORKSPACE_ROOT/.claude/skills/` so Claude Code discovers them
@@ -52,7 +52,7 @@ One `WORKFLOW.<svc>.md` per service you want orchestrated. Key fields:
 tracker:
   kind: file
   board_root: ./.symphony/kanban
-  active_states: [Todo, Explore, "In Progress", Review, QA, Learn]
+  active_states: [Todo, "In Progress", Verify, Learn]
   terminal_states: [Closed, Cancelled, Duplicate, Done, Archive, Blocked]
   archive_state: Archive
   archive_after_days: 30

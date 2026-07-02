@@ -12,9 +12,13 @@ from __future__ import annotations
 STATE_COLOR = {
     "todo": "bright_black",
     "in progress": "cyan",
+    "verify": "yellow",
+    "learn": "bright_magenta",
+    "human review": "magenta",
     "blocked": "red",
     "review": "yellow",
     "done": "green",
+    "archive": "bright_black",
     "cancelled": "magenta",
     "canceled": "magenta",
     "duplicate": "magenta",

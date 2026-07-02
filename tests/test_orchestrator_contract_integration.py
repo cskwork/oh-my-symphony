@@ -33,13 +33,13 @@ Test taxonomy
 -------------
 
 ``test_contract_passes_when_disk_has_required_sections``
-    Happy path: ticket file already contains Plan / Acceptance Tests /
-    Done Signals before the agent transitions Plan → Review. Contract
-    must pass; no ``## Contract Failure`` note may be appended.
+    Happy path: ticket file already contains In Progress contract sections
+    before the agent transitions In Progress -> Verify. Contract must pass;
+    no ``## Contract Failure`` note may be appended.
 
 ``test_contract_fails_when_disk_missing_sections``
     Sad path: ticket file is missing ``## Done Signals``. Contract must
-    fail and the orchestrator must rewind the ticket back to ``Plan``.
+    fail and the orchestrator must rewind the ticket back to ``In Progress``.
 
 The fake backend used here mutates the ticket file on disk inside
 ``run_turn`` — the same shape the real agents have (Write tool → file)
@@ -82,7 +82,7 @@ from symphony.workflow import (
 
 
 # ---------------------------------------------------------------------------
-# Plan-stage body fixtures
+# In Progress and Verify body fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -112,7 +112,7 @@ def _has_contract_warning_heading(body: str) -> bool:
     return _CONTRACT_WARNING_HEADING_RE.search(body) is not None
 
 
-_PLAN_BODY_COMPLETE = """## Plan
+_IN_PROGRESS_BODY_COMPLETE = """## Plan
 
 Step 1 — wire the new validator into the forward-transition path.
 Step 2 — surface a `## Contract Failure` note when the producing stage
@@ -127,24 +127,52 @@ under-produces.
 
 - pytest -q green
 - one release-bumping commit landed on `main`
+
+## Implementation
+
+- wired the validator into the phase transition path
+
+## Self-Critique
+
+- checked stale-body and empty-body paths
 """
 
 
-_PLAN_BODY_MISSING_DONE_SIGNALS = """## Plan
+_IN_PROGRESS_BODY_MISSING_DONE_SIGNALS = """## Plan
 
 Step 1 — wire the new validator into the forward-transition path.
 
 ## Acceptance Tests
 
 - existing phase-transition tests stay green
+
+## Implementation
+
+- wired the validator into the phase transition path
+
+## Self-Critique
+
+- checked stale-body and empty-body paths
 """
 
 
-# QA body that satisfies the presence + evidence contract (evidence cells
-# are `n/a`, so the hard path-existence check is a no-op) but carries a
-# non-passing AC Scorecard row — the soft S2 warning path: a
-# `## Contract Warning` note is appended and the ticket still advances.
-_QA_BODY_SCORECARD_FAIL = """## QA Evidence
+_VERIFY_BODY_SCORECARD_FAIL = """## Security Audit
+
+| check | verdict | evidence |
+|--------|--------|----------|
+| secrets | pass | n/a |
+| input-validation | pass | n/a |
+| injection | pass | n/a |
+| xss | pass | n/a |
+| csrf | pass | n/a |
+| authz | pass | n/a |
+| rate-limit | pass | n/a |
+
+## Review
+
+diff matches the plan
+
+## QA Evidence
 
 - booted the service and replayed the acceptance payloads
 
@@ -154,6 +182,10 @@ _QA_BODY_SCORECARD_FAIL = """## QA Evidence
 |--------|--------|--------|----------|
 | happy path returns 200 | curl | pass | n/a |
 | edge case rejects bad input | curl | fail | n/a |
+
+## Merge Status
+
+merged to main with --no-ff
 """
 
 
@@ -418,8 +450,8 @@ def test_contract_passes_when_disk_has_required_sections(
 ) -> None:
     """Happy path against a real FileBoardTracker.
 
-    The ticket on disk already has all Plan-contract sections before the
-    agent transitions to Review. Contract evaluation MUST read the disk
+    The ticket on disk already has all In Progress contract sections before the
+    agent transitions to Verify. Contract evaluation MUST read the disk
     body and pass; no rewind, no ``## Contract Failure`` note.
 
     The 0.6.7 release shipped a path where ``_refresh_issue_state``
@@ -430,24 +462,26 @@ def test_contract_passes_when_disk_has_required_sections(
     """
     board_root = tmp_path / "board"
     ticket_path = _write_initial_ticket(
-        board_root, state="Plan", body=_PLAN_BODY_COMPLETE
+        board_root, state="In Progress", body=_IN_PROGRESS_BODY_COMPLETE
     )
     cfg = _make_file_tracker_config(
         board_root=board_root,
-        active_states=("Plan", "Review", "QA"),
-        max_turns=2,
-    )
+            active_states=("In Progress", "Verify", "Learn"),
+            max_turns=2,
+        )
 
     _install_file_tracker_backend(
         monkeypatch,
         ticket_path=ticket_path,
-        transitions=[("Review", _PLAN_BODY_COMPLETE)],
+        transitions=[("Verify", _IN_PROGRESS_BODY_COMPLETE)],
     )
 
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
+    (workspace_path / "docs" / "MT-1" / "work").mkdir(parents=True)
+    (workspace_path / "docs" / "MT-1" / "work" / "notes.md").write_text("ok")
     o = _orch(workspace_path)
-    issue = _make_issue_from_disk("Plan", _PLAN_BODY_COMPLETE)
+    issue = _make_issue_from_disk("In Progress", _IN_PROGRESS_BODY_COMPLETE)
     _seed_running_entry(o, issue, workspace_path)
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
@@ -461,10 +495,8 @@ def test_contract_passes_when_disk_has_required_sections(
         "False ## Contract Failure heading appended despite ticket "
         f"containing all required Plan sections. Body was:\n{final_body}"
     )
-    # State must have advanced — the contract guard, when working, does
-    # NOT rewind back to Plan.
-    assert final_front["state"] != "Plan", (
-        "Contract guard rewound the ticket back to Plan even though every "
+    assert final_front["state"] != "In Progress", (
+        "Contract guard rewound the ticket back to In Progress even though every "
         "required section is present on disk."
     )
 
@@ -475,32 +507,34 @@ def test_contract_fails_when_disk_missing_sections(
     """Sad path against a real FileBoardTracker.
 
     The ticket is missing ``## Done Signals`` when the agent transitions
-    Plan → Review. The contract MUST fail, the orchestrator MUST append
+    In Progress -> Verify. The contract MUST fail, the orchestrator MUST append
     a ``## Contract Failure`` note, AND the ticket state MUST revert to
-    ``Plan``. This guards the rewind path against silent breakage in
+    ``In Progress``. This guards the rewind path against silent breakage in
     addition to the happy path above.
     """
     board_root = tmp_path / "board"
     ticket_path = _write_initial_ticket(
-        board_root, state="Plan", body=_PLAN_BODY_MISSING_DONE_SIGNALS
+        board_root, state="In Progress", body=_IN_PROGRESS_BODY_MISSING_DONE_SIGNALS
     )
     cfg = _make_file_tracker_config(
         board_root=board_root,
-        active_states=("Plan", "Review", "QA"),
+        active_states=("In Progress", "Verify", "Learn"),
         max_turns=2,
     )
 
     _install_file_tracker_backend(
         monkeypatch,
         ticket_path=ticket_path,
-        # Agent moves to Review without producing Done Signals.
-        transitions=[("Review", _PLAN_BODY_MISSING_DONE_SIGNALS)],
+        # Agent moves to Verify without producing Done Signals.
+        transitions=[("Verify", _IN_PROGRESS_BODY_MISSING_DONE_SIGNALS)],
     )
 
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
+    (workspace_path / "docs" / "MT-1" / "work").mkdir(parents=True)
+    (workspace_path / "docs" / "MT-1" / "work" / "notes.md").write_text("ok")
     o = _orch(workspace_path)
-    issue = _make_issue_from_disk("Plan", _PLAN_BODY_MISSING_DONE_SIGNALS)
+    issue = _make_issue_from_disk("In Progress", _IN_PROGRESS_BODY_MISSING_DONE_SIGNALS)
     _seed_running_entry(o, issue, workspace_path)
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
@@ -510,8 +544,8 @@ def test_contract_fails_when_disk_missing_sections(
         "Contract guard did not append a ## Contract Failure heading "
         "even though `## Done Signals` was absent. Body was:\n" + final_body
     )
-    assert final_front["state"] == "Plan", (
-        "Contract guard did not rewind the ticket back to Plan after a "
+    assert final_front["state"] == "In Progress", (
+        "Contract guard did not rewind the ticket back to In Progress after a "
         f"failed contract. Final state was {final_front['state']!r}."
     )
 
@@ -521,34 +555,34 @@ def test_qa_scorecard_fail_warns_without_rewind(
 ) -> None:
     """Soft S2 warning path end-to-end against a real FileBoardTracker.
 
-    A QA ticket that passes the presence + evidence contract but carries a
+    A Verify ticket that passes the presence + evidence contract but carries a
     ``fail`` AC Scorecard row must NOT rewind. The orchestrator's
     ``elif contract.warnings:`` branch appends a ``## Contract Warning``
-    note and lets the ticket advance past QA. The contracts-layer unit
+    note and lets the ticket advance past Verify. The contracts-layer unit
     tests cover ``_scorecard_all_pass``; this guards the orchestrator
     wiring (the core.py branch) against the same stale-body / phantom
     refresh class of bug the rewind tests above guard.
     """
     board_root = tmp_path / "board"
     ticket_path = _write_initial_ticket(
-        board_root, state="QA", body=_QA_BODY_SCORECARD_FAIL
+        board_root, state="Verify", body=_VERIFY_BODY_SCORECARD_FAIL
     )
     cfg = _make_file_tracker_config(
         board_root=board_root,
-        active_states=("QA", "Learn"),
+        active_states=("Verify", "Learn"),
         max_turns=2,
     )
 
     _install_file_tracker_backend(
         monkeypatch,
         ticket_path=ticket_path,
-        transitions=[("Learn", _QA_BODY_SCORECARD_FAIL)],
+        transitions=[("Learn", _VERIFY_BODY_SCORECARD_FAIL)],
     )
 
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     o = _orch(workspace_path)
-    issue = _make_issue_from_disk("QA", _QA_BODY_SCORECARD_FAIL)
+    issue = _make_issue_from_disk("Verify", _VERIFY_BODY_SCORECARD_FAIL)
     _seed_running_entry(o, issue, workspace_path)
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
@@ -562,7 +596,7 @@ def test_qa_scorecard_fail_warns_without_rewind(
         "Soft scorecard warning incorrectly escalated to a "
         "## Contract Failure rewind."
     )
-    assert final_front["state"] != "QA", (
+    assert final_front["state"] != "Verify", (
         "Soft scorecard warning incorrectly rewound the ticket instead of "
-        f"advancing past QA. Final state was {final_front['state']!r}."
+        f"advancing past Verify. Final state was {final_front['state']!r}."
     )

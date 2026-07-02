@@ -129,8 +129,8 @@ def test_should_dispatch_basic():
     assert orch._should_dispatch(issue, cfg) is True
 
 
-def test_auto_triage_actionable_file_todo_moves_to_explore_without_dispatch(monkeypatch):
-    cfg = _make_config(tracker_kind="file", active_states=("Todo", "Explore", "In Progress"))
+def test_auto_triage_actionable_file_todo_moves_to_in_progress_without_dispatch(monkeypatch):
+    cfg = _make_config(tracker_kind="file", active_states=("Todo", "In Progress", "Verify"))
     issue = _issue(
         "MT-1",
         description="## Request\nBuild it.\n\n## Acceptance Criteria\n1. It works.",
@@ -167,18 +167,18 @@ def test_auto_triage_actionable_file_todo_moves_to_explore_without_dispatch(monk
     asyncio.run(orch._on_tick())
 
     assert dispatched == []
-    assert appended == [("MT-1", "Triage", "Ticket is actionable; routing to Explore.")]
-    assert moved == [("MT-1", "Explore")]
+    assert appended == [("MT-1", "Triage", "Ticket is actionable; routing to In Progress.")]
+    assert moved == [("MT-1", "In Progress")]
 
 
 def test_auto_triage_skips_already_triaged_todo(monkeypatch):
-    cfg = _make_config(tracker_kind="file", active_states=("Todo", "Explore", "In Progress"))
+    cfg = _make_config(tracker_kind="file", active_states=("Todo", "In Progress", "Verify"))
     issue = _issue(
         "MT-1",
         description=(
             "## Request\nBuild it.\n\n"
             "## Acceptance Criteria\n1. It works.\n\n"
-            "## Triage\nTicket is actionable; routing to Explore."
+            "## Triage\nTicket is actionable; routing to In Progress."
         ),
     )
     orch = _orch()
@@ -2484,6 +2484,55 @@ def test_normal_exit_does_not_continue_after_total_turn_budget():
         assert issue.id not in orch._retry
         assert issue.id in orch._turn_budget_exhausted
         assert not orch._eligible(issue, cfg, owning_retry=False)
+
+    asyncio.run(_run())
+
+
+def test_turn_budget_exhaustion_survives_next_tick_claim_prune(monkeypatch):
+    """A budget-exhausted active ticket must not redispatch next poll.
+
+    `_claimed` is intentionally pruned when no worker/retry owns the ticket,
+    but `_turn_budget_exhausted` is the durable in-process guard. Pruning both
+    lets a max_total_turns ticket loop forever until restart or operator action.
+    """
+
+    orch = _orch()
+    issue = _issue("MT-BUDGET-LOOP", state="In Progress")
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress",),
+        terminal_states=("Done", "Blocked"),
+    )
+    cfg = replace(
+        cfg,
+        agent=replace(cfg.agent, max_turns=1, max_total_turns=1),
+    )
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(captured_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(captured_issue.identifier)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._turn_budget_exhausted.add(issue.id)
+        orch._claimed.add(issue.id)
+        monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+        monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+        monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(orch, "_archive_sweep", _archive)
+        monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+        await orch._on_tick()
+
+        assert dispatched == []
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id not in orch._claimed
 
     asyncio.run(_run())
 

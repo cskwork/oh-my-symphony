@@ -1138,6 +1138,7 @@ async def test_n_opens_new_issue_modal_and_creates_ticket(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     from textual.widgets import Input as TextualInput
+    from textual.widgets import TextArea
 
     from symphony.tui import NewIssueScreen
 
@@ -1150,7 +1151,7 @@ async def test_n_opens_new_issue_modal_and_creates_ticket(
         await pilot.pause()
         assert isinstance(app.screen, NewIssueScreen)
         app.screen.query_one("#ni-title", TextualInput).value = "wire the modal"
-        app.screen.query_one("#ni-skills", TextualInput).value = "tdd, tdd"
+        app.screen.query_one("#ni-description", TextArea).text = "line one\nline two"
         await pilot.pause()
         await pilot.click("#ni-create")
         await pilot.pause()
@@ -1161,7 +1162,9 @@ async def test_n_opens_new_issue_modal_and_creates_ticket(
     text = ticket.read_text(encoding="utf-8")
     assert "title: wire the modal" in text
     assert "state: Todo" in text
-    assert "- tdd" in text
+    assert "line one" in text
+    assert "line two" in text
+    assert "skills:" not in text
 
 
 @pytest.mark.asyncio
