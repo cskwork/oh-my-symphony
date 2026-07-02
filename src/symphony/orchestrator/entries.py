@@ -27,6 +27,7 @@ class RunningEntry:
     workspace_path: Path
     attempt_kind: str = "initial"
     agent_kind: str = ""
+    run_id: str = ""
     # Live backend driver for this attempt. Populated by `_run_agent_attempt`
     # immediately after `build_backend(...)` so `_on_codex_event` can route
     # the stall-progress predicate through `backend.is_progress_event(...)`

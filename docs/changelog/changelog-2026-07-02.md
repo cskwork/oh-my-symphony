@@ -236,3 +236,39 @@ tabs, and clearer terminal-state wording.
   directly while leaving `All` as the full editable board.
 - Rejected: duplicating README board text. The existing active-lane sentences
   were refined in English and Korean to name **Review and parked**.
+
+---
+
+# 2026-07-02 - crash-safe orchestrator state and leases
+
+## Decision
+
+Add a SQLite WAL run registry at `.symphony/state.db` and use it as a
+single-node dispatch lease before worker task creation. `_running` remains the
+live in-process source for task handles, but a fresh orchestrator now refuses
+to dispatch a ticket while an unexpired persisted lease exists. Active workers
+heartbeat their lease on poll/progress, and worker exit or force-eject marks
+the run terminal.
+
+- Rejected: starting with multi-node HA. Symphony still uses local worktrees,
+  local hooks, and file-backed tickets, so a single-node crash-safe lease closes
+  the immediate duplicate-dispatch failure without pretending the whole system
+  is distributed-safe.
+- Rejected: tracker write locks in the same patch. Board read-modify-write
+  locking is still needed, but mixing it with worker leases would make two
+  independent concurrency models harder to verify.
+- Rejected: JSONL run state. The registry needs "claim if no active lease"
+  semantics; SQLite `BEGIN IMMEDIATE` plus WAL gives that atomically with no new
+  dependency.
+- Not implemented yet: reattaching live workers after restart. Current workers
+  are in-process asyncio tasks, so a hard process crash leaves no task to
+  reattach. The registry records run/workspace metadata so a later recovery
+  slice can decide whether to reclaim a worktree or resume an external backend.
+
+## Verification
+
+- `PYTHONPATH=src pytest -q tests/test_run_registry.py tests/test_orchestrator_dispatch.py -k 'run_registry or persisted_lease or worker_exit_releases_persisted_lease'` failed before implementation on missing `symphony.orchestrator.run_registry`.
+- `.venv/bin/python -m pytest -q tests/test_run_registry.py tests/test_orchestrator_dispatch.py -k 'run_registry or persisted_lease or worker_exit_releases_persisted_lease'` -> 5 passed, 89 deselected.
+- `.venv/bin/python -m pytest -q tests/test_run_registry.py tests/test_orchestrator_dispatch.py` -> 94 passed.
+- `.venv/bin/symphony doctor ./WORKFLOW.md` -> all PASS.
+- `.venv/bin/python -m pytest -q` -> 871 passed, 2 skipped.

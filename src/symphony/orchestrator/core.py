@@ -94,6 +94,7 @@ from .helpers import (
     _utc_iso_z,
 )
 from .parsing import _parse_findings_rows, _parse_touched_files
+from .run_registry import RunRegistry
 
 
 # Parent-package indirection. ``_pkg.build_backend`` (and the two other
@@ -174,6 +175,7 @@ class Orchestrator:
         # once the workflow dir is known; every record call is failure-
         # tolerant inside StatsStore, so hooks never guard beyond None.
         self._stats: StatsStore | None = None
+        self._run_registry: RunRegistry | None = None
 
     # ------------------------------------------------------------------
     # public accessors for API / TUI layers
@@ -186,6 +188,71 @@ class Orchestrator:
     @property
     def stats(self) -> StatsStore | None:
         return self._stats
+
+    def _ensure_run_registry(self, cfg: ServiceConfig) -> None:
+        path = cfg.workflow_path.parent / ".symphony" / "state.db"
+        if self._run_registry is not None and self._run_registry.path == path:
+            return
+        if self._run_registry is not None:
+            self._run_registry.close()
+        self._run_registry = RunRegistry(path)
+        expired = self._run_registry.expire_stale()
+        if expired:
+            log.info("run_leases_expired_on_start", count=expired, path=str(path))
+
+    def _has_active_run_lease(self, issue_id: str) -> bool:
+        if self._run_registry is None:
+            return False
+        return self._run_registry.has_active_lease(issue_id)
+
+    def _heartbeat_run_lease(
+        self, issue_id: str, entry: RunningEntry, *, progress: datetime | None = None
+    ) -> None:
+        if self._run_registry is None or not entry.run_id:
+            return
+        self._run_registry.heartbeat(
+            issue_id=issue_id,
+            run_id=entry.run_id,
+            progress_at=progress,
+        )
+
+    def _finish_run_lease(
+        self, issue_id: str, entry: RunningEntry, status: str
+    ) -> None:
+        if self._run_registry is None or not entry.run_id:
+            return
+        self._run_registry.complete_run(
+            issue_id=issue_id,
+            run_id=entry.run_id,
+            status=status,
+        )
+
+    def _try_acquire_run_lease(
+        self,
+        *,
+        issue: Issue,
+        workspace_path: Path,
+        attempt: int | None,
+        attempt_kind: str,
+        agent_kind: str,
+    ) -> str | None:
+        if self._run_registry is None:
+            return ""
+        run_id = self._run_registry.acquire_run(
+            issue,
+            workspace_path=workspace_path,
+            attempt=attempt,
+            attempt_kind=attempt_kind,
+            agent_kind=agent_kind,
+        )
+        if run_id:
+            return run_id
+        log.info(
+            "dispatch_lease_held",
+            issue_id=issue.id,
+            issue_identifier=issue.identifier,
+        )
+        return None
 
     # ------------------------------------------------------------------
     # public lifecycle
@@ -218,6 +285,7 @@ class Orchestrator:
         self._stats = stats_store_for(
             cfg.workflow_path.parent / ".symphony" / "stats.jsonl"
         )
+        self._ensure_run_registry(cfg)
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
 
@@ -253,6 +321,9 @@ class Orchestrator:
         self._paused_issue_ids.clear()
         self._pause_events.clear()
         self._turn_budget_exhausted.clear()
+        if self._run_registry is not None:
+            self._run_registry.close()
+            self._run_registry = None
 
     # ------------------------------------------------------------------
     # observers (§13)
@@ -819,6 +890,13 @@ class Orchestrator:
             )
             self._workspace_manager.update_reuse_policy(cfg.workspace_reuse_policy)
             self._workspace_manager.update_hook_env(_branch_hook_env(cfg))
+        self._ensure_run_registry(cfg)
+        for issue_id, entry in list(self._running.items()):
+            self._heartbeat_run_lease(issue_id, entry)
+        if self._run_registry is not None:
+            expired = self._run_registry.expire_stale()
+            if expired:
+                log.info("run_leases_expired", count=expired)
 
         await self._reconcile_running(cfg)
         # G1 — drop sticky locks for tickets no longer in flight. `_claimed`
@@ -1055,6 +1133,8 @@ class Orchestrator:
         false-negative loop where the retry timer keeps rescheduling itself.
         """
         if issue.id in self._running:
+            return False
+        if self._has_active_run_lease(issue.id):
             return False
         if not owning_retry and issue.id in self._claimed:
             return False
@@ -1393,16 +1473,33 @@ class Orchestrator:
         if existing_retry is not None:
             existing_retry.timer_handle.cancel()
 
+        workspace_path = (
+            self._workspace_manager.path_for(issue.identifier)
+            if self._workspace_manager
+            else Path("/")
+        )
+        resolved_attempt_kind = attempt_kind or (
+            "retry" if attempt is not None else "initial"
+        )
+        agent_kind = _requested_agent_kind(issue) or cfg.agent.kind
+        run_id = self._try_acquire_run_lease(
+            issue=issue,
+            workspace_path=workspace_path,
+            attempt=attempt,
+            attempt_kind=resolved_attempt_kind,
+            agent_kind=agent_kind,
+        )
+        if run_id is None:
+            return
         entry = RunningEntry(
             issue=issue,
             started_at=datetime.now(timezone.utc),
             retry_attempt=attempt,
             worker_task=None,
-            workspace_path=self._workspace_manager.path_for(issue.identifier)
-            if self._workspace_manager
-            else Path("/"),
-            attempt_kind=attempt_kind or ("retry" if attempt is not None else "initial"),
-            agent_kind=_requested_agent_kind(issue) or cfg.agent.kind,
+            workspace_path=workspace_path,
+            attempt_kind=resolved_attempt_kind,
+            agent_kind=agent_kind,
+            run_id=run_id,
         )
         self._running[issue.id] = entry
         self._claimed.add(issue.id)
@@ -1414,6 +1511,7 @@ class Orchestrator:
         except Exception:
             self._running.pop(issue.id, None)
             self._claimed.discard(issue.id)
+            self._finish_run_lease(issue.id, entry, "dispatch_failed")
             raise
         entry.worker_task = worker_task
         worker_task.add_done_callback(
@@ -2392,6 +2490,11 @@ class Orchestrator:
             is_progress = True
         if is_progress:
             entry.last_progress_timestamp = entry.last_codex_timestamp
+            self._heartbeat_run_lease(
+                issue_id,
+                entry,
+                progress=entry.last_progress_timestamp,
+            )
         # Rate limits.
         rl = event.get("rate_limits")
         if isinstance(rl, dict):
@@ -2682,6 +2785,7 @@ class Orchestrator:
         )
         if entry is None:
             return
+        self._finish_run_lease(issue_id, entry, reason)
         elapsed = (datetime.now(timezone.utc) - entry.started_at).total_seconds()
         self._totals.seconds_running += elapsed
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
@@ -2908,6 +3012,7 @@ class Orchestrator:
         """
         self._running.pop(issue_id, None)
         self._claimed.discard(issue_id)
+        self._finish_run_lease(issue_id, entry, "force_ejected_zombie")
         pause_event = self._pause_events.pop(issue_id, None)
         if pause_event is not None and not pause_event.is_set():
             pause_event.set()
@@ -3155,6 +3260,8 @@ class Orchestrator:
     async def _reconcile_running(self, cfg: ServiceConfig) -> None:
         # Part A: stall detection + force-eject of zombie workers.
         _, _, stall_timeout_ms = cfg.backend_timeouts()
+        for issue_id, entry in list(self._running.items()):
+            self._heartbeat_run_lease(issue_id, entry)
         if stall_timeout_ms > 0:
             now = datetime.now(timezone.utc)
             for issue_id, entry in list(self._running.items()):

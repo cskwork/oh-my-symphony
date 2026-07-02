@@ -380,6 +380,7 @@ import asyncio
 from datetime import timedelta
 
 from symphony.orchestrator import STALL_FORCE_EJECT_GRACE_S
+from symphony.orchestrator.run_registry import RunRegistry
 
 
 def test_reconcile_force_ejects_zombie_after_grace():
@@ -421,6 +422,83 @@ def test_reconcile_force_ejects_zombie_after_grace():
     assert zombie.id not in orch._claimed, "claim should be released"
     assert zombie.id in orch._retry, "force-eject must schedule a retry"
     assert orch._retry[zombie.id].error == "force_ejected_zombie"
+
+
+def test_persisted_lease_blocks_fresh_orchestrator_dispatch(tmp_path, monkeypatch):
+    """A crash-restarted process must not ignore another live lease."""
+    cfg = _make_config(workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws")
+    issue = _issue("MT-1", state="Todo")
+    state_db = tmp_path / ".symphony" / "state.db"
+
+    async def _parked_worker(_issue, _attempt, _cfg) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_record_agent_kind",
+        staticmethod(lambda _cfg, _identifier, _agent_kind: None),
+    )
+
+    async def _run() -> None:
+        first = _orch()
+        first._loop = asyncio.get_running_loop()
+        first._run_registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+        monkeypatch.setattr(first, "_run_agent_attempt", _parked_worker)
+
+        first._dispatch(issue, cfg, attempt=None)
+        task = first._running[issue.id].worker_task
+        assert task is not None
+
+        restarted = _orch()
+        restarted._run_registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+        assert restarted._should_dispatch(issue, cfg) is False
+
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    asyncio.run(_run())
+
+
+def test_worker_exit_releases_persisted_lease(tmp_path, monkeypatch):
+    cfg = _make_config(workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws")
+    issue = _issue("MT-1", state="Todo")
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db", lease_ttl=timedelta(minutes=5))
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+        now=datetime.now(timezone.utc),
+    )
+    assert run_id
+
+    async def _run() -> None:
+        orch = _orch()
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        monkeypatch_cfg = replace(cfg, agent=replace(cfg.agent, max_turns=20))
+        monkeypatch.setattr(orch._workflow_state, "current", lambda: monkeypatch_cfg)
+        orch._running[issue.id] = RunningEntry(
+            issue=issue,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=tmp_path / "ws" / issue.identifier,
+            run_id=run_id,
+        )
+
+        await orch._on_worker_exit_impl(issue.id, "normal", None)
+        for retry in list(orch._retry.values()):
+            retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+    assert registry.has_active_lease(issue.id, now=datetime.now(timezone.utc)) is False
+    assert registry.get_run(run_id).status == "normal"
 
 
 def test_reconcile_first_stall_only_cancels():
