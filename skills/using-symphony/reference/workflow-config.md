@@ -32,7 +32,7 @@ hooks:
     echo "run finished at $(date)"
 
 agent:
-  kind: claude          # codex | claude | gemini | pi
+  kind: claude          # codex | claude | gemini | opencode | pi
   max_concurrent_agents: 1
   max_turns: 20
 
@@ -65,9 +65,10 @@ Set `agent.kind`:
 - **`codex`** — Codex `app-server`. Best for multi-turn JSON-RPC sessions; most mature backend. Long-running stdio JSON-RPC connection; one process for the whole run.
 - **`claude`** — Claude Code. Fresh subprocess per turn with `--resume <session-id>` from turn 2 onward. NDJSON event stream.
 - **`gemini`** — Gemini CLI. Fresh subprocess per turn with JSON output; turn 1 uses a Symphony-minted `--session-id <uuid>` and same-state continuation turns use `--resume <uuid>`. State transitions rebuild the backend and start a fresh Gemini session.
+- **`opencode`** — OpenCode CLI (`opencode run --format json --auto`). Fresh subprocess per turn; Symphony passes the prompt as the documented `message` argument and adds `--session <id>` on continuation turns after OpenCode reports a session id. Usage parsing is best-effort from JSON events.
 - **`pi`** — Pi coding-agent (`pi --mode json -p ""`). Per-turn subprocess with `--session <id>` resume from turn 2 onward; JSONL events. Multiplexes Anthropic / OpenAI / Gemini / Bedrock backends behind one CLI — useful when you want to swap LLM providers without changing Symphony config. Auth: sign in once with `pi` → `/login` (OAuth); credentials cached at `~/.pi/agent/auth.json` and inherited by every subprocess Symphony spawns. `symphony doctor` warns if the auth file is missing.
 
-Each backend reads its own block (`codex`, `claude`, `gemini`, `pi`); the
+Each backend reads its own block (`codex`, `claude`, `gemini`, `opencode`, `pi`); the
 others are ignored. The `codex.linear_graphql` client tool is only
 advertised when `agent.kind: codex`.
 

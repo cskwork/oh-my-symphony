@@ -139,6 +139,7 @@ For other agents:
 
 - Codex: `workspace-write` covers cwd-external reads by default — no extra flag needed.
 - Gemini: `--skip-trust` for non-interactive mode.
+- OpenCode: no special flag; Symphony passes the prompt as `opencode run`'s `message` argument.
 - Pi: no special flag.
 
 ## 5. Bidirectional Claude Code permissions

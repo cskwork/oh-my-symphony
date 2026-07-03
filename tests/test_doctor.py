@@ -78,6 +78,20 @@ def test_agent_cli_pass_for_python_mock(tmp_path: Path) -> None:
     assert "python" in result.message
 
 
+def test_agent_cli_pass_for_opencode_kind(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: opencode }
+        opencode: { command: python -m symphony.mock_codex }
+        """,
+    )
+    result = check_agent_cli(cfg)
+    assert result.status == "pass"
+    assert "python" in result.message
+
+
 def test_agent_cli_fail_for_missing_binary(tmp_path: Path) -> None:
     cfg = _build_cfg(
         tmp_path,

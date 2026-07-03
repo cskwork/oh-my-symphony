@@ -1,7 +1,7 @@
 """SPEC §4.1.3, §6.4 — frozen typed config view exposed to the orchestrator.
 
-Every field a long-running workflow can carry — tracker, hooks, the four
-backend kinds, TUI/server/progress/system/wiki extras, prompt template
+Every field a long-running workflow can carry — tracker, hooks, backend
+kind configs, TUI/server/progress/system/wiki extras, prompt template
 overrides — lives here as a `@dataclass(frozen=True)` value type. The
 builder (`build_service_config`) is the only writer; the orchestrator and
 TUI only read.
@@ -18,15 +18,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..errors import ConfigValidationError
 from ..notifications import NotificationsConfig
 from .coercion import _normalize_state_key
 from .constants import (
     DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
+    DEFAULT_BACKEND_READ_TIMEOUT_MS,
+    DEFAULT_BACKEND_STALL_TIMEOUT_MS,
+    DEFAULT_BACKEND_TURN_TIMEOUT_MS,
     DEFAULT_CODEX_MODEL,
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TOTAL_TURNS,
+    DEFAULT_OPENCODE_COMMAND,
     DEFAULT_WORKSPACE_REUSE_POLICY,
 )
 
@@ -212,6 +217,30 @@ class GeminiConfig:
 
 
 @dataclass(frozen=True)
+class OpenCodeConfig:
+    """`agent.kind: opencode` — driving OpenCode CLI run/json mode."""
+
+    command: str
+    turn_timeout_ms: int
+    read_timeout_ms: int
+    stall_timeout_ms: int
+    # When True, turns 2+ add `--session <id>` after OpenCode reports an
+    # actual session id in JSON output. Before then, continuations run fresh
+    # rather than inventing an OpenCode-owned id.
+    resume_across_turns: bool = True
+
+
+def _default_opencode_config() -> OpenCodeConfig:
+    return OpenCodeConfig(
+        command=DEFAULT_OPENCODE_COMMAND,
+        turn_timeout_ms=DEFAULT_BACKEND_TURN_TIMEOUT_MS,
+        read_timeout_ms=DEFAULT_BACKEND_READ_TIMEOUT_MS,
+        stall_timeout_ms=DEFAULT_BACKEND_STALL_TIMEOUT_MS,
+        resume_across_turns=True,
+    )
+
+
+@dataclass(frozen=True)
 class PiConfig:
     """`agent.kind: pi` — driving the Pi coding-agent CLI in print/json mode."""
 
@@ -324,6 +353,7 @@ class ServiceConfig:
     gemini: GeminiConfig
     pi: PiConfig
     server: ServerConfig
+    opencode: OpenCodeConfig = field(default_factory=_default_opencode_config)
     tui: TuiConfig = field(default_factory=TuiConfig)
     progress: ProgressConfig = field(default_factory=ProgressConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
@@ -364,8 +394,19 @@ class ServiceConfig:
                 self.pi.read_timeout_ms,
                 self.pi.stall_timeout_ms,
             )
-        return (
-            self.gemini.turn_timeout_ms,
-            self.gemini.read_timeout_ms,
-            self.gemini.stall_timeout_ms,
+        if kind == "gemini":
+            return (
+                self.gemini.turn_timeout_ms,
+                self.gemini.read_timeout_ms,
+                self.gemini.stall_timeout_ms,
+            )
+        if kind == "opencode":
+            return (
+                self.opencode.turn_timeout_ms,
+                self.opencode.read_timeout_ms,
+                self.opencode.stall_timeout_ms,
+            )
+        raise ConfigValidationError(
+            "agent.kind must be one of codex, claude, gemini, opencode, pi",
+            value=kind,
         )

@@ -22,6 +22,7 @@ import symphony._shell as shell_module
 import symphony.backends.claude_code as claude_module
 import symphony.backends.codex as codex_module
 import symphony.backends.gemini as gemini_module
+import symphony.backends.opencode as opencode_module
 import symphony.backends.pi as pi_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
@@ -44,6 +45,7 @@ from symphony.backends.codex import (
     _scan_workspace_symlinks,
 )
 from symphony.backends.gemini import GeminiBackend
+from symphony.backends.opencode import OpenCodeBackend
 from symphony.backends.pi import (
     PiBackend,
     _extract_failure_reason,
@@ -56,6 +58,7 @@ from symphony.workflow import (
     CodexConfig,
     GeminiConfig,
     HooksConfig,
+    OpenCodeConfig,
     PiConfig,
     ServerConfig,
     ServiceConfig,
@@ -106,6 +109,13 @@ def _make_cfg(kind: str, *, workspace_root: Path) -> ServiceConfig:
             turn_timeout_ms=60_000,
             read_timeout_ms=5_000,
             stall_timeout_ms=30_000,
+        ),
+        opencode=OpenCodeConfig(
+            command="opencode run --format json --auto",
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+            resume_across_turns=True,
         ),
         pi=PiConfig(
             command='pi --mode json -p ""',
@@ -253,6 +263,16 @@ def test_factory_returns_gemini_backend(tmp_path: Path) -> None:
     assert isinstance(backend, GeminiBackend)
 
 
+def test_factory_returns_opencode_backend(tmp_path: Path) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = build_backend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert isinstance(backend, OpenCodeBackend)
+
+
 def test_factory_returns_pi_backend(tmp_path: Path) -> None:
     cfg = _make_cfg("pi", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
@@ -281,6 +301,7 @@ def test_factory_rejects_unknown_kind(tmp_path: Path) -> None:
         codex=cfg.codex,
         claude=cfg.claude,
         gemini=cfg.gemini,
+        opencode=cfg.opencode,
         pi=cfg.pi,
         server=cfg.server,
         prompt_template="hi",
@@ -589,6 +610,88 @@ async def test_pi_fresh_backend_first_turn_does_not_reuse_session(
 
 
 @pytest.mark.asyncio
+async def test_opencode_same_state_continuation_uses_reported_session_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    first_prompt = "first prompt"
+    second_prompt = "second prompt"
+    commands = _install_subprocess_double(
+        monkeypatch,
+        opencode_module,
+        [
+            _FakeSubprocess(
+                stdout_blob=(
+                    b'{"type":"session.updated","session":{"id":"opencode-s1"}}\n'
+                    b'{"type":"message","message":"one",'
+                    b'"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}\n'
+                )
+            ),
+            _FakeSubprocess(
+                stdout_blob=(
+                    b'{"type":"session.updated","session":{"id":"opencode-s1"}}\n'
+                    b'{"type":"message","message":"two",'
+                    b'"tokens":{"input":4,"output":6}}\n'
+                )
+            ),
+        ],
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    local_sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    assert uuid.UUID(local_sid)
+    first = await backend.run_turn(prompt=first_prompt, is_continuation=False)
+    second = await backend.run_turn(prompt=second_prompt, is_continuation=True)
+
+    assert first.turn_id == "opencode-s1"
+    assert first.last_message == "one"
+    assert second.turn_id == "opencode-s1"
+    assert second.last_message == "two"
+    assert "--session" not in commands[0]
+    assert shlex.quote(first_prompt) in commands[0]
+    assert f"--session {shlex.quote('opencode-s1')}" in commands[1]
+    assert shlex.quote(second_prompt) in commands[1]
+    assert backend.latest_usage == {
+        "input_tokens": 7,
+        "output_tokens": 8,
+        "total_tokens": 15,
+    }
+
+
+@pytest.mark.asyncio
+async def test_opencode_plain_stdout_is_valid_result_until_json_schema_stabilizes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    commands = _install_subprocess_double(
+        monkeypatch,
+        opencode_module,
+        [
+            _FakeSubprocess(stdout_blob=b"plain answer"),
+            _FakeSubprocess(stdout_blob=b"still plain"),
+        ],
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    local_sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+    await backend.run_turn(prompt="second", is_continuation=True)
+
+    assert result.turn_id == local_sid
+    assert result.last_message == "plain answer"
+    assert "--session" not in commands[0]
+    assert "--session" not in commands[1]
+
+
+@pytest.mark.asyncio
 async def test_gemini_session_id_is_minted_locally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -743,6 +846,22 @@ agent: {kind: bogus}
     wf = parse_workflow_text(text, tmp_path / "WORKFLOW.md")
     with pytest.raises(ConfigValidationError):
         build_service_config(wf)
+
+
+def test_opencode_workflow_config_defaults(tmp_path: Path) -> None:
+    from symphony.workflow import build_service_config, parse_workflow_text
+
+    text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: opencode}
+---
+prompt body
+"""
+    wf = parse_workflow_text(text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert cfg.agent.kind == "opencode"
+    assert cfg.opencode.command == "opencode run --format json --auto"
+    assert cfg.opencode.resume_across_turns is True
 
 
 # ---- Codex v2 protocol -------------------------------------------------

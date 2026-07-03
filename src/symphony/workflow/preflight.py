@@ -70,6 +70,9 @@ def validate_for_dispatch(config: ServiceConfig) -> None:
     elif kind == "gemini":
         if not config.gemini.command.strip():
             raise ConfigValidationError("gemini.command must be non-empty")
+    elif kind == "opencode":
+        if not config.opencode.command.strip():
+            raise ConfigValidationError("opencode.command must be non-empty")
     elif kind == "pi":
         if not config.pi.command.strip():
             raise ConfigValidationError("pi.command must be non-empty")

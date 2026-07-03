@@ -1,7 +1,7 @@
 # Cross-platform compatibility (macOS / Linux / Windows)
 
 Symphony's orchestrator runs on all three platforms. The agent CLIs
-(Codex, Claude Code, Gemini, Pi) are themselves cross-platform. The
+(Codex, Claude Code, Gemini, OpenCode, Pi) are themselves cross-platform. The
 sharp edges are concentrated in three places:
 
 1. the bash binary that runs your hooks,

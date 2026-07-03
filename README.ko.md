@@ -7,8 +7,8 @@
 [![Tests](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/cskwork/oh-my-symphony?style=social)](https://github.com/cskwork/oh-my-symphony/stargazers)
 
-> 하나의 터미널, 하나의 칸반 보드, 네 개의 AI 코딩 에이전트
-> (**Codex**, **Claude Code**, **Gemini**, **Pi**) — 티켓마다 골라 쓰고,
+> 하나의 터미널, 하나의 칸반 보드, 다섯 개의 AI 코딩 에이전트
+> (**Codex**, **Claude Code**, **Gemini**, **OpenCode**, **Pi**) — 티켓마다 골라 쓰고,
 > 병렬로 실행하며, 실시간으로 지켜본다.
 
 ![symphony tui screenshot](docs/tui-screenshot.svg)
@@ -24,7 +24,7 @@
 
 ## Why Symphony?
 
-- **벤더 종속 없음.** Codex ↔ Claude Code ↔ Gemini ↔ Pi를 YAML 한 줄로
+- **벤더 종속 없음.** Codex ↔ Claude Code ↔ Gemini ↔ OpenCode ↔ Pi를 YAML 한 줄로
   바꾸거나, 티켓마다 백엔드를 섞어 쓴다. 새 에이전트(Ollama, 로컬 모델,
   CLI가 있는 무엇이든)는 얇은 `AgentBackend` Protocol 뒤에 끼워 넣으면 된다 —
   네 단계면 끝, 오케스트레이터 변경은 없다.
@@ -43,7 +43,7 @@
 - **검증된 코어.**
   [OpenAI의 공식 Symphony 레퍼런스 구현](https://github.com/openai/symphony)에서
   포크했다. 오케스트레이터, 스케줄러, 재시도 정책, 워크스페이스 수명 주기,
-  프롬프트 렌더러는 모두 업스트림 그대로이며 — 이 포크는 네 개의 백엔드와
+  프롬프트 렌더러는 모두 업스트림 그대로이며 — 이 포크는 다섯 개의 백엔드와
   TUI를 더한 얇은 레이어다.
 - **뷰어가 아니라 진짜 웹 앱.** 오케스트레이터 포트가 Linear 스타일 보드를
   직접 서빙한다: 이슈 등록, 드래그로 컬럼 이동, 컬럼 추가/삭제/이름변경,
@@ -61,8 +61,8 @@
 - 자는 동안 수십 개 티켓에 걸쳐 무인 야간 리팩터링을 돌리는 **1인 개발자**.
 - 버그 수정, 문서 갱신, 마이그레이션 티켓을 여러 코딩 에이전트에 걸쳐 동시에
   병렬화하는 **팀**.
-- 동일한 프롬프트와 워크스페이스로 Codex, Claude Code, Gemini, Pi가 같은 작업을
-  어떻게 처리하는지 나란히 비교하는 **연구자와 리뷰어**.
+- 동일한 프롬프트와 워크스페이스로 Codex, Claude Code, Gemini, OpenCode, Pi가
+  같은 작업을 어떻게 처리하는지 나란히 비교하는 **연구자와 리뷰어**.
 - "에이전트당 채팅 창 하나"의 한계에 부딪혀, 한눈에 읽히는 칸반을 갖춘 진짜
   오케스트레이터를 원하는 **누구든**.
 
@@ -99,11 +99,13 @@ q quit · r refresh · enter details · n new · e edit · s stats · S skip Lea
 안에서 Codex 세션을 실행한다. 이 포크는 그 오케스트레이터를 유지하면서 다음을
 더한다:
 
-1. 네 개의 구체 어댑터를 가진 플러그형 **AgentBackend** 레이어:
+1. 다섯 개의 구체 어댑터를 가진 플러그형 **AgentBackend** 레이어:
    - **Codex** — `codex app-server` (JSON-RPC stdio, 멀티턴) — 원본
    - **Claude Code** — `claude -p --output-format stream-json --verbose`
      (NDJSON 이벤트, `--resume`를 쓰는 턴별 서브프로세스)
    - **Gemini** — `gemini -p ""` (턴당 1회 호출, stdin 프롬프트 → stdout 결과)
+   - **OpenCode** — `opencode run --format json --auto` (턴당 1회 호출,
+     문서화된 `message` 인자로 프롬프트 전달, 세션 ID 확인 후 `--session` 재개)
    - **Pi** — `pi --mode json -p ""` (JSONL 이벤트, `--session` 재개를 쓰는
      턴별 서브프로세스; 하나의 CLI 아래에서 Anthropic / OpenAI / Gemini / Bedrock
      백엔드를 지원 — [pi.dev](https://pi.dev) 참고)
@@ -126,7 +128,7 @@ q quit · r refresh · enter details · n new · e edit · s stats · S skip Lea
 
 ```yaml
 agent:
-  kind: claude          # codex | claude | gemini | pi
+  kind: claude          # codex | claude | gemini | opencode | pi
 
 claude:
   command: claude -p --output-format stream-json --verbose
@@ -139,7 +141,7 @@ pi:
   turn_timeout_ms: 3600000
 ```
 
-각 백엔드는 자기 블록(`codex`, `claude`, `gemini`, `pi`)을 읽으며, 런타임에는
+각 백엔드는 자기 블록(`codex`, `claude`, `gemini`, `opencode`, `pi`)을 읽으며, 런타임에는
 `agent.kind`에 맞는 것만 사용된다. Codex `linear_graphql` 클라이언트 도구는
 `agent.kind=codex`일 때만 노출된다.
 
@@ -153,7 +155,7 @@ agent:
 
 손으로 편집한 카드에는 플랫 별칭 `agent_kind: codex`도 허용된다.
 모든 백엔드 명령과 타임아웃 설정은 여전히 `WORKFLOW.md`의 해당 전역
-`codex:`, `claude:`, `gemini:`, `pi:` 블록에서 가져온다.
+`codex:`, `claude:`, `gemini:`, `opencode:`, `pi:` 블록에서 가져온다.
 CLI에서 파일 보드 티켓을 만들 때는
 `symphony board new TASK-2 "title" --agent-kind codex`를 쓴다.
 
@@ -177,11 +179,12 @@ pip install -e ".[dev]"
 | `codex`      | `codex` (with `app-server` subcommand) |
 | `claude`     | `claude` (Claude Code) |
 | `gemini`     | `gemini` (Gemini CLI)  |
+| `opencode`   | `opencode` (OpenCode CLI — `npm install -g opencode-ai`로 설치, `opencode auth login`으로 provider 인증) |
 | `pi`         | `pi` (Pi coding-agent — `npm i -g @earendil-works/pi-coding-agent` or `curl -fsSL https://pi.dev/install.sh \| sh`; sign in once via `pi` → `/login` (OAuth, credentials cached at `~/.pi/agent/auth.json`) — no env var needed) |
 
 ## Try it in 60 seconds (no agent CLI required)
 
-`codex`, `claude`, `gemini`를 설치하기 전에 TUI가 카드를 옮기는 모습을 먼저 보고
+실제 에이전트 CLI를 설치하기 전에 TUI가 카드를 옮기는 모습을 먼저 보고
 싶은가? 번들로 제공되는 **목(mock) 백엔드**를 쓰면 된다 — Codex와 동일한 JSON-RPC
 프로토콜을 말하지만 실제 작업은 하지 않고, 턴을 시뮬레이션하며 토큰 사용량 틱을
 내보낼 뿐이다.
@@ -680,6 +683,7 @@ src/symphony/
     codex.py           Codex JSON-RPC stdio backend (was upstream agent.py)
     claude_code.py     Claude Code stream-json backend
     gemini.py          Gemini one-shot backend
+    opencode.py        OpenCode run/json backend (per-turn subprocess, --session resume)
     pi.py              Pi --mode json backend (per-turn subprocess, --session resume)
   trackers/
     __init__.py        TrackerClient Protocol + factory
@@ -697,7 +701,7 @@ src/symphony/
     keep_awake.py      macOS caffeinate wrapper (no-op on other platforms)
     wiki_sweep.py      Learn-prompt wiki integrity sweep
   agent.py             back-compat shim re-exporting backends.* symbols
-  workflow.py          typed config — adds AgentConfig.kind + Claude/Gemini/Pi configs
+  workflow.py          typed config — adds AgentConfig.kind + backend configs
   orchestrator.py      scheduler; uses build_backend() + build_tracker_client() factories
   tui.py               Textual Kanban TUI (replaces server.py dashboard)
   server.py            JSON API only (HTML root removed)
@@ -714,14 +718,15 @@ pytest -q
 ```
 
 테스트 스위트는 업스트림 적합성 스위트, 팩토리에 대한 백엔드 단위 테스트, 이벤트
-정규화, Claude / Pi 사용량 누적, Gemini 세션 합성, Pi 실패 사유 탐지, 그리고 TUI
+정규화, Claude / Pi 사용량 누적, Gemini 세션 합성, OpenCode 명령/세션 파싱,
+Pi 실패 사유 탐지, 그리고 TUI
 앱에 대한 Textual `Pilot` 구동 스모크 테스트를 포함한다. 실제 CLI를 상대로 한
 서브프로세스 구동 통합 테스트는 의도적으로 CI에 포함하지 않았다 — 로컬에서
 실행한다.
 
 ## Design notes
 
-### Why four different lifecycles behind one Protocol?
+### Why five different lifecycles behind one Protocol?
 
 - **Codex**는 이슈당 하나의 `app-server` 서브프로세스를 열고 현재의
   `codex app-server` JSON-RPC 프로토콜(`initialize` + `thread/start`
@@ -734,6 +739,10 @@ pytest -q
 - **Gemini CLI**는 호출당 1회로, 네이티브 세션 모델이 없다.
   각 턴은 독립적이며, 오케스트레이터의 기록이 일관되게 유지되도록
   `gemini-<uuid>` 세션 id를 합성한다.
+- **OpenCode**는 문서화된 자동화 경로인
+  `opencode run --format json --auto [message..]`로 실행한다. Symphony는
+  프롬프트를 `message` 인자로 전달하고, JSON 이벤트가 있으면 읽으며, OpenCode가
+  실제 세션 id를 보고한 뒤부터 continuation 턴에 `--session <id>`를 붙인다.
 - **Pi**는 영속 서버가 없지만 세션을 `~/.pi/agent/sessions/`에 자동 저장한다.
   각 `run_turn`은 새 `pi --mode json`을 스폰하고 턴 2부터 `--session <id>`를
   넘긴다. 세션 id는 첫 `{"type":"session"}` JSONL 줄에서 읽고, 메시지별 `usage`는
@@ -781,6 +790,8 @@ pytest -q
 
 - Claude Code의 턴 중간 스트리밍 사용량 이벤트는 읽지만 노출하지 않는다 —
   토큰 합계의 진실의 원천은 종료 `result` 이벤트다.
+- OpenCode 토큰 사용량은 JSON 이벤트에서 best-effort로 파싱한다. 알 수 없는
+  이벤트 형태는 완료된 턴을 실패시키지 않고 합계를 0으로 둔다.
 - Gemini 토큰 사용량은 CLI가 안정적인 형태로 보고하지 않으므로, 그 백엔드의
   합계는 0에 머문다.
 - Gemini의 멀티턴 연속성은 지원하지 않는다(CLI에 세션 프로토콜이 없다). 각

@@ -187,7 +187,7 @@ hooks:
     git -C "$HOST_REPO" worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
 
 agent:
-  kind: codex          # codex | claude | gemini | pi
+  kind: codex          # codex | claude | gemini | opencode | pi
   max_concurrent_agents: 1
   max_turns: 100
   # Hard per-ticket budget across continuation attempts. Prevents an
@@ -257,6 +257,13 @@ gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass `""`
   # so the prompt comes purely from stdin. Symphony appends JSON/session flags.
   command: 'gemini -p ""'
+  resume_across_turns: true
+
+opencode:
+  # `opencode run [message..]` is OpenCode's documented scripting path.
+  # Symphony appends the prompt as a shell-quoted message argument and adds
+  # `--session <id>` on continuation turns after OpenCode reports a session id.
+  command: opencode run --format json --auto
   resume_across_turns: true
 
 pi:

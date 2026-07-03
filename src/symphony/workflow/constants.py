@@ -50,7 +50,7 @@ SUPPORTED_WORKSPACE_REUSE_POLICIES = {"preserve", "refresh"}
 
 DEFAULT_PROMPT = "You are working on an issue from Linear."
 
-SUPPORTED_AGENT_KINDS = {"codex", "claude", "gemini", "pi"}
+SUPPORTED_AGENT_KINDS = {"codex", "claude", "gemini", "opencode", "pi"}
 DEFAULT_AGENT_KIND = "codex"
 DEFAULT_CLAUDE_COMMAND = (
     "claude -p --output-format stream-json --include-partial-messages --verbose"
@@ -64,6 +64,10 @@ DEFAULT_GEMINI_COMMAND = 'gemini -p ""'
 # `--mode json` switches stdout to JSONL events so we can parse session id,
 # turn boundaries, and per-message token usage.
 DEFAULT_PI_COMMAND = 'pi --mode json -p ""'
+# OpenCode documents `opencode run [message..]` for scripting, with
+# `--format json` exposing raw JSON events and `--auto` allowing
+# non-interactive tool permission flow under the user's configured policy.
+DEFAULT_OPENCODE_COMMAND = "opencode run --format json --auto"
 DEFAULT_BACKEND_TURN_TIMEOUT_MS = 3_600_000
 DEFAULT_BACKEND_READ_TIMEOUT_MS = 5_000
 DEFAULT_BACKEND_STALL_TIMEOUT_MS = 300_000

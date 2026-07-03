@@ -2,14 +2,15 @@
 
 Symphony was originally hardwired to the Codex app-server JSON-RPC protocol.
 This package introduces an `AgentBackend` Protocol so the orchestrator can
-drive any coding-agent CLI (Codex, Claude Code, Gemini, Pi) behind one
+drive any coding-agent CLI (Codex, Claude Code, Gemini, OpenCode, Pi) behind one
 interface.
 
 Each backend owns its own subprocess lifecycle. The Codex backend keeps the
 single long-running app-server connection that speaks JSON-RPC over stdio.
-The Claude, Gemini, and Pi backends spawn one subprocess per turn — Claude
+The Claude, Gemini, OpenCode, and Pi backends spawn one subprocess per turn — Claude
 uses `claude -p --output-format stream-json`, Gemini uses `gemini -p` one-
-shot, and Pi uses `pi --mode json -p ""`.
+shot, OpenCode uses `opencode run --format json`, and Pi uses
+`pi --mode json -p ""`.
 
 Normalized event vocabulary is shared across backends (see `events.py` style
 constants below). The orchestrator only consumes these normalized event names
@@ -186,10 +187,14 @@ def build_backend(init: BackendInit) -> AgentBackend:
         from .gemini import GeminiBackend
 
         return cast(AgentBackend, GeminiBackend(init))
+    if kind == "opencode":
+        from .opencode import OpenCodeBackend
+
+        return cast(AgentBackend, OpenCodeBackend(init))
     if kind == "pi":
         from .pi import PiBackend
 
         return cast(AgentBackend, PiBackend(init))
     raise ConfigValidationError(
-        f"unknown agent.kind {kind!r}; expected codex, claude, gemini, or pi"
+        f"unknown agent.kind {kind!r}; expected codex, claude, gemini, opencode, or pi"
     )

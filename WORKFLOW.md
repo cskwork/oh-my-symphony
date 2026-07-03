@@ -305,6 +305,16 @@ codex:
 gemini:
   command: 'gemini -p ""'
 
+opencode:
+  # `opencode run [message..]` is OpenCode's documented scripting path.
+  # Symphony appends the prompt as a shell-quoted message argument and adds
+  # `--session <id>` on continuation turns after OpenCode reports a session id.
+  command: opencode run --format json --auto
+  resume_across_turns: true
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+
 pi:
   command: 'pi --mode json -p ""'
   resume_across_turns: true

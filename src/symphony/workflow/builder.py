@@ -36,6 +36,7 @@ from .config import (
     CodexConfig,
     GeminiConfig,
     HooksConfig,
+    OpenCodeConfig,
     PiConfig,
     ProgressConfig,
     PromptConfig,
@@ -70,6 +71,7 @@ from .constants import (
     DEFAULT_MAX_RETRY_BACKOFF_MS,
     DEFAULT_MAX_TOTAL_TURNS,
     DEFAULT_MAX_TURNS,
+    DEFAULT_OPENCODE_COMMAND,
     DEFAULT_PI_COMMAND,
     DEFAULT_POLL_INTERVAL_MS,
     DEFAULT_PROMPT,
@@ -404,6 +406,29 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         resume_across_turns=bool(gemini_raw.get("resume_across_turns", True)),
     )
 
+    opencode_raw = cfg.get("opencode") or {}
+    if not isinstance(opencode_raw, dict):
+        opencode_raw = {}
+    opencode = OpenCodeConfig(
+        command=_as_str(opencode_raw.get("command"), DEFAULT_OPENCODE_COMMAND) or DEFAULT_OPENCODE_COMMAND,
+        turn_timeout_ms=_validated_positive_or_default(
+            opencode_raw.get("turn_timeout_ms"),
+            DEFAULT_BACKEND_TURN_TIMEOUT_MS,
+            name="opencode.turn_timeout_ms",
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            opencode_raw.get("read_timeout_ms"),
+            DEFAULT_BACKEND_READ_TIMEOUT_MS,
+            name="opencode.read_timeout_ms",
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            opencode_raw.get("stall_timeout_ms"),
+            DEFAULT_BACKEND_STALL_TIMEOUT_MS,
+            name="opencode.stall_timeout_ms",
+        ),
+        resume_across_turns=bool(opencode_raw.get("resume_across_turns", True)),
+    )
+
     pi_raw = cfg.get("pi") or {}
     if not isinstance(pi_raw, dict):
         pi_raw = {}
@@ -551,6 +576,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         codex=codex,
         claude=claude,
         gemini=gemini,
+        opencode=opencode,
         pi=pi,
         server=server,
         tui=tui,

@@ -125,7 +125,6 @@ class NewIssueScreen(ModalScreen[dict[str, Any] | None]):
             yield Input(placeholder="title (required)", id="ni-title")
             yield TextArea(
                 "",
-                language="markdown",
                 id="ni-description",
             )
             yield Select(
@@ -229,7 +228,6 @@ class EditIssueScreen(ModalScreen[dict[str, Any] | None]):
             )
             yield TextArea(
                 self._issue.description or "",
-                language="markdown",
                 id="ei-description",
             )
             yield Select(

@@ -241,7 +241,7 @@ def test_env_var_indirection_with_explicit_value_passes(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["codex", "claude", "gemini", "pi"])
+@pytest.mark.parametrize("kind", ["codex", "claude", "gemini", "opencode", "pi"])
 def test_empty_backend_command_fails_preflight(tmp_path: Path, kind: str) -> None:
     """Setting the chosen backend's `command:` to "" via YAML normally
     fills in a default; the preflight guard against an empty command
@@ -270,7 +270,7 @@ def test_empty_backend_command_fails_preflight(tmp_path: Path, kind: str) -> Non
 
 def test_other_backends_empty_command_does_not_fail_preflight(tmp_path: Path) -> None:
     """When agent.kind=codex, only codex.command is required to be set.
-    Empty claude/gemini/pi commands are tolerated because they are not used."""
+    Empty inactive backend commands are tolerated because they are not used."""
     path = _write(
         tmp_path,
         """\
@@ -290,6 +290,7 @@ def test_other_backends_empty_command_does_not_fail_preflight(tmp_path: Path) ->
         cfg,
         claude=replace(cfg.claude, command=""),
         gemini=replace(cfg.gemini, command=""),
+        opencode=replace(cfg.opencode, command=""),
         pi=replace(cfg.pi, command=""),
     )
     # Should NOT raise: the active backend is codex and it has a command.
