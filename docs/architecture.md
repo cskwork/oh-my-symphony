@@ -14,7 +14,7 @@ src/symphony/
 ├── __init__.py          # package docstring + __version__ only
 ├── __main__.py          # `python -m symphony` entry point
 ├── _shell.py            # safe subprocess wrappers
-├── agent.py             # AgentKind enum + per-agent capabilities
+├── agent.py             # backwards-compat shim for symphony.backends
 ├── errors.py            # typed exceptions
 ├── i18n.py              # message catalog (Korean + English)
 ├── issue.py             # Issue dataclass (canonical board card)
@@ -22,43 +22,48 @@ src/symphony/
 ├── mock_codex.py        # offline codex stub used in tests + demos
 ├── progress_md.py       # WORKFLOW-PROGRESS.md renderer
 ├── prompt.py            # symphony-prompts loader / variable expansion
-├── server.py            # HTTP board / dashboard JSON endpoints
-├── service.py           # top-level `symphony run` service wiring
+├── server.py            # aiohttp app, state / health / refresh routes
+├── service.py           # managed `symphony service` lifecycle
+├── skills.py            # SKILL.md discovery + prompt injection
+├── stats.py             # append-only run stats store + aggregation
+├── webapi.py            # web board REST routes + static SPA serving
 ├── workspace.py         # git-worktree lifecycle + commit_workspace_on_done
 │
-├── backends/            # agent CLI adapters (claude, codex, gemini, pi)
+├── backends/            # agent CLI adapters (codex, claude, gemini, opencode, pi)
 ├── cli/                 # `symphony` argparse surface (board, doctor, main)
 ├── notifications/       # opt-in Slack dispatcher
-├── orchestrator/        # state machine — see "Orchestrator package"
+├── orchestrator/        # state machine + run registry — see below
 ├── trackers/            # board adapters (file, jira, linear)
 ├── tui/                 # Textual Kanban UI — see "TUI package"
 ├── utils/               # archive, auto-merge, keep-awake, wiki-sweep
+├── web/static/           # built-in browser board assets
 └── workflow/            # WORKFLOW.md loader + typed config — see below
 ```
 
-Three packages were carved out of single-file modules on
-`refactor/surgical-decomposition`. Each split kept the existing public
-dotted paths intact (the same `from symphony.X import Y` continues to
-work), and `pytest` stayed green through the refactor — the suite
-moved from 565 passed / 6 skipped to 566 passed / 5 skipped (one test
-came off the skip list; no regressions).
+The old single-file `workflow.py`, `tui.py`, and `orchestrator.py`
+surfaces are now packages. Public imports are preserved through package
+`__init__.py` re-exports, so existing `from symphony.X import Y` call
+sites keep working. Later reliability work added `orchestrator/run_registry.py`
+for SQLite run leases / issue flags, and the web revamp added `webapi.py`
+plus packaged static assets.
 
 ## Workflow package (`symphony.workflow`)
 
-Replaces the former 1,204-line `workflow.py`. Modules ordered the way a
-reader scans the public surface — parser → coercion → config →
-builder → preflight → state:
+Replaces the former single-file `workflow.py`. Modules are ordered the way a
+reader scans the public surface: parser, coercion, config, builder, preflight,
+and state.
 
-| file              | LOC | role                                                                  |
-|-------------------|----:|-----------------------------------------------------------------------|
-| `constants.py`    |  65 | defaults, env keys, `_VAR_PATTERN`                                    |
-| `parser.py`       |  92 | `WorkflowDefinition` + `parse_*` / `load_*` / `resolve_*`             |
-| `coercion.py`     | 125 | `$VAR` / `~` expansion, `_as_*` / `normalize_*` helpers               |
-| `config.py`       | 359 | every `@dataclass(frozen=True)` config type                           |
-| `builder.py`      | 599 | `build_service_config` + strict validators                            |
-| `preflight.py`    |  75 | `validate_for_dispatch`                                               |
-| `state.py`        |  47 | `WorkflowState` (SPEC §6.2 hot reload)                                |
-| `__init__.py`     | 141 | re-exports the full surface from `symphony.workflow.X`                |
+| file | role |
+| --- | --- |
+| `constants.py` | defaults, env keys, `_VAR_PATTERN`, supported agent constants |
+| `parser.py` | `WorkflowDefinition` + `parse_*` / `load_*` / `resolve_*` |
+| `coercion.py` | `$VAR` / `~` expansion, `_as_*` / `normalize_*` helpers |
+| `config.py` | every frozen config dataclass, including backend-specific blocks |
+| `builder.py` | `build_service_config` + strict validators |
+| `mutate.py` | comment-preserving `WORKFLOW.md` edits for web column / prompt / branch policy UI |
+| `preflight.py` | `validate_for_dispatch` |
+| `state.py` | `WorkflowState` hot reload |
+| `__init__.py` | re-exports the full surface from `symphony.workflow.*` |
 
 The package `__init__.py` re-exports every name that callers and tests
 import from `symphony.workflow`. Adding a new public symbol means
@@ -66,18 +71,18 @@ adding it to both its leaf module and the re-export list.
 
 ## TUI package (`symphony.tui`)
 
-Replaces the former 1,626-line `tui.py`. A Textual app with focusable
+Replaces the former single-file `tui.py`. A Textual app with focusable
 lanes, first-class cards, and modal detail screens; CLI continues to do
 `await KanbanTUI(orchestrator, workflow_state).run()`.
 
-| file            | LOC | role                                                                   |
-|-----------------|----:|------------------------------------------------------------------------|
-| `constants.py`  |  53 | `STATE_COLOR` / `AGENT_COLOR`, density flags, lane widths              |
-| `helpers.py`    | 197 | `_CardStatus` + pure runtime helpers (`_silent_seconds`, `_parse_iso`) |
-| `screens.py`    |  81 | `_RefreshNow` event + `TicketDetailScreen` modal                       |
-| `widgets.py`    | 554 | `IssueCard` / `Lane` / `StatsBar` / `DetailPane` / `FilterBar`         |
-| `app.py`        | 818 | `KanbanApp` + `KanbanTUI` (single cohesive class kept intact)          |
-| `__init__.py`   |  91 | re-exports the public surface                                          |
+| file | role |
+| --- | --- |
+| `constants.py` | `STATE_COLOR` / `AGENT_COLOR`, density flags, lane widths |
+| `helpers.py` | `_CardStatus` + pure runtime helpers (`_silent_seconds`, `_parse_iso`) |
+| `screens.py` | ticket detail plus create/edit modal screens |
+| `widgets.py` | `IssueCard` / `Lane` / `StatsBar` / `DetailPane` / `FilterBar` |
+| `app.py` | `KanbanApp` + `KanbanTUI`, keyboard write actions, API/TUI coordination |
+| `__init__.py` | re-exports the public surface |
 
 ### Monkeypatch indirection — `_tui_pkg`
 
@@ -102,18 +107,21 @@ stub coverage — do not inline.
 
 ## Orchestrator package (`symphony.orchestrator`)
 
-Replaces the former 3,324-line `orchestrator.py`. The state machine
-itself stayed a single class (`Orchestrator`); only the surrounding
-helpers, parsers, dataclasses, and constants were extracted.
+Replaces the former single-file `orchestrator.py`. The state machine
+itself stayed a single class (`Orchestrator`), while helpers, parsers,
+dataclasses, contract checks, and the SQLite run registry live in leaf
+modules.
 
-| file             | LOC  | role                                                                               |
-|------------------|-----:|------------------------------------------------------------------------------------|
-| `constants.py`   |   77 | `AUTO_TRIAGE_*`, retry timing, `STALL_FORCE_EJECT_GRACE_S`                         |
-| `parsing.py`     |  136 | `_parse_touched_files`, `_parse_findings_rows` (markdown agent output)             |
-| `entries.py`     |  125 | `RunningEntry`, `RetryEntry`, `_CodexTotals`, `_IssueDebug`                        |
-| `helpers.py`     |  221 | pure module-level helpers (`_sort_for_dispatch_fifo`, `_is_rewind_transition`, …)  |
-| `core.py`        | 2873 | the `Orchestrator` class                                                           |
-| `__init__.py`    |   88 | re-exports + monkeypatch-target bindings                                           |
+| file | role |
+| --- | --- |
+| `constants.py` | `AUTO_TRIAGE_*`, retry timing, stall / tick supervision constants |
+| `parsing.py` | `_parse_touched_files`, `_parse_findings_rows` from markdown agent output |
+| `entries.py` | `RunningEntry`, `RetryEntry`, `_CodexTotals`, `_IssueDebug` |
+| `helpers.py` | pure helpers (`_sort_for_dispatch_fifo`, `_is_rewind_transition`, and related utilities) |
+| `contracts.py` | stage-contract evaluation for pipeline headings and evidence gates |
+| `run_registry.py` | SQLite WAL run leases, dead-owner reclaim, persisted retry / pause / budget flags |
+| `core.py` | the `Orchestrator` class, tick loop, dispatch, health, pause/resume, Learn skip |
+| `__init__.py` | re-exports + monkeypatch-target bindings |
 
 ### Monkeypatch indirection — `_pkg`
 
@@ -168,6 +176,15 @@ they are easy to regress and hard to spot in a diff:
 - Module-level helpers are re-exported through every package
   `__init__.py` so that `monkeypatch.setattr("symphony.<pkg>.helper", …)`
   in tests reaches the live name.
+- `RunRegistry.acquire_run` is the durable single-issue claim when a registry
+  is configured; dispatch must not start a worker without first owning the
+  lease.
+- File tracker writes go through the lock-and-compare-and-swap mutation path;
+  new helpers should build on that path instead of rewriting ticket files
+  directly.
+- `Orchestrator.health()` stays cheap and counter-based so `/api/v1/health`
+  remains available even when tracker refresh or run-registry cleanup is
+  degraded.
 
 ## Adding a new public symbol
 
@@ -177,13 +194,15 @@ they are easy to regress and hard to spot in a diff:
    dotted path, follow the `_pkg.<name>` / `_tui_pkg.<name>` indirection
    pattern from the existing modules. Do not bind the name at the call
    site's module level — patches will not reach you.
-4. Run the full pytest suite (`pytest -q`); the current baseline is
-   566 passed, 5 skipped.
+4. Run the relevant focused tests plus the full pytest suite before publishing
+   runtime changes. For documentation-only edits, run stale-string/static
+   checks and any affected contract tests.
 
-## Rollback
+## Historical Split Commits
 
-The five commits that produced this layout are each self-contained and
-revertible individually:
+The original package split came from these self-contained commits. Use them as
+history when auditing the split; prefer scoped reverts or follow-up fixes over
+resetting a working branch.
 
 ```
 89bfbf8  .gitignore for .omc/ and WORKFLOW-PROGRESS.md
@@ -192,6 +211,3 @@ d5c4477  refactor(tui): split into 6 submodules
 3ec7aed  refactor(orchestrator): split into a package
 39b4a59  chore(release): lockstep pyproject at 0.6.5
 ```
-
-`git reset --hard baseline/pre-refactor-2026-05-19` returns the tree to
-the dev@54050c4 starting point.

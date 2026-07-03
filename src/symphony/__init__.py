@@ -15,10 +15,10 @@ Layout (see ``AGENTS.md`` for full SPEC references):
     - ``prompt``        — Liquid-compatible templating (SPEC §5.4, §12)
 
 * Storage
-    - ``trackers``      — tracker protocol + ``file`` / ``linear`` adapters (SPEC §11)
+    - ``trackers``      — tracker protocol + ``file`` / ``jira`` / ``linear`` adapters (SPEC §11)
 
 * Agents
-    - ``backends``      — codex / claude_code / gemini / pi (SPEC §10)
+    - ``backends``      — codex / claude_code / gemini / opencode / pi (SPEC §10)
     - ``agent``         — backwards-compat shim for ``symphony.backends.*``
 
 * Orchestration

@@ -26,8 +26,8 @@
 
 - **벤더 종속 없음.** Codex ↔ Claude Code ↔ Gemini ↔ OpenCode ↔ Pi를 YAML 한 줄로
   바꾸거나, 티켓마다 백엔드를 섞어 쓴다. 새 에이전트(Ollama, 로컬 모델,
-  CLI가 있는 무엇이든)는 얇은 `AgentBackend` Protocol 뒤에 끼워 넣으면 된다 —
-  네 단계면 끝, 오케스트레이터 변경은 없다.
+  CLI가 있는 무엇이든)는 오케스트레이터를 바꾸지 않고 얇은
+  `AgentBackend` Protocol 뒤에 끼워 넣으면 된다.
 - **에이전트가 실제로 무엇을 하는지 본다.** 실시간 칸반은 모든 실행 중 카드의
   턴 수, 마지막 이벤트, 누적 토큰, 레이트 리밋 여유를 보여준다.
   "멈춘 건가, 생각 중인 건가?" 더 이상 헷갈릴 일이 없고 — 로그인할 SaaS
@@ -38,13 +38,13 @@
   파일로 미러링하고, macOS 절전 방지는 잠금 화면이 야간 파이프라인을
   중단시키는 것을 막는다.
 - **체험에 SaaS도, API 키도, 가입도 필요 없다.** 파일 기반 Markdown 칸반이므로
-  티켓이 코드 옆 `git`에 함께 산다. Linear는 드롭인 트래커로 지원되지만,
-  꼭 필요하지는 않다.
-- **검증된 코어.**
+  티켓이 코드 옆 `git`에 함께 산다. Linear와 Jira는 외부 트래커로 지원되지만,
+  Symphony를 체험하는 데는 둘 다 필요하지 않다.
+- **검증된 기반 위에 로컬 운영 안정성을 더했다.**
   [OpenAI의 공식 Symphony 레퍼런스 구현](https://github.com/openai/symphony)에서
-  포크했다. 오케스트레이터, 스케줄러, 재시도 정책, 워크스페이스 수명 주기,
-  프롬프트 렌더러는 모두 업스트림 그대로이며 — 이 포크는 다섯 개의 백엔드와
-  TUI를 더한 얇은 레이어다.
+  포크했다. 이 포크는 파일 우선 오케스트레이션 모델을 유지하면서 다섯 개의
+  백엔드, TUI / 웹 운영 화면, SQLite 실행 lease, 재시작에도 보존되는 이슈
+  플래그, 잠금 기반 Markdown 티켓 쓰기를 더한다.
 - **뷰어가 아니라 진짜 웹 앱.** 오케스트레이터 포트가 Linear 스타일 보드를
   직접 서빙한다: 이슈 등록, 드래그로 컬럼 이동, 컬럼 추가/삭제/이름변경,
   컬럼별 스테이지 프롬프트 편집, 브랜치 정책 선택, 워커 Pause / Resume,
@@ -115,12 +115,14 @@ q quit · r refresh · enter details · n new · e edit · s stats · S skip Lea
    카드에서 `enter`를 누르면 전체 상세 모달이, `n`으로 멀티라인 새 티켓 등록,
    `e`로 포커스 티켓 편집, `S`로 Learn 스킵, `s`로 통계 화면이 열린다.
 3. 오케스트레이터 포트에 내장된 **웹 칸반 앱** — 이슈 CRUD, Learn 스킵,
-   CRUD, 드래그 앤 드롭 상태 이동, 컬럼 추가/삭제/이름변경, 컬럼별 프롬프트
+   드래그 앤 드롭 상태 이동, 컬럼 추가/삭제/이름변경, 컬럼별 프롬프트
    편집, 브랜치 정책, 전용 통계 페이지.
+4. `.symphony/state.db`의 **단일 노드 신뢰성 ledger** — 활성 실행 lease가
+   재시작 뒤 중복 디스패치를 막고, 죽은 프로세스 소유 lease를 회수하며,
+   retry / pause / budget-exhausted 플래그를 프로세스 종료 뒤에도 보존한다.
 
-오케스트레이터, 스케줄러, 재시도 정책, 워크스페이스 매니저, 트래커 레이어,
-프롬프트 렌더러는 업스트림에서 변경되지 않았다 — 이 포크는 검증된 오케스트레이터
-코어 위에 얹은 얇은 레이어다.
+아키텍처는 의도적으로 로컬 / 파일 우선이다. Markdown 티켓은 사람이 읽고 고치는
+진실의 원천이고, SQLite는 손으로 편집하지 않아야 하는 런타임 조정 상태를 저장한다.
 
 ## Pick an agent
 
@@ -491,7 +493,8 @@ symphony board mv TASK-1 Blocked         # forces a state transition
       │ ## Resolution     ┌──────────────────┐                │  + after_create  │
       │ + state: Done     │  AgentBackend    │  ◀────────────│    hook ran      │
       └───────────────────│  (codex/claude/  │                └──────────────────┘
-                          │   gemini)        │                          │
+                          │   gemini/open-   │                          │
+                          │   code/pi)       │                          │
                           │  per-turn loop   │  before_run hook ──▶ turn(s)
                           └──────────────────┘                          │
                                                                         ▼
@@ -551,15 +554,18 @@ JSON API 엔드포인트:
 
 | Method | Path                              | Purpose                                      |
 |--------|-----------------------------------|----------------------------------------------|
+| GET    | `/api/v1/health`                  | tick loop / tracker / run registry 상태       |
 | GET    | `/api/v1/state`                   | Snapshot — running, retrying, totals, limits |
 | GET    | `/api/v1/board`                   | 컬럼 + 이슈 + 실행 중 정보                    |
 | POST/PATCH/DELETE | `/api/v1/issues[...]`  | 이슈 CRUD (file tracker)                     |
 | PUT    | `/api/v1/workflow/states`         | 컬럼 추가 / 삭제 / 이름변경 / 순서변경        |
 | GET/PUT| `/api/v1/workflow/prompts/<state>`| 컬럼 스테이지 프롬프트 조회 / 편집            |
+| PUT    | `/api/v1/workflow/branch-policy`  | feature base / merge target 브랜치 갱신       |
+| GET    | `/api/v1/git/branches`            | 브랜치 정책 UI용 로컬 브랜치 목록             |
 | GET    | `/api/v1/stats?days=N`            | 집계된 실행 통계                              |
 | POST   | `/api/v1/refresh`                 | poll + reconcile 즉시 트리거                  |
-| POST   | `/api/v1/<id>/pause` `/resume`    | 실행 중 워커 보류 / 재개                      |
-| POST   | `/api/v1/<id>/skip-learn`         | idle Learn 티켓을 Human Review로 이동         |
+| POST   | `/api/v1/{id}/pause` `/resume`    | 실행 중 워커 보류 / 재개                      |
+| POST   | `/api/v1/issues/{id}/skip-learn`  | idle Learn 티켓을 Human Review로 이동         |
 
 ### CLI Kanban TUI (primary UI)
 
@@ -687,8 +693,20 @@ src/symphony/
     pi.py              Pi --mode json backend (per-turn subprocess, --session resume)
   trackers/
     __init__.py        TrackerClient Protocol + factory
-    file.py            FileBoardTracker (Markdown ticket files)
+    _retry.py          retry/backoff wrapper for network trackers
+    file.py            FileBoardTracker (locked Markdown ticket mutations)
+    jira.py            Jira REST tracker
     linear.py          LinearClient (Linear GraphQL)
+  workflow/
+    parser.py          WORKFLOW.md frontmatter/body parser
+    config.py          frozen config dataclasses
+    builder.py         ServiceConfig construction + validation
+    mutate.py          comment-preserving workflow edits for the web UI
+    preflight.py       dispatch-time validation
+  orchestrator/
+    core.py            scheduler/state machine
+    run_registry.py    SQLite WAL run leases + issue flags
+    contracts.py       stage-contract validation helpers
   cli/
     __init__.py        re-exports `main` for the `symphony` console_script
     __main__.py        keeps `python -m symphony.cli ...` working for service.py
@@ -701,12 +719,14 @@ src/symphony/
     keep_awake.py      macOS caffeinate wrapper (no-op on other platforms)
     wiki_sweep.py      Learn-prompt wiki integrity sweep
   agent.py             back-compat shim re-exporting backends.* symbols
-  workflow.py          typed config — adds AgentConfig.kind + backend configs
-  orchestrator.py      scheduler; uses build_backend() + build_tracker_client() factories
-  tui.py               Textual Kanban TUI (replaces server.py dashboard)
-  server.py            JSON API only (HTML root removed)
+  server.py            aiohttp server, health/state/refresh routes
+  webapi.py            web app REST routes + static SPA serving
+  stats.py             .symphony/stats.jsonl aggregation
+  skills.py            SKILL.md discovery + prompt injection
+  tui/                 Textual Kanban TUI package
   service.py           `symphony service` background lifecycle
   mock_codex.py        runnable via `python -m symphony.mock_codex` for demos/tests
+  web/static/          built-in browser app assets
 tui-open.sh            cross-platform launcher (macOS / Linux): doctor preflight + open TUI in a new terminal window
 tui-open.bat           Windows equivalent
 ```
@@ -719,10 +739,10 @@ pytest -q
 
 테스트 스위트는 업스트림 적합성 스위트, 팩토리에 대한 백엔드 단위 테스트, 이벤트
 정규화, Claude / Pi 사용량 누적, Gemini 세션 합성, OpenCode 명령/세션 파싱,
-Pi 실패 사유 탐지, 그리고 TUI
-앱에 대한 Textual `Pilot` 구동 스모크 테스트를 포함한다. 실제 CLI를 상대로 한
-서브프로세스 구동 통합 테스트는 의도적으로 CI에 포함하지 않았다 — 로컬에서
-실행한다.
+Pi 실패 사유 탐지, run registry 영속성, file tracker locking, 웹 API contract,
+그리고 TUI 앱에 대한 Textual `Pilot` 구동 스모크 테스트를 포함한다. 실제 CLI를
+상대로 한 서브프로세스 구동 통합 테스트는 의도적으로 CI에 포함하지 않았다 —
+로컬에서 실행한다.
 
 ## Design notes
 
@@ -755,39 +775,43 @@ Pi 실패 사유 탐지, 그리고 TUI
 이벤트(`session_started`, `turn_completed`, `turn_failed` 등)와 최신 사용량 /
 레이트 리밋 스냅샷만 본다.
 
-### What the TUI does and does not do
+### What the TUI and web app do and do not do
 
-보드는 관찰 전용이다: 카드는 에이전트가 기저 티켓 파일을 다시 쓰거나(파일 트래커)
-이슈를 전환할 때(Linear) 움직이며, 직접적인 UI 동작으로는 절대 움직이지 않는다.
-이는 업스트림 설계 철학과 일치한다 — 오케스트레이터가 진실의 원천이고 UI는 얇은
-반영이다.
+웹 앱은 파일 보드를 위한 전체 브라우저 편집기다. 같은 tracker / workflow 모듈을
+통해 이슈 생성/수정/삭제, 드래그 상태 이동, 컬럼/프롬프트 편집, 브랜치 정책
+갱신을 수행한다. TUI는 키보드 운영에 최적화되어 있으며 터미널을 벗어나지 않고
+티켓 생성/수정, archive, Done gate confirm, Pause / Resume, Learn skip, filter,
+detail 확인을 할 수 있다.
 
 대화형으로 *할 수 있는* 것:
 
 - `tab` / `shift+tab` 또는 클릭으로 어떤 카드든 포커스한다.
 - 마우스 휠, `j` / `k`, 또는 페이지 키로 레인을 스크롤한다.
 - `enter`로 포커스된 카드의 전체 설명을 모달로 연다.
+- `n`, `e`, `a`, `c`, `P`, `S`, `/`로 주요 TUI 쓰기 동작을 실행한다.
 
 의도적으로 범위 밖인 것:
 
-- **카드 드래그앤드롭 없음.** 티켓은 `symphony board mv ID State`(파일 트래커)나
-  트래커 UI에서 직접 옮긴다.
-- **에이전트 출력 로그 창 없음.** 에이전트 stdout/stderr는 구조화된 로그로
+- **터미널 TUI 안에서는 드래그앤드롭 없음.** 포인터 기반 상태 이동이 필요하면
+  웹 보드, `symphony board mv ID State`, 또는 트래커 UI를 쓴다.
+- **전체 에이전트 출력 로그 창 없음.** 에이전트 stdout/stderr는 구조화된 로그로
   가며, 옆 터미널에서 `tail -F log/symphony.log`로 따라간다.
-- **트래커에 대한 쓰기 동작 없음** — 에이전트가 스스로 하는 것 외에는.
+- **웹 보드에서 Linear/Jira 직접 수정 없음.** 브라우저 이슈 CRUD는 file tracker
+  전용이고, Linear/Jira 보드는 read-only live status로 내려간다.
 
 ## What is *not* implemented
 
 업스트림에서 상속:
 
 - SSH 워커 확장 — 단일 호스트 전용.
-- 프로세스 재시작에 걸친 영속 재시도 큐.
-- Linear와 파일 기반 칸반 외의 트래커 어댑터.
-- 오케스트레이터의 일급 트래커 쓰기 API. 티켓 쓰기는 여전히 에이전트를 통해
-  일어난다(Codex는 `linear_graphql`, 파일 기반 칸반은 직접 파일 편집).
+- Linear, Jira, 파일 기반 칸반 외의 트래커 어댑터.
 
 포크 고유의 한계:
 
+- Run lease와 이슈 safety flag는 SQLite에 저장되지만, hard crash 뒤 실행 중이던
+  in-process worker에 다시 붙지는 않는다. Markdown 티켓 상태가 recovery checkpoint다.
+- Retry attempt는 보존되지만, 과거 attempt를 운영자가 훑어볼 first-class run
+  history CLI/API는 아직 없다.
 - Claude Code의 턴 중간 스트리밍 사용량 이벤트는 읽지만 노출하지 않는다 —
   토큰 합계의 진실의 원천은 종료 `result` 이벤트다.
 - OpenCode 토큰 사용량은 JSON 이벤트에서 best-effort로 파싱한다. 알 수 없는

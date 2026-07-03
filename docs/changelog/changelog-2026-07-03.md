@@ -80,3 +80,43 @@ only the failing gaps.
 
 - Rejected: blindly reimplementing the older handoff. The live branch is ahead
   of that document, so direct replay risks churn and duplicate fixes.
+
+# 2026-07-03 - Public docs surface sync
+
+## Goal
+
+Bring the public documentation surfaces in line with the current `dev` branch:
+five agent backends, the built-in web board, file-tracker write APIs, and the
+SQLite reliability ledger.
+
+## Decisions
+
+### 1. Update current-facing docs, not historical plans
+
+The README pair, landing page, architecture map, package description, and
+top-level changelog are the surfaces a new operator reads first. Historical
+plans under `docs/plans/` and ticket-specific notes stay as records of when
+they were written.
+
+- Rejected: sweeping old plan text. That would blur audit history and create a
+  larger review surface without changing the current operator contract.
+
+### 2. Describe reliability as single-node and local
+
+The docs now say the run registry provides local SQLite leases and issue flags,
+and that Markdown tickets remain the human source of truth. This matches the
+implementation without implying a distributed queue or restartable worker
+reattach.
+
+- Rejected: marketing it as generic crash recovery. The current code persists
+  claims and retry state, but an in-process worker is still lost on a hard
+  crash.
+
+### 3. Keep English, Korean, and landing-page copy in sync
+
+The Korean README and landing-page i18n strings were updated in the same pass
+as the English README so backend counts, endpoint names, and unsupported
+surfaces do not diverge.
+
+- Rejected: only updating the English README. The repo already presents Korean
+  as a first-class operator surface.

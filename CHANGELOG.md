@@ -8,6 +8,19 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — public documentation sync
+
+### Changed
+
+- README, Korean README, and the GitHub Pages landing page now describe the
+  current five-backend surface: Codex, Claude Code, Gemini, OpenCode, and Pi.
+- Public docs now call out the current local reliability boundary: SQLite run
+  leases, persisted retry/pause/budget issue flags, file-tracker write locks,
+  and `/api/v1/health`.
+- Architecture docs now include `webapi.py`, packaged web assets,
+  `workflow/mutate.py`, `orchestrator/run_registry.py`, the Jira tracker
+  adapter, and the OpenCode backend.
+
 ## [0.9.0] — 4-stage pipeline simplification
 
 ### Changed

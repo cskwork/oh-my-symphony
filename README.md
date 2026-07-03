@@ -26,8 +26,8 @@ a Jira-style TUI you never have to leave your terminal for.
 
 - **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ OpenCode ↔ Pi with one
   YAML line, or mix backends per ticket. New agents (Ollama, local models,
-  anything with a CLI) drop in behind a thin `AgentBackend` Protocol — four
-  steps, no orchestrator changes.
+  anything with a CLI) drop in behind a thin `AgentBackend` Protocol without
+  changing the orchestrator.
 - **See what your agents are actually doing.** Live Kanban shows turn count,
   last event, accumulated tokens, and rate-limit headroom for every running
   card. No more "is it stuck or just thinking?" — and no SaaS dashboard to
@@ -38,13 +38,13 @@ a Jira-style TUI you never have to leave your terminal for.
   `tail -F` in any editor; macOS keep-awake stops the lock screen from
   killing overnight pipelines.
 - **No SaaS, no API key, no signup to try.** File-based Markdown Kanban
-  means tickets live in `git` next to your code. Linear is supported as a
-  drop-in tracker; you don't need it.
-- **Battle-tested core.** Forked from
+  means tickets live in `git` next to your code. Linear and Jira are supported
+  external trackers; you don't need either one to try Symphony.
+- **Battle-tested base, hardened for local operations.** Forked from
   [OpenAI's official Symphony reference implementation](https://github.com/openai/symphony).
-  The orchestrator, scheduler, retry policy, workspace lifecycle, and prompt
-  renderer are all upstream — this fork is a thin layer that adds the five
-  backends and the TUI.
+  This fork keeps the file-first orchestration model, then adds five agent
+  backends, the TUI/web operator surfaces, SQLite run leases, restart-safe
+  issue flags, and locked Markdown ticket writes.
 - **A real web app, not just a viewer.** The orchestrator port serves a
   Linear-style board: register issues, drag cards
   between columns, add / delete / rename columns, edit each column's stage
@@ -124,10 +124,13 @@ adds:
 3. A **built-in web Kanban app** on the orchestrator port — issue CRUD with
    drag-and-drop state moves, Learn skip, column add/delete/rename, per-column
    prompt editing, branch policy, and a dedicated stats page.
+4. A **single-node reliability ledger** in `.symphony/state.db` — active run
+   leases block duplicate dispatch across restarts, dead-owner leases are
+   reclaimed, and retry / pause / budget-exhausted flags survive process exit.
 
-The orchestrator, scheduler, retry policy, workspace manager, tracker layer,
-and prompt renderer are unchanged from upstream — this fork is a thin layer
-on top of a battle-tested orchestrator core.
+The architecture is still intentionally local and file-first: Markdown tickets
+remain the human source of truth, while SQLite stores runtime coordination
+state that should not be hand-edited.
 
 ## Pick an agent
 
@@ -504,7 +507,8 @@ stage-specific prompt files configured by `WORKFLOW.md`.
       │ ## Resolution     ┌──────────────────┐                │  + after_create  │
       │ + state: Done     │  AgentBackend    │  ◀────────────│    hook ran      │
       └───────────────────│  (codex/claude/  │                └──────────────────┘
-                          │   gemini)        │                          │
+                          │   gemini/open-   │                          │
+                          │   code/pi)       │                          │
                           │  per-turn loop   │  before_run hook ──▶ turn(s)
                           └──────────────────┘                          │
                                                                         ▼
@@ -590,15 +594,18 @@ JSON API endpoints:
 
 | Method | Path                              | Purpose                                      |
 |--------|-----------------------------------|----------------------------------------------|
+| GET    | `/api/v1/health`                  | Tick-loop / tracker / run-registry health    |
 | GET    | `/api/v1/state`                   | Snapshot — running, retrying, totals, limits |
 | GET    | `/api/v1/board`                   | Columns + issues + live run info             |
 | POST/PATCH/DELETE | `/api/v1/issues[...]`  | Issue CRUD (file tracker)                    |
 | PUT    | `/api/v1/workflow/states`         | Column add / delete / rename / reorder       |
 | GET/PUT| `/api/v1/workflow/prompts/<state>`| Read / edit a column's stage prompt          |
+| PUT    | `/api/v1/workflow/branch-policy`  | Update feature base / merge target branches  |
+| GET    | `/api/v1/git/branches`            | Local branch list for branch policy UI       |
 | GET    | `/api/v1/stats?days=N`            | Aggregated run statistics                    |
 | POST   | `/api/v1/refresh`                 | Coalesced trigger of poll + reconcile        |
-| POST   | `/api/v1/<id>/pause` `/resume`    | Hold / release a running worker              |
-| POST   | `/api/v1/<id>/skip-learn`         | Move idle Learn ticket to Human Review       |
+| POST   | `/api/v1/{id}/pause` `/resume`    | Hold / release a running worker              |
+| POST   | `/api/v1/issues/{id}/skip-learn`  | Move idle Learn ticket to Human Review       |
 
 ### CLI Kanban TUI (primary UI)
 
@@ -741,8 +748,20 @@ src/symphony/
     pi.py              Pi --mode json backend (per-turn subprocess, --session resume)
   trackers/
     __init__.py        TrackerClient Protocol + factory
-    file.py            FileBoardTracker (Markdown ticket files)
+    _retry.py          retry/backoff wrapper for network trackers
+    file.py            FileBoardTracker (locked Markdown ticket mutations)
+    jira.py            Jira REST tracker
     linear.py          LinearClient (Linear GraphQL)
+  workflow/
+    parser.py          WORKFLOW.md frontmatter/body parser
+    config.py          frozen config dataclasses
+    builder.py         ServiceConfig construction + validation
+    mutate.py          comment-preserving workflow edits for the web UI
+    preflight.py       dispatch-time validation
+  orchestrator/
+    core.py            scheduler/state machine
+    run_registry.py    SQLite WAL run leases + issue flags
+    contracts.py       stage-contract validation helpers
   cli/
     __init__.py        re-exports `main` for the `symphony` console_script
     __main__.py        keeps `python -m symphony.cli ...` working for service.py
@@ -755,12 +774,14 @@ src/symphony/
     keep_awake.py      macOS caffeinate wrapper (no-op on other platforms)
     wiki_sweep.py      Learn-prompt wiki integrity sweep
   agent.py             back-compat shim re-exporting backends.* symbols
-  workflow.py          typed config — adds AgentConfig.kind + backend configs
-  orchestrator.py      scheduler; uses build_backend() + build_tracker_client() factories
-  tui.py               Textual Kanban TUI (replaces server.py dashboard)
-  server.py            JSON API only (HTML root removed)
+  server.py            aiohttp server, health/state/refresh routes
+  webapi.py            web app REST routes + static SPA serving
+  stats.py             .symphony/stats.jsonl aggregation
+  skills.py            SKILL.md discovery + prompt injection
+  tui/                 Textual Kanban TUI package
   service.py           `symphony service` background lifecycle
   mock_codex.py        runnable via `python -m symphony.mock_codex` for demos/tests
+  web/static/          built-in browser app assets
 tui-open.sh            cross-platform launcher (macOS / Linux): doctor preflight + open TUI in a new terminal window
 tui-open.bat           Windows equivalent
 ```
@@ -773,9 +794,11 @@ pytest -q
 
 The test suite covers the upstream conformance suite, backend unit tests for
 the factory, event normalization, Claude / Pi usage accumulation, Gemini
-session synthesis, OpenCode command/session parsing, and Pi failure-reason detection, plus Textual
-`Pilot`-driven smoke tests for the TUI app. Subprocess-driven integration
-tests against real CLIs are intentionally not in CI — run them locally.
+session synthesis, OpenCode command/session parsing, Pi failure-reason
+detection, run-registry persistence, file-tracker locking, web API contracts,
+and Textual `Pilot`-driven smoke tests for the TUI app. Subprocess-driven
+integration tests against real CLIs are intentionally not in CI — run them
+locally.
 
 ## Design notes
 
@@ -810,40 +833,45 @@ The `AgentBackend` Protocol hides these differences. The orchestrator only
 sees normalized events (`session_started`, `turn_completed`, `turn_failed`,
 …) and the latest usage / rate-limit snapshots.
 
-### What the TUI does and does not do
+### What the TUI and web app do and do not do
 
-The board is observer-only: cards move when the agent rewrites the underlying
-ticket file (file tracker) or transitions the issue (Linear), never as a
-direct UI action. That matches the upstream design philosophy — the
-orchestrator is the source of truth and the UI is a thin reflection.
+The web app is the full browser editor for file boards: it can create, patch,
+delete, drag cards between configured states, edit workflow columns/prompts,
+and update branch policy through the same tracker/workflow modules the CLI
+uses. The TUI is optimized for keyboard operation: it can create/edit tickets,
+archive, confirm Done-gated cards, pause/resume running workers, skip Learn,
+filter, and inspect details without leaving the terminal.
 
 What you *can* do interactively:
 
 - Focus any card with `tab` / `shift+tab` or by clicking it.
 - Scroll a lane with the mouse wheel, `j` / `k`, or page keys.
 - Open a focused card's full description in a modal with `enter`.
+- Use `n`, `e`, `a`, `c`, `P`, `S`, and `/` for the core TUI write actions.
 
 What is intentionally out of scope:
 
-- **No card drag-drop.** Move tickets via `symphony board mv ID State`
-  (file tracker) or in your tracker UI directly.
-- **No agent-output log pane.** Agent stdout/stderr goes to the structured
+- **No drag-drop inside the terminal TUI.** Use the web board, `symphony board
+  mv ID State`, or the tracker UI when you want pointer-based state moves.
+- **No full agent-output log pane.** Agent stdout/stderr goes to the structured
   log; tail it with `tail -F log/symphony.log` in a side terminal.
-- **No write actions to the tracker** beyond what the agent does itself.
+- **No direct Linear/Jira mutation from the web board.** Browser issue CRUD is
+  file-tracker only; Linear/Jira boards degrade to read-only live status.
 
 ## What is *not* implemented
 
 Inherited from upstream:
 
 - SSH worker extension — single-host only.
-- Persistent retry queue across process restarts.
-- Tracker adapters beyond Linear and the file-based Kanban.
-- First-class tracker write APIs in the orchestrator. Ticket writes still
-  happen through the agent (`linear_graphql` for Codex, direct file edits for
-  the file-based Kanban).
+- Tracker adapters beyond Linear, Jira, and the file-based Kanban.
 
 Fork-specific gaps:
 
+- Run leases and issue safety flags persist in SQLite, but Symphony still does
+  not reattach to an in-process worker after a hard crash. Markdown ticket
+  state is the recovery checkpoint.
+- Retry attempts persist, but there is not yet a first-class run-history CLI or
+  API for operators to browse old attempts.
 - Claude Code's mid-turn streaming usage events are read but not surfaced;
   the terminal `result` event is the source of truth for token totals.
 - OpenCode token usage is parsed best-effort from JSON events; unknown event
