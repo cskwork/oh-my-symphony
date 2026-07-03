@@ -337,3 +337,69 @@ auto-commit snapshot path for cancelled turns.
   completed normally and reported an OpenCode session id.
 - Real Pi CLI E2E: temp file-board workflow using `pi --mode json -p ""`; one
   dispatch completed normally with token totals reported.
+
+# 2026-07-03 - Four-agent todo E2E triage plan
+
+## Goal
+
+Record the production-readiness gaps found by a real four-agent Symphony run
+against a static todo-app task, then preserve the fix path as a detailed plan.
+
+## Decisions
+
+### 1. Keep the live run isolated from the main board
+
+The E2E used a temporary clone and temp workspace root while preserving the
+real `dev` checkout and existing `kanban/` tickets. The temp workflow kept the
+same hooks and agent backends, with only workspace root, polling interval, and
+concurrency adjusted for the test.
+
+- Rejected: running the four generated-app tickets on the main board. That
+  would have mixed test artifacts with operator work and made cleanup risky.
+
+### 2. Treat the result as a failed production gate
+
+OpenCode and Pi both produced useful todo apps, but OpenCode missed a real
+browser Escape-cancel behavior and Pi did not transition out of `In Progress`.
+Claude and Codex did not produce apps because they hit orchestration-level
+failure modes first. The plan therefore does not claim production readiness.
+
+- Rejected: accepting generated DOM-shim evidence as sufficient. Real Chromium
+  found behavior the shim missed.
+
+### 3. Prioritize unattended-loop failures before UI polish
+
+The fix plan starts with Codex approval prompts, Claude empty-response loops,
+and Pi productive-without-transition behavior because those can leave the board
+looking active while no reliable delivery path exists.
+
+- Rejected: starting with the todo app bug itself. The app defect matters, but
+  the larger production risk is that Verify and orchestration allowed the
+  broken or unfinished states to persist.
+
+### 4. Serialize only git metadata setup, not whole workspace creation
+
+The concurrent `.git/config` lock failure points at the git worktree critical
+section. The plan scopes locking to worktree setup and git config writes, while
+keeping venv install outside the lock to preserve useful concurrency.
+
+- Rejected: lowering global agent concurrency. That would avoid the symptom
+  while failing the requested four-agent production scenario.
+
+## Artifacts
+
+- Plan: `docs/plans/2026-07-03-four-agent-todo-e2e-production-hardening.md`
+- Temp clone used for evidence:
+  `/private/tmp/symphony-e2e-todo-MJxJP2/repo`
+- Temp workspace root:
+  `/private/tmp/symphony-e2e-todo-MJxJP2/workspaces`
+
+## Verification
+
+- Temp `symphony doctor ./WORKFLOW.md` passed before the service run.
+- OpenCode generated harness: `node docs/e2e-todo/E2E-101/harness/run.js`
+  -> `23 passed, 0 failed`.
+- OpenCode real Chromium interaction found inline edit Escape-cancel failure.
+- Pi real Chromium interaction and persistence test passed.
+- Final documentation checks for this plan are recorded with the work that
+  added the plan file.
