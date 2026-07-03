@@ -2279,6 +2279,51 @@ def test_worker_exit_preserves_pause_flag_for_held_ticket():
     asyncio.run(_run())
 
 
+def test_worker_exit_error_auto_pauses_with_visible_reason(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-ERROR-PAUSE", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        _install_running_entry(orch, issue)
+
+        try:
+            await orch._on_worker_exit(
+                issue.id,
+                reason="turn_error",
+                error=(
+                    "429 The service may be temporarily overloaded; "
+                    "stderr: \x1b[31mbackend-internal\x1b[0m"
+                ),
+            )
+
+            flags = registry.get_issue_flags(issue.id)
+            assert flags is not None
+            assert flags.paused is True
+            assert flags.pause_reason is not None
+            assert "turn_error" in flags.pause_reason
+            assert "429 The service may be temporarily overloaded" in flags.pause_reason
+            assert "backend-internal" in flags.pause_reason
+            assert "\x1b" not in flags.pause_reason
+            retry = orch._retry[issue.id]
+            assert retry.error is not None
+            assert "429 The service may be temporarily overloaded" in retry.error
+            assert "backend-internal" in retry.error
+            assert "\x1b" not in retry.error
+
+            attention = orch.issue_attention(issue)
+            assert attention is not None
+            assert attention["kind"] == "paused"
+            assert attention["message"] == flags.pause_reason
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def test_eligible_refuses_paused_ticket_for_dispatch_and_retry():
     """`_eligible` returns False for a paused issue on both code paths.
 

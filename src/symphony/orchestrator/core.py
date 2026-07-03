@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -113,6 +114,21 @@ _pkg = sys.modules[__package__]
 
 
 log = get_logger()
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _clean_board_error_message(message: str) -> str:
+    without_ansi = _ANSI_ESCAPE_RE.sub("", message)
+    without_controls = _CONTROL_CHAR_RE.sub("", without_ansi)
+    return " ".join(without_controls.split())
+
+
+def _worker_error_pause_reason(reason: str, error: str | None) -> str:
+    detail = f"{reason}: {error}" if error else reason
+    clean = _clean_board_error_message(detail)
+    return f"worker error: {clean}; paused for operator inspection"
 
 
 def _update_state_turn_counter(debug: _IssueDebug, state: str) -> int:
@@ -3619,6 +3635,24 @@ class Orchestrator:
                 )
                 debug.last_error = f"max_turns reached ({attempt_cap}/attempt){suffix}"
         else:
+            failure_reason = f"{reason}: {error}" if error else reason
+            pause_reason = _worker_error_pause_reason(reason, error)
+            debug.last_error = pause_reason
+            self._paused_issue_ids.add(issue_id)
+            self._pause_reasons[issue_id] = pause_reason
+            self._set_issue_flags(
+                issue_id,
+                paused=True,
+                pause_reason=pause_reason,
+            )
+            log.warning(
+                "worker_error_auto_paused",
+                issue_id=issue_id,
+                issue_identifier=entry.issue.identifier,
+                reason=reason,
+                error=error,
+                pause_reason=pause_reason,
+            )
             next_attempt = (entry.retry_attempt or 0) + 1
             cfg = self._workflow_state.current()
             cap = cfg.agent.max_retry_backoff_ms if cfg is not None else 300_000
@@ -3628,7 +3662,7 @@ class Orchestrator:
                 identifier=entry.issue.identifier,
                 attempt=next_attempt,
                 delay_ms=delay_ms,
-                error=f"{reason}: {error}" if error else reason,
+                error=_clean_board_error_message(failure_reason),
                 kind="retry",
             )
         log.info(

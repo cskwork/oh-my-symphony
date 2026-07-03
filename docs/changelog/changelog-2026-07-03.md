@@ -643,6 +643,48 @@ out.
 - State route/snapshot gate: `.venv/bin/python -m pytest tests/test_orchestrator_dispatch.py::test_running_snapshot_carries_live_telemetry_for_supported_agent_kinds tests/test_server_routes.py::test_state_route_returns_orchestrator_snapshot -q`
   -> `2 passed`.
 
+# 2026-07-03 - SMA-27 Pi 429 RCA
+
+## Goal
+
+Explain the observed Pi backend-internal 429 retries during the live Symphony
+run for `SMA-27`.
+
+## Decision
+
+Treat the failure as a Pi upstream availability/rate-limit signal, not an app
+quality failure or Symphony dispatch defect.
+
+Evidence:
+
+- `log/symphony.log` shows `SMA-27` dispatched with `agent_kind=pi`, then Pi
+  emitted repeated backend-internal retry events with `429 The service may be
+  temporarily overloaded, please try again later`.
+- Each failed Pi turn ended as `turn_error`, then Symphony scheduled the normal
+  worker retry attempts.
+- After `agent.max_retries=3`, Symphony logged `agent_retry_cap_exhausted` and
+  moved the ticket to `Human Review`, matching the configured safety valve.
+- `kanban/SMA-27.md` records the same escalation and last error.
+
+Rejected causes:
+
+- Rejected: application test or implementation failure. The failing evidence is
+  the Pi upstream 429 before app-quality verification could complete.
+- Rejected: Symphony retry-loop bug. Focused tests confirm Pi retry events are
+  surfaced and max-retry exhaustion escalates instead of looping forever.
+- Rejected: local service-state proof. The service was no longer listening on
+  `127.0.0.1:9999` during this investigation, so persisted logs and the ticket
+  file are the authoritative evidence for this run.
+
+## Verification
+
+- `symphony doctor ./WORKFLOW.md` -> workflow checks passed except the known
+  sandbox-local workspace writability failure for `/Users/danny/symphony_workspaces`.
+- `curl -s http://127.0.0.1:9999/api/v1/state` -> connection refused; service
+  was not running at investigation time.
+- `PYTHONPATH=src .venv/bin/pytest tests/test_backends.py::test_pi_consume_stream_surfaces_compaction_events tests/test_orchestrator_max_retries.py::test_max_retries_exhausted_triggers_escalation_task`
+  -> `2 passed`.
+
 # 2026-07-03 - Four-agent rerun release gate
 
 ## Goal
@@ -731,3 +773,37 @@ Rejected alternatives:
   `/Users/danny/symphony_workspaces` writability; prompt, tracker, and viewer
   checks passed.
 - Spec written at `docs/spec/human-review-confirmation-gate/`.
+
+# 2026-07-03 - Worker errors pause issue board
+
+## Goal
+
+Make backend or worker error codes visible on the issue board and stop automatic
+progress until an operator inspects the ticket.
+
+## Decision
+
+Persist a paused issue flag on non-normal worker exits, using a sanitized
+operator-facing reason such as `worker error: turn_error: 429 ...; paused for
+operator inspection`.
+
+The existing retry entry remains scheduled under the pause. This keeps the
+recovery path intact, while the pause gate prevents hidden retry cycling until
+the operator resumes the issue.
+
+Rejected alternatives:
+
+- Rejected: convert every worker error to a terminal state. Transient provider
+  errors such as Pi `429` can still be retried after operator inspection.
+- Rejected: only log the error. Logs are not enough when the board is the live
+  operational surface.
+- Rejected: show raw stderr. ANSI/control bytes can make board text hard to
+  read, so the board message is normalized while preserving the error code and
+  backend text.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/pytest tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_with_visible_reason -q`
+  -> `1 passed`.
+- `PYTHONPATH=src .venv/bin/pytest tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_with_visible_reason tests/test_orchestrator_dispatch.py::test_worker_exit_preserves_pause_flag_for_held_ticket tests/test_orchestrator_dispatch.py::test_retry_timer_reparks_paused_ticket_without_dispatching tests/test_orchestrator_dispatch.py::test_issue_attention_reports_paused_non_running_ticket tests/test_orchestrator_dispatch.py::test_retry_schedule_write_through_and_continuation_clears_issue_flag -q`
+  -> `5 passed`.
