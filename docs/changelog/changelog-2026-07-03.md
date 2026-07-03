@@ -1026,3 +1026,52 @@ Rejected alternatives:
   -> all checks `PASS`.
 - `PYTHONPATH=src .venv/bin/python -m pytest -q`
   -> `1024 passed, 2 skipped, 2 warnings`.
+
+# 2026-07-03 - Worktree browser dependency setup
+
+## Goal
+
+Make Symphony-created workspaces use a Python environment compatible with the
+current package metadata and the checked-in browser acceptance gate.
+
+## Decision
+
+The worktree setup hook now prefers `python3.12`/`python3.13` before `python3.11`
+and installs `.[dev,browser]` instead of only `.[dev]`.
+
+Evidence from the fresh `dev` rerun:
+
+- Temp run root: `/private/tmp/symphony-release-e2e-r4-rDTUem`.
+- `REL-404` (Codex) generated a valid app; the host acceptance gate passed
+  against that app.
+- The worker `.venv` was created with Python 3.11 even though
+  `pyproject.toml` requires `>=3.12`, so editable install failed and the venv
+  had no `playwright`.
+- The ticket command used host/global `python`, which had Playwright 1.50 but
+  missed the required `chromium_headless_shell-1155` executable. This made the
+  worker mark a valid app `Blocked`.
+
+Rejected alternatives:
+
+- Rejected: relying on host/global `python`. It changes with operator shell
+  state and can carry mismatched Playwright/browser revisions.
+- Rejected: keeping browser dependencies out of worker venvs while requiring
+  browser gates in release tickets. That creates a guaranteed environment block
+  for browser UI work.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workspace.py::test_setup_worktree_script_uses_pyproject_compatible_browser_env -q`
+  failed before the fix because the script still preferred `python3.11` and
+  installed only `.[dev]`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workspace.py::test_setup_worktree_script_uses_pyproject_compatible_browser_env -q`
+  -> `1 passed`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workspace.py -q`
+  -> `29 passed`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workspace.py tests/test_static_todo_browser_acceptance.py -q`
+  -> `30 passed`.
+- `PYTHONPATH=src SYMPHONY_BROWSER_E2E=1 .venv/bin/python -m pytest tests/test_web_browser_e2e.py -q -rs`
+  -> `1 passed`.
+- `git diff --check` -> passed.
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1025 passed, 2 skipped, 2 warnings`.

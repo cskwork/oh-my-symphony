@@ -211,6 +211,17 @@ def test_symphony_link_dir_propagates_writes_back_to_source(tmp_path):
     assert (board / "DEMO-2.md").exists()
 
 
+def test_setup_worktree_script_uses_pyproject_compatible_browser_env():
+    script = (
+        Path(__file__).parents[1]
+        / "scripts"
+        / "symphony-setup-worktree.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "for candidate in python3.12 python3.13 python3.11 python3 python" in script
+    assert "-e '.[dev,browser]'" in script
+
+
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
 async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_path):

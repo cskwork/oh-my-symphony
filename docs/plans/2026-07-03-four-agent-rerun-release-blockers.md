@@ -97,6 +97,22 @@ Status at `2026-07-03 18:14 KST` from
 - The release gate remains red. Do not merge to `main`, tag, or publish until a
   fresh clone from the fixed `dev` branch completes all acceptance gates.
 
+Additional status from the replacement run:
+
+- `REL-403` was cancelled after the Claude provider quota pause; the restart
+  ticket is `REL-405`, which dispatched and moved to `In Progress`.
+- `REL-404` (Codex) generated an app that passes the host browser gate, but the
+  worker marked it `Blocked` because its ticket workspace could not run the
+  browser gate reliably.
+- Root cause found in the setup hook: it preferred `python3.11` while
+  `pyproject.toml` requires `>=3.12`, and it installed only `.[dev]` even
+  though the release browser gate needs the `browser` extra.
+- Follow-up fix in the main checkout: prefer `python3.12`/`python3.13` first
+  and install `.[dev,browser]` in `scripts/symphony-setup-worktree.sh`.
+- This fix does not by itself prove Codex can launch Chromium inside Codex's
+  workspace sandbox. The host gate passes, but a fresh run is still required to
+  determine whether worker-side browser launch is now reliable for all agents.
+
 ## Goal
 
 Run Symphony end-to-end with four live agent backends building the same static

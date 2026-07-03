@@ -159,11 +159,11 @@ for dir in kanban; do
   grep -qxF "$dir" "$exclude_file" 2>/dev/null || echo "$dir" >> "$exclude_file"
   _symphony_link_dir "$dir" "$HOST_REPO/$dir"
 done
-# Pick the first available Python interpreter. `python3.11` is preferred
-# because the project pins to >= 3.11, but we tolerate any newer 3.x so
-# the hook does not break on fresh hosts that only ship 3.12+.
+# Pick the first available Python interpreter that satisfies pyproject first.
+# The package currently requires >=3.12; keep 3.11 only as a last fallback so
+# older clones fail in pip with a clear reason instead of skipping venv setup.
 PYTHON=""
-for candidate in python3.11 python3.12 python3.13 python3 python; do
+for candidate in python3.12 python3.13 python3.11 python3 python; do
   if command -v "$candidate" >/dev/null 2>&1; then
     PYTHON="$candidate"; break
   fi
@@ -179,8 +179,8 @@ else
   "$PYTHON" -m venv .venv
   # `python -m pip` survives the venv-script path differences between
   # POSIX (`.venv/bin/pip`) and Windows (`.venv/Scripts/pip.exe`).
-  .venv/*/python -m pip install --quiet -e '.[dev]' 2>/dev/null \
-    || .venv/bin/python -m pip install --quiet -e '.[dev]' 2>/dev/null \
-    || .venv/Scripts/python -m pip install --quiet -e '.[dev]' 2>/dev/null \
+  .venv/*/python -m pip install --quiet -e '.[dev,browser]' 2>/dev/null \
+    || .venv/bin/python -m pip install --quiet -e '.[dev,browser]' 2>/dev/null \
+    || .venv/Scripts/python -m pip install --quiet -e '.[dev,browser]' 2>/dev/null \
     || echo "after_create: pip install failed; agent will fall back to host python." >&2
 fi
