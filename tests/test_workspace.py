@@ -772,6 +772,77 @@ async def test_commit_workspace_on_done_squashes_to_recorded_base(
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
+async def test_commit_workspace_on_done_refuses_protected_root_deletion(
+    tmp_path, monkeypatch
+):
+    """A bad in-turn commit must not be squashed into a ticket commit when it
+    deletes root files that define the repo's runtime contract."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+    (repo / "WORKFLOW.md").write_text("states: []\n")
+    (repo / "seed.txt").write_text("base")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base commit")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "config", "symphony.basesha", base_sha)
+
+    _git(repo, "rm", "-q", "pyproject.toml")
+    (repo / "feature.txt").write_text("useful worker output")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wip: bad deletion")
+
+    await commit_workspace_on_done(
+        repo, identifier="OLV-GUARD", title="protect root files"
+    )
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base_sha
+    log = _git(repo, "log", "--format=%s").stdout.strip().splitlines()
+    assert log == ["base commit"]
+    status = _git(repo, "status", "--short").stdout
+    assert "D  pyproject.toml" in status
+    assert "A  feature.txt" in status
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_refuses_high_volume_deletion(
+    tmp_path, monkeypatch
+):
+    """Mass deletion is treated as a corrupt worker snapshot, even when no
+    single protected root file is involved."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    docs = repo / "docs"
+    docs.mkdir()
+    for i in range(26):
+        (docs / f"old-{i}.md").write_text(f"old {i}\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base commit")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "config", "symphony.basesha", base_sha)
+
+    for i in range(26):
+        (docs / f"old-{i}.md").unlink()
+    (repo / "feature.txt").write_text("useful worker output")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wip: destructive delete")
+
+    await commit_workspace_on_done(
+        repo, identifier="OLV-GUARD2", title="refuse mass delete"
+    )
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base_sha
+    log = _git(repo, "log", "--format=%s").stdout.strip().splitlines()
+    assert log == ["base commit"]
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
 async def test_commit_workspace_on_done_no_base_falls_back_to_plain_commit(
     tmp_path, monkeypatch
 ):

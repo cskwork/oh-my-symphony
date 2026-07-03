@@ -401,6 +401,18 @@ async def commit_workspace_on_done(
         '  # and working tree so the final `git commit` captures everything.\n'
         '  git reset --soft "$BASE" || exit 44\n'
         'fi\n'
+        'DELETE_COUNT="$(git diff --cached --name-only --diff-filter=D -- . | wc -l | tr -d "[:space:]")"\n'
+        'PROTECTED_DELETE="$(git diff --cached --name-only --diff-filter=D -- '
+        'pyproject.toml WORKFLOW.md WORKFLOW.example.md WORKFLOW.file.example.md '
+        '2>/dev/null | sed -n "1p")"\n'
+        'if [ -n "$PROTECTED_DELETE" ]; then\n'
+        '  echo "auto_commit: refusing protected deletion: $PROTECTED_DELETE"\n'
+        '  exit 45\n'
+        'fi\n'
+        'if [ "${DELETE_COUNT:-0}" -gt 25 ]; then\n'
+        '  echo "auto_commit: refusing destructive snapshot with $DELETE_COUNT deleted files"\n'
+        '  exit 45\n'
+        'fi\n'
         'git commit -m "$SYMPHONY_AUTO_COMMIT_MSG" || exit 43\n'
     )
     env = {

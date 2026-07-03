@@ -493,6 +493,28 @@ keeping venv install outside the lock to preserve useful concurrency.
 - Final documentation checks for this plan are recorded with the work that
   added the plan file.
 
+# 2026-07-03 - Auto-commit destructive snapshot guard
+
+## Goal
+
+Prevent a worker's bad in-turn commit from being squashed into a branch that
+deletes core repository files during the release E2E gate.
+
+## Decisions
+
+### 1. Refuse protected root-file and high-volume deletions at auto-commit time
+
+`commit_workspace_on_done` now inspects the staged squash before creating the
+final ticket commit. It refuses deletion of root contract files
+(`pyproject.toml`, `WORKFLOW*.md`) and refuses unusually large delete sets.
+
+- Rejected: relying on auto-merge to catch the damage later. The failed
+  OpenCode release lane showed the destructive branch can still reach Human
+  Review with browser-passing artifacts, which is too late for a safe release
+  signal.
+- Rejected: blocking all deletions. Small, intentional cleanup can be valid;
+  the guard targets repo-contract loss and mass deletion.
+
 # 2026-07-03 - E2E hardening item 1: Codex approvals
 
 ## Goal
