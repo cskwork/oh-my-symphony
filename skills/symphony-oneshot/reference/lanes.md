@@ -101,9 +101,33 @@ Outputs:
 For each Build/Verify/QA/Deliver ticket in plan.md, create it via:
   symphony board new BUILD-N "<title>" --priority 2 \
     --description "$(cat <<'EOF'
-read .oneshot/vault/plan.md §BUILD-N for the spec
+Goal:
+- <one outcome this ticket owns>
+
+Scope:
+- In: <files, flows, components, APIs>
+- Out: <nearby work this ticket must not touch>
+
+Dependencies:
+- blocked_by: <ids or none>
+- Contract: <contracts.md section owned or consumed>
+- Plan anchor: .oneshot/vault/plan.md §BUILD-N
+
+Acceptance criteria:
+- WHEN <event> THEN <observable behavior>
+- IF <edge/error case> THEN <observable behavior>
+
+Verification:
+- <focused command>
+- <lint/type/build/full-suite command if relevant>
+
+Done evidence:
+- Append a claims.md, verification.md, QA, or delivery entry as appropriate.
 EOF
 )"
+The board description is the worker prompt. It may point at `plan.md`, but it
+must still include goal, scope, dependencies, acceptance criteria,
+verification, and done evidence.
 Number each lane's tickets by task-table order, then run `symphony board new`
 in that same order. Ticket suffixes are dispatch-order metadata in Symphony;
 do not give a later task a lower number.

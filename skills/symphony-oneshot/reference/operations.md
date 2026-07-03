@@ -3,11 +3,11 @@
 This file holds operator-facing details that are useful during a OneShot run
 but too bulky for `SKILL.md`.
 
-## OneShot vs using-symphony
+## OneShot route vs ad-hoc Symphony operation
 
-| `using-symphony` | `symphony-oneshot` |
+| Ad-hoc operation | OneShot route |
 |---|---|
-| You write a ticket; one ticket equals one task. | You write one prompt; the skill produces N tickets. |
+| You write a ticket; one ticket equals one task. | You write one prompt; the router produces N tickets. |
 | One lane can be enough. | Multi-lane pipeline: Brief, Plan, Build, Verify, QA, Polish, Deliver. |
 | Shared knowledge is optional and local to the operator. | All tickets read and write `.oneshot/vault/`. |
 | Verification is manually decided by the operator. | Verification is a hard gate before Deliver. |

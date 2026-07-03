@@ -1,4 +1,4 @@
-"""Contract: symphony-monorepo ships a parseable WORKFLOW with the worktree hook.
+"""Contract: symphony-monorepo support bundle ships a parseable WORKFLOW.
 
 `setup-monorepo.sh` deliberately does NOT emit a per-service WORKFLOW (that is
 workspace-specific); it copies prompts, wires permissions, and points the user

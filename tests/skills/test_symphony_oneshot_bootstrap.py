@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ONESHOT = REPO_ROOT / "skills" / "symphony-oneshot"
 BOOTSTRAP = ONESHOT / "templates" / "bootstrap.sh"
 LANES = ONESHOT / "reference" / "lanes.md"
+WORKFLOW = ONESHOT / "templates" / "WORKFLOW.oneshot.md"
 
 
 def _deliver_gate_vault_files() -> list[str]:
@@ -106,6 +107,16 @@ def _hermetic_project(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 
 def test_bootstrap_script_exists() -> None:
     assert BOOTSTRAP.is_file(), f"missing bootstrap script: {BOOTSTRAP}"
+
+
+def test_plan_lane_requires_self_contained_ticket_descriptions() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "The board description is the worker prompt" in workflow
+    assert "Acceptance criteria:" in workflow
+    assert "Verification:" in workflow
+    assert "Done evidence:" in workflow
+    assert "Read .oneshot/vault/plan.md §BUILD-1 for the spec." not in workflow
 
 
 @pytest.mark.skipif(

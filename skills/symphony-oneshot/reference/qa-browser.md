@@ -80,7 +80,7 @@ embeds the screenshots inline, and uses A4 + 18mm margins by default.
 | Date         | 2026-05-09T15:42Z                      |
 | Build SHA    | abc1234                                |
 | Branch       | main                                   |
-| QA Agent     | claude-opus-4-7 via symphony-oneshot   |
+| QA Agent     | claude-opus-4-7 via OneShot route      |
 | Spec file    | tests/e2e/qa.spec.ts                   |
 | Total tests  | 14                                     |
 | Passed       | 14                                     |

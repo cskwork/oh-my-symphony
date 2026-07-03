@@ -20,6 +20,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Architecture docs now include `webapi.py`, packaged web assets,
   `workflow/mutate.py`, `orchestrator/run_registry.py`, the Jira tracker
   adapter, and the OpenCode backend.
+- Operator skill discovery now uses one routed `using-symphony` skill.
+  OneShot and monorepo assets remain as support bundles for templates,
+  scripts, and references.
 
 ## [0.9.0] — 4-stage pipeline simplification
 

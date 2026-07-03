@@ -20,7 +20,8 @@ cp -R skills "$TARGET/"
 cp AGENTS.md GEMINI.md "$TARGET/"
 mkdir -p "$TARGET/.claude/skills"
 ln -s ../../skills/using-symphony "$TARGET/.claude/skills/using-symphony"
-ln -s ../../skills/symphony-oneshot "$TARGET/.claude/skills/symphony-oneshot"
+ln -s ../../skills/symphony-oneshot "$TARGET/.claude/skills/symphony-oneshot"   # support bundle path
+ln -s ../../skills/symphony-monorepo "$TARGET/.claude/skills/symphony-monorepo" # support bundle path
 chmod +x "$TARGET/tui-open.sh"
 ```
 
@@ -50,16 +51,19 @@ python3.12 -m venv .venv
 | --- | --- |
 | `WORKFLOW.md` | Runtime config and prompt entrypoint |
 | `docs/symphony-prompts/` | Worker prompts; dispatched agents read these |
-| `skills/` | Canonical operator skills |
-| `.claude/skills/<name>` | Claude Code discovery symlinks to `skills/<name>` |
+| `skills/using-symphony/` | Canonical operator router skill |
+| `skills/symphony-oneshot/`, `skills/symphony-monorepo/` | Support bundles for router templates, scripts, and references |
+| `.claude/skills/using-symphony` | Claude Code discovery symlink to the router |
+| `.claude/skills/symphony-*` | Compatibility symlinks so bundled templates can read support files by path |
 | `AGENTS.md` | Codex entrypoint pointing to repo skills |
 | `GEMINI.md` | Gemini entrypoint pointing to repo skills |
 | `tui-open.sh`, `tui-open.bat` | One-shot board launchers |
 | `tools/board-viewer/` | Web HTML board viewer for `--viewer-port` (silently no-ops if absent) |
 | `scripts/symphony-setup-worktree.sh` | Worktree-setup body invoked by the default `after_create` hook in `WORKFLOW.example.md`. Without it, every fresh ticket dispatch fails at the hook stage with `No such file or directory`. |
 
-`skills/<name>/` is the source of truth. Edit only the canonical files under
-`skills/`; platform entrypoints should point at them.
+`skills/using-symphony/SKILL.md` is the only operator activation route. Edit
+only the canonical files under `skills/`; platform entrypoints should point at
+them.
 
 ## Preserve the default pipeline
 

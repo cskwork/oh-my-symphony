@@ -1,20 +1,39 @@
 ---
 name: using-symphony
-description: Use for Symphony Kanban operations including tickets, TUI/service runs, workflow prompts, delegation, and dispatch or worker failure triage.
+description: Single Symphony operator router for Kanban tickets, service/TUI runs, workflow prompts, delegation, OneShot runs, monorepo bootstrap, and worker failure triage.
 ---
 
 # Using Symphony
 
 Symphony is a polling orchestrator that reads Kanban tickets and runs a
 coding-agent CLI (Codex, Claude Code, Gemini, AGY/Antigravity, Kiro, OpenCode,
-or Pi) against each ticket in
-an isolated workspace. Use this skill for operator work: creating tickets,
-running the orchestrator, editing workflow config, bootstrapping Symphony into
-another repo, and triaging worker failures.
+or Pi) against each ticket in an isolated workspace. This file is the single
+operator router: classify the request, load only the matching reference, then
+act.
 
 Start by reading the target `WORKFLOW.md` and one or two real `kanban/*.md`
 files. Symphony behavior is workflow-specific, and forks commonly customize
 lanes, prompts, hooks, workspace roots, and agent backends.
+
+## Route
+
+State the route in one line, then open only the reference that route needs.
+
+| Signal | Route | Read |
+| --- | --- | --- |
+| add/list/show/move tickets, start service/TUI/API, inspect state | OPERATE | `reference/operations.md` |
+| edit `WORKFLOW.md`, agent kind, hooks, prompts, workspace, Slack hooks | CONFIGURE | `reference/workflow-config.md` |
+| rename lanes, add state prompts, change pipeline shape | CUSTOMIZE | `reference/customization.md` |
+| break a large request into Symphony board tickets | DELEGATE | `reference/delegation.md` |
+| one prompt should become a full evidence-gated delivery pipeline | ONESHOT | `../symphony-oneshot/reference/operations.md` |
+| OneShot plan quality, ticket slicing, QA/PDF, vault, or lane gates | ONESHOT-DEEP | `../symphony-oneshot/reference/decomposition.md`, then the needed OneShot reference |
+| bootstrap Symphony into another repo | BOOTSTRAP | `reference/bootstrapping.md` |
+| bootstrap isolated worktrees for a monorepo/polyrepo | MONOREPO | `../symphony-monorepo/references/workflow-template.md` and `../symphony-monorepo/scripts/setup-monorepo.sh` |
+| worker exit, auth stall, blank TUI, stuck service, platform issue | TRIAGE | `reference/troubleshooting.md` or `reference/platform-compat.md` |
+
+Support bundles under `skills/symphony-oneshot/` and
+`skills/symphony-monorepo/` intentionally do not have their own `SKILL.md`.
+They provide templates, scripts, and deep references for this router.
 
 ## Core Model
 
@@ -29,6 +48,25 @@ lanes, prompts, hooks, workspace roots, and agent backends.
 - The default Verify prompt expects the `symphony/<ID>` branch to be merged or
   proven ready against the configured target branch before the ticket moves to
   `Learn`.
+
+## Board Ticket Quality Gate
+
+Before registering more than one ticket, write the task list first and reject
+bad slices:
+
+- Independently testable: if tests require unbuilt work, merge the slice or
+  add `blocked_by`.
+- Self-contained prompt: the ticket description includes goal, scope, files,
+  acceptance criteria, tests, dependencies, and done evidence.
+- One contract owner: a ticket owns one behavior/API/data contract, not a
+  grab bag.
+- Small enough for one worker: rough limit <=5 files and <=500 net lines for a
+  Build ticket.
+- Ordered IDs: assign suffixes by walking the task list top to bottom, then
+  create files in that same order.
+
+Ticket descriptions are worker prompts. Do not register vague tickets like
+`implement frontend`; register a bounded slice with observable checks.
 
 ## Non-Negotiable Preflight
 
@@ -109,6 +147,9 @@ is off whenever the block is absent — no extra cleanup needed.
 | Edit `WORKFLOW.md`, agent kind, hooks, tracker, workspace | `reference/workflow-config.md` |
 | Rename lanes, add per-state prompts, customize pipelines | `reference/customization.md` |
 | Delegate independent sub-tasks to Symphony workers | `reference/delegation.md` |
+| Run a single prompt through the OneShot pipeline | `../symphony-oneshot/reference/operations.md` |
+| Improve OneShot issue decomposition | `../symphony-oneshot/reference/decomposition.md` |
+| Bootstrap a monorepo worktree workflow | `../symphony-monorepo/references/workflow-template.md` |
 | Diagnose `worker_exit`, `hook_failed`, blank TUI, auth stalls | `reference/troubleshooting.md` |
 | Set up/debug Windows, macOS, Linux behavior | `reference/platform-compat.md` |
 | Configure `.gitignore` for Symphony-generated docs/logs | `reference/gitignore-recommendations.md` |
@@ -134,7 +175,5 @@ minute, inspect backend auth, command, and stdin behavior. See
 - The user wants to write code inside a workspace Symphony already created for
   them; handle it as a normal coding task using that agent backend's
   conventions.
-- The user wants a whole product built end-to-end from a single prompt with the
-  OneShot knowledge-vault and PDF-gated workflow; use `symphony-oneshot`.
 - The user is asking general Linear API questions outside a Symphony workflow;
   use the project README and upstream Linear docs instead.

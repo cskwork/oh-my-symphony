@@ -19,6 +19,41 @@ For each candidate ticket:
    `contracts.md`. Two tickets owning the same contract is a merge conflict
    waiting to happen.
 
+## Ticket descriptions are worker prompts
+
+The Plan lane must not create tickets whose description only says "read
+plan.md". A ticket can point at its plan section, but its board description
+must carry the minimum context needed for a fresh worker:
+
+```text
+Goal:
+- <one outcome>
+
+Scope:
+- In: <files, flows, components, APIs>
+- Out: <nearby work to avoid>
+
+Dependencies:
+- blocked_by: <ids or none>
+- Contract: <the contract section this ticket owns or consumes>
+
+Acceptance criteria:
+- WHEN <event> THEN <observable behavior>
+- IF <edge/error> THEN <observable behavior>
+
+Verification:
+- <focused command>
+- <integration/full-suite command if this ticket owns it>
+
+Done evidence:
+- claim entry, verification entry, QA artifacts, or delivery.md section
+```
+
+This follows the spec-first discipline: requirements are observable, design is
+separate from acceptance criteria, and tasks are small enough to verify
+independently. If a Build slice needs more than this, put the full detail under
+`## BUILD-N` in `plan.md` and summarize the exact anchor in the ticket.
+
 ## Ticket numbering is task order
 
 The Plan lane must treat ticket IDs as ordering metadata, not decoration.

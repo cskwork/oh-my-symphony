@@ -142,28 +142,120 @@ Outputs:
 - `$ONESHOT_ROOT/.oneshot/vault/architecture.md` (system design, components, data model)
 - `$ONESHOT_ROOT/.oneshot/vault/contracts.md` (interface contracts between Build slices)
 
-For each Build/Verify/QA/Deliver ticket in plan.md, create it from the project root with the **next lane as its starting state** (this is critical — `--state` defaults to Todo which is NOT in active_states).
+Plan quality rules:
+- Each Build ticket owns one contract boundary: a route, data model, UI flow, CLI command, integration, or proof surface.
+- Each ticket must be independently testable. If not, merge it with its dependency or add `blocked_by`.
+- Keep Build tickets small enough for one worker: roughly <=5 files and <=500 net lines.
+- Acceptance criteria must be observable: `WHEN <event> THEN <behavior>` or `IF <edge case> THEN <behavior>`.
+- Separate application development, verification, browser QA, and delivery work. Do not hide test/commit prep inside a giant Build ticket.
+
+`plan.md` must contain:
+- a task table in execution order with ID, title, starting state, dependencies, owned contract, files/areas, acceptance summary, and verification command;
+- a `## BUILD-N` / `## VERIFY-N` / `## QA-N` / `## DELIVER-N` section for every ticket you will create;
+- dependency notes precise enough to copy into each ticket frontmatter as `blocked_by`.
+
+For each Build/Verify/QA/Deliver ticket in plan.md, create it from the project root with the **next lane as its starting state** (this is critical — `--state` defaults to Todo which is NOT in active_states). The board description is the worker prompt. It may point at `plan.md`, but it must also be self-contained.
 
 Ticket IDs are order metadata. Assign suffixes by walking the `plan.md` task table from top to bottom, then create the kanban files in that same order. Example: the first Build task in the table is `BUILD-1`, the second is `BUILD-2`, and a later task must never receive a lower suffix.
 
 ```bash
 cd "$ONESHOT_ROOT"
+desc_file="$(mktemp)"
+cat > "$desc_file" <<'DESC'
+Goal:
+- <one outcome this ticket owns>
+
+Scope:
+- In: <files, flows, components, APIs>
+- Out: <nearby work this ticket must not touch>
+
+Dependencies:
+- blocked_by: <ids or none>
+- Contract: <contracts.md section owned or consumed>
+- Plan anchor: .oneshot/vault/plan.md §BUILD-1
+
+Acceptance criteria:
+- WHEN <event> THEN <observable behavior>
+- IF <edge/error case> THEN <observable behavior>
+
+Verification:
+- <focused command>
+- <lint/type/build/full-suite command if relevant>
+
+Done evidence:
+- Append a claims.md entry with changed files, tests run, and residual risk.
+DESC
 symphony board new BUILD-1 "<title>" --priority 2 --state Build \
-  --description "Read .oneshot/vault/plan.md §BUILD-1 for the spec."
-symphony board new BUILD-2 "<title>" --priority 2 --state Build \
-  --description "Read .oneshot/vault/plan.md §BUILD-2 for the spec."
-# ... etc, one per slice ...
+  --description "$(cat "$desc_file")"
+# Repeat the same description-file shape for BUILD-2, BUILD-3, etc. Each
+# ticket gets its own concrete goal/scope/dependencies/criteria/tests.
 
 symphony board new VERIFY-1 "Verify all build slices" --priority 2 --state Verify \
-  --description "Re-run every claim in claims.md. Per Verify lane prompt."
+  --description "Goal:
+- Re-run every Build claim and prove the integrated result.
+
+Scope:
+- In: claims.md, plan.md, full project test/lint/type/build surface.
+- Out: application code edits.
+
+Dependencies:
+- blocked_by: all BUILD-* tickets.
+
+Acceptance criteria:
+- WHEN each claim command is rerun THEN it SHALL pass from a clean checkout.
+- WHEN the full suite runs THEN it SHALL pass or record exact failing evidence.
+
+Verification:
+- Use each claim's run-to-prove command.
+- Run the full suite/lint/type/build commands listed in plan.md.
+
+Done evidence:
+- Append verification.md with verdict: GREEN or RED."
 
 # QA only if browser app
 [ -f "$ONESHOT_ROOT/.oneshot/vault/.is_browser_app" ] && \
   symphony board new QA-1 "Playwright QA + PDF" --priority 2 --state QA \
-    --description "Drive the running app via Playwright. Per QA lane prompt."
+    --description "Goal:
+- Prove browser flows from the brief with Playwright and produce the signed QA evidence.
+
+Scope:
+- In: browser flows, screenshots, accessibility checks, qa-report.md, qa-report.pdf.
+- Out: application code edits except test/spec adaptation.
+
+Dependencies:
+- blocked_by: VERIFY-1 with verdict GREEN.
+
+Acceptance criteria:
+- WHEN golden flows run THEN Playwright SHALL pass and save screenshots.
+- IF edge/accessibility cases fail THEN qa-report.md SHALL end with BLOCKED.
+- WHEN approved THEN qa-report.pdf and sha256 SHALL be present.
+
+Verification:
+- npx playwright test tests/e2e/qa.spec.ts --reporter=list,json
+- bash .claude/skills/symphony-oneshot/templates/qa-pdf.sh"
 
 symphony board new DELIVER-1 "Final packaging + sign-off" --priority 2 --state Deliver \
-  --description "Run the Deliver gate. Write delivery.md. Per Deliver lane prompt."
+  --description "Goal:
+- Run the delivery gate, write delivery.md, and commit the delivered result.
+
+Scope:
+- In: .oneshot/vault delivery evidence, final commit/tag.
+- Out: new product scope.
+
+Dependencies:
+- blocked_by: VERIFY-1 and QA-1 when browser QA exists.
+
+Acceptance criteria:
+- WHEN the Deliver gate runs THEN all required vault files SHALL exist.
+- IF browser app THEN qa-report.pdf hash SHALL match qa-report.pdf.sha256.
+- WHEN complete THEN delivery.md SHALL cite verification evidence.
+
+Verification:
+- Run the Deliver hard gate in this lane prompt.
+
+Done evidence:
+- delivery.md plus final commit/tag details."
+rm -f "$desc_file"
 ```
 
 For ordering, edit each ticket's frontmatter to add `blocked_by: [BUILD-1]` etc. Note that Symphony's `blocked_by` is advisory — workers should still self-check via `symphony board show <BLOCKER>`.

@@ -243,6 +243,38 @@ details inside a durable evidence file.
 - Rejected: soft-warning fabricated evidence paths. Missing evidence remains a
   hard contract failure because it means the handoff is not auditable.
 
+# 2026-07-03 - Single Symphony operator skill router
+
+## Goal
+
+Collapse Symphony's operator skill discovery to one routed skill while keeping
+the OneShot and monorepo templates available at their existing paths.
+
+## Decisions
+
+### 1. Make `using-symphony` the only routable `SKILL.md`
+
+`skills/using-symphony/SKILL.md` now classifies operator requests by intent:
+operate, configure, customize, delegate, OneShot, bootstrapping, monorepo, and
+triage. `skills/symphony-oneshot/` and `skills/symphony-monorepo/` remain as
+support bundles without `SKILL.md`, so templates/scripts still resolve but
+agents no longer see competing top-level Symphony skills.
+
+- Rejected: moving every OneShot and monorepo file under `using-symphony/`.
+  That would churn tested paths such as `skills/symphony-oneshot/templates/`
+  without improving routing.
+
+### 2. Treat board ticket descriptions as worker prompts
+
+Delegation and OneShot planning now require each generated ticket to include a
+self-contained goal, scope, dependencies, acceptance criteria, verification,
+and done evidence. The Plan lane can still point at `plan.md`, but the board
+description must carry enough context for a fresh worker.
+
+- Rejected: leaving Build tickets as `Read plan.md` stubs. It hides the real
+  task boundary and makes issue quality depend on external context instead of
+  the registered board prompt.
+
 # 2026-07-03 - Release stop cleanup follow-up
 
 ## Goal

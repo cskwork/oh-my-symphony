@@ -11,7 +11,8 @@
 #   3) Appends .symphony/ to $WORKSPACE_ROOT/.gitignore if missing
 #   4) Registers bidirectional permissions.additionalDirectories
 #      in both .claude/settings.local.json files (needs jq)
-#   5) Symlinks the three symphony-* skills into $WORKSPACE_ROOT/.claude/skills/
+#   5) Symlinks the using-symphony router and support bundles into
+#      $WORKSPACE_ROOT/.claude/skills/
 
 set -euo pipefail
 
@@ -80,7 +81,7 @@ register_additional_dir() {
 register_additional_dir "$ABS_WORKSPACE_ROOT/.claude/settings.local.json" "$ABS_SYMPHONY_HOME"
 register_additional_dir "$ABS_SYMPHONY_HOME/.claude/settings.local.json" "$ABS_WORKSPACE_ROOT"
 
-# 5) symlink all symphony-* skills into the workspace
+# 5) symlink router/support bundles into the workspace
 link_skill() {
   local src="$1"
   local name
@@ -105,9 +106,9 @@ link_skill() {
   fi
 }
 
-link_skill "$ABS_SYMPHONY_HOME/skills/symphony-monorepo"
-link_skill "$ABS_SYMPHONY_HOME/skills/symphony-oneshot"
 link_skill "$ABS_SYMPHONY_HOME/skills/using-symphony"
+link_skill "$ABS_SYMPHONY_HOME/skills/symphony-oneshot"
+link_skill "$ABS_SYMPHONY_HOME/skills/symphony-monorepo"
 
 cat <<EOF
 

@@ -8,16 +8,18 @@ gets from `.claude/skills/`.
 
 ## Skill activation
 
-Gemini activates skills through the `activate_skill` tool after reading
-their metadata. Treat each entry below as a skill definition: read the
-`description` to decide if it applies to the current user request, then
-load `skills/<name>/SKILL.md` (via `Read` or `read_file`) and follow it.
+Gemini activates Symphony through one operator skill after reading its
+metadata: read the `description`, then load
+`skills/using-symphony/SKILL.md` (via `Read` or `read_file`) and follow its
+route table.
 
-Source of truth lives in `skills/<name>/`. `.claude/skills/` is a thin
-symlink layer for Claude Code's native discovery only — do not edit
-through it.
+Source of truth lives in `skills/using-symphony/`. `.claude/skills/` is a thin
+symlink layer for Claude Code's native discovery only — do not edit through it.
+`skills/symphony-oneshot/` and `skills/symphony-monorepo/` are support bundles
+for templates/scripts/references used by the router, not separate activation
+routes.
 
-## Available skills (operator-facing)
+## Available skill (operator-facing)
 
 ### `using-symphony`
 
@@ -25,29 +27,17 @@ through it.
 > Gemini / Pi) against a Kanban board via this `oh-my-symphony` repo
 > — adding/listing/transitioning tickets, launching the TUI, inspecting
 > orchestrator state, customizing the workflow (lanes, per-state prompts),
-> delegating sub-tasks to free up context, or diagnosing dispatch failures.
+> delegating sub-tasks to free up context, one-shotting a prompt into an
+> evidence-gated board, bootstrapping a monorepo workflow, or diagnosing
+> dispatch failures.
 > Triggers on phrases like "add a symphony task", "run symphony", "dispatch
 > this ticket", "symphony board", "WORKFLOW.md", "symphony tui won't start",
 > "ticket failed with worker_exit", "customize kanban states", "deploy
 > pipeline workflow", "delegate to symphony", "agent.kind: pi", "agent
-> silent for N seconds".
+> silent for N seconds", "one-shot this", "decompose and dispatch with proof",
+> or "symphony monorepo".
 
 Entry: `skills/using-symphony/SKILL.md`
-
-### `symphony-oneshot`
-
-> Use when the user wants a single prompt — a feature, a bugfix, a
-> refactor, or a whole product — driven end-to-end through a rigorous
-> decompose-build-verify-QA-deliver pipeline with a shared `.oneshot/vault/`
-> for cross-agent knowledge and mechanical bash gates that refuse to close
-> without proof. For browser apps, the QA gate produces Playwright +
-> screenshots + a signed PDF report. Distinct from `using-symphony` (which
-> is the bare CLI for ad-hoc tickets). Triggers on phrases like "one-shot
-> this", "OneShot pattern", "decompose and dispatch with proof", "build
-> with verification gates", "Playwright sign-off PDF", "fix this bug
-> end-to-end", "ship this feature with QA evidence".
-
-Entry: `skills/symphony-oneshot/SKILL.md`
 
 ## Worker-side guidance
 
@@ -77,5 +67,5 @@ The skill files use Claude Code tool names (`Read`, `Bash`, `Edit`,
 - Read `WORKFLOW.md` and a couple of `kanban/*.md` files before any
   recommendation — settings vary per fork.
 - Run `symphony doctor ./WORKFLOW.md` before launching anything.
-- See `skills/using-symphony/SKILL.md` "Bootstrapping" for the full file
-  set required when copying Symphony into another project.
+- See the `BOOTSTRAP` route in `skills/using-symphony/SKILL.md` for the full
+  file set required when copying Symphony into another project.
