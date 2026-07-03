@@ -2354,6 +2354,7 @@ def test_retry_timer_reparks_paused_ticket_without_dispatching(monkeypatch):
         orch._loop = asyncio.get_running_loop()
         orch._claimed.add(issue.id)
         orch._paused_issue_ids.add(issue.id)
+        orch._pause_reasons[issue.id] = "worker error: turn_error: simulated"
         monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
 
         # Schedule a "natural" retry — pretend a worker just exited.
@@ -2375,7 +2376,7 @@ def test_retry_timer_reparks_paused_ticket_without_dispatching(monkeypatch):
             assert reparked.attempt == original_attempt, (
                 "paused re-park must not consume a retry attempt"
             )
-            assert reparked.error == "paused"
+            assert reparked.error == "worker error: turn_error: simulated"
             # Hold delay roughly matches PAUSED_RETRY_HOLD_MS.
             expected_due = (
                 orch._loop.time() * 1000 + PAUSED_RETRY_HOLD_MS

@@ -807,3 +807,42 @@ Rejected alternatives:
   -> `1 passed`.
 - `PYTHONPATH=src .venv/bin/pytest tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_with_visible_reason tests/test_orchestrator_dispatch.py::test_worker_exit_preserves_pause_flag_for_held_ticket tests/test_orchestrator_dispatch.py::test_retry_timer_reparks_paused_ticket_without_dispatching tests/test_orchestrator_dispatch.py::test_issue_attention_reports_paused_non_running_ticket tests/test_orchestrator_dispatch.py::test_retry_schedule_write_through_and_continuation_clears_issue_flag -q`
   -> `5 passed`.
+
+# 2026-07-03 - Paused retry keeps Pi error visible
+
+## Goal
+
+Verify the worker-error pause behavior against a live Pi dispatch and keep the
+board message clear after the paused retry hold timer fires.
+
+## Decision
+
+When a paused issue's retry timer fires, re-park the retry with the stored pause
+reason instead of replacing the visible error with the generic string
+`paused`.
+
+Evidence from Pi E2E:
+
+- Temp run root: `/private/tmp/symphony-pi-e2e-BmEKJq`.
+- `symphony doctor ./WORKFLOW.md` passed after temp board init.
+- Pi dispatch for `PI-E2E-301` failed before app generation because the Pi CLI
+  could not create its session directory:
+  `code: 'EPERM'`, `syscall: 'mkdir'`,
+  `path: '/Users/danny/.pi/agent/sessions/--private-tmp-symphony-pi-e2e-BmEKJq-workspaces-PI-E2E-301--'`.
+- The initial fix paused the issue, but the retry re-park overwrote the state
+  API error with `paused`.
+- After the re-park fix, `PI-E2E-302` stayed `paused: true` and repeated
+  `/api/v1/state` polls kept the full `EPERM` / `mkdir` error in both
+  `retrying[].error` and `retrying[].attention.message`.
+
+Rejected alternatives:
+
+- Rejected: rely on logs only. The issue board state API is the operator
+  surface during a headless Symphony run.
+- Rejected: consume another retry attempt while paused. Pause is an operator
+  hold, not a failed retry attempt.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/pytest tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_with_visible_reason tests/test_orchestrator_dispatch.py::test_retry_timer_reparks_paused_ticket_without_dispatching tests/test_orchestrator_dispatch.py::test_resume_worker_releases_held_retry_immediately -q`
+  -> `3 passed`.

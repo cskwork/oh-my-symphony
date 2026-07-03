@@ -3933,12 +3933,18 @@ class Orchestrator:
         # this we'd reach `_eligible` → "not eligible at retry time" and
         # silently burn through the backoff schedule.
         if issue_id in self._paused_issue_ids:
+            paused_error = (
+                self._pause_reasons.get(issue_id)
+                or retry.error
+                or "paused"
+            )
             self._schedule_retry(
                 issue_id,
                 identifier=retry.identifier,
                 attempt=retry.attempt,
                 delay_ms=PAUSED_RETRY_HOLD_MS,
-                error="paused",
+                error=paused_error,
+                kind=retry.kind,
             )
             return
         cfg = self._workflow_state.current()
