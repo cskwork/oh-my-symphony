@@ -257,6 +257,87 @@ async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_
     assert _git(ws.path, "status", "--short").stdout == ""
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX shell concurrency test")
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+def test_setup_worktree_script_serializes_concurrent_git_admin_writes(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    _git(host, "init", "-q", "-b", "main")
+    (host / "kanban").mkdir()
+    (host / "kanban" / "DEMO-1.md").write_text("---\nstate: Todo\n---\n")
+
+    import shutil as _shutil
+
+    repo_root = Path(__file__).parents[1]
+    (host / "scripts").mkdir()
+    _shutil.copy2(
+        repo_root / "scripts" / "symphony-setup-worktree.sh",
+        host / "scripts" / "symphony-setup-worktree.sh",
+    )
+    script = host / "scripts" / "symphony-setup-worktree.sh"
+    script.chmod(0o755)
+    _git(host, "add", "-A")
+    _git(host, "commit", "-q", "-m", "seed")
+
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    fake_python = fakebin / "python3.11"
+    fake_python.write_text(
+        """#!/bin/sh
+set -eu
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
+  mkdir -p "$3/bin"
+  cat > "$3/bin/python" <<'PY'
+#!/bin/sh
+exit 0
+PY
+  chmod +x "$3/bin/python"
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    workspace_root = tmp_path / "workspaces"
+    workspace_root.mkdir()
+    env = {
+        **os.environ,
+        "SYMPHONY_WORKFLOW_DIR": str(host),
+        "SYMPHONY_FEATURE_BASE_BRANCH": "main",
+        "PATH": f"{fakebin}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+    processes = []
+    for index in range(4):
+        workspace = workspace_root / f"CONC-{index}"
+        workspace.mkdir()
+        processes.append(
+            (
+                workspace,
+                subprocess.Popen(
+                    [_BASH, str(script)],
+                    cwd=str(workspace),
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                ),
+            )
+        )
+
+    failures = []
+    for workspace, proc in processes:
+        stdout, stderr = proc.communicate(timeout=120)
+        if proc.returncode != 0:
+            failures.append((workspace.name, proc.returncode, stdout, stderr))
+        assert "could not lock config file" not in stderr
+
+    assert failures == []
+    for workspace, _proc in processes:
+        assert (workspace / ".git").exists()
+        assert (workspace / "kanban").is_symlink()
+
+
 @pytest.mark.asyncio
 async def test_before_run_aborts_attempt(tmp_path):
     mgr = WorkspaceManager(tmp_path / "ws", _hooks(before_run="exit 9"))

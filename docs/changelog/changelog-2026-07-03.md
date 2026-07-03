@@ -541,3 +541,53 @@ the separate handoff note because they are not budget-blocked outcomes.
   -> `7 passed`.
 - Broader workflow/dispatch gate: `.venv/bin/python -m pytest tests/test_workflow.py tests/test_orchestrator_dispatch.py -q`
   -> `157 passed`.
+
+# 2026-07-03 - E2E hardening item 4: Worktree setup lock
+
+## Goal
+
+Prevent concurrent `after_create` hooks from colliding on host git worktree
+admin files and shared `.git/config` writes.
+
+## Decisions
+
+### 1. Lock only the git admin critical section
+
+`symphony-setup-worktree.sh` now acquires a host-repo lock before
+`git worktree remove` and releases it immediately after the `symphony.*`
+`git config --worktree` writes. Symlink/junction setup and venv priming stay
+outside the lock.
+
+- Rejected: wrapping the whole script. Python venv installation can be slow and
+  does not touch shared git admin state, so serializing it would reduce worker
+  startup concurrency without fixing the race more completely.
+
+### 2. Use flock when available, mkdir lock otherwise
+
+Linux hosts use fd-based `flock` on `.git/symphony-worktree.lock`. macOS-style
+hosts without `flock` fall back to a mkdir spin lock with timeout, stale-lock
+breakage, and a pid file for diagnosis.
+
+- Rejected: relying on git's own lock retries. The observed failure happens
+  before git retries can coordinate separate worktree admin operations.
+
+### 3. Preserve failure cleanup with an EXIT trap
+
+The lock release path is registered before the critical section, so `set -e`
+failures cannot leave the mkdir fallback lock behind.
+
+- Rejected: manual unlock only on the success path. A failed `git config` would
+  leak the lock and turn one transient failure into a two-minute stall.
+
+## Verification
+
+- Reproduced baseline failure with the new concurrency test before the fix:
+  `.venv/bin/python -m pytest tests/test_workspace.py::test_setup_worktree_script_serializes_concurrent_git_admin_writes -q`
+  -> failed with `could not lock config file`.
+- Syntax gate: `bash -n scripts/symphony-setup-worktree.sh` -> passed.
+- Focused gate: `.venv/bin/python -m pytest tests/test_workspace.py::test_setup_worktree_script_serializes_concurrent_git_admin_writes -q`
+  -> `1 passed`.
+- Existing hook regression: `.venv/bin/python -m pytest tests/test_workspace.py::test_file_workflow_after_create_hides_host_symlink_roots_from_git -q`
+  -> `1 passed`.
+- Broader workspace gate: `.venv/bin/python -m pytest tests/test_workspace.py -q`
+  -> `28 passed`.

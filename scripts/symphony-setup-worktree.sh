@@ -22,6 +22,66 @@ cd "$HOST_REPO"
 BASE_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current 2>/dev/null || true)"
 FEATURE_BASE_BRANCH="${SYMPHONY_FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
 MERGE_TARGET_BRANCH="${SYMPHONY_MERGE_TARGET_BRANCH:-${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}}"
+
+_SYMPHONY_WORKTREE_LOCK_DIR=""
+_SYMPHONY_WORKTREE_LOCK_FD=""
+
+_symphony_lock_mtime_epoch() {
+  if stat -c %Y "$1" >/dev/null 2>&1; then
+    stat -c %Y "$1"
+  else
+    stat -f %m "$1"
+  fi
+}
+
+_symphony_release_worktree_lock() {
+  if [ -n "${_SYMPHONY_WORKTREE_LOCK_DIR:-}" ] && [ -d "$_SYMPHONY_WORKTREE_LOCK_DIR" ]; then
+    rm -rf "$_SYMPHONY_WORKTREE_LOCK_DIR"
+    _SYMPHONY_WORKTREE_LOCK_DIR=""
+  fi
+  if [ -n "${_SYMPHONY_WORKTREE_LOCK_FD:-}" ]; then
+    flock -u 9 2>/dev/null || true
+    exec 9>&-
+    _SYMPHONY_WORKTREE_LOCK_FD=""
+  fi
+}
+
+_symphony_acquire_worktree_lock() {
+  local lock_file="$HOST_REPO/.git/symphony-worktree.lock"
+  local lock_dir="${lock_file}.d"
+  local start now mtime
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$lock_file"
+    flock 9
+    _SYMPHONY_WORKTREE_LOCK_FD="9"
+    return
+  fi
+
+  start="$(date +%s)"
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    now="$(date +%s)"
+    if [ -d "$lock_dir" ]; then
+      mtime="$(_symphony_lock_mtime_epoch "$lock_dir" 2>/dev/null || printf '%s\n' "$now")"
+      case "$mtime" in
+        ""|*[!0-9]*) mtime="$now" ;;
+      esac
+      if [ $((now - mtime)) -gt 300 ]; then
+        rm -rf "$lock_dir"
+        continue
+      fi
+    fi
+    if [ $((now - start)) -ge 120 ]; then
+      echo "after_create: timed out waiting for git worktree lock at $lock_dir" >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+  _SYMPHONY_WORKTREE_LOCK_DIR="$lock_dir"
+  printf '%s\n' "$$" > "$lock_dir/pid"
+}
+
+trap _symphony_release_worktree_lock EXIT
+
 # `git worktree add` (git >= 2.30) tolerates an existing *empty* target
 # directory, which is exactly what Symphony pre-creates here. Trying to
 # rmdir it first runs straight into Windows file-indexer / AV scans that
@@ -34,6 +94,7 @@ MERGE_TARGET_BRANCH="${SYMPHONY_MERGE_TARGET_BRANCH:-${FEATURE_BASE_BRANCH:-${BA
 # "missing but already registered" or "already checked out". `remove`
 # tolerates a non-existent path (returns non-zero, ignored); `prune`
 # mops up any leftover admin files.
+_symphony_acquire_worktree_lock
 git worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
 git worktree prune 2>/dev/null || true
 # Reuse the branch if a prior worktree was reaped without prune.
@@ -54,6 +115,7 @@ git config extensions.worktreeConfig true
 git config --worktree symphony.basesha "$(git rev-parse HEAD)"
 git config --worktree symphony.basebranch "${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
 git config --worktree symphony.mergetargetbranch "${MERGE_TARGET_BRANCH:-}"
+_symphony_release_worktree_lock
 # Link shared board directories back to host so agent state changes are
 # visible to Symphony's file tracker (which reads host board_root).
 #
