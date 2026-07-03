@@ -1453,3 +1453,48 @@ Rejected alternatives:
 - `PYTHONPATH=src .venv/bin/python -m symphony.cli doctor ./WORKFLOW.md --no-color`
   -> passed all 11 checks.
 - Pending after push: GitHub Actions rerun on `dev` and `main`.
+
+# 2026-07-03 - Local Git quality gates
+
+## Goal
+
+Prevent another local commit/push from reaching GitHub before the same class
+of CI blockers is checked locally.
+
+## Decision
+
+Add tracked Git hooks under `.githooks/` and route both hooks through
+`scripts/git_quality_gate.py`.
+
+- `pre-commit` runs `git diff --cached --check` and compiles staged Python
+  files, catching whitespace and syntax problems before a commit is created.
+- `pre-push` runs `git diff --check`, `git diff --cached --check`, and full
+  `python -m pytest -q` inside a clean dev-only virtualenv under
+  `.git/symphony-quality/ci-dev-venv`.
+- The dev-only virtualenv is keyed by Python version, `pyproject.toml`, and a
+  gate version so dependency changes rebuild it. This mirrors GitHub's
+  `pip install -e ".[dev]"` path and avoids the local browser-extra leak that
+  hid the Playwright import problem.
+
+Rejected alternatives:
+
+- Rejected: run the full suite directly from the operator `.venv`. That would
+  keep optional browser dependencies visible and would not reproduce the CI
+  environment that failed.
+- Rejected: put hook bodies directly in `.git/hooks`. Those files are not
+  versioned, so future checkouts would lose the guardrail.
+- Rejected: run the full suite on every commit. The high-signal block point is
+  before network push; pre-commit stays fast enough to keep normal local
+  commit flow usable.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_git_quality_gate.py -q`
+  -> `3 passed`.
+- `.venv/bin/python scripts/git_quality_gate.py pre-commit --dry-run`
+  -> planned `git diff --cached --check`.
+- `.venv/bin/python scripts/git_quality_gate.py pre-push --dry-run`
+  -> planned `git diff --check`, `git diff --cached --check`, and
+  `<ci-dev-venv-python> -m pytest -q`.
+- Pending: enable local `core.hooksPath`, run actual hooks, full suite, commit,
+  push, GitHub Actions, and live Symphony workflow proof.

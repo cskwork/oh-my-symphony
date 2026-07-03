@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  PYTHON="$ROOT/.venv/bin/python"
+elif command -v python3.12 >/dev/null 2>&1; then
+  PYTHON="python3.12"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON="python3"
+else
+  PYTHON="python"
+fi
+
+exec "$PYTHON" "$ROOT/scripts/git_quality_gate.py" pre-commit
