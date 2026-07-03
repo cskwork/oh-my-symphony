@@ -7,7 +7,7 @@ implementing files instead of dispatching tickets.
 
 **Cause**: SYSTEM.md invariant #1 not re-read.
 
-**Fix**: Stop. `cat .oneshot/SYSTEM.md`. Open `using-symphony` skill's
+**Fix**: Stop. `cat .oneshot/SYSTEM.md`. Open `symphony-skill` skill's
 delegation pattern. The orchestrator's only legal moves are:
 `symphony board new`, `symphony board mv`, `cat .oneshot/vault/*`, polling
 the API. If you need to change code, dispatch a Build ticket.

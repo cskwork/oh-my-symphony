@@ -11,7 +11,7 @@
 #   3) Appends .symphony/ to $WORKSPACE_ROOT/.gitignore if missing
 #   4) Registers bidirectional permissions.additionalDirectories
 #      in both .claude/settings.local.json files (needs jq)
-#   5) Symlinks the using-symphony router into $WORKSPACE_ROOT/.claude/skills/
+#   5) Symlinks the symphony-skill router into $WORKSPACE_ROOT/.claude/skills/
 
 set -euo pipefail
 
@@ -105,14 +105,14 @@ link_skill() {
   fi
 }
 
-link_skill "$ABS_SYMPHONY_HOME/skills/using-symphony"
+link_skill "$ABS_SYMPHONY_HOME/skills/symphony-skill"
 
 cat <<EOF
 
 [done] Symphony monorepo bootstrap complete.
 
 Next steps:
-  1. Author one WORKFLOW.<service>.md per service (see skills/using-symphony/monorepo/references/workflow-template.md)
+  1. Author one WORKFLOW.<service>.md per service (see skills/symphony-skill/monorepo/references/workflow-template.md)
   2. Activate venv:   source $ABS_SYMPHONY_HOME/.venv/bin/activate
   3. Preflight:       symphony doctor $ABS_WORKSPACE_ROOT/WORKFLOW.<svc>.md
   4. First ticket:    symphony board new TICKET-1 "title" --root $ABS_WORKSPACE_ROOT/.symphony/kanban

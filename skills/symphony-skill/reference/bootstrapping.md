@@ -19,7 +19,7 @@ chmod +x "$TARGET/scripts/symphony-setup-worktree.sh"
 cp -R skills "$TARGET/"
 cp AGENTS.md GEMINI.md "$TARGET/"
 mkdir -p "$TARGET/.claude/skills"
-ln -s ../../skills/using-symphony "$TARGET/.claude/skills/using-symphony"
+ln -s ../../skills/symphony-skill "$TARGET/.claude/skills/symphony-skill"
 chmod +x "$TARGET/tui-open.sh"
 ```
 
@@ -49,16 +49,16 @@ python3.12 -m venv .venv
 | --- | --- |
 | `WORKFLOW.md` | Runtime config and prompt entrypoint |
 | `docs/symphony-prompts/` | Worker prompts; dispatched agents read these |
-| `skills/using-symphony/` | Canonical operator router skill |
-| `skills/using-symphony/oneshot/`, `skills/using-symphony/monorepo/` | Router branch subfolders for templates, scripts, and references |
-| `.claude/skills/using-symphony` | Claude Code discovery symlink to the router |
+| `skills/symphony-skill/` | Canonical operator router skill |
+| `skills/symphony-skill/oneshot/`, `skills/symphony-skill/monorepo/` | Router branch subfolders for templates, scripts, and references |
+| `.claude/skills/symphony-skill` | Claude Code discovery symlink to the router |
 | `AGENTS.md` | Codex entrypoint pointing to repo skills |
 | `GEMINI.md` | Gemini entrypoint pointing to repo skills |
 | `tui-open.sh`, `tui-open.bat` | One-shot board launchers |
 | `tools/board-viewer/` | Web HTML board viewer for `--viewer-port` (silently no-ops if absent) |
 | `scripts/symphony-setup-worktree.sh` | Worktree-setup body invoked by the default `after_create` hook in `WORKFLOW.example.md`. Without it, every fresh ticket dispatch fails at the hook stage with `No such file or directory`. |
 
-`skills/using-symphony/SKILL.md` is the only operator activation route. Edit
+`skills/symphony-skill/SKILL.md` is the only operator activation route. Edit
 only the canonical files under `skills/`; platform entrypoints should point at
 them.
 

@@ -1,5 +1,5 @@
 ---
-name: using-symphony
+name: symphony-skill
 description: Single Symphony operator router for Kanban tickets, service/TUI runs, workflow prompts, delegation, OneShot runs, monorepo bootstrap, and worker failure triage.
 ---
 

@@ -10,18 +10,18 @@ gets from `.claude/skills/`.
 
 Gemini activates Symphony through one operator skill after reading its
 metadata: read the `description`, then load
-`skills/using-symphony/SKILL.md` (via `Read` or `read_file`) and follow its
+`skills/symphony-skill/SKILL.md` (via `Read` or `read_file`) and follow its
 route table.
 
-Source of truth lives in `skills/using-symphony/`. `.claude/skills/` is a thin
+Source of truth lives in `skills/symphony-skill/`. `.claude/skills/` is a thin
 symlink layer for Claude Code's native discovery only — do not edit through it.
-`skills/using-symphony/oneshot/` and `skills/using-symphony/monorepo/` are
+`skills/symphony-skill/oneshot/` and `skills/symphony-skill/monorepo/` are
 branch-specific subfolders for templates/scripts/references used by the
 router, not separate activation routes.
 
 ## Available skill (operator-facing)
 
-### `using-symphony`
+### `symphony-skill`
 
 > Use when the user wants to dispatch coding agents (Codex / Claude Code /
 > Gemini / Pi) against a Kanban board via this `oh-my-symphony` repo
@@ -37,7 +37,7 @@ router, not separate activation routes.
 > silent for N seconds", "one-shot this", "decompose and dispatch with proof",
 > or "symphony monorepo".
 
-Entry: `skills/using-symphony/SKILL.md`
+Entry: `skills/symphony-skill/SKILL.md`
 
 ## Worker-side guidance
 
@@ -67,5 +67,5 @@ The skill files use Claude Code tool names (`Read`, `Bash`, `Edit`,
 - Read `WORKFLOW.md` and a couple of `kanban/*.md` files before any
   recommendation — settings vary per fork.
 - Run `symphony doctor ./WORKFLOW.md` before launching anything.
-- See the `BOOTSTRAP` route in `skills/using-symphony/SKILL.md` for the full
+- See the `BOOTSTRAP` route in `skills/symphony-skill/SKILL.md` for the full
   file set required when copying Symphony into another project.

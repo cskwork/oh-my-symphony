@@ -37,7 +37,7 @@ Run from the repo root:
 symphony doctor ./WORKFLOW.md
 
 # 1. Bootstrap vault, workflow, and intake ticket
-bash skills/using-symphony/oneshot/templates/bootstrap.sh \
+bash skills/symphony-skill/oneshot/templates/bootstrap.sh \
   "<user's one-shot prompt>"
 
 # 2. Launch headless on the port bootstrap wrote into WORKFLOW.md

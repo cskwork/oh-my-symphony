@@ -26,7 +26,7 @@ import pytest
 from symphony._shell import resolve_bash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ONESHOT = REPO_ROOT / "skills" / "using-symphony" / "oneshot"
+ONESHOT = REPO_ROOT / "skills" / "symphony-skill" / "oneshot"
 BOOTSTRAP = ONESHOT / "templates" / "bootstrap.sh"
 LANES = ONESHOT / "reference" / "lanes.md"
 WORKFLOW = ONESHOT / "templates" / "WORKFLOW.oneshot.md"
