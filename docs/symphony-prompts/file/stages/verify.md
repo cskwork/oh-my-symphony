@@ -1,19 +1,23 @@
-### VERIFY -- when state is `Verify`
+### VERIFY -- prove it and merge safely
 
 **Allowed tools (advisory).** Read full diff, tests, `docs/{{ issue.identifier }}/work/`, and ticket sections. Write tests/evidence under `docs/{{ issue.identifier }}/qa/` and ticket comments. Run real commands. You may run Merge Gate commands. Do NOT make unrelated source edits.
 
-Verify has three jobs: review, QA, and merge preflight/merge.
+Verify has three jobs: review, QA, and merge preflight/merge. Goal for this lane: make a yes/no delivery decision a human can trust. The card must say what worked, what failed, what is not covered, how to re-run the proof, and whether the branch merged cleanly.
 
-1. Review the diff against the ticket and `## Acceptance Tests`.
-2. Append `## Security Audit` with exactly 7 rows: secrets, input-validation, injection, xss, csrf, authz, rate-limit. Use `pass`, `fail`, or `n/a`.
-3. If any CRITICAL/HIGH/MEDIUM issue exists, append `## Review Findings` as a severity table, set state to `In Progress`, and stop. Otherwise append `## Review`.
-4. Run the real acceptance checks. Save durable proof under `docs/{{ issue.identifier }}/qa/`.
+1. Review the diff against the ticket, `## Plan`, `## Acceptance Tests`, and `## Done Signals`. Check that the implementation still matches the user's goal and did not add orphan scope.
+2. Append `## Security Audit` with exactly 7 rows: secrets, input-validation, injection, xss, csrf, authz, rate-limit. Use `pass`, `fail`, or `n/a`; evidence must point to durable `qa/...` or `work/...` artifacts when a row needs proof.
+3. If any CRITICAL/HIGH/MEDIUM issue exists, append `## Review Findings` as a severity table with problem, evidence path, requested fix, and scope. Set state to `In Progress`, and stop. Otherwise append `## Review` with the clean-review reason.
+4. Run the real acceptance checks. Save durable proof under `docs/{{ issue.identifier }}/qa/`. Write evidence like a short QA report:
+   - What worked.
+   - What did not work.
+   - What was not covered or remains `Not proven`.
+   - How to re-run the check.
    - For trivial non-runtime changes, the QA half may be short: run the relevant static/content check and explain why no runtime path changed.
    - Browser UI work must drive Playwright/headless Chromium against `file://` or a tiny static server for core flows (add/toggle/edit-cancel via Escape/delete/filter/reload persistence as applicable). DOM shims are smoke only, never final Verify authority.
    - Test the exact declared launch path. If the app claims direct `file://` support, fail on module-script/CORS boot errors instead of switching to HTTP.
    - If browser deps are unavailable, append `## Environment Block` naming what is missing, set state to `Blocked`, and stop.
    - For bugs, close the reproduction loop by saving `docs/{{ issue.identifier }}/qa/repro-after.log`.
-5. Append `## QA Evidence` with commands, exit codes, and top evidence paths.
+5. Append `## QA Evidence` with a command manifest: command, exit code, evidence path, what it proves, what it does not prove, and how to re-run.
 6. Append `## AC Scorecard` with one row per acceptance criterion: signal, source, result, evidence path.
    - Evidence cells must cite files under `docs/{{ issue.identifier }}/` as `qa/...` or `work/...`. Put source anchors and prose inside those evidence files, not in the table cell.
 7. If any required command fails or evidence disproves an AC, append `## QA Failure`, set state to `In Progress`, and stop.

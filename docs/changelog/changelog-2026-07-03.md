@@ -1226,3 +1226,34 @@ Rejected alternatives:
   process referencing the temp root.
 - `PYTHONPATH=src .venv/bin/python -m pytest -q`
   -> `1029 passed, 2 skipped, 2 warnings`.
+
+# 2026-07-03 - Human-readable board prompt refresh
+
+## Goal
+
+Make the shipped file and Linear Kanban prompts easier for non-specialist
+operators to understand while preserving the four-stage workflow and existing
+contract headings.
+
+## Decision
+
+Refresh `docs/symphony-prompts/{file,linear}/` around a plain board-card
+mental model: each lane answers one human question, and every evidence claim
+should name the goal, before state, after target, proof, not-covered risk, and
+how to re-run. The required top-level sections stay the same so existing
+contract enforcement continues to work.
+
+Rejected alternatives:
+
+- Rejected: add new required top-level sections such as `## Goal and Proof
+  Map`. That would force orchestrator contract changes and make older in-flight
+  tickets rewind for a readability-only improvement.
+- Rejected: change the active states. The problem is prompt usability, not the
+  pipeline shape.
+- Rejected: update only the file-board prompts. Linear ships the same operator
+  workflow and should not drift from the file-board guidance.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1029 passed, 2 skipped, 2 warnings`.

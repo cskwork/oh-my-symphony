@@ -17,11 +17,11 @@ plus the current state's stage prompt for each fresh turn.
 | State | Owner of this turn | Required output |
 | --- | --- | --- |
 | Todo | triage/router | `## Triage`, then route actionable work to `In Progress` or explain `Blocked` |
-| In Progress | implementer | `## Plan`, `## Acceptance Tests`, `## Done Signals`, `## Implementation`, `## Self-Critique`, plus work artefacts under `docs/<ID>/work/` |
-| Verify | reviewer + QA + merge gate | `## Security Audit`, clean `## Review` or `## Review Findings`, `## QA Evidence`, `## AC Scorecard`, `## Merge Status` |
+| In Progress | implementer | `## Plan`, `## Acceptance Tests`, `## Done Signals`, `## Implementation`, `## Self-Critique`, plus goal/before/after proof notes under `docs/<ID>/work/` |
+| Verify | reviewer + QA + merge gate | `## Security Audit`, clean `## Review` or `## Review Findings`, `## QA Evidence`, `## AC Scorecard`, `## Merge Status`, plus not-covered and rerun guidance |
 | Learn | distiller | `docs/llm-wiki/` updates, `## Wiki Updates`, `## Human Review`; may rewind real defects to `In Progress` |
 | Human Review | operator | human approval before `Done` |
-| Done | reporter | `## As-Is -> To-Be Report` |
+| Done | reporter | `## As-Is -> To-Be Report` with goal, evidence, residual risk, and how to re-run |
 | Blocked | agent or operator | `## Blocker` describing the missing input or failed gate |
 
 ## Why four stages
@@ -41,11 +41,11 @@ turns. The new shape keeps the important gates while reducing context loss:
 
 In Progress must leave enough evidence for a fresh verifier to audit the work:
 
-- `## Plan` - ordered implementation steps and risk notes.
-- `## Acceptance Tests` - the observable checks that prove the request.
-- `## Done Signals` - exact state the verifier should see.
-- `## Implementation` - changed files and behavior.
-- `## Self-Critique` - known limits and suspicious areas.
+- `## Plan` - user goal, before state, after target, rejected alternatives, and ordered implementation steps.
+- `## Acceptance Tests` - one observable proof per acceptance criterion.
+- `## Done Signals` - exact state the verifier should see, including anything still `Not proven`.
+- `## Implementation` - changed files, behavior, and why this approach was chosen.
+- `## Self-Critique` - known limits, not-covered areas, and suspicious paths for Verify.
 - `docs/<ID>/work/` - at least one durable work artefact when a docs root is
   available.
 
@@ -66,7 +66,10 @@ Verify must produce:
 - `## Review` for a clean diff, or `## Review Findings` with severity and
   cited paths for blocking issues.
 - `## QA Evidence` - commands, exit codes, and evidence paths.
-- `## AC Scorecard` - acceptance criteria with pass/fail status.
+- `## QA Evidence` also names what worked, what failed, what is not covered,
+  and how to re-run the proof.
+- `## AC Scorecard` - acceptance criteria with signal, source, pass/fail
+  status, and evidence path.
 - `## Merge Status` - target branch, merge or PR proof, and final commit/ref.
 
 Any CRITICAL/HIGH/MEDIUM review issue, failed command, failed AC, or failed

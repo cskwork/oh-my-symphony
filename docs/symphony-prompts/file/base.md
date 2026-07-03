@@ -18,7 +18,7 @@ This ticket depends on:
 
 ## Production pipeline (4 active stages)
 
-Honour the gate matching `{{ issue.state }}`. One stage = one transition; never jump ahead.
+Honour the gate matching `{{ issue.state }}`. One stage = one transition; never jump ahead. The ticket should read like a short delivery record for the next person who opens the board, not like a raw transcript.
 
 ```
   Todo  ->  In Progress  ->  Verify  ->  Learn  ->  Human Review  ->  Done
@@ -35,6 +35,26 @@ Honour the gate matching `{{ issue.state }}`. One stage = one transition; never 
 {% if token_budget %}
 - Token budget: keep this turn under {{ token_budget }} completion tokens (stage EMA: {{ token_ema }}). Cut narration, never evidence.
 {% endif %}
+
+## Board card mental model
+
+Each lane answers one human question:
+
+| Lane | Human question | Required answer on the card |
+|---|---|---|
+| Todo | Is this ready to work? | Ready reason, missing input, or blocker. |
+| In Progress | What are we changing and how will we prove it? | Goal, before state, after target, plan, tests, implementation notes, self-critique. |
+| Verify | Did it really work and is it safe to merge? | Review result, real commands, acceptance scorecard, not-covered risk, merge proof. |
+| Learn | What should the next ticket remember? | Durable wiki update plus a concise Human Review handoff. |
+| Done | What changed from As-Is to To-Be? | Final report with evidence, reasoning, residual risk, and rerun path. |
+
+Evidence should be readable without reopening the whole transcript:
+
+- Name the user's goal in plain language before code details.
+- State the before condition and the intended after condition.
+- For every proof, say what it proves and what it does not prove.
+- Include the exact command or artifact path needed to re-run or inspect it.
+- Use `Not proven` when evidence is missing, indirect, or too narrow.
 
 ## Audience & writing style
 {% if language == 'ko' %}
@@ -73,31 +93,32 @@ Keep sections compact. Overflow goes to `docs/{{ issue.identifier }}/<stage>/det
 |---|---:|---|
 | `## Triage` | 1-2 lines | n/a |
 | `## Reproduction` | command + 3-10 line failure excerpt | raw trace/log under `reproduce/` |
-| `## Plan` | <= 10 lines | full task list, risk notes |
-| `## Acceptance Tests` | <= 10 bullets | setup/fixtures |
-| `## Done Signals` | <= 8 bullets | payloads, long logs |
+| `## Plan` | goal, before, after, 4-8 steps | full task list, risk notes |
+| `## Acceptance Tests` | one proof per criterion | setup/fixtures |
+| `## Done Signals` | expected observable pass state | payloads, long logs |
 | `## Difficulty` | 1 line verdict + 1 line why | n/a |
 | `## Implementation` | <= 10 lines | per-file details |
-| `## Self-Critique` | <= 8 lines | full review notes |
+| `## Self-Critique` | risk, not-covered, next verify focus | full review notes |
 | `## Pipeline Route` | 1 line | n/a |
 | `## Security Audit` | exactly 7 rows | per-check rationale |
 | `## Review` | <= 6 lines | full checklist |
 | `## Review Findings` | <= 6 severity rows | details under `qa/details.md` |
-| `## QA Evidence` | commands + result summary | raw output under `qa/` |
-| `## QA Failure` | <= 6 rows | raw output under `qa/` |
-| `## AC Scorecard` | 1 row per acceptance criterion | raw proof under `qa/` |
+| `## QA Evidence` | command manifest + worked/failed/not-covered/rerun summary | raw output under `qa/` |
+| `## QA Failure` | observed vs expected + evidence path | raw output under `qa/` |
+| `## AC Scorecard` | 1 row per acceptance criterion: signal/source/result/evidence | raw proof under `qa/` |
 | `## Merge Status` | <= 6 lines | command logs under `qa/merge.log` |
 | `## Learnings` | 3-4 bullets | extended rationale |
 | `## Wiki Updates` | <= 4 lines | wiki files are source of truth |
 | `## Learn Skipped` | 1 line, orchestrator only | n/a |
-| `## Human Review` | <= 18 lines across sub-sections | full evidence dump under docs |
-| `## As-Is -> To-Be Report` | <= 20 lines | full evidence dump under docs |
+| `## Human Review` | <= 18 lines: changed, why, evidence, risk, checklist, decision | full evidence dump under docs |
+| `## As-Is -> To-Be Report` | <= 20 lines: goal, as-is, to-be, reasoning, evidence, residual risk | full evidence dump under docs |
 
 Style rules:
 
 - Cite the top 1-3 `path:line` anchors only. Extra citations and raw command output go to `details.md`.
 - One thing per bullet. No nested bullets. No multi-paragraph items.
 - Show, do not tell: `200 passed` beats `all tests passed`.
+- Prefer evidence words a non-developer can act on: `works`, `fails`, `not covered`, `not proven`, `how to re-run`.
 
 ## Hard rules
 

@@ -23,6 +23,10 @@ STAGE_HEADINGS_BY_STATE = {
 }
 
 IN_PROGRESS_RULES = (
+    "proof map",
+    "before state",
+    "after target",
+    "what would still be `Not proven`",
     "## Plan",
     "## Acceptance Tests",
     "## Done Signals",
@@ -35,6 +39,10 @@ IN_PROGRESS_RULES = (
 
 VERIFY_RULES = (
     "Verify has three jobs: review, QA, and merge preflight/merge",
+    "what worked",
+    "what failed",
+    "what is not covered",
+    "How to re-run",
     "## Security Audit",
     "## Review Findings",
     "Browser UI work must drive Playwright/headless Chromium",
@@ -61,10 +69,13 @@ LEARN_RULES = (
 
 DONE_REPORT_SHAPE = (
     "## As-Is -> To-Be Report",
+    "### Goal",
     "### As-Is",
     "### To-Be",
     "### Reasoning",
     "### Evidence",
+    "### Not Covered",
+    "### How To Re-run",
 )
 
 HUMAN_REVIEW_HANDOFF_SHAPE = (
@@ -208,8 +219,11 @@ def test_base_prompt_declares_four_stage_pipeline_and_skip_learn(flavor: str) ->
     )
 
     assert "Production pipeline (4 active stages)" in text
+    assert "Board card mental model" in text
+    assert "Each lane answers one human question" in text
     assert "Todo  ->  In Progress  ->  Verify  ->  Learn" in text
     assert "operator may skip Learn to Human Review" in text
+    assert "Use `Not proven` when evidence is missing" in text
     assert "Never skip Verify" in text
 
 
