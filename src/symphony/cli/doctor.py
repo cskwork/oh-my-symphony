@@ -21,10 +21,12 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -112,6 +114,10 @@ def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
         command = cfg.claude.command
     elif kind == "gemini":
         command = cfg.gemini.command
+    elif kind == "agy":
+        command = cfg.agy.command
+    elif kind == "kiro":
+        command = cfg.kiro.command
     elif kind == "opencode":
         command = cfg.opencode.command
     elif kind == "pi":
@@ -162,6 +168,110 @@ def check_pi_auth(cfg: ServiceConfig) -> CheckResult:
         " provider env var is set, otherwise every dispatch will fail at the"
         " first turn.",
     )
+
+
+def check_gemini_auth(cfg: ServiceConfig) -> CheckResult:
+    """Catch Gemini CLI noninteractive auth failures before dispatch."""
+    name = "agent.kind=gemini.auth"
+    if cfg.agent.kind != "gemini":
+        return CheckResult(name, "pass", "not gemini (skipped)")
+
+    settings = Path.home() / ".gemini" / "settings.json"
+    selected_auth_type: object = None
+    nested_hint = ""
+    if settings.exists():
+        try:
+            data = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return CheckResult(name, "fail", f"cannot read {settings}: {exc}")
+        selected_auth_type = data.get("selectedAuthType")
+        security = data.get("security")
+        if isinstance(security, dict):
+            auth = security.get("auth")
+            if isinstance(auth, dict) and auth.get("selectedType"):
+                nested_hint = (
+                    " Found security.auth.selectedType, but this Gemini CLI"
+                    " reads selectedAuthType for noninteractive runs."
+                )
+
+    gemini_api_key = bool(os.environ.get("GEMINI_API_KEY"))
+    if not isinstance(selected_auth_type, str) or not selected_auth_type.strip():
+        if gemini_api_key:
+            return CheckResult(
+                name,
+                "pass",
+                "GEMINI_API_KEY present; Gemini CLI will use gemini-api-key",
+            )
+        return CheckResult(
+            name,
+            "fail",
+            f"{settings} lacks root selectedAuthType and GEMINI_API_KEY is unset."
+            f"{nested_hint} Run `gemini` and `/auth`, or export GEMINI_API_KEY.",
+        )
+
+    auth_type = selected_auth_type.strip()
+    if auth_type == "oauth-personal":
+        return CheckResult(name, "pass", f"{settings} selectedAuthType={auth_type}")
+    if auth_type == "gemini-api-key":
+        if gemini_api_key:
+            return CheckResult(name, "pass", "GEMINI_API_KEY present")
+        return CheckResult(
+            name,
+            "fail",
+            f"{settings} selects gemini-api-key but GEMINI_API_KEY is unset",
+        )
+    if auth_type == "vertex-ai":
+        has_vertex_project_location = bool(
+            os.environ.get("GOOGLE_CLOUD_PROJECT")
+            and os.environ.get("GOOGLE_CLOUD_LOCATION")
+        )
+        if has_vertex_project_location or os.environ.get("GOOGLE_API_KEY"):
+            return CheckResult(name, "pass", "Vertex AI auth env is present")
+        return CheckResult(
+            name,
+            "fail",
+            f"{settings} selects vertex-ai but Vertex AI env vars are unset",
+        )
+    return CheckResult(name, "fail", f"unsupported Gemini selectedAuthType={auth_type!r}")
+
+
+def check_kiro_auth(cfg: ServiceConfig) -> CheckResult:
+    """Catch Kiro CLI noninteractive auth failures before dispatch."""
+    name = "agent.kind=kiro.auth"
+    if cfg.agent.kind != "kiro":
+        return CheckResult(name, "pass", "not kiro (skipped)")
+    if os.environ.get("KIRO_API_KEY"):
+        return CheckResult(name, "pass", "KIRO_API_KEY present")
+    whoami = _kiro_whoami()
+    if whoami.status == "pass":
+        return whoami
+    return CheckResult(
+        name,
+        "fail",
+        "KIRO_API_KEY is unset and `kiro-cli whoami` did not confirm a login; "
+        "run `kiro-cli login` or export KIRO_API_KEY before dispatch.",
+    )
+
+
+def _kiro_whoami() -> CheckResult:
+    name = "agent.kind=kiro.auth"
+    try:
+        completed = subprocess.run(
+            ["kiro-cli", "whoami"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return CheckResult(name, "fail", f"`kiro-cli whoami` failed: {exc}")
+    output = "\n".join(
+        part.strip() for part in (completed.stdout, completed.stderr) if part.strip()
+    )
+    if completed.returncode == 0 and "Logged in" in output:
+        return CheckResult(name, "pass", "`kiro-cli whoami` confirms login")
+    suffix = f": {output}" if output else ""
+    return CheckResult(name, "fail", f"`kiro-cli whoami` returned {completed.returncode}{suffix}")
 
 
 def check_after_create_hook(cfg: ServiceConfig) -> CheckResult:
@@ -314,6 +424,8 @@ def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]
         check_shell(),
         check_agent_cli(cfg),
         check_pi_auth(cfg),
+        check_gemini_auth(cfg),
+        check_kiro_auth(cfg),
         check_prompts(cfg),
         check_after_create_hook(cfg),
         check_workspace_root(cfg),

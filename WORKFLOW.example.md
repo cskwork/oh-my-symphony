@@ -171,7 +171,7 @@ hooks:
     git -C "$HOST_REPO" worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
 
 agent:
-  kind: codex          # codex | claude | gemini | opencode | pi
+  kind: codex          # codex | claude | gemini | agy | kiro | opencode | pi
   max_concurrent_agents: 1
   max_turns: 100
   # Hard per-ticket budget across continuation attempts. Prevents an
@@ -263,9 +263,31 @@ claude:
 
 gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass an
-  # empty `""` so the prompt comes purely from stdin. Symphony appends
-  # `--skip-trust --output-format json` plus `--session-id` / `--resume`.
+  # empty `""` so the prompt comes from stdin. Symphony appends `--yolo`
+  # for unattended worker runs and keeps its own local session id.
   command: 'gemini -p ""'
+  resume_across_turns: true
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+
+agy:
+  # Antigravity CLI (`agy`) is the forward path for Gemini-style Google agent
+  # runs. Symphony sends the full prompt on stdin via `--print -`, appends
+  # `--dangerously-skip-permissions`, and adds `--continue` on continuation
+  # turns when resume_across_turns is true.
+  command: agy --print -
+  resume_across_turns: true
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+
+kiro:
+  # Kiro headless mode accepts KIRO_API_KEY or a confirmed `kiro-cli login`.
+  # Kiro does not read piped stdin as the first message, so this shell bridge
+  # passes Symphony's rendered prompt as the required positional chat input.
+  # Continuation turns insert `--resume` before the prompt argument.
+  command: 'kiro-cli chat --no-interactive --trust-all-tools "$(cat)"'
   resume_across_turns: true
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000

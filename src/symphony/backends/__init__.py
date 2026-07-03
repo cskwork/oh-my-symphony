@@ -2,15 +2,16 @@
 
 Symphony was originally hardwired to the Codex app-server JSON-RPC protocol.
 This package introduces an `AgentBackend` Protocol so the orchestrator can
-drive any coding-agent CLI (Codex, Claude Code, Gemini, OpenCode, Pi) behind one
-interface.
+drive any coding-agent CLI (Codex, Claude Code, Gemini, AGY/Antigravity, Kiro,
+OpenCode, Pi) behind one interface.
 
 Each backend owns its own subprocess lifecycle. The Codex backend keeps the
 single long-running app-server connection that speaks JSON-RPC over stdio.
-The Claude, Gemini, OpenCode, and Pi backends spawn one subprocess per turn — Claude
-uses `claude -p --output-format stream-json`, Gemini uses `gemini -p` one-
-shot, OpenCode uses `opencode run --format json`, and Pi uses
-`pi --mode json -p ""`.
+The Claude, Gemini, AGY, Kiro, OpenCode, and Pi backends spawn one subprocess
+per turn — Claude uses `claude -p --output-format stream-json`, Gemini uses
+`gemini -p` one-shot, AGY uses `agy --print -`, Kiro uses
+`kiro-cli chat --no-interactive`, OpenCode uses `opencode run --format json`,
+and Pi uses `pi --mode json -p ""`.
 
 Normalized event vocabulary is shared across backends (see `events.py` style
 constants below). The orchestrator only consumes these normalized event names
@@ -188,6 +189,14 @@ def build_backend(init: BackendInit) -> AgentBackend:
         from .gemini import GeminiBackend
 
         return cast(AgentBackend, GeminiBackend(init))
+    if kind == "agy":
+        from .agy import AgyBackend
+
+        return cast(AgentBackend, AgyBackend(init))
+    if kind == "kiro":
+        from .kiro import KiroBackend
+
+        return cast(AgentBackend, KiroBackend(init))
     if kind == "opencode":
         from .opencode import OpenCodeBackend
 
@@ -197,5 +206,6 @@ def build_backend(init: BackendInit) -> AgentBackend:
 
         return cast(AgentBackend, PiBackend(init))
     raise ConfigValidationError(
-        f"unknown agent.kind {kind!r}; expected codex, claude, gemini, opencode, or pi"
+        "unknown agent.kind "
+        f"{kind!r}; expected agy, codex, claude, gemini, kiro, opencode, or pi"
     )

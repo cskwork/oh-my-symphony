@@ -1257,3 +1257,106 @@ Rejected alternatives:
 
 - `PYTHONPATH=src .venv/bin/python -m pytest -q`
   -> `1029 passed, 2 skipped, 2 warnings`.
+
+# 2026-07-03 - Gemini CLI 0.1.9 backend compatibility
+
+## Goal
+
+Keep the all-agent E2E gate runnable with the currently installed Gemini CLI.
+
+## Decision
+
+Update `GeminiBackend` for Gemini CLI 0.1.9, which supports `-p/--prompt` and
+`--yolo` but rejects Symphony's older hardcoded `--skip-trust`,
+`--output-format`, `--session-id`, and `--resume` flags. Symphony now treats
+Gemini as a plain-text one-shot backend, appends `--yolo` for unattended worker
+runs, and keeps the session UUID locally for telemetry. JSON stats parsing
+remains best-effort for custom/older commands that still emit that shape.
+
+Rejected alternatives:
+
+- Rejected: exclude Gemini from the all-agent gate. The user asked for all
+  agents, and the CLI is installed.
+- Rejected: keep JSON/session flags behind the default command. The current
+  local CLI rejects them before any ticket work starts.
+- Rejected: remove `resume_across_turns` from config. Keeping it is harmless
+  compatibility for existing workflow files.
+
+## Verification
+
+- Pending in this change set: focused Gemini backend tests, full suite, and
+  a fresh all-agent E2E rerun.
+
+# 2026-07-03 - AGY/Antigravity and Kiro backend compatibility
+
+## Goal
+
+Prepare the next minor release for Gemini CLI deprecation risk by adding
+first-class Google Antigravity CLI (`agy`) support, accepting `agent.kind:
+antigravity` as a readable alias, and adding Kiro CLI headless compatibility.
+
+## Decision
+
+Add two plain-stdout backends behind the existing `AgentBackend` Protocol:
+
+- `agent.kind: agy` uses `agy --print -`, sends the full Symphony prompt on
+  stdin, appends `--dangerously-skip-permissions` for unattended worker turns,
+  and appends `--continue` on same-worker continuation turns. Live testing
+  rejected the earlier `agy --print` default because `--print` consumes the
+  following token as its prompt argument; appending the permission flag after it
+  made that flag visible to the model instead of enabling unattended mode.
+- `agent.kind: antigravity` normalizes to `agy` so downstream logs, metrics,
+  and factory code have one canonical backend name.
+- `agent.kind: kiro` uses `kiro-cli chat --no-interactive --trust-all-tools
+  "$(cat)"` because Kiro's noninteractive chat command ignores piped stdin as
+  the first message. Same-worker continuation turns insert `--resume` before
+  that positional prompt argument.
+- `symphony doctor` accepts either `KIRO_API_KEY` or a successful
+  `kiro-cli whoami` login check for Kiro headless dispatch.
+- Both backends use local Symphony session UUIDs for orchestration bookkeeping.
+  Token totals stay zero because the researched CLI surfaces do not expose a
+  stable machine-readable token stream.
+
+Rejected alternatives:
+
+- Rejected: map AGY through the Gemini backend. The AGY CLI has different
+  permission and continuation flags, and reusing Gemini would hide actionable
+  doctor/command-shape differences.
+- Rejected: create a generic arbitrary shell backend. That would be flexible
+  but would weaken diagnostics, config validation, and release proof for named
+  CLIs.
+- Rejected: keep `antigravity` as a second runtime kind. Two names for the
+  same backend would complicate stats, docs, and branch/workflow evidence.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_backends.py::test_factory_returns_agy_backend tests/test_backends.py::test_factory_returns_kiro_backend tests/test_backends.py::test_agy_plain_text_stdout_is_completed_and_appends_permissions tests/test_backends.py::test_agy_continuation_adds_continue_without_duplicate_permissions tests/test_backends.py::test_kiro_plain_text_stdout_is_completed_with_stdin_prompt tests/test_backends.py::test_kiro_continuation_adds_resume_when_enabled tests/test_backends.py::test_agy_workflow_config_defaults_and_antigravity_alias tests/test_backends.py::test_kiro_workflow_config_defaults_and_honors_resume tests/test_doctor.py::test_agent_cli_pass_for_agy_kind tests/test_doctor.py::test_agent_cli_pass_for_kiro_kind tests/test_doctor.py::test_run_checks_returns_one_result_per_check tests/test_doctor.py::test_kiro_auth_skipped_for_non_kiro tests/test_doctor.py::test_kiro_auth_fails_without_api_key tests/test_doctor.py::test_kiro_auth_accepts_cli_login tests/test_doctor.py::test_kiro_auth_accepts_api_key_env -q`
+  -> `15 passed`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_backends.py tests/test_doctor.py tests/test_workflow.py tests/test_workflow_preflight_full.py tests/test_orchestrator_dispatch.py::test_running_snapshot_carries_live_telemetry_for_supported_agent_kinds -q`
+  -> `198 passed`.
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1054 passed, 2 skipped, 2 warnings`.
+- `PYTHONPATH=src .venv/bin/python -m symphony.cli doctor ./WORKFLOW.md --no-color`
+  -> current Claude workflow preflight passed all 11 checks.
+- Disposable live AGY workflow proof:
+  - Root: `/private/tmp/symphony-agy-live-fixed.sRtAPq`.
+  - Doctor: `agent.kind=agy` passed with `/Users/danny/.local/bin/agy`.
+  - Ticket: `kanban/AGY-LIVE-002.md` moved from `Todo` to `Done`.
+  - Body proof: `## Live Backend Proof` recorded `Agent: agy`, workflow
+    `disposable file-board`, and ticket `AGY-LIVE-002`.
+  - Log proof: `agent_session_started`, `worker_turn_started`, and
+    `worker_exit reason=normal`.
+- Disposable live Kiro workflow proof:
+  - Root: `/private/tmp/symphony-kiro-live-proof.sIixgc`.
+  - Doctor: `agent.kind=kiro` passed with `/Users/danny/.local/bin/kiro-cli`;
+    `agent.kind=kiro.auth` passed via `kiro-cli whoami`.
+  - Ticket: `kanban/KIRO-LIVE-002.md` moved from `Todo` to `Done`.
+  - Body proof: placeholders were removed and `## Live Backend Proof` recorded
+    `Agent: kiro`, workflow `disposable file-board`, logged-in CLI auth, and
+    ticket `KIRO-LIVE-002`.
+  - Log proof: `agent_session_started`, `worker_turn_started`, and
+    `worker_exit reason=normal`.
+- Remaining scope note: Gemini live dispatch is still blocked in this local
+  environment by auth configuration (`selectedAuthType` / `GEMINI_API_KEY`),
+  but this AGY/Kiro compatibility change now has live workflow proof for both
+  newly added backends.

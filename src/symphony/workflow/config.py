@@ -22,12 +22,14 @@ from ..errors import ConfigValidationError
 from ..notifications import NotificationsConfig
 from .coercion import _normalize_state_key
 from .constants import (
+    DEFAULT_AGY_COMMAND,
     DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
     DEFAULT_BACKEND_READ_TIMEOUT_MS,
     DEFAULT_BACKEND_STALL_TIMEOUT_MS,
     DEFAULT_BACKEND_TURN_TIMEOUT_MS,
     DEFAULT_CODEX_MODEL,
     DEFAULT_CODEX_REASONING_EFFORT,
+    DEFAULT_KIRO_COMMAND,
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_STATE_TURNS,
@@ -206,17 +208,57 @@ class ClaudeConfig:
 
 @dataclass(frozen=True)
 class GeminiConfig:
-    """`agent.kind: gemini` — driving Gemini CLI in JSON/session mode."""
+    """`agent.kind: gemini` — driving Gemini CLI as one plain-text turn."""
 
     command: str
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
-    # When True, turns 2+ within one worker attempt add `--resume <id>` so
-    # Gemini rejoins the session UUID minted at start_session. Cross-attempt
-    # and cross-phase resume is intentionally not supported because those
-    # paths build a new backend instance.
+    # Retained for config compatibility. Current Gemini CLI releases expose no
+    # resume/session flag, so Symphony keeps the session id locally.
     resume_across_turns: bool = True
+
+
+@dataclass(frozen=True)
+class AgyConfig:
+    """`agent.kind: agy` — driving Antigravity CLI in print mode."""
+
+    command: str
+    turn_timeout_ms: int
+    read_timeout_ms: int
+    stall_timeout_ms: int
+    resume_across_turns: bool = True
+
+
+def _default_agy_config() -> AgyConfig:
+    return AgyConfig(
+        command=DEFAULT_AGY_COMMAND,
+        turn_timeout_ms=DEFAULT_BACKEND_TURN_TIMEOUT_MS,
+        read_timeout_ms=DEFAULT_BACKEND_READ_TIMEOUT_MS,
+        stall_timeout_ms=DEFAULT_BACKEND_STALL_TIMEOUT_MS,
+        resume_across_turns=True,
+    )
+
+
+@dataclass(frozen=True)
+class KiroConfig:
+    """`agent.kind: kiro` — driving Kiro CLI in noninteractive chat mode."""
+
+    command: str
+    turn_timeout_ms: int
+    read_timeout_ms: int
+    stall_timeout_ms: int
+    resume_across_turns: bool = True
+
+
+def _default_kiro_config() -> KiroConfig:
+    return KiroConfig(
+        command=DEFAULT_KIRO_COMMAND,
+        turn_timeout_ms=DEFAULT_BACKEND_TURN_TIMEOUT_MS,
+        read_timeout_ms=DEFAULT_BACKEND_READ_TIMEOUT_MS,
+        stall_timeout_ms=DEFAULT_BACKEND_STALL_TIMEOUT_MS,
+        resume_across_turns=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -356,6 +398,8 @@ class ServiceConfig:
     gemini: GeminiConfig
     pi: PiConfig
     server: ServerConfig
+    agy: AgyConfig = field(default_factory=_default_agy_config)
+    kiro: KiroConfig = field(default_factory=_default_kiro_config)
     opencode: OpenCodeConfig = field(default_factory=_default_opencode_config)
     tui: TuiConfig = field(default_factory=TuiConfig)
     progress: ProgressConfig = field(default_factory=ProgressConfig)
@@ -403,6 +447,18 @@ class ServiceConfig:
                 self.gemini.read_timeout_ms,
                 self.gemini.stall_timeout_ms,
             )
+        if kind == "agy":
+            return (
+                self.agy.turn_timeout_ms,
+                self.agy.read_timeout_ms,
+                self.agy.stall_timeout_ms,
+            )
+        if kind == "kiro":
+            return (
+                self.kiro.turn_timeout_ms,
+                self.kiro.read_timeout_ms,
+                self.kiro.stall_timeout_ms,
+            )
         if kind == "opencode":
             return (
                 self.opencode.turn_timeout_ms,
@@ -410,6 +466,6 @@ class ServiceConfig:
                 self.opencode.stall_timeout_ms,
             )
         raise ConfigValidationError(
-            "agent.kind must be one of codex, claude, gemini, opencode, pi",
+            "agent.kind must be one of agy, codex, claude, gemini, kiro, opencode, pi",
             value=kind,
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import subprocess
 import textwrap
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from symphony.cli.doctor import (
     check_after_create_hook,
     check_agent_cli,
     check_board_viewer,
+    check_gemini_auth,
+    check_kiro_auth,
     check_pi_auth,
     check_port,
     check_prompts,
@@ -88,6 +91,34 @@ def test_agent_cli_pass_for_opencode_kind(tmp_path: Path) -> None:
         tracker: { kind: file, board_root: ./kanban }
         agent: { kind: opencode }
         opencode: { command: python -m symphony.mock_codex }
+        """,
+    )
+    result = check_agent_cli(cfg)
+    assert result.status == "pass"
+    assert "python" in result.message
+
+
+def test_agent_cli_pass_for_agy_kind(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: agy }
+        agy: { command: python -m symphony.mock_codex }
+        """,
+    )
+    result = check_agent_cli(cfg)
+    assert result.status == "pass"
+    assert "python" in result.message
+
+
+def test_agent_cli_pass_for_kiro_kind(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: kiro }
+        kiro: { command: python -m symphony.mock_codex }
         """,
     )
     result = check_agent_cli(cfg)
@@ -319,8 +350,9 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
         """,
     )
     results = run_checks(cfg)
-    # port + shell + agent + pi_auth + prompts + after_create + workspace + tracker + viewer = 9
-    assert len(results) == 9
+    # port + shell + agent + pi_auth + gemini_auth + kiro_auth + prompts
+    # + after_create + workspace + tracker + viewer = 11
+    assert len(results) == 11
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",
@@ -340,6 +372,34 @@ def test_pi_auth_skipped_for_non_pi(tmp_path: Path) -> None:
         """,
     )
     result = check_pi_auth(cfg)
+    assert result.status == "pass"
+    assert "skipped" in result.message
+
+
+def test_gemini_auth_skipped_for_non_gemini(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    result = check_gemini_auth(cfg)
+    assert result.status == "pass"
+    assert "skipped" in result.message
+
+
+def test_kiro_auth_skipped_for_non_kiro(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    result = check_kiro_auth(cfg)
     assert result.status == "pass"
     assert "skipped" in result.message
 
@@ -387,6 +447,133 @@ def test_pi_auth_passes_when_present(tmp_path: Path, monkeypatch) -> None:
     result = check_pi_auth(cfg)
     assert result.status == "pass"
     assert "auth.json" in result.message
+
+
+def test_gemini_auth_fails_without_root_auth_or_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _isolate_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    settings = tmp_path / ".gemini" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(
+        '{"security":{"auth":{"selectedType":"oauth-personal"}}}',
+        encoding="utf-8",
+    )
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: gemini }
+        gemini: { command: 'gemini -p ""' }
+        """,
+    )
+    result = check_gemini_auth(cfg)
+    assert result.status == "fail"
+    assert "selectedAuthType" in result.message
+    assert "security.auth.selectedType" in result.message
+
+
+def test_gemini_auth_accepts_api_key_env(tmp_path: Path, monkeypatch) -> None:
+    _isolate_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "redacted")
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: gemini }
+        gemini: { command: 'gemini -p ""' }
+        """,
+    )
+    result = check_gemini_auth(cfg)
+    assert result.status == "pass"
+    assert "GEMINI_API_KEY" in result.message
+
+
+def test_gemini_auth_accepts_oauth_selected_type(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _isolate_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    settings = tmp_path / ".gemini" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"selectedAuthType":"oauth-personal"}', encoding="utf-8")
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: gemini }
+        gemini: { command: 'gemini -p ""' }
+        """,
+    )
+    result = check_gemini_auth(cfg)
+    assert result.status == "pass"
+    assert "oauth-personal" in result.message
+
+
+def test_kiro_auth_fails_without_api_key(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("KIRO_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "symphony.cli.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=1,
+            stdout="",
+            stderr="not logged in",
+        ),
+    )
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: kiro }
+        kiro: { command: kiro-cli chat --no-interactive "hello" }
+        """,
+    )
+    result = check_kiro_auth(cfg)
+    assert result.status == "fail"
+    assert "KIRO_API_KEY" in result.message
+    assert "kiro-cli whoami" in result.message
+
+
+def test_kiro_auth_accepts_cli_login(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("KIRO_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "symphony.cli.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout="Logged in with Builder ID\nEmail: redacted@example.com\n",
+            stderr="",
+        ),
+    )
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: kiro }
+        kiro: { command: kiro-cli chat --no-interactive "hello" }
+        """,
+    )
+    result = check_kiro_auth(cfg)
+    assert result.status == "pass"
+    assert "whoami" in result.message
+    assert "Email" not in result.message
+
+
+def test_kiro_auth_accepts_api_key_env(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("KIRO_API_KEY", "redacted")
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: kiro }
+        kiro: { command: kiro-cli chat --no-interactive "hello" }
+        """,
+    )
+    result = check_kiro_auth(cfg)
+    assert result.status == "pass"
+    assert "KIRO_API_KEY" in result.message
 
 
 def test_format_results_includes_all_statuses() -> None:

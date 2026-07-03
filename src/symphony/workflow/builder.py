@@ -32,10 +32,12 @@ from .coercion import (
 )
 from .config import (
     AgentConfig,
+    AgyConfig,
     ClaudeConfig,
     CodexConfig,
     GeminiConfig,
     HooksConfig,
+    KiroConfig,
     OpenCodeConfig,
     PiConfig,
     ProgressConfig,
@@ -50,6 +52,7 @@ from .config import (
 from .constants import (
     _AFTER_DONE_FAILURE_POLICIES,
     DEFAULT_ACTIVE_STATES,
+    DEFAULT_AGY_COMMAND,
     DEFAULT_AGENT_KIND,
     DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
     DEFAULT_BACKEND_READ_TIMEOUT_MS,
@@ -65,6 +68,7 @@ from .constants import (
     DEFAULT_CODEX_TURN_TIMEOUT_MS,
     DEFAULT_GEMINI_COMMAND,
     DEFAULT_HOOK_TIMEOUT_MS,
+    DEFAULT_KIRO_COMMAND,
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_CONCURRENT_AGENTS,
     DEFAULT_MAX_RETRIES,
@@ -119,6 +123,12 @@ def _build_prompt_config(raw: Any, base_dir: Path) -> PromptConfig:
         stage_templates=stage_templates,
         stage_paths=stage_paths,
     )
+
+
+def _canonical_agent_kind(kind: str) -> str:
+    if kind == "antigravity":
+        return "agy"
+    return kind
 
 
 def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
@@ -288,7 +298,10 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         active_states=tracker.active_states,
         terminal_states=tracker.terminal_states,
     )
-    agent_kind = _as_str(agent_raw.get("kind"), DEFAULT_AGENT_KIND).strip().lower() or DEFAULT_AGENT_KIND
+    agent_kind = _canonical_agent_kind(
+        _as_str(agent_raw.get("kind"), DEFAULT_AGENT_KIND).strip().lower()
+        or DEFAULT_AGENT_KIND
+    )
     if agent_kind not in SUPPORTED_AGENT_KINDS:
         raise ConfigValidationError(
             f"agent.kind must be one of {sorted(SUPPORTED_AGENT_KINDS)}",
@@ -417,6 +430,40 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="gemini.stall_timeout_ms"
         ),
         resume_across_turns=bool(gemini_raw.get("resume_across_turns", True)),
+    )
+
+    agy_raw = cfg.get("agy") or cfg.get("antigravity") or {}
+    if not isinstance(agy_raw, dict):
+        agy_raw = {}
+    agy = AgyConfig(
+        command=_as_str(agy_raw.get("command"), DEFAULT_AGY_COMMAND) or DEFAULT_AGY_COMMAND,
+        turn_timeout_ms=_validated_positive_or_default(
+            agy_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="agy.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            agy_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="agy.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            agy_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="agy.stall_timeout_ms"
+        ),
+        resume_across_turns=bool(agy_raw.get("resume_across_turns", True)),
+    )
+
+    kiro_raw = cfg.get("kiro") or {}
+    if not isinstance(kiro_raw, dict):
+        kiro_raw = {}
+    kiro = KiroConfig(
+        command=_as_str(kiro_raw.get("command"), DEFAULT_KIRO_COMMAND) or DEFAULT_KIRO_COMMAND,
+        turn_timeout_ms=_validated_positive_or_default(
+            kiro_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="kiro.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            kiro_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="kiro.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            kiro_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="kiro.stall_timeout_ms"
+        ),
+        resume_across_turns=bool(kiro_raw.get("resume_across_turns", True)),
     )
 
     opencode_raw = cfg.get("opencode") or {}
@@ -589,6 +636,8 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         codex=codex,
         claude=claude,
         gemini=gemini,
+        agy=agy,
+        kiro=kiro,
         opencode=opencode,
         pi=pi,
         server=server,

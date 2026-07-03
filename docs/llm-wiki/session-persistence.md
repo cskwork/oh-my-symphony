@@ -53,7 +53,9 @@ corrupts the previous content.
 |---------|-----------|------------------------------------------|
 | pi      | `--session <id>`              | injected on turn 1 when `_session_id` was pre-populated |
 | claude  | `--resume <id>`               | injected on turn 1 when `_session_id` was pre-populated |
-| gemini  | id preserved only             | CLI flag wired by SMA-19 (`--session-id`); SMA-20 keeps the id alive across restarts |
+| gemini  | id preserved locally          | current Gemini CLI has no session/resume flag; Symphony keeps the UUID only in its own state |
+| agy     | `--continue`                  | appended on same-worker continuation turns when `resume_across_turns` is true |
+| kiro    | `--resume`                    | inserted before the positional prompt argument on same-worker continuation turns when `resume_across_turns` is true |
 | codex   | `thread/resume { threadId }`  | tried first; on RPC error falls back to `thread/start` and logs `session_resume_unsupported` |
 
 ## Codex fallback is load-bearing, not just legacy

@@ -18,7 +18,7 @@ Layout (see ``AGENTS.md`` for full SPEC references):
     - ``trackers``      — tracker protocol + ``file`` / ``jira`` / ``linear`` adapters (SPEC §11)
 
 * Agents
-    - ``backends``      — codex / claude_code / gemini / opencode / pi (SPEC §10)
+    - ``backends``      — codex / claude_code / gemini / agy / kiro / opencode / pi (SPEC §10)
     - ``agent``         — backwards-compat shim for ``symphony.backends.*``
 
 * Orchestration

@@ -21,9 +21,12 @@ import pytest
 import symphony._shell as shell_module
 import symphony.backends.claude_code as claude_module
 import symphony.backends.codex as codex_module
+import symphony.backends.agy as agy_module
 import symphony.backends.gemini as gemini_module
+import symphony.backends.kiro as kiro_module
 import symphony.backends.opencode as opencode_module
 import symphony.backends.pi as pi_module
+import symphony.backends.plain_cli as plain_cli_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
     EVENT_TURN_COMPLETED,
@@ -44,7 +47,9 @@ from symphony.backends.codex import (
     _sandbox_uses_workspace_write,
     _scan_workspace_symlinks,
 )
+from symphony.backends.agy import AgyBackend
 from symphony.backends.gemini import GeminiBackend
+from symphony.backends.kiro import KiroBackend
 from symphony.backends.opencode import OpenCodeBackend
 from symphony.backends.pi import (
     PiBackend,
@@ -54,10 +59,12 @@ from symphony.backends.pi import (
 from symphony.errors import ConfigValidationError, TurnFailed
 from symphony.workflow import (
     AgentConfig,
+    AgyConfig,
     ClaudeConfig,
     CodexConfig,
     GeminiConfig,
     HooksConfig,
+    KiroConfig,
     OpenCodeConfig,
     PiConfig,
     ServerConfig,
@@ -109,6 +116,20 @@ def _make_cfg(kind: str, *, workspace_root: Path) -> ServiceConfig:
             turn_timeout_ms=60_000,
             read_timeout_ms=5_000,
             stall_timeout_ms=30_000,
+        ),
+        agy=AgyConfig(
+            command="agy --print -",
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+            resume_across_turns=True,
+        ),
+        kiro=KiroConfig(
+            command='kiro-cli chat --no-interactive --trust-all-tools "$(cat)"',
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+            resume_across_turns=True,
         ),
         opencode=OpenCodeConfig(
             command="opencode run --format json --auto",
@@ -281,6 +302,26 @@ def test_factory_returns_gemini_backend(tmp_path: Path) -> None:
     assert isinstance(backend, GeminiBackend)
 
 
+def test_factory_returns_agy_backend(tmp_path: Path) -> None:
+    cfg = _make_cfg("agy", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = build_backend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert isinstance(backend, AgyBackend)
+
+
+def test_factory_returns_kiro_backend(tmp_path: Path) -> None:
+    cfg = _make_cfg("kiro", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = build_backend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert isinstance(backend, KiroBackend)
+
+
 def test_factory_returns_opencode_backend(tmp_path: Path) -> None:
     cfg = _make_cfg("opencode", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
@@ -319,6 +360,8 @@ def test_factory_rejects_unknown_kind(tmp_path: Path) -> None:
         codex=cfg.codex,
         claude=cfg.claude,
         gemini=cfg.gemini,
+        agy=cfg.agy,
+        kiro=cfg.kiro,
         opencode=cfg.opencode,
         pi=cfg.pi,
         server=cfg.server,
@@ -1007,10 +1050,40 @@ async def test_gemini_session_id_is_minted_locally(
     assert backend.session_id == sid
     assert result.turn_id == sid
     assert result.last_message == "hello"
-    assert "--skip-trust" in commands[0]
-    assert "--output-format json" in commands[0]
-    assert f"--session-id {shlex.quote(sid)}" in commands[0]
+    assert commands[0] == 'gemini -p "" --yolo'
+    assert "--skip-trust" not in commands[0]
+    assert "--output-format" not in commands[0]
+    assert "--session-id" not in commands[0]
     assert "--resume" not in commands[0]
+
+
+@pytest.mark.asyncio
+async def test_gemini_plain_text_stdout_is_a_completed_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("gemini", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = GeminiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    _install_subprocess_double(
+        monkeypatch,
+        gemini_module,
+        [_FakeSubprocess(stdout_blob=b"plain text result\n")],
+    )
+
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert backend.session_id == sid
+    assert result.turn_id == sid
+    assert result.last_message == "plain text result"
+    assert backend.latest_usage == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -1100,9 +1173,125 @@ async def test_gemini_resume_across_turns_reuses_session_id(
     await backend.run_turn(prompt="second", is_continuation=True)
 
     assert backend.session_id == sid
-    assert f"--session-id {shlex.quote(sid)}" in commands[0]
-    assert f"--resume {shlex.quote(sid)}" in commands[1]
+    assert commands == ['gemini -p "" --yolo', 'gemini -p "" --yolo']
+    assert f"--session-id {shlex.quote(sid)}" not in commands[0]
+    assert f"--resume {shlex.quote(sid)}" not in commands[1]
     assert "--session-id" not in commands[1]
+
+
+@pytest.mark.asyncio
+async def test_agy_plain_text_stdout_is_completed_and_appends_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("agy", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = AgyBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    proc = _FakeSubprocess(stdout_blob=b"agy result\n")
+    commands = _install_subprocess_double(monkeypatch, plain_cli_module, [proc])
+
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert backend.session_id == sid
+    assert result.turn_id == sid
+    assert result.last_message == "agy result"
+    assert commands == ["agy --print - --dangerously-skip-permissions"]
+    assert proc.stdin.data == b"first"
+    assert proc.stdin.closed is True
+
+
+@pytest.mark.asyncio
+async def test_agy_continuation_adds_continue_without_duplicate_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = replace(
+        _make_cfg("agy", workspace_root=tmp_path),
+        agy=AgyConfig(
+            command="agy --print - --dangerously-skip-permissions",
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+            resume_across_turns=True,
+        ),
+    )
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = AgyBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    commands = _install_subprocess_double(
+        monkeypatch,
+        plain_cli_module,
+        [
+            _FakeSubprocess(stdout_blob=b"one\n"),
+            _FakeSubprocess(stdout_blob=b"two\n"),
+        ],
+    )
+
+    await backend.run_turn(prompt="first", is_continuation=False)
+    await backend.run_turn(prompt="second", is_continuation=True)
+
+    assert commands == [
+        "agy --print - --dangerously-skip-permissions",
+        "agy --print - --dangerously-skip-permissions --continue",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_kiro_plain_text_stdout_is_completed_with_stdin_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("kiro", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = KiroBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    proc = _FakeSubprocess(stdout_blob=b"kiro result\n")
+    commands = _install_subprocess_double(monkeypatch, plain_cli_module, [proc])
+
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert backend.session_id == sid
+    assert result.turn_id == sid
+    assert result.last_message == "kiro result"
+    assert commands == [
+        'kiro-cli chat --no-interactive --trust-all-tools "$(cat)"'
+    ]
+    assert proc.stdin.data == b"first"
+    assert proc.stdin.closed is True
+
+
+@pytest.mark.asyncio
+async def test_kiro_continuation_adds_resume_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("kiro", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = KiroBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    commands = _install_subprocess_double(
+        monkeypatch,
+        plain_cli_module,
+        [
+            _FakeSubprocess(stdout_blob=b"one\n"),
+            _FakeSubprocess(stdout_blob=b"two\n"),
+        ],
+    )
+
+    await backend.run_turn(prompt="first", is_continuation=False)
+    await backend.run_turn(prompt="second", is_continuation=True)
+
+    assert commands[0].endswith('"$(cat)"')
+    assert commands[1].endswith('--resume "$(cat)"')
 
 
 def test_workflow_config_validates_kind(tmp_path: Path) -> None:
@@ -1906,6 +2095,68 @@ prompt body
     wf = parse_workflow_text(custom_text, tmp_path / "WORKFLOW.md")
     cfg = build_service_config(wf)
     assert cfg.gemini.resume_across_turns is False
+
+
+def test_agy_workflow_config_defaults_and_antigravity_alias(tmp_path: Path) -> None:
+    from symphony.workflow import build_service_config, parse_workflow_text
+
+    default_text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: agy}
+---
+prompt body
+"""
+    wf = parse_workflow_text(default_text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert cfg.agent.kind == "agy"
+    assert cfg.agy.command == "agy --print -"
+    assert cfg.agy.resume_across_turns is True
+
+    alias_text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: antigravity}
+antigravity:
+  command: agy --print - --model gemini-test
+  resume_across_turns: false
+---
+prompt body
+"""
+    wf = parse_workflow_text(alias_text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert cfg.agent.kind == "agy"
+    assert "--model gemini-test" in cfg.agy.command
+    assert cfg.agy.resume_across_turns is False
+
+
+def test_kiro_workflow_config_defaults_and_honors_resume(tmp_path: Path) -> None:
+    from symphony.workflow import build_service_config, parse_workflow_text
+
+    default_text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: kiro}
+---
+prompt body
+"""
+    wf = parse_workflow_text(default_text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert cfg.agent.kind == "kiro"
+    assert cfg.kiro.command.startswith("kiro-cli chat --no-interactive")
+    assert "--trust-all-tools" in cfg.kiro.command
+    assert cfg.kiro.resume_across_turns is True
+
+    custom_text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: kiro}
+kiro:
+  command: kiro-cli chat --no-interactive --agent dev "stdin follows"
+  resume_across_turns: false
+---
+prompt body
+"""
+    wf = parse_workflow_text(custom_text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert "--agent dev" in cfg.kiro.command
+    assert cfg.kiro.resume_across_turns is False
 
 
 # --- stderr ring buffer + compaction event surfacing (improve/observability) ---

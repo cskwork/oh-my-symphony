@@ -51,7 +51,7 @@ SUPPORTED_WORKSPACE_REUSE_POLICIES = {"preserve", "refresh"}
 
 DEFAULT_PROMPT = "You are working on an issue from Linear."
 
-SUPPORTED_AGENT_KINDS = {"codex", "claude", "gemini", "opencode", "pi"}
+SUPPORTED_AGENT_KINDS = {"agy", "codex", "claude", "gemini", "kiro", "opencode", "pi"}
 DEFAULT_AGENT_KIND = "codex"
 DEFAULT_CLAUDE_COMMAND = (
     "claude -p --output-format stream-json --include-partial-messages --verbose"
@@ -61,6 +61,16 @@ DEFAULT_CLAUDE_COMMAND = (
 # stdin alone is the prompt (Gemini documents stdin as "Appended to input on
 # stdin (if any).").
 DEFAULT_GEMINI_COMMAND = 'gemini -p ""'
+# Antigravity CLI print mode. `--print` requires an argument; `-` makes AGY
+# read the rendered Symphony prompt from stdin while the backend appends the
+# unattended permission flag at dispatch time.
+DEFAULT_AGY_COMMAND = "agy --print -"
+# Kiro CLI headless mode. Kiro's noninteractive chat command does not consume
+# piped stdin as the first message, so the shell bridges Symphony's stdin into
+# the required positional input argument.
+DEFAULT_KIRO_COMMAND = (
+    'kiro-cli chat --no-interactive --trust-all-tools "$(cat)"'
+)
 # Pi (https://pi.dev) print mode: `-p ""` lets stdin carry the full prompt;
 # `--mode json` switches stdout to JSONL events so we can parse session id,
 # turn boundaries, and per-message token usage.

@@ -43,11 +43,17 @@ input. Symphony exposes that as `cache_input_tokens` in logs and
 `/api/v1/state` so a large cached context does not look like fresh input burn;
 `total_tokens` still includes fresh input + cache input + output.
 
-Gemini reports JSON `stats.models.*.tokens`; Symphony folds `input + cached`
-into `input_tokens`, `candidates + thoughts + tool` into `output_tokens`, and
-sets `total_tokens` to that sum. Same-state continuation uses Gemini
-`--resume`, but phase transitions rebuild the backend and mint a new session
-UUID.
+Gemini CLI 0.1.9 reports plain stdout and exposes no JSON/session flags.
+Symphony therefore keeps a local session UUID for bookkeeping and leaves token
+totals at zero unless a custom Gemini command emits the older JSON
+`stats.models.*.tokens` shape.
+
+AGY/Antigravity and Kiro currently use the same plain-stdout accounting model:
+Symphony records lifecycle events and a local session UUID, but token totals
+remain zero unless those CLIs add a stable machine-readable stats stream later.
+Kiro live dispatch accepts either `KIRO_API_KEY` or a confirmed
+`kiro-cli whoami` login; `symphony doctor` fails early when neither auth path
+is present.
 
 Pi-only events that may interleave at any point:
 
@@ -64,7 +70,7 @@ Pi-only events that may interleave at any point:
 | `dispatch` then nothing for >60s                  | Agent CLI not booting (auth missing, wrong path)       | `symphony doctor ./WORKFLOW.md`                    |
 | `WARN stalled_session elapsed_ms>=stall_timeout_ms` | No real model progress within `<kind>.stall_timeout_ms` (default 5min). Detected via `last_progress_timestamp`, which advances only on lifecycle events, token deltas, or `EVENT_OTHER_MESSAGE` whose payload is from the assistant role — claude API tool_result echoes / stream keepalive do not reset the clock. | Reconcile will cancel the worker on this tick and force-eject after 30 s grace if cancel doesn't land — let it. Inspect `last_codex_message` in `/api/v1/state` to see the model's last visible output |
 | `ERROR stalled_worker_force_ejected elapsed_since_cancel_s>30` | Cancel fired 30+ s ago but the worker never returned (parked on a non-cancellable await). Slot was freed and ticket re-queued for retry. | No action needed unless this repeats for the same ticket — then check `agent.kind` backend's subprocess-wait code (see `project_symphony_async_subprocess_helper.md`) |
-| repeated `agent_turn_failed reason=… stderr_tail=[...]` | Real backend error                                | Read `stderr_tail` array — it's the literal stderr from pi/claude/gemini |
+| repeated `agent_turn_failed reason=… stderr_tail=[...]` | Real backend error                                | Read `stderr_tail` array — it is the literal stderr from pi/claude/gemini/agy/kiro |
 | `hook_after_run_skipped_missing_cwd`              | Agent or hook removed its own workspace before exit    | Cosmetic; ignore unless `after_run` is load-bearing |
 | `reconcile_terminate_terminal last_event_age_s>10` | Worker stuck — reconcile force-cancelled it          | Inspect the agent CLI's last activity; raise turn_timeout_ms if legitimate work was in progress |
 

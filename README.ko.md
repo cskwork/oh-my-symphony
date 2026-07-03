@@ -7,9 +7,9 @@
 [![Tests](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/cskwork/oh-my-symphony?style=social)](https://github.com/cskwork/oh-my-symphony/stargazers)
 
-> 하나의 터미널, 하나의 칸반 보드, 다섯 개의 AI 코딩 에이전트
-> (**Codex**, **Claude Code**, **Gemini**, **OpenCode**, **Pi**) — 티켓마다 골라 쓰고,
-> 병렬로 실행하며, 실시간으로 지켜본다.
+> 하나의 터미널, 하나의 칸반 보드, 일곱 개의 AI 코딩 에이전트
+> (**Codex**, **Claude Code**, **Gemini**, **AGY/Antigravity**, **Kiro**,
+> **OpenCode**, **Pi**) — 티켓마다 골라 쓰고, 병렬로 실행하며, 실시간으로 지켜본다.
 
 ![symphony tui screenshot](docs/tui-screenshot.svg)
 
@@ -38,7 +38,7 @@
 
 ## Why Symphony?
 
-- **벤더 종속 없음.** Codex ↔ Claude Code ↔ Gemini ↔ OpenCode ↔ Pi를 YAML 한 줄로
+- **벤더 종속 없음.** Codex ↔ Claude Code ↔ Gemini ↔ AGY ↔ Kiro ↔ OpenCode ↔ Pi를 YAML 한 줄로
   바꾸거나, 티켓마다 백엔드를 섞어 쓴다. 새 에이전트(Ollama, 로컬 모델,
   CLI가 있는 무엇이든)는 오케스트레이터를 바꾸지 않고 얇은
   `AgentBackend` Protocol 뒤에 끼워 넣으면 된다.
@@ -56,7 +56,7 @@
   Symphony를 체험하는 데는 둘 다 필요하지 않다.
 - **검증된 기반 위에 로컬 운영 안정성을 더했다.**
   [OpenAI의 공식 Symphony 레퍼런스 구현](https://github.com/openai/symphony)에서
-  포크했다. 이 포크는 파일 우선 오케스트레이션 모델을 유지하면서 다섯 개의
+  포크했다. 이 포크는 파일 우선 오케스트레이션 모델을 유지하면서 일곱 개의
   백엔드, TUI / 웹 운영 화면, SQLite 실행 lease, 재시작에도 보존되는 이슈
   플래그, 잠금 기반 Markdown 티켓 쓰기를 더한다.
 - **뷰어가 아니라 진짜 웹 앱.** 오케스트레이터 포트가 Linear 스타일 보드를
@@ -75,8 +75,9 @@
 - 자는 동안 수십 개 티켓에 걸쳐 무인 야간 리팩터링을 돌리는 **1인 개발자**.
 - 버그 수정, 문서 갱신, 마이그레이션 티켓을 여러 코딩 에이전트에 걸쳐 동시에
   병렬화하는 **팀**.
-- 동일한 프롬프트와 워크스페이스로 Codex, Claude Code, Gemini, OpenCode, Pi가
-  같은 작업을 어떻게 처리하는지 나란히 비교하는 **연구자와 리뷰어**.
+- 동일한 프롬프트와 워크스페이스로 Codex, Claude Code, Gemini,
+  AGY/Antigravity, Kiro, OpenCode, Pi가 같은 작업을 어떻게 처리하는지 나란히
+  비교하는 **연구자와 리뷰어**.
 - "에이전트당 채팅 창 하나"의 한계에 부딪혀, 한눈에 읽히는 칸반을 갖춘 진짜
   오케스트레이터를 원하는 **누구든**.
 
@@ -113,11 +114,16 @@ q quit · r refresh · enter details · n new · e edit · s stats · S skip Lea
 안에서 Codex 세션을 실행한다. 이 포크는 그 오케스트레이터를 유지하면서 다음을
 더한다:
 
-1. 다섯 개의 구체 어댑터를 가진 플러그형 **AgentBackend** 레이어:
+1. 일곱 개의 구체 어댑터를 가진 플러그형 **AgentBackend** 레이어:
    - **Codex** — `codex app-server` (JSON-RPC stdio, 멀티턴) — 원본
    - **Claude Code** — `claude -p --output-format stream-json --verbose`
      (NDJSON 이벤트, `--resume`를 쓰는 턴별 서브프로세스)
    - **Gemini** — `gemini -p ""` (턴당 1회 호출, stdin 프롬프트 → stdout 결과)
+   - **AGY / Antigravity** — `agy --print -` (턴당 1회 호출, stdin 프롬프트
+     -> stdout 결과; `agent.kind: antigravity`는 `agy`로 처리)
+   - **Kiro** — `kiro-cli chat --no-interactive --trust-all-tools ...`
+     (headless chat 모드; 프롬프트를 chat 입력 인자로 전달,
+     `KIRO_API_KEY` 또는 `kiro-cli login` 사용)
    - **OpenCode** — `opencode run --format json --auto` (턴당 1회 호출,
      문서화된 `message` 인자로 프롬프트 전달, 세션 ID 확인 후 `--session` 재개)
    - **Pi** — `pi --mode json -p ""` (JSONL 이벤트, `--session` 재개를 쓰는
@@ -144,7 +150,7 @@ q quit · r refresh · enter details · n new · e edit · s stats · S skip Lea
 
 ```yaml
 agent:
-  kind: claude          # codex | claude | gemini | opencode | pi
+  kind: claude          # codex | claude | gemini | agy | kiro | opencode | pi
 
 claude:
   command: claude -p --output-format stream-json --verbose
@@ -157,7 +163,8 @@ pi:
   turn_timeout_ms: 3600000
 ```
 
-각 백엔드는 자기 블록(`codex`, `claude`, `gemini`, `opencode`, `pi`)을 읽으며, 런타임에는
+각 백엔드는 자기 블록(`codex`, `claude`, `gemini`, `agy`, `kiro`,
+`opencode`, `pi`)을 읽으며, 런타임에는
 `agent.kind`에 맞는 것만 사용된다. Codex `linear_graphql` 클라이언트 도구는
 `agent.kind=codex`일 때만 노출된다.
 
@@ -171,7 +178,7 @@ agent:
 
 손으로 편집한 카드에는 플랫 별칭 `agent_kind: codex`도 허용된다.
 모든 백엔드 명령과 타임아웃 설정은 여전히 `WORKFLOW.md`의 해당 전역
-`codex:`, `claude:`, `gemini:`, `opencode:`, `pi:` 블록에서 가져온다.
+`codex:`, `claude:`, `gemini:`, `agy:`, `kiro:`, `opencode:`, `pi:` 블록에서 가져온다.
 CLI에서 파일 보드 티켓을 만들 때는
 `symphony board new TASK-2 "title" --agent-kind codex`를 쓴다.
 
@@ -195,6 +202,8 @@ pip install -e ".[dev]"
 | `codex`      | `codex` (with `app-server` subcommand) |
 | `claude`     | `claude` (Claude Code) |
 | `gemini`     | `gemini` (Gemini CLI)  |
+| `agy`        | `agy` (Antigravity CLI — Google Antigravity에서 설치; Symphony가 `--dangerously-skip-permissions`를 붙임) |
+| `kiro`       | `kiro-cli` (Kiro CLI — `https://cli.kiro.dev/install`에서 설치; headless 실행에는 `kiro-cli login` 또는 `KIRO_API_KEY` 필요) |
 | `opencode`   | `opencode` (OpenCode CLI — `npm install -g opencode-ai`로 설치, `opencode auth login`으로 provider 인증) |
 | `pi`         | `pi` (Pi coding-agent — `npm i -g @earendil-works/pi-coding-agent` or `curl -fsSL https://pi.dev/install.sh \| sh`; sign in once via `pi` → `/login` (OAuth, credentials cached at `~/.pi/agent/auth.json`) — no env var needed) |
 
@@ -719,6 +728,8 @@ src/symphony/
     codex.py           Codex JSON-RPC stdio backend (was upstream agent.py)
     claude_code.py     Claude Code stream-json backend
     gemini.py          Gemini one-shot backend
+    agy.py             AGY / Antigravity one-shot backend
+    kiro.py            Kiro headless chat backend
     opencode.py        OpenCode run/json backend (per-turn subprocess, --session resume)
     pi.py              Pi --mode json backend (per-turn subprocess, --session resume)
   trackers/
@@ -768,8 +779,8 @@ pytest -q
 ```
 
 테스트 스위트는 업스트림 적합성 스위트, 팩토리에 대한 백엔드 단위 테스트, 이벤트
-정규화, Claude / Pi 사용량 누적, Gemini 세션 합성, OpenCode 명령/세션 파싱,
-Pi 실패 사유 탐지, run registry 영속성, file tracker locking, 웹 API contract,
+정규화, Claude / Pi 사용량 누적, Gemini 세션 합성, AGY/Kiro 명령 구성,
+OpenCode 명령/세션 파싱, Pi 실패 사유 탐지, run registry 영속성, file tracker locking, 웹 API contract,
 그리고 TUI 앱에 대한 Textual `Pilot` 구동 스모크 테스트를 포함한다. 실제 CLI를
 상대로 한 서브프로세스 구동 통합 테스트는 의도적으로 CI에 포함하지 않았다 —
 로컬에서 실행한다.
@@ -789,6 +800,15 @@ Pi 실패 사유 탐지, run registry 영속성, file tracker locking, 웹 API c
 - **Gemini CLI**는 호출당 1회로, 네이티브 세션 모델이 없다.
   각 턴은 독립적이며, 오케스트레이터의 기록이 일관되게 유지되도록
   `gemini-<uuid>` 세션 id를 합성한다.
+- **AGY / Antigravity CLI**는 호출당 1회로 실행된다. Symphony는 렌더링된
+  프롬프트를 `agy --print -`의 stdin으로 보내고
+  `--dangerously-skip-permissions`를 붙이며,
+  `resume_across_turns`가 true이면 continuation 턴에 `--continue`를 붙인다.
+- **Kiro CLI**는 headless chat 모드로 실행된다. Kiro는 piped stdin을 첫
+  메시지로 읽지 않으므로 Symphony는 `"$(cat)"`으로 stdin을 위치 chat 입력
+  인자로 전달하고, `resume_across_turns`가 true이면 그 입력 앞에
+  `--resume`을 넣는다. `symphony doctor`는 `KIRO_API_KEY` 또는 성공한
+  `kiro-cli whoami` 로그인 확인을 허용한다.
 - **OpenCode**는 문서화된 자동화 경로인
   `opencode run --format json --auto [message..]`로 실행한다. Symphony는
   프롬프트를 `message` 인자로 전달하고, JSON 이벤트가 있으면 읽으며, OpenCode가
@@ -846,10 +866,11 @@ detail 확인을 할 수 있다.
   토큰 합계의 진실의 원천은 종료 `result` 이벤트다.
 - OpenCode 토큰 사용량은 JSON 이벤트에서 best-effort로 파싱한다. 알 수 없는
   이벤트 형태는 완료된 턴을 실패시키지 않고 합계를 0으로 둔다.
-- Gemini 토큰 사용량은 CLI가 안정적인 형태로 보고하지 않으므로, 그 백엔드의
-  합계는 0에 머문다.
+- Gemini, AGY, Kiro 토큰 사용량은 CLI가 안정적인 형태로 보고하지 않으므로,
+  그 백엔드들의 합계는 0에 머문다.
 - Gemini의 멀티턴 연속성은 지원하지 않는다(CLI에 세션 프로토콜이 없다). 각
-  `run_turn`은 독립적이다.
+  `run_turn`은 독립적이다. AGY와 Kiro는 CLI continuation 플래그를 쓰지만
+  토큰 사용량은 노출하지 않는다.
 
 ## Contributing
 

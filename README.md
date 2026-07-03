@@ -7,9 +7,9 @@
 [![Tests](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/cskwork/oh-my-symphony?style=social)](https://github.com/cskwork/oh-my-symphony/stargazers)
 
-> One terminal. One Kanban board. Five AI coding agents
-> (**Codex**, **Claude Code**, **Gemini**, **OpenCode**, **Pi**) — pick per ticket, run in
-> parallel, watch live.
+> One terminal. One Kanban board. Seven AI coding agents
+> (**Codex**, **Claude Code**, **Gemini**, **AGY/Antigravity**, **Kiro**,
+> **OpenCode**, **Pi**) — pick per ticket, run in parallel, watch live.
 
 ![symphony tui screenshot](docs/tui-screenshot.svg)
 
@@ -38,7 +38,7 @@ a Jira-style TUI you never have to leave your terminal for.
 
 ## Why Symphony?
 
-- **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ OpenCode ↔ Pi with one
+- **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ AGY ↔ Kiro ↔ OpenCode ↔ Pi with one
   YAML line, or mix backends per ticket. New agents (Ollama, local models,
   anything with a CLI) drop in behind a thin `AgentBackend` Protocol without
   changing the orchestrator.
@@ -56,7 +56,7 @@ a Jira-style TUI you never have to leave your terminal for.
   external trackers; you don't need either one to try Symphony.
 - **Battle-tested base, hardened for local operations.** Forked from
   [OpenAI's official Symphony reference implementation](https://github.com/openai/symphony).
-  This fork keeps the file-first orchestration model, then adds five agent
+  This fork keeps the file-first orchestration model, then adds seven agent
   backends, the TUI/web operator surfaces, SQLite run leases, restart-safe
   issue flags, and locked Markdown ticket writes.
 - **A real web app, not just a viewer.** The orchestrator port serves a
@@ -80,8 +80,8 @@ a Jira-style TUI you never have to leave your terminal for.
 - **Teams** parallelizing bug fixes, doc updates, or migration tickets across
   multiple coding agents simultaneously.
 - **Researchers and reviewers** comparing how Codex, Claude Code, Gemini,
-  OpenCode, and Pi tackle the same task side by side, with identical prompts and
-  workspaces.
+  AGY/Antigravity, Kiro, OpenCode, and Pi tackle the same task side by side,
+  with identical prompts and workspaces.
 - **Anyone** who hit the "one chat window per agent" ceiling and wants a
   real orchestrator with a Kanban they can read at a glance.
 
@@ -118,11 +118,16 @@ Upstream polls a tracker (Linear or a local Markdown Kanban) and runs a Codex
 session inside a per-issue workspace. This fork keeps that orchestrator and
 adds:
 
-1. A pluggable **AgentBackend** layer with five concrete adapters:
+1. A pluggable **AgentBackend** layer with seven concrete adapters:
    - **Codex** — `codex app-server` (JSON-RPC stdio, multi-turn) — original
    - **Claude Code** — `claude -p --output-format stream-json --verbose`
      (NDJSON events, per-turn subprocess with `--resume`)
    - **Gemini** — `gemini -p ""` (one-shot per turn, stdin prompt → stdout result)
+   - **AGY / Antigravity** — `agy --print -` (one-shot per turn, stdin prompt
+     -> stdout result; `agent.kind: antigravity` aliases to `agy`)
+   - **Kiro** — `kiro-cli chat --no-interactive --trust-all-tools ...`
+     (headless chat mode; prompt bridged into the chat input argument,
+     accepts `KIRO_API_KEY` or `kiro-cli login`)
    - **OpenCode** — `opencode run --format json --auto` (one-shot per turn,
      prompt passed as the documented `message` argument; `--session` resume
      after OpenCode reports a session id)
@@ -152,7 +157,7 @@ Set `agent.kind` in your `WORKFLOW.md`:
 
 ```yaml
 agent:
-  kind: claude          # codex | claude | gemini | opencode | pi
+  kind: claude          # codex | claude | gemini | agy | kiro | opencode | pi
 
 claude:
   command: claude -p --output-format stream-json --verbose
@@ -165,8 +170,9 @@ pi:
   turn_timeout_ms: 3600000
 ```
 
-Each backend reads its own block (`codex`, `claude`, `gemini`, `opencode`, `pi`); only the
-one matching `agent.kind` is used at runtime. The Codex `linear_graphql`
+Each backend reads its own block (`codex`, `claude`, `gemini`, `agy`, `kiro`,
+`opencode`, `pi`); only the one matching `agent.kind` is used at runtime. The
+Codex `linear_graphql`
 client tool is only advertised when `agent.kind=codex`.
 
 `agent.kind` is the global default. A file-board ticket can opt into a
@@ -179,7 +185,8 @@ agent:
 
 The flat alias `agent_kind: codex` is also accepted for hand-edited cards.
 All backend command and timeout settings still come from the matching global
-`codex:`, `claude:`, `gemini:`, `opencode:`, or `pi:` block in `WORKFLOW.md`.
+`codex:`, `claude:`, `gemini:`, `agy:`, `kiro:`, `opencode:`, or `pi:` block
+in `WORKFLOW.md`.
 When creating file-board tickets from the CLI, use
 `symphony board new TASK-2 "title" --agent-kind codex`.
 
@@ -204,6 +211,8 @@ Make the relevant CLI available on `$PATH`:
 | `codex`      | `codex` (with `app-server` subcommand) |
 | `claude`     | `claude` (Claude Code) |
 | `gemini`     | `gemini` (Gemini CLI)  |
+| `agy`        | `agy` (Antigravity CLI — install from Google Antigravity; Symphony appends `--dangerously-skip-permissions`) |
+| `kiro`       | `kiro-cli` (Kiro CLI — install from `https://cli.kiro.dev/install`; run `kiro-cli login` or set `KIRO_API_KEY` for headless runs) |
 | `opencode`   | `opencode` (OpenCode CLI — install with `npm install -g opencode-ai`; authenticate providers with `opencode auth login`) |
 | `pi`         | `pi` (Pi coding-agent — `npm i -g @earendil-works/pi-coding-agent` or `curl -fsSL https://pi.dev/install.sh \| sh`; sign in once via `pi` → `/login` (OAuth, credentials cached at `~/.pi/agent/auth.json`) — no env var needed) |
 
@@ -774,6 +783,8 @@ src/symphony/
     codex.py           Codex JSON-RPC stdio backend (was upstream agent.py)
     claude_code.py     Claude Code stream-json backend
     gemini.py          Gemini one-shot backend
+    agy.py             AGY / Antigravity one-shot backend
+    kiro.py            Kiro headless chat backend
     opencode.py        OpenCode run/json backend (per-turn subprocess, --session resume)
     pi.py              Pi --mode json backend (per-turn subprocess, --session resume)
   trackers/
@@ -824,9 +835,9 @@ pytest -q
 
 The test suite covers the upstream conformance suite, backend unit tests for
 the factory, event normalization, Claude / Pi usage accumulation, Gemini
-session synthesis, OpenCode command/session parsing, Pi failure-reason
-detection, run-registry persistence, file-tracker locking, web API contracts,
-and Textual `Pilot`-driven smoke tests for the TUI app. Subprocess-driven
+session synthesis, AGY/Kiro command construction, OpenCode command/session
+parsing, Pi failure-reason detection, run-registry persistence, file-tracker
+locking, web API contracts, and Textual `Pilot`-driven smoke tests for the TUI app. Subprocess-driven
 integration tests against real CLIs are intentionally not in CI — run them
 locally.
 
@@ -845,6 +856,15 @@ locally.
 - **Gemini CLI** is one-shot per invocation with no native session model.
   Each turn is independent; we synthesize a `gemini-<uuid>` session id so the
   orchestrator's bookkeeping stays consistent.
+- **AGY / Antigravity CLI** is one-shot per invocation. Symphony sends the
+  rendered prompt on stdin with `agy --print -`, appends
+  `--dangerously-skip-permissions`, and adds
+  `--continue` on continuation turns when `resume_across_turns` is true.
+- **Kiro CLI** runs through headless chat mode. Because Kiro does not treat
+  piped stdin as the first message, Symphony bridges stdin into the positional
+  chat input with `"$(cat)"` and inserts `--resume` before that input on
+  continuation turns. `symphony doctor` accepts either `KIRO_API_KEY` or a
+  successful `kiro-cli whoami` login check.
 - **OpenCode** runs through its documented automation path:
   `opencode run --format json --auto [message..]`. Symphony passes the prompt
   as the `message` argument, reads raw JSON events when present, and starts
@@ -906,10 +926,11 @@ Fork-specific gaps:
   the terminal `result` event is the source of truth for token totals.
 - OpenCode token usage is parsed best-effort from JSON events; unknown event
   shapes leave totals at zero instead of failing completed turns.
-- Gemini token usage is not reported by the CLI in stable form, so totals
-  stay at zero for that backend.
+- Gemini, AGY, and Kiro token usage is not reported by the CLIs in stable form,
+  so totals stay at zero for those backends.
 - Multi-turn continuity for Gemini is not supported (no session protocol
-  exists in the CLI). Each `run_turn` is independent.
+  exists in the CLI). AGY and Kiro continuations use their CLI flags but do not
+  expose token accounting.
 
 ## Contributing
 

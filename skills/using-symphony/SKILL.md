@@ -6,7 +6,8 @@ description: Use for Symphony Kanban operations including tickets, TUI/service r
 # Using Symphony
 
 Symphony is a polling orchestrator that reads Kanban tickets and runs a
-coding-agent CLI (Codex, Claude Code, Gemini, OpenCode, or Pi) against each ticket in
+coding-agent CLI (Codex, Claude Code, Gemini, AGY/Antigravity, Kiro, OpenCode,
+or Pi) against each ticket in
 an isolated workspace. Use this skill for operator work: creating tickets,
 running the orchestrator, editing workflow config, bootstrapping Symphony into
 another repo, and triaging worker failures.

@@ -1,10 +1,10 @@
 """Gemini CLI backend.
 
-Drives `gemini -p "" --output-format json` once per turn. Symphony mints a
-session UUID at `start_session`; turn 1 passes it via `--session-id`, and
-same-state continuation turns resume it via `--resume`. The orchestrator
-rebuilds backends on phase transitions, so Todo -> In Progress and other
-state changes naturally get a fresh Gemini session.
+Drives `gemini -p "" --yolo` once per turn. Current Gemini CLI releases expose
+plain stdout rather than Symphony-friendly JSON/session flags, so Symphony
+mints and keeps a local session UUID for telemetry while treating each Gemini
+CLI invocation as a one-shot turn. If an older/custom command returns JSON, the
+backend still parses its response/stats best-effort.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def _utc_iso() -> str:
 
 
 class GeminiBackend(BaseAgentBackend):
-    """One subprocess per turn; parses Gemini JSON output."""
+    """One subprocess per turn; parses plain text or best-effort JSON output."""
 
     def is_progress_event(self, event: dict[str, Any]) -> bool:
         """Gemini emits no mid-turn events (stdout is read in bulk at turn
@@ -195,42 +195,29 @@ class GeminiBackend(BaseAgentBackend):
                 raise TurnFailed(err_msg or f"gemini failed with exit {rc}")
 
             result_text = (stdout or b"").decode("utf-8", errors="replace").strip()
-            try:
-                parsed = json.loads(result_text)
-            except json.JSONDecodeError as exc:
-                payload = {
-                    "reason": "gemini emitted malformed JSON",
-                    "stdout": result_text[:400],
-                    "stderr_tail": list(self._stderr_tail),
-                }
-                await self._emit(EVENT_TURN_FAILED, payload)
-                raise TurnFailed("gemini emitted malformed JSON") from exc
-            if not isinstance(parsed, dict):
-                payload = {
-                    "reason": "gemini JSON output was not an object",
-                    "stdout": result_text[:400],
-                    "stderr_tail": list(self._stderr_tail),
-                }
-                await self._emit(EVENT_TURN_FAILED, payload)
-                raise TurnFailed("gemini JSON output was not an object")
-
-            sid = parsed.get("session_id")
-            if isinstance(sid, str) and sid:
-                old_sid = self._session_id
-                self._session_id = sid
-                if sid != old_sid:
-                    await self._emit(
-                        EVENT_SESSION_STARTED,
-                        {"session_id": sid, "thread_id": sid},
-                    )
-            response = parsed.get("response")
-            last_message = response if isinstance(response, str) else ""
-            self._update_usage_from_stats(parsed.get("stats"))
+            parsed = self._parse_json_output(result_text)
+            if parsed is not None:
+                sid = parsed.get("session_id")
+                if isinstance(sid, str) and sid:
+                    old_sid = self._session_id
+                    self._session_id = sid
+                    if sid != old_sid:
+                        await self._emit(
+                            EVENT_SESSION_STARTED,
+                            {"session_id": sid, "thread_id": sid},
+                        )
+                response = parsed.get("response")
+                last_message = response if isinstance(response, str) else result_text
+                stats = parsed.get("stats") if isinstance(parsed.get("stats"), dict) else {}
+                self._update_usage_from_stats(stats)
+            else:
+                last_message = result_text
+                stats = {}
             payload = {
                 "result": last_message,
                 "response": last_message,
                 "session_id": self._session_id,
-                "stats": parsed.get("stats") if isinstance(parsed.get("stats"), dict) else {},
+                "stats": stats,
                 "exit_code": rc,
             }
             await self._emit(EVENT_TURN_COMPLETED, payload)
@@ -250,14 +237,20 @@ class GeminiBackend(BaseAgentBackend):
     # ------------------------------------------------------------------
 
     def _command_for_turn(self, *, is_continuation: bool) -> str:
-        cmd = f"{self._gemini.command} --skip-trust --output-format json"
-        if not self._session_id:
+        del is_continuation
+        cmd = self._gemini.command
+        if _has_shell_flag(cmd, "-y", "--yolo"):
             return cmd
-        if is_continuation:
-            if self._gemini.resume_across_turns:
-                return f"{cmd} --resume {shlex.quote(self._session_id)}"
-            return cmd
-        return f"{cmd} --session-id {shlex.quote(self._session_id)}"
+        return f"{cmd} --yolo"
+
+    def _parse_json_output(self, text: str) -> dict[str, Any] | None:
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def _capture_stderr(self, stderr: bytes) -> None:
         text = stderr.decode("utf-8", errors="replace")
@@ -312,3 +305,11 @@ class GeminiBackend(BaseAgentBackend):
             )
         except Exception as exc:
             log.warning("event_callback_failed", error=str(exc))
+
+
+def _has_shell_flag(command: str, *flags: str) -> bool:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    return any(part in flags for part in parts)
