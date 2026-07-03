@@ -299,8 +299,13 @@ codex:
   # user-level config untouched.
   command: codex app-server -c model=gpt-5-codex
   approval_policy: never
-  thread_sandbox: workspace-write
-  turn_sandbox_policy: workspace-write
+  # The release workflow requires workers to run Playwright/Chromium gates.
+  # Codex's macOS workspace-write sandbox can block Chromium's Mach bootstrap
+  # before the app loads, so browser-capable Codex workers run without an
+  # outer Codex sandbox. The per-ticket git worktree, kanban symlink check,
+  # and ticket scope guard remain the containment boundary.
+  thread_sandbox: danger-full-access
+  turn_sandbox_policy: danger-full-access
 
 gemini:
   command: 'gemini -p ""'

@@ -113,6 +113,33 @@ Additional status from the replacement run:
   workspace sandbox. The host gate passes, but a fresh run is still required to
   determine whether worker-side browser launch is now reliable for all agents.
 
+## Follow-up Status - Codex Browser Sandbox RCA
+
+Status at `2026-07-03 20:31 KST` from the r7 clean-dev rerun:
+
+- `REL-704` (Codex) generated an app that passed the operator-side browser gate:
+  `.venv/bin/python scripts/static_todo_browser_acceptance.py
+  /private/tmp/symphony-release-e2e-r7-VCauY2/workspaces/REL-704/examples/e2e-todo/codex`
+  -> `PASS`.
+- The same gate failed inside the Codex worker before app interaction:
+  `bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer...:
+  Permission denied (1100)`.
+- Root cause: the shipped workflow ran Codex with `thread_sandbox:
+  workspace-write` and `turn_sandbox_policy: workspace-write`. That sandbox
+  still allowed file edits after writable-root injection, but it blocked
+  Playwright Chromium's macOS Mach bootstrap path.
+- Fix: the shipped `WORKFLOW.md` now sets Codex `thread_sandbox` and
+  `turn_sandbox_policy` to `danger-full-access` for this browser-gated
+  production workflow.
+- Rejected: adding another isolated browser profile. The current gate already
+  isolates `HOME`, cache, and config, and the app passes from the operator
+  shell.
+- Rejected: treating the worker failure as app-quality failure. Host proof
+  shows the app is valid; the failing layer is Codex worker sandboxing.
+- Rejected: skipping the browser gate or asking workers to manually claim it.
+  Prior Pi and OpenCode failures prove real browser execution is the release
+  authority.
+
 ## Goal
 
 Run Symphony end-to-end with four live agent backends building the same static

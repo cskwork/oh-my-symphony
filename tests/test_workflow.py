@@ -313,6 +313,14 @@ def test_build_service_config_reads_codex_model_and_reasoning(tmp_path):
     assert cfg.codex.reasoning_effort == "medium"
 
 
+def test_repo_workflow_codex_is_browser_capable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cfg = build_service_config(load_workflow(repo_root / "WORKFLOW.md"))
+
+    assert cfg.codex.thread_sandbox == "danger-full-access"
+    assert cfg.codex.turn_sandbox_policy == "danger-full-access"
+
+
 def test_build_service_config_allows_zero_agent_max_attempts(tmp_path):
     path = _write(
         tmp_path,

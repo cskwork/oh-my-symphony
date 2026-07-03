@@ -1140,3 +1140,49 @@ Rejected alternatives:
   -> `16 passed`.
 - `PYTHONPATH=src .venv/bin/python -m pytest tests/test_orchestrator_dispatch.py::test_reconcile_part_b_skips_paused_worker_on_terminal_state tests/test_orchestrator_dispatch.py::test_reconcile_terminate_terminal_commits_before_remove tests/test_orchestrator_dispatch.py::test_reconcile_terminate_terminal_skips_commit_when_auto_off tests/test_orchestrator_dispatch.py::test_on_worker_exit_commits_workspace_at_done tests/test_orchestrator_dispatch.py::test_on_worker_exit_commits_workspace_for_non_done_terminal_state -q`
   -> `5 passed`.
+
+# 2026-07-03 - Codex browser sandbox release blocker RCA
+
+## Goal
+
+Remove the r7 Codex release blocker where a valid todo app could not be proven
+inside the Codex worker because Playwright Chromium could not launch.
+
+## Decision
+
+The shipped workflow now runs Codex with `danger-full-access` for both
+`thread_sandbox` and `turn_sandbox_policy`.
+
+Evidence from r7:
+
+- Codex worker evidence for `REL-704` failed before app interaction with
+  `bootstrap_check_in ... Permission denied (1100)`.
+- The operator-shell rerun of the exact same app and browser gate passed:
+  `.venv/bin/python scripts/static_todo_browser_acceptance.py
+  /private/tmp/symphony-release-e2e-r7-VCauY2/workspaces/REL-704/examples/e2e-todo/codex`
+  -> `PASS`.
+- The local Codex app-server schema supports `dangerFullAccess`, while
+  `workspaceWrite` is the sandbox profile that adds the outer macOS sandbox.
+
+Rejected alternatives:
+
+- Rejected: another browser profile isolation patch. The gate already isolates
+  `HOME`, cache, and config, and passes outside the Codex worker.
+- Rejected: treating the failure as an app defect. The identical app passes the
+  host browser gate.
+- Rejected: skipping browser proof for Codex. The release condition requires
+  real browser evidence from every backend.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workflow.py::test_repo_workflow_codex_is_browser_capable -q`
+  failed before the fix because the workflow still used `workspace-write`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workflow.py::test_repo_workflow_codex_is_browser_capable tests/test_backends.py::test_codex_sandbox_policy_workspace_write_to_v2_payload -q`
+  -> `2 passed`.
+- `PYTHONPATH=src .venv/bin/python -m symphony.cli doctor ./WORKFLOW.md`
+  -> all checks `PASS`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workflow.py tests/test_backends.py -q`
+  -> `138 passed`.
+- `git diff --check` -> passed.
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1029 passed, 2 skipped, 2 warnings`.
