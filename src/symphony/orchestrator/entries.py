@@ -144,4 +144,5 @@ class _IssueDebug:
     rewind_count: int = 0
     last_workspace: Path | None = None
     last_error: str | None = None
+    tracker_error: str | None = None
     recent_events: list[dict[str, Any]] = field(default_factory=list)

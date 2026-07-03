@@ -32,6 +32,7 @@ from .skills import normalize_skill_names
 from .stats import StatsStore, stats_store_for
 from .trackers.file import FileBoardTracker, parse_ticket_file
 from .orchestrator import Orchestrator
+from .orchestrator.run_registry import clamp_run_history_limit
 from .workflow import SUPPORTED_AGENT_KINDS, ServiceConfig
 from .workflow.mutate import (
     StateSpec,
@@ -170,7 +171,7 @@ class _Ctx:
 def _issue_card(
     issue: Issue,
     *,
-    attention: dict[str, str] | None = None,
+    attention: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "identifier": issue.identifier,
@@ -359,6 +360,19 @@ def _parse_state_specs(body: dict[str, Any]) -> list[StateSpec]:
 def _register_issue_routes(
     app: web.Application, ctx: _Ctx, orchestrator: Orchestrator
 ) -> None:
+    async def handle_runs(request: web.Request) -> web.Response:
+        raw_limit = request.query.get("limit", "50")
+        try:
+            limit = clamp_run_history_limit(int(raw_limit))
+        except (TypeError, ValueError):
+            limit = clamp_run_history_limit(50)
+        issue_id = request.query.get("issue") or None
+        runs, registry_error = orchestrator.recent_runs(issue_id=issue_id, limit=limit)
+        payload: dict[str, Any] = {"runs": runs, "count": len(runs)}
+        if registry_error:
+            payload["registry_error"] = registry_error
+        return web.json_response(payload)
+
     async def handle_board(_request: web.Request) -> web.Response:
         cfg = ctx.config()
         issues: list[dict[str, Any]] = []
@@ -526,6 +540,7 @@ def _register_issue_routes(
             {"identifier": identifier, "skipped": True, "message": message}
         )
 
+    app.router.add_get("/api/v1/runs", _wrap(handle_runs))
     app.router.add_get("/api/v1/board", _wrap(handle_board))
     app.router.add_post("/api/v1/issues", _wrap(handle_issue_create))
     app.router.add_get("/api/v1/issues/{identifier}", _wrap(handle_issue_detail))

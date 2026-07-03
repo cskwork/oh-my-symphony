@@ -55,6 +55,13 @@
     patchIssue: (id, fields) => apiRequest(`/issues/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(fields) }),
     deleteIssue: (id) => apiRequest(`/issues/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     getWorkflow: () => apiRequest('/workflow'),
+    getRuns: ({ issue, limit } = {}) => {
+      const params = new URLSearchParams();
+      if (issue) params.set('issue', issue);
+      if (limit != null) params.set('limit', String(limit));
+      const query = params.toString();
+      return apiRequest(`/runs${query ? `?${query}` : ''}`);
+    },
     putWorkflowStates: (states) => apiRequest('/workflow/states', { method: 'PUT', body: JSON.stringify({ states }) }),
     getPrompt: (stateName) => apiRequest(`/workflow/prompts/${encodeURIComponent(stateName)}`),
     putPrompt: (stateName, content) => apiRequest(`/workflow/prompts/${encodeURIComponent(stateName)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
@@ -278,6 +285,18 @@
     if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
     return `${Math.round(seconds / 86400)}d ago`;
+  }
+
+  function formatShortDateTime(isoString) {
+    if (!isoString) return 'open';
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return 'unknown';
+    return date.toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 
   function truncate(text, max) {
@@ -1173,6 +1192,7 @@
       }, 'Skip Learn'));
     }
     if (detail.live) container.appendChild(buildLiveSection(detail));
+    container.appendChild(buildRunHistorySection(detail));
     container.appendChild(buildDescriptionSection(detail));
     container.appendChild(el('div', { class: 'drawer-meta' }, [
       el('div', null, `Created ${timeAgo(detail.created_at)}`),
@@ -1180,6 +1200,53 @@
     ]));
     container.appendChild(deleteBtn);
     return container;
+  }
+
+  function buildRunHistorySection(detail) {
+    const rows = el('div', { class: 'run-history-rows' }, [
+      el('div', { class: 'history-muted' }, 'Loading run history...'),
+    ]);
+    const section = el('div', { class: 'drawer-run-history' }, [
+      el('div', { class: 'section-heading' }, 'Run history'),
+      rows,
+    ]);
+    loadRunHistory(detail.identifier, rows);
+    return section;
+  }
+
+  async function loadRunHistory(identifier, rows) {
+    try {
+      const data = await api.getRuns({ issue: identifier, limit: 10 });
+      if (state.drawerIssue !== identifier) return;
+      clearNode(rows);
+      if (data.registry_error) {
+        rows.appendChild(el('div', { class: 'history-muted' }, 'History unavailable'));
+        return;
+      }
+      const runs = data.runs || [];
+      if (!runs.length) {
+        rows.appendChild(el('div', { class: 'history-muted' }, 'No runs recorded'));
+        return;
+      }
+      for (const run of runs) rows.appendChild(buildRunHistoryRow(run));
+    } catch (_err) {
+      if (state.drawerIssue !== identifier) return;
+      clearNode(rows);
+      rows.appendChild(el('div', { class: 'history-muted' }, 'History unavailable'));
+    }
+  }
+
+  function buildRunHistoryRow(run) {
+    const attempt = run.attempt_kind || 'run';
+    const agent = run.agent_kind || 'agent';
+    const status = run.status || 'unknown';
+    const start = formatShortDateTime(run.started_at);
+    const end = run.completed_at ? formatShortDateTime(run.completed_at) : 'open';
+    return el('div', { class: 'run-history-row' }, [
+      el('span', { class: 'run-history-main' }, `${attempt} ${agent}`),
+      el('span', { class: 'run-history-status' }, status),
+      el('span', { class: 'run-history-time' }, `${start} -> ${end}`),
+    ]);
   }
 
   function buildDescriptionSection(detail) {

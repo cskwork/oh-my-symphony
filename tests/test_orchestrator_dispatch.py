@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -2778,11 +2779,138 @@ def test_issue_attention_reports_budget_exhaustion():
         last_error="max_total_turns reached (1/1)"
     )
 
-    assert orch.issue_attention(issue) == {
-        "kind": "budget_exhausted",
-        "label": "Budget exhausted",
-        "message": "max_total_turns reached (1/1)",
-    }
+    attention = orch.issue_attention(issue)
+    assert attention is not None
+    assert attention["kind"] == "budget_exhausted"
+    assert attention["label"] == "Budget exhausted"
+    assert attention["severity"] == "warning"
+    assert attention["message"] == "max_total_turns reached (1/1)"
+
+
+def test_issue_attention_reports_retry_scheduled():
+    orch = _orch()
+    issue = _issue("MT-RETRY", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=2,
+            delay_ms=60_000,
+            error="backend timeout",
+            kind="retry",
+        )
+        try:
+            attention = orch.issue_attention(issue)
+            assert attention is not None
+            assert attention["kind"] == "retry_scheduled"
+            assert attention["label"] == "Retry scheduled"
+            assert attention["severity"] == "info"
+            assert attention["message"] == "backend timeout"
+            assert isinstance(attention["due_at"], str)
+            assert attention["due_at"].endswith("Z")
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_issue_attention_reports_stalled_and_lease_blocked():
+    orch = _orch()
+    issue = _issue("MT-STALL", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    entry.lease_lost = True
+    entry.cancelled_at = datetime.now(timezone.utc) - timedelta(seconds=4)
+
+    stalled = orch.issue_attention(issue)
+    assert stalled is not None
+    assert stalled["kind"] == "stalled"
+    assert stalled["severity"] == "error"
+    assert "worker cancellation pending" in stalled["message"]
+
+    entry.cancelled_at = None
+    lease = orch.issue_attention(issue)
+    assert lease is not None
+    assert lease["kind"] == "lease_blocked"
+    assert lease["severity"] == "error"
+
+
+def test_issue_attention_reports_active_lease_block_from_eligibility(monkeypatch):
+    orch = _orch()
+    issue = _issue("MT-LEASE", state="In Progress")
+    cfg = _make_config(active_states=("In Progress",))
+
+    monkeypatch.setattr(orch, "_has_active_run_lease", lambda _issue_id: True)
+
+    assert orch._eligible(issue, cfg, owning_retry=False) is False
+    attention = orch.issue_attention(issue)
+    assert attention is not None
+    assert attention["kind"] == "lease_blocked"
+    assert attention["message"] == "another active run lease exists for this issue"
+
+
+def test_issue_attention_reports_tracker_error():
+    orch = _orch()
+    issue = _issue("MT-TRACKER", state="In Progress")
+    orch._issue_debug[issue.id] = _IssueDebug(tracker_error="update failed")
+
+    attention = orch.issue_attention(issue)
+
+    assert attention is not None
+    assert attention["kind"] == "tracker_error"
+    assert attention["label"] == "Tracker error"
+    assert attention["severity"] == "warning"
+    assert attention["message"] == "update failed"
+
+
+def test_issue_attention_priority_order():
+    orch = _orch()
+    issue = _issue("MT-PRIORITY", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    entry.cancelled_at = datetime.now(timezone.utc)
+    entry.lease_lost = True
+    orch._turn_budget_exhausted.add(issue.id)
+    orch._issue_debug[issue.id] = _IssueDebug(
+        last_error="turn budget", tracker_error="tracker failed"
+    )
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=1,
+            delay_ms=60_000,
+            error="retry later",
+            kind="retry",
+        )
+        try:
+            assert orch.issue_attention(issue)["kind"] == "stalled"  # type: ignore[index]
+            entry.cancelled_at = None
+            assert orch.issue_attention(issue)["kind"] == "lease_blocked"  # type: ignore[index]
+            entry.lease_lost = False
+            assert orch.issue_attention(issue)["kind"] == "budget_exhausted"  # type: ignore[index]
+            orch._turn_budget_exhausted.clear()
+            assert orch.issue_attention(issue)["kind"] == "tracker_error"  # type: ignore[index]
+            orch._issue_debug[issue.id].tracker_error = None
+            assert orch.issue_attention(issue)["kind"] == "retry_scheduled"  # type: ignore[index]
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_issue_attention_omits_terminal_issue():
+    orch = _orch()
+    issue = _issue("MT-DONE", state="Done")
+    orch._workflow_state._config = _make_config(terminal_states=("Done",))
+    orch._turn_budget_exhausted.add(issue.id)
+    orch._issue_debug[issue.id] = _IssueDebug(tracker_error="update failed")
+
+    assert orch.issue_attention(issue) is None
 
 
 def test_turn_budget_exhaustion_survives_next_tick_claim_prune(monkeypatch):

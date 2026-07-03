@@ -101,7 +101,7 @@ from .helpers import (
     _utc_iso_z,
 )
 from .parsing import _parse_findings_rows, _parse_touched_files
-from .run_registry import RunRegistry
+from .run_registry import RunRecord, RunRegistry, registry_path_for_workflow
 
 
 # Parent-package indirection. ``_pkg.build_backend`` (and the two other
@@ -112,6 +112,41 @@ _pkg = sys.modules[__package__]
 
 
 log = get_logger()
+
+
+def _run_record_payload(record: RunRecord) -> dict[str, Any]:
+    return {
+        "run_id": record.run_id,
+        "issue_id": record.issue_id,
+        "identifier": record.identifier,
+        "attempt": record.attempt,
+        "attempt_kind": record.attempt_kind,
+        "agent_kind": record.agent_kind,
+        "status": record.status,
+        "started_at": record.started_at.isoformat() if record.started_at else None,
+        "completed_at": (
+            record.completed_at.isoformat() if record.completed_at else None
+        ),
+        "workspace_path": str(record.workspace_path) if record.workspace_path else None,
+    }
+
+
+def _attention_signal(
+    kind: str,
+    label: str,
+    message: str,
+    severity: str,
+    *,
+    due_at: str | None = None,
+) -> dict[str, str | None]:
+    return {
+        "kind": kind,
+        "label": label,
+        "message": message,
+        "severity": severity,
+        "due_at": due_at,
+    }
+
 
 class Orchestrator:
     def __init__(
@@ -135,6 +170,7 @@ class Orchestrator:
         # can't wedge it; None = never swept, so the first tick sweeps once.
         self._last_archive_sweep_monotonic: float | None = None
         self._turn_budget_exhausted: set[str] = set()
+        self._lease_blocked: dict[str, str] = {}
         # Tickets whose worker-exit handler is mid-flight. `_on_worker_exit`
         # adds the id on entry and clears it in a `finally`, so from the moment
         # a worker leaves `_running` until its terminal-state persist (or retry
@@ -229,7 +265,7 @@ class Orchestrator:
         return result
 
     def _ensure_run_registry(self, cfg: ServiceConfig) -> None:
-        path = cfg.workflow_path.parent / ".symphony" / "state.db"
+        path = registry_path_for_workflow(cfg.workflow_path)
         if self._run_registry is not None and self._run_registry.path == path:
             return
         if self._run_registry is not None:
@@ -258,6 +294,27 @@ class Orchestrator:
             log.info("run_leases_expired_on_start", count=expired, path=str(path))
         flags = self._registry_guard("list_issue_flags", registry.list_issue_flags, [])
         self._rehydrate_issue_flags(flags)
+
+    def recent_runs(
+        self, issue_id: str | None = None, limit: int = 50
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        registry = self._run_registry
+        if registry is None:
+            cfg = self._workflow_state.current()
+            if cfg is not None:
+                self._ensure_run_registry(cfg)
+                registry = self._run_registry
+        if registry is None:
+            return [], "run registry unavailable"
+
+        rows = self._registry_guard(
+            "recent_runs",
+            lambda: registry.recent_runs(issue_id=issue_id, limit=limit),
+            None,
+        )
+        if rows is None:
+            return [], self._last_registry_error
+        return [_run_record_payload(row) for row in rows], None
 
     def _rehydrate_issue_flags(self, flags: list[Any]) -> None:
         self._persisted_retry_attempts.clear()
@@ -544,6 +601,7 @@ class Orchestrator:
         self._paused_issue_ids.clear()
         self._pause_events.clear()
         self._turn_budget_exhausted.clear()
+        self._lease_blocked.clear()
         if self._run_registry is not None:
             self._run_registry.close()
             self._run_registry = None
@@ -629,11 +687,13 @@ class Orchestrator:
             degraded_reasons.append("tracker_fetch_failures")
         if self._last_registry_error is not None:
             degraded_reasons.append("run_registry_error")
+        status = "degraded" if degraded_reasons else ("starting" if last is None else "ok")
         return {
-            "status": "degraded" if degraded_reasons else "ok",
+            "status": status,
             "degraded_reasons": degraded_reasons,
             "version": __version__,
             "generated_at": _utc_iso_z(),
+            "workflow_path": str(self._workflow_state.path),
             "tick": {
                 "alive": tick_alive,
                 "started": tick_started,
@@ -732,15 +792,80 @@ class Orchestrator:
                 }
         return None
 
-    def issue_attention(self, issue: Issue) -> dict[str, str] | None:
-        if issue.id not in self._turn_budget_exhausted:
+    def issue_attention(self, issue: Issue) -> dict[str, str | None] | None:
+        if self._issue_is_terminal(issue):
             return None
+        entry = self._running.get(issue.id)
+        if entry is not None:
+            stalled = self._stalled_attention(entry)
+            if stalled is not None:
+                return stalled
+            if entry.lease_lost:
+                return _attention_signal(
+                    "lease_blocked",
+                    "Lease blocked",
+                    "run lease was lost to another active holder",
+                    "error",
+                )
+        if issue.id in self._lease_blocked:
+            return _attention_signal(
+                "lease_blocked",
+                "Lease blocked",
+                self._lease_blocked[issue.id],
+                "error",
+            )
+        if issue.id in self._turn_budget_exhausted:
+            debug = self._issue_debug.get(issue.id, _IssueDebug())
+            return _attention_signal(
+                "budget_exhausted",
+                "Budget exhausted",
+                debug.last_error or "agent budget exhausted",
+                "warning",
+            )
         debug = self._issue_debug.get(issue.id, _IssueDebug())
-        return {
-            "kind": "budget_exhausted",
-            "label": "Budget exhausted",
-            "message": debug.last_error or "agent budget exhausted",
-        }
+        if debug.tracker_error:
+            return _attention_signal(
+                "tracker_error",
+                "Tracker error",
+                debug.tracker_error,
+                "warning",
+            )
+        retry = self._retry.get(issue.id)
+        if retry is not None:
+            return self._retry_attention(retry)
+        return None
+
+    def _issue_is_terminal(self, issue: Issue) -> bool:
+        state = normalize_state(issue.state)
+        cfg = self._workflow_state.current()
+        if cfg is not None:
+            return state in {normalize_state(s) for s in cfg.tracker.terminal_states}
+        return state in {"done", "cancelled", "canceled", "blocked", "archive"}
+
+    def _stalled_attention(
+        self, entry: RunningEntry
+    ) -> dict[str, str | None] | None:
+        if entry.cancelled_at is None:
+            return None
+        seconds = int(
+            max(0.0, (datetime.now(timezone.utc) - entry.cancelled_at).total_seconds())
+        )
+        return _attention_signal(
+            "stalled",
+            "Stalled",
+            f"worker cancellation pending for {seconds}s",
+            "error",
+        )
+
+    def _retry_attention(self, entry: RetryEntry) -> dict[str, str | None]:
+        reason = entry.error or f"{entry.kind} attempt {entry.attempt} scheduled"
+        return _attention_signal(
+            "retry_scheduled",
+            "Retry scheduled",
+            reason,
+            "info",
+            due_at=_from_monotonic_to_iso(entry.due_at_ms),
+        )
 
     def _running_row(self, issue_id: str, entry: RunningEntry) -> dict[str, Any]:
         debug = self._issue_debug.get(issue_id, _IssueDebug())
@@ -761,6 +886,7 @@ class Orchestrator:
             "started_at": _to_iso(entry.started_at),
             "last_event_at": _to_iso(entry.last_codex_timestamp),
             "paused": self.is_paused(issue_id),
+            "attention": self.issue_attention(entry.issue),
             "tokens": {
                 "input_tokens": entry.codex_input_tokens,
                 "cache_input_tokens": entry.codex_cache_input_tokens,
@@ -918,6 +1044,7 @@ class Orchestrator:
             "kind": entry.kind,
             "due_at": _from_monotonic_to_iso(entry.due_at_ms),
             "error": entry.error,
+            "attention": self._retry_attention(entry),
             # Pause now persists across worker exit, so a retry-queued
             # ticket can carry a paused flag the TUI surfaces for resume.
             "paused": self.is_paused(entry.issue_id),
@@ -1434,7 +1561,9 @@ class Orchestrator:
                 identifier=issue.identifier,
                 error=str(exc),
             )
+            self._record_tracker_error(issue.id, exc)
             return False
+        self._clear_tracker_error(issue.id)
         log.info(
             "auto_triage_todo",
             identifier=issue.identifier,
@@ -1455,7 +1584,11 @@ class Orchestrator:
         if issue.id in self._running:
             return False
         if self._has_active_run_lease(issue.id):
+            self._lease_blocked[issue.id] = (
+                "another active run lease exists for this issue"
+            )
             return False
+        self._lease_blocked.pop(issue.id, None)
         if not owning_retry and issue.id in self._claimed:
             return False
         # Paused tickets hold their slot but never start a fresh worker
@@ -2570,9 +2703,11 @@ class Orchestrator:
             )
         except Exception as exc:
             log.warning("issue_state_refresh_failed", issue_id=issue_id, error=str(exc))
+            self._record_tracker_error(issue_id, exc)
             return None
         for issue in results:
             if issue.id == issue_id:
+                self._clear_tracker_error(issue_id)
                 return issue
         return None
 
@@ -2589,13 +2724,16 @@ class Orchestrator:
         in-memory issue in that case (do NOT replace it with None).
         """
         try:
-            return await asyncio.to_thread(
+            issue = await asyncio.to_thread(
                 self._tracker_call_full_by_id, cfg, issue_id
             )
+            self._clear_tracker_error(issue_id)
+            return issue
         except Exception as exc:
             log.warning(
                 "issue_full_refresh_failed", issue_id=issue_id, error=str(exc)
             )
+            self._record_tracker_error(issue_id, exc)
             return None
 
     async def _persist_budget_exhausted_state(
@@ -2649,6 +2787,7 @@ class Orchestrator:
                 target_state=target_state,
                 budget_kind=budget_kind,
             )
+            self._clear_tracker_error(issue_id)
             return True
         except Exception as persist_exc:
             # Lenient: the in-memory guard still prevents another dispatch in
@@ -2661,6 +2800,7 @@ class Orchestrator:
                 budget_kind=budget_kind,
                 error=str(persist_exc),
             )
+            self._record_tracker_error(issue_id, persist_exc)
             return False
 
     # ------------------------------------------------------------------
@@ -3533,8 +3673,10 @@ class Orchestrator:
                 attempt=attempt,
                 target_state=target_state,
             )
+            self._clear_tracker_error(issue_id)
         except Exception as exc:
             attempts = self._pending_escalations.get(issue_id, 0) + 1
+            self._record_tracker_error(issue_id, exc)
             if attempts >= ESCALATION_MAX_ATTEMPTS:
                 log.error(
                     "agent_retry_cap_escalation_abandoned",
@@ -3753,6 +3895,7 @@ class Orchestrator:
                     identifier=issue.identifier,
                     error=str(exc),
                 )
+                self._record_tracker_error(issue.id, exc)
 
     async def _reconcile_one(
         self,
@@ -3869,6 +4012,18 @@ class Orchestrator:
 
     async def _fetch_candidates(self, cfg: ServiceConfig) -> list[Issue]:
         return await asyncio.to_thread(self._tracker_call_candidates, cfg)
+
+    def _record_tracker_error(self, issue_id: str, exc: Exception | str) -> None:
+        message = str(exc) or type(exc).__name__
+        message = " ".join(message.split())
+        if len(message) > 500:
+            message = message[-500:]
+        self._issue_debug.setdefault(issue_id, _IssueDebug()).tracker_error = message
+
+    def _clear_tracker_error(self, issue_id: str) -> None:
+        debug = self._issue_debug.get(issue_id)
+        if debug is not None:
+            debug.tracker_error = None
 
     @staticmethod
     def _tracker_call_candidates(cfg: ServiceConfig) -> list[Issue]:

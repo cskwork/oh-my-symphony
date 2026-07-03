@@ -272,6 +272,21 @@ PASS  tracker.board_root            ./kanban (3 tickets)
 잡아낸다: 포트 충돌, `$PATH`의 CLI 누락, 기본 제공되는 자리표시자 클론 URL,
 쓰기 불가 워크스페이스, 보드 디렉터리 누락.
 
+## Prove It Works
+
+`doctor`가 통과하면 같은 워크플로를 런타임 표면으로 증명한다:
+
+```bash
+symphony ./WORKFLOW.md --port 9999
+curl -s http://127.0.0.1:9999/api/v1/health
+symphony runs ./WORKFLOW.md --limit 5
+python scripts/smoke_web_api.py --base-url http://127.0.0.1:9999
+```
+
+`/api/v1/health`는 `starting`, `ok`, `degraded` 중 하나를 보고한다.
+`symphony runs`는 최근 registry 실행 시도를 출력하고, smoke 스크립트는 health,
+state, board, static asset, 이슈 CRUD, refresh, workflow, stats를 확인한다.
+
 ---
 
 ## Quickstart — your first task end-to-end
@@ -571,6 +586,7 @@ JSON API 엔드포인트:
 | GET    | `/api/v1/health`                  | tick loop / tracker / run registry 상태       |
 | GET    | `/api/v1/state`                   | Snapshot — running, retrying, totals, limits |
 | GET    | `/api/v1/board`                   | 컬럼 + 이슈 + 실행 중 정보                    |
+| GET    | `/api/v1/runs?issue=&limit=`      | registry의 최근 실행 시도                     |
 | POST/PATCH/DELETE | `/api/v1/issues[...]`  | 이슈 CRUD (file tracker)                     |
 | PUT    | `/api/v1/workflow/states`         | 컬럼 추가 / 삭제 / 이름변경 / 순서변경        |
 | GET/PUT| `/api/v1/workflow/prompts/<state>`| 컬럼 스테이지 프롬프트 조회 / 편집            |

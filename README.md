@@ -224,8 +224,8 @@ pip install -e ".[dev]"
 cat > WORKFLOW.md <<'YAML'
 ---
 tracker: { kind: file, board_root: ./kanban,
-           active_states: [Todo, "In Progress"],
-           terminal_states: [Done, Cancelled, Blocked] }
+           active_states: [Todo, "In Progress", Verify, Learn],
+           terminal_states: ["Human Review", Done, Blocked, Archive] }
 polling: { interval_ms: 5000 }
 workspace: { root: ~/symphony_workspaces }
 hooks:
@@ -280,6 +280,21 @@ Exit code is `0` when all checks pass, `1` if any FAIL, `2` if `WORKFLOW.md`
 itself can't be loaded. The doctor catches the most common first-run
 failures in one pass: port collision, missing CLI on `$PATH`, the shipped
 placeholder clone URL, unwritable workspace, missing board directory.
+
+## Prove It Works
+
+After `doctor` passes, prove the same workflow through the runtime surfaces:
+
+```bash
+symphony ./WORKFLOW.md --port 9999
+curl -s http://127.0.0.1:9999/api/v1/health
+symphony runs ./WORKFLOW.md --limit 5
+python scripts/smoke_web_api.py --base-url http://127.0.0.1:9999
+```
+
+`/api/v1/health` reports `starting`, `ok`, or `degraded`; `symphony runs`
+prints recent registry attempts; the smoke script checks health, state,
+board, static assets, issue CRUD, refresh, workflow, and stats.
 
 ---
 
@@ -611,6 +626,7 @@ JSON API endpoints:
 | GET    | `/api/v1/health`                  | Tick-loop / tracker / run-registry health    |
 | GET    | `/api/v1/state`                   | Snapshot — running, retrying, totals, limits |
 | GET    | `/api/v1/board`                   | Columns + issues + live run info             |
+| GET    | `/api/v1/runs?issue=&limit=`      | Recent run attempts from the registry        |
 | POST/PATCH/DELETE | `/api/v1/issues[...]`  | Issue CRUD (file tracker)                    |
 | PUT    | `/api/v1/workflow/states`         | Column add / delete / rename / reorder       |
 | GET/PUT| `/api/v1/workflow/prompts/<state>`| Read / edit a column's stage prompt          |

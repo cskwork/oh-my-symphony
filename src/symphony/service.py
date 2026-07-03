@@ -165,6 +165,26 @@ def load_record(workflow_path: str | Path) -> ServiceRecord | None:
         return None
 
 
+def port_owner_hint(
+    workflow_path: str | Path,
+    port: int,
+    *,
+    is_running: ProcessRunningPredicate | None = None,
+) -> str | None:
+    record = load_record(workflow_path)
+    if record is None or record.port != port:
+        return None
+    alive = is_running or is_process_running
+    if not alive(record.orchestrator_pid):
+        return None
+    pid = record.orchestrator_pid
+    started = f", started {record.started_at}" if record.started_at else ""
+    return (
+        f"owned by this workflow's service (pid {pid}{started}); "
+        f"check `symphony service status {record.workflow_path}`"
+    )
+
+
 def save_record(record: ServiceRecord) -> Path:
     path = record_path_for(record.workflow_path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -30,6 +30,12 @@ class RunRecord:
     workspace_path: Path
     lease_expires_at: datetime | None
     last_progress_at: datetime | None
+    attempt: int | None = None
+    attempt_kind: str = ""
+    agent_kind: str = ""
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
     owner_pid: int | None = None
     owner_boot_id: str | None = None
 
@@ -44,6 +50,14 @@ class IssueFlags:
 
 
 _UNSET = object()
+
+
+def registry_path_for_workflow(workflow_path: str | Path) -> Path:
+    return Path(workflow_path).expanduser().resolve().parent / ".symphony" / "state.db"
+
+
+def clamp_run_history_limit(limit: int) -> int:
+    return max(1, min(int(limit), 200))
 
 
 def _pid_alive(pid: int) -> bool:
@@ -288,6 +302,32 @@ class RunRegistry:
             raise KeyError(run_id)
         return _record(row)
 
+    def recent_runs(
+        self, issue_id: str | None = None, limit: int = 50
+    ) -> list[RunRecord]:
+        """Return newest run rows, clamping limit into [1, 200]."""
+        limit = clamp_run_history_limit(limit)
+        if issue_id:
+            rows = self._connect().execute(
+                """
+                SELECT * FROM runs
+                WHERE issue_id = ? OR identifier = ?
+                ORDER BY rowid DESC
+                LIMIT ?
+                """,
+                (issue_id, issue_id, limit),
+            ).fetchall()
+        else:
+            rows = self._connect().execute(
+                """
+                SELECT * FROM runs
+                ORDER BY rowid DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_record(row) for row in rows]
+
     def get_issue_flags(self, issue_id: str) -> IssueFlags | None:
         row = self._connect().execute(
             "SELECT * FROM issue_flags WHERE issue_id = ?",
@@ -508,6 +548,12 @@ def _record(row: sqlite3.Row) -> RunRecord:
         workspace_path=Path(str(row["workspace_path"])),
         lease_expires_at=_parse(row["lease_expires_at"]),
         last_progress_at=_parse(row["last_progress_at"]),
+        attempt=int(row["attempt"]) if row["attempt"] is not None else None,
+        attempt_kind=str(row["attempt_kind"]),
+        agent_kind=str(row["agent_kind"]),
+        started_at=_parse(row["started_at"]),
+        updated_at=_parse(row["updated_at"]),
+        completed_at=_parse(row["completed_at"]),
         owner_pid=int(owner_pid) if owner_pid is not None else None,
         owner_boot_id=row["owner_boot_id"],
     )

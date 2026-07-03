@@ -68,6 +68,14 @@ class _StubOrchestrator:
             "rate_limits": None,
         }
 
+    def health(self) -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "degraded_reasons": [],
+            "version": "test",
+            "generated_at": "2026-07-03T00:00:00Z",
+        }
+
     def issue_snapshot(self, _identifier: str) -> dict[str, Any] | None:
         return None
 
@@ -124,6 +132,7 @@ async def test_smoke_web_api_runs_against_test_server(web_base_url: str) -> None
     smoke = _load_smoke_module()
     checks = await asyncio.to_thread(smoke.run_smoke, web_base_url, prefix="SMOKET")
     assert [c.name for c in checks] == [
+        "health",
         "state",
         "board",
         "static assets",
@@ -133,3 +142,27 @@ async def test_smoke_web_api_runs_against_test_server(web_base_url: str) -> None
         "refresh",
         "workflow stats skills",
     ]
+
+
+def test_smoke_degraded_health_reports_reasons(monkeypatch) -> None:
+    smoke = _load_smoke_module()
+
+    def fake_request(
+        _base_url: str,
+        _method: str,
+        path: str,
+        _body: dict[str, Any] | None = None,
+    ) -> tuple[int, Any]:
+        if path == "/api/v1/health":
+            return 200, {"status": "degraded", "degraded_reasons": ["tick_failures"]}
+        return 200, {}
+
+    monkeypatch.setattr(smoke, "request", fake_request)
+
+    with pytest.raises(smoke.SmokeFailure) as exc:
+        smoke.run_smoke("http://127.0.0.1:9999")
+
+    message = str(exc.value)
+    assert "GET /api/v1/health" in message
+    assert "tick_failures" in message
+    assert "Next step:" in message

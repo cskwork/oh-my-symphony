@@ -9,14 +9,37 @@ the tests don't actually start orchestrators / TUIs / wiki sweeps.
 from __future__ import annotations
 
 import importlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+from symphony.issue import Issue
+from symphony.orchestrator.run_registry import RunRegistry
 
 # `symphony/cli/__init__.py` re-exports `main` as a function on the package,
 # which shadows the submodule attribute lookup. Pull the actual module
 # through importlib so we can monkeypatch its internals (`_run` etc.).
 cli_main_mod = importlib.import_module("symphony.cli.main")
+
+
+def _workflow(tmp_path: Path) -> Path:
+    path = tmp_path / "WORKFLOW.md"
+    path.write_text("---\ntracker: {kind: file}\n---\nbody\n", encoding="utf-8")
+    return path
+
+
+def _issue(identifier: str = "MT-1") -> Issue:
+    return Issue(
+        id=f"id-{identifier}",
+        identifier=identifier,
+        title=f"{identifier} title",
+        description="",
+        priority=None,
+        state="In Progress",
+        created_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+    )
 
 
 def test_board_token_dispatches_to_board_main(
@@ -65,6 +88,50 @@ def test_service_token_dispatches_to_service_main(
     rc = cli_main_mod.main(["service", "status"])
     assert rc == 5
     assert captured["argv"] == ["status"]
+
+
+def test_runs_token_prints_recent_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workflow = _workflow(tmp_path)
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    issue = _issue()
+    now = datetime(2026, 7, 3, 1, 0, tzinfo=timezone.utc)
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=1,
+        attempt_kind="retry",
+        agent_kind="codex",
+        now=now,
+    )
+    assert run_id
+    registry.complete_run(
+        issue_id=issue.id,
+        run_id=run_id,
+        status="force_ejected_zombie",
+        now=now + timedelta(seconds=1),
+    )
+
+    rc = cli_main_mod.main(["runs", str(workflow), "--issue", issue.id, "--limit", "5"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "MT-1" in out
+    assert "retry" in out
+    assert "codex" in out
+    assert "force_ejected_zombie" in out
+
+
+def test_runs_token_empty_history_is_success(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workflow = _workflow(tmp_path)
+
+    rc = cli_main_mod.main(["runs", str(workflow)])
+
+    assert rc == 0
+    assert "no runs recorded" in capsys.readouterr().out
 
 
 def test_wiki_sweep_token_runs_inline_main_with_root_dry_run(

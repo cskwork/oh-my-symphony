@@ -266,3 +266,95 @@ def test_run_registry_clears_issue_flags_independently(tmp_path: Path) -> None:
 
     registry.clear_issue_flags("id-MT-1", budget_exhausted=True)
     assert registry.get_issue_flags("id-MT-1") is None
+
+
+def test_recent_runs_empty(tmp_path: Path) -> None:
+    registry = RunRegistry(tmp_path / "state.db")
+
+    assert registry.recent_runs() == []
+
+
+def test_recent_runs_orders_newest_first_and_filters_issue(tmp_path: Path) -> None:
+    registry = RunRegistry(tmp_path / "state.db")
+    first = _issue("MT-1")
+    second = _issue("MT-2")
+    now = datetime(2026, 7, 3, 1, 0, tzinfo=timezone.utc)
+
+    run_1 = registry.acquire_run(
+        first,
+        workspace_path=tmp_path / "ws" / first.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+        now=now,
+    )
+    assert run_1
+    registry.complete_run(
+        issue_id=first.id,
+        run_id=run_1,
+        status="normal",
+        now=now + timedelta(seconds=1),
+    )
+    run_2 = registry.acquire_run(
+        second,
+        workspace_path=tmp_path / "ws" / second.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="claude",
+        now=now + timedelta(seconds=2),
+    )
+    assert run_2
+    registry.complete_run(
+        issue_id=second.id,
+        run_id=run_2,
+        status="force_ejected_zombie",
+        now=now + timedelta(seconds=3),
+    )
+    run_3 = registry.acquire_run(
+        first,
+        workspace_path=tmp_path / "ws" / first.identifier,
+        attempt=1,
+        attempt_kind="retry",
+        agent_kind="codex",
+        now=now + timedelta(seconds=4),
+    )
+    assert run_3
+
+    recent = registry.recent_runs()
+    assert [r.run_id for r in recent] == [run_3, run_2, run_1]
+    assert recent[1].status == "force_ejected_zombie"
+    assert recent[1].attempt_kind == "initial"
+    assert recent[1].agent_kind == "claude"
+    assert recent[1].completed_at == now + timedelta(seconds=3)
+
+    filtered = registry.recent_runs(issue_id=first.id)
+    assert [r.run_id for r in filtered] == [run_3, run_1]
+
+    identifier_filtered = registry.recent_runs(issue_id=first.identifier)
+    assert [r.run_id for r in identifier_filtered] == [run_3, run_1]
+
+
+def test_recent_runs_limit_clamped(tmp_path: Path) -> None:
+    registry = RunRegistry(tmp_path / "state.db")
+    now = datetime(2026, 7, 3, 1, 0, tzinfo=timezone.utc)
+    for index in range(3):
+        issue = _issue(f"MT-{index}")
+        run_id = registry.acquire_run(
+            issue,
+            workspace_path=tmp_path / "ws" / issue.identifier,
+            attempt=None,
+            attempt_kind="initial",
+            agent_kind="codex",
+            now=now + timedelta(seconds=index),
+        )
+        assert run_id
+        registry.complete_run(
+            issue_id=issue.id,
+            run_id=run_id,
+            status="normal",
+            now=now + timedelta(seconds=index, milliseconds=500),
+        )
+
+    assert len(registry.recent_runs(limit=0)) == 1
+    assert len(registry.recent_runs(limit=-10)) == 1
+    assert len(registry.recent_runs(limit=500)) == 3

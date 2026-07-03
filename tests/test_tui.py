@@ -300,10 +300,28 @@ def test_build_runtime_index_extracts_running_and_retrying() -> None:
                 "tokens": {"total_tokens": 100, "input_tokens": 60, "output_tokens": 40},
                 "last_message": "hello",
                 "agent_kind": "pi",
+                "attention": {
+                    "kind": "stalled",
+                    "label": "Stalled",
+                    "message": "worker cancellation pending",
+                    "severity": "error",
+                    "due_at": None,
+                },
             }
         ],
         "retrying": [
-            {"issue_id": "id-2", "attempt": 2, "error": "timeout"},
+            {
+                "issue_id": "id-2",
+                "attempt": 2,
+                "error": "timeout",
+                "attention": {
+                    "kind": "retry_scheduled",
+                    "label": "Retry scheduled",
+                    "message": "timeout",
+                    "severity": "info",
+                    "due_at": "2026-07-03T01:00:00Z",
+                },
+            },
         ],
     }
     idx = _build_runtime_index(snap)
@@ -314,14 +332,69 @@ def test_build_runtime_index_extracts_running_and_retrying() -> None:
     assert idx["id-1"].tokens == 100
     assert idx["id-1"].last_event_at is not None
     assert idx["id-1"].agent_kind == "pi"
+    assert idx["id-1"].attention["kind"] == "stalled"  # type: ignore[index]
     assert idx["id-2"].runtime == "retrying"
     assert idx["id-2"].attempt == 2
     assert idx["id-2"].error == "timeout"
+    assert idx["id-2"].attention["kind"] == "retry_scheduled"  # type: ignore[index]
 
 
 def test_build_runtime_index_tolerates_missing_blocks() -> None:
     assert _build_runtime_index({}) == {}
     assert _build_runtime_index({"running": None, "retrying": None}) == {}
+
+
+def test_compact_card_renders_attention_label() -> None:
+    card = IssueCard.__new__(IssueCard)
+    card._issue = _issue("SMA-1")  # type: ignore[attr-defined]
+    card._status = _CardStatus(  # type: ignore[attr-defined]
+        attention={
+            "kind": "tracker_error",
+            "label": "Tracker error",
+            "message": "update failed",
+            "severity": "warning",
+            "due_at": None,
+        }
+    )
+    card._stage_pos = None  # type: ignore[attr-defined]
+
+    assert "! Tracker error" in card._render_compact().plain
+
+
+def test_ticket_detail_modal_renders_attention_message_and_due_at() -> None:
+    status = _CardStatus(
+        attention={
+            "kind": "retry_scheduled",
+            "label": "Retry scheduled",
+            "message": "backend timeout",
+            "severity": "info",
+            "due_at": "2026-07-03T01:00:00Z",
+        }
+    )
+    screen = TicketDetailScreen(_issue("SMA-1"), status, "en")
+
+    meta = screen._meta_text().plain
+    assert "Retry scheduled: backend timeout" in meta
+    assert "due 2026-07-03T01:00:00Z" in meta
+
+
+def test_app_card_status_uses_orchestrator_attention() -> None:
+    cfg = _make_config()
+    issue = _issue("SMA-1")
+    orch = _StubOrchestrator()
+    orch.issue_attention = lambda _issue: {  # type: ignore[attr-defined]
+        "kind": "budget_exhausted",
+        "label": "Budget exhausted",
+        "message": "turn budget",
+        "severity": "warning",
+        "due_at": None,
+    }
+    app = KanbanApp(orch, _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+
+    status = app._card_status_for_issue(issue, {})
+
+    assert status.attention is not None
+    assert status.attention["kind"] == "budget_exhausted"
 
 
 # ---------------------------------------------------------------------------

@@ -6,15 +6,18 @@ import socket
 import textwrap
 from pathlib import Path
 
+from symphony.service import ServiceRecord, save_record
 from symphony.cli.doctor import (
     check_after_create_hook,
     check_agent_cli,
     check_board_viewer,
     check_pi_auth,
     check_port,
+    check_prompts,
     check_tracker,
     check_workspace_root,
     format_results,
+    main as doctor_main,
     run_checks,
 )
 from symphony.workflow import ServiceConfig, build_service_config, load_workflow
@@ -147,6 +150,116 @@ def test_port_fail_when_already_bound(tmp_path: Path) -> None:
         sock.close()
 
 
+def test_port_fail_names_this_workflow_service_when_record_matches(
+    tmp_path: Path,
+) -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    bound_port = sock.getsockname()[1]
+    try:
+        cfg = _build_cfg(
+            tmp_path,
+            f"""
+            tracker: {{ kind: file, board_root: ./kanban }}
+            agent: {{ kind: codex }}
+            codex: {{ command: codex app-server }}
+            server: {{ port: {bound_port} }}
+            """,
+        )
+        save_record(
+            ServiceRecord(
+                workflow_path=cfg.workflow_path,
+                workflow_dir=cfg.workflow_path.parent,
+                host="127.0.0.1",
+                port=bound_port,
+                viewer_port=None,
+                orchestrator_pid=4242,
+                viewer_pid=None,
+                log_path=tmp_path / "log" / "symphony.log",
+                viewer_log_path=None,
+                started_at="2026-07-03T01:00:00Z",
+                orchestrator_command=["symphony", str(cfg.workflow_path)],
+                viewer_command=[],
+            )
+        )
+        result = check_port(cfg, is_running=lambda pid: pid == 4242)
+        assert result.status == "fail"
+        assert "owned by this workflow's service" in result.message
+        assert "symphony service status" in result.message
+        assert "pid 4242" in result.message
+    finally:
+        sock.close()
+
+
+def test_prompt_visibility_lists_configured_prompt_paths(tmp_path: Path) -> None:
+    (tmp_path / "base.md").write_text("base", encoding="utf-8")
+    stages = tmp_path / "prompts" / "stages"
+    stages.mkdir(parents=True)
+    (stages / "todo.md").write_text("todo", encoding="utf-8")
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        prompts:
+          base: ./base.md
+          stages:
+            Todo: ./prompts/stages/todo.md
+        """,
+    )
+
+    result = check_prompts(cfg)
+
+    assert result.status == "pass"
+    assert "2 prompt file" in result.message
+    assert "base.md" in result.message
+
+
+def test_prompt_visibility_reports_builtin_template(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+
+    result = check_prompts(cfg)
+
+    assert result.status == "pass"
+    assert "built-in" in result.message
+
+
+def test_missing_prompt_file_surfaces_load_error_without_traceback(
+    tmp_path: Path, capsys
+) -> None:
+    workflow = _write_workflow(
+        tmp_path,
+        textwrap.dedent("""\
+        ---
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        prompts:
+          stages:
+            Todo: ./missing.md
+        ---
+        body
+        """),
+    )
+
+    rc = doctor_main([str(workflow), "--no-color"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "workflow load failed" in captured.err
+    assert "missing.md" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_workspace_root_creates_and_writes(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     cfg = _build_cfg(
@@ -206,8 +319,8 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
         """,
     )
     results = run_checks(cfg)
-    # port + shell + agent + pi_auth + after_create + workspace + tracker + viewer = 8
-    assert len(results) == 8
+    # port + shell + agent + pi_auth + prompts + after_create + workspace + tracker + viewer = 9
+    assert len(results) == 9
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",

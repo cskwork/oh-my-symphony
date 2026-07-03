@@ -2,13 +2,15 @@
 tracker:
   kind: file
   board_root: ./kanban_smoke
-  active_states: [Todo, "In Progress"]
-  terminal_states: ["Human Review", Done, Cancelled, Blocked]
+  active_states: [Todo, "In Progress", Verify, Learn]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
   archive_state: Archive
   archive_after_days: 0
   state_descriptions:
     Todo: "Triage; route to In Progress"
-    "In Progress": "Implement; transition to Human Review"
+    "In Progress": "Implement; transition to Verify"
+    Verify: "Check the result; transition to Learn or Human Review"
+    Learn: "Capture reusable knowledge; transition to Human Review"
     "Human Review": "Human confirms before Done"
     Done: "Human-confirmed complete"
 

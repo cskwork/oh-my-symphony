@@ -208,3 +208,78 @@ actions versions, concurrency, and reruns visible in the repo.
 
 - Rejected: rerunning the failed dynamic deployment as the only fix. The rerun
   failed at the same deploy step and did not expose a repo-side error.
+
+# 2026-07-03 - Operator Trust Program implementation
+
+## Goal
+
+Complete the remaining Operator Trust Program tasks so an operator can trust
+the system from public surfaces: health, attention signals, run history,
+doctor, smoke checks, and fresh-clone documentation.
+
+## Decisions
+
+### 1. Keep health and attention changes additive
+
+`health.status` now reports `starting` before the first completed tick and the
+payload includes `workflow_path`. Attention payloads keep `kind`, `label`, and
+`message`, then add `severity` and `due_at` where useful. This preserves
+existing consumers while giving operators clearer startup and stuck-work
+diagnostics.
+
+- Rejected: renaming the existing health or attention fields to match newer
+  spec wording. That would turn a trust-program polish pass into a breaking
+  API change.
+
+### 2. Derive attention from existing runtime facts
+
+The attention taxonomy is built from existing retry entries, cancelled/stalled
+running entries, lease-loss markers, budget-exhausted state, and issue-scoped
+tracker errors. Priority is deterministic:
+`stalled > lease_blocked > budget_exhausted > tracker_error > retry_scheduled`.
+
+- Rejected: adding a second issue-state store for attention. It would create a
+  reconciliation problem with Markdown tickets, leases, and the SQLite run
+  registry without improving operator truth.
+
+### 3. Reuse the run registry as the history ledger
+
+Run history uses the existing SQLite registry and exposes bounded reads through
+`/api/v1/runs`, `symphony runs`, and the web drawer. Filtering accepts both
+the internal issue id and the operator-facing identifier so UI calls can stay
+human-readable.
+
+- Rejected: adding a schema migration or separate web history cache. The
+  registry already stores attempt rows and terminal statuses; duplicating it
+  would add failure modes for the same evidence.
+
+### 4. Prefer deterministic local smoke over external-agent dispatch
+
+Final runtime proof used a temporary file-board workflow under `/private/tmp`
+with `python -m symphony.mock_codex`, a writable workspace root, and the
+production server command. This verifies health, board CRUD, refresh, static
+assets, workflow stats, and run-history reachability without depending on a
+live Claude/Codex account.
+
+- Rejected: claiming `doctor ./WORKFLOW.md` success in this sandbox. The repo
+  workflow correctly reported environmental failures: the configured
+  `~/symphony_workspaces` root is not writable here and the worktree has no
+  local `kanban/` directory.
+
+## Verification
+
+- Focused attention/API/UI batch:
+  `PYTHONPATH=/private/tmp/symphony-operator-trust-run/src .../.venv/bin/python -m pytest -q tests/test_orchestrator_dispatch.py tests/test_run_registry.py tests/test_webapi.py tests/test_web_static_contract.py tests/test_tui.py`
+  -> `190 passed`.
+- Focused touched-slices batch:
+  `PYTHONPATH=/private/tmp/symphony-operator-trust-run/src .../.venv/bin/python -m pytest -q tests/test_orchestrator_health.py tests/test_run_registry.py tests/test_webapi.py tests/test_cli_main_routing.py tests/test_cli_run_startup.py tests/test_doctor.py tests/test_web_api_smoke_script.py tests/test_web_static_contract.py tests/test_tui.py`
+  -> `137 passed, 2 warnings`.
+- Full suite:
+  `PYTHONPATH=/private/tmp/symphony-operator-trust-run/src .../.venv/bin/python -m pytest -q`
+  -> `965 passed, 2 skipped, 2 warnings`.
+- Static checks: `compileall` on touched Python packages, `git diff --check`,
+  README proof-command grep, and workflow/snippet lane grep passed.
+- Runtime checks: temp workflow `doctor` exited 0 with only the legacy
+  board-viewer warning; live smoke against `http://127.0.0.1:54017` passed
+  all nine checks; `/api/v1/health` returned `status: ok` and
+  `/api/v1/runs?limit=5` returned an empty run list.

@@ -17,8 +17,8 @@ legacy fallback.
 tracker:
   kind: file
   board_root: ./kanban
-  active_states: [Todo, "In Progress"]
-  terminal_states: [Done, Cancelled, Blocked]
+  active_states: [Todo, "In Progress", Verify, Learn]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
 
 workspace:
   root: ~/symphony_workspaces
@@ -307,13 +307,13 @@ from the lane name alone.
 ```yaml
 tracker:
   active_states: [Todo, "In Progress", Verify, Learn]
-  terminal_states: [Done, Cancelled, Blocked]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
   state_descriptions:
     Todo: "Triage: decide if actionable"
     "In Progress": "Plan, implement, and self-critique"
     Verify: "Review, QA, and merge proof"
     Learn: "Write back docs, then Human Review"
-    Cancelled: "Junk / stale / agent-rejected"
+    "Human Review": "Human confirms before Done"
 ```
 
 Keys are matched case-insensitively. Empty strings and non-string

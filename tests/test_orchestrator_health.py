@@ -111,17 +111,27 @@ async def test_tick_loop_done_callback_restarts_bounded(monkeypatch) -> None:
 
 def test_health_degraded_after_consecutive_tick_failures() -> None:
     orch = _orch()
-    assert orch.health()["status"] == "ok"
+    assert orch.health()["status"] == "starting"
     orch._consecutive_tick_failures = 3
     health = orch.health()
     assert health["status"] == "degraded"
     assert "tick_failures" in health["degraded_reasons"]
 
 
+def test_health_reports_starting_before_first_tick() -> None:
+    orch = _orch()
+
+    health = orch.health()
+
+    assert health["status"] == "starting"
+    assert health["tick"]["last_completed_at"] is None
+    assert health["workflow_path"] == "/tmp/no.md"
+
+
 def test_snapshot_includes_health_summary() -> None:
     orch = _orch()
     snap = orch.snapshot()
-    assert snap["health"]["status"] == "ok"
+    assert snap["health"]["status"] == "starting"
     assert snap["health"]["degraded_reasons"] == []
 
 
@@ -245,7 +255,8 @@ async def test_health_endpoint_returns_status() -> None:
         resp = await client.get("/api/v1/health")
         assert resp.status == 200
         data = await resp.json()
-        assert data["status"] == "ok"
+        assert data["status"] == "starting"
+        assert data["workflow_path"] == "/tmp/no.md"
         assert data["version"]
         assert data["tick"]["alive"] is False
         assert data["counts"] == {"running": 0, "retrying": 0}

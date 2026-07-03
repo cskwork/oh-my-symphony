@@ -17,6 +17,7 @@ bind the function once at import time and ignore the patch.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any, Iterable
 
 from rich.console import Console
@@ -281,7 +282,7 @@ class KanbanApp(App):
             issues = sorted(issues_by_state.get(key, []), key=_card_sort_key)
             lane.set_count(len(issues))
             cards = [
-                (issue, runtime_index.get(issue.id, _CardStatus()))
+                (issue, self._card_status_for_issue(issue, runtime_index))
                 for issue in issues
             ]
             lane.render_cards(
@@ -304,6 +305,28 @@ class KanbanApp(App):
                     continue
                 seen.add(issue.id)
                 yield issue
+
+    def _card_status_for_issue(
+        self, issue: Issue, runtime_index: dict[str, _CardStatus]
+    ) -> _CardStatus:
+        status = runtime_index.get(issue.id, _CardStatus())
+        if status.attention is not None:
+            return status
+        attention_fn = getattr(self._orch, "issue_attention", None)
+        if not callable(attention_fn):
+            return status
+        try:
+            attention = attention_fn(issue)
+        except Exception as exc:
+            log.debug(
+                "tui_issue_attention_failed",
+                identifier=issue.identifier,
+                error=str(exc),
+            )
+            return status
+        if not attention:
+            return status
+        return replace(status, attention=attention)
 
     # ----- actions -----------------------------------------------------
 

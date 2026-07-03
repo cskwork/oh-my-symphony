@@ -16,6 +16,10 @@ def test_web_board_defaults_to_active_lanes_with_terminal_group() -> None:
     assert "state.boardScope === 'all' ? columns : activeColumns(columns)" in js
     assert "function buildTerminalSectionEl(groups, live, readOnly)" in js
     assert "function buildAttentionBadge(attention)" in js
+    assert "getRuns: ({ issue, limit } = {})" in js
+    assert "function buildRunHistorySection(detail)" in js
+    assert "api.getRuns({ issue: identifier, limit: 10 })" in js
+    assert "Run history" in js
     assert "function buildMobileLaneTabs(columns)" in js
     assert "function isMobileBoardViewport()" in js
     assert "Review and parked" in js
@@ -25,5 +29,7 @@ def test_web_board_defaults_to_active_lanes_with_terminal_group() -> None:
     assert ".terminal-card-list" in css
     assert ".chip-attention" in css
     assert ".drawer-attention" in css
+    assert ".drawer-run-history" in css
+    assert ".run-history-row" in css
     assert ".mobile-lane-tabs" in css
     assert ".mobile-lane-tab.active" in css

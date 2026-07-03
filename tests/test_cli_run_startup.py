@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib
+import os
 import socket
 import sys
 from pathlib import Path
 
 import pytest
+
+from symphony.service import ServiceRecord, save_record
 
 cli_main_mod = importlib.import_module("symphony.cli.main")
 
@@ -131,3 +134,46 @@ def test_port_conflict_prints_actionable_sentence_not_traceback(
     assert "symphony:" in err
     assert str(port) in err
     assert "already in use" in err
+
+
+def test_port_conflict_names_this_workflow_service(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workflow = _board(
+        tmp_path,
+        _workflow_text(
+            codex_command=f"{sys.executable} -m symphony.mock_codex app-server",
+            workspace_root=str(tmp_path / "ws"),
+        ),
+    ).resolve()
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+    save_record(
+        ServiceRecord(
+            workflow_path=workflow,
+            workflow_dir=workflow.parent,
+            host="127.0.0.1",
+            port=port,
+            viewer_port=None,
+            orchestrator_pid=os.getpid(),
+            viewer_pid=None,
+            log_path=tmp_path / "log" / "symphony.log",
+            viewer_log_path=None,
+            started_at="2026-07-03T01:00:00Z",
+            orchestrator_command=["symphony", str(workflow)],
+            viewer_command=[],
+        )
+    )
+    try:
+        rc = cli_main_mod.main([str(workflow), "--port", str(port)])
+    finally:
+        blocker.close()
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "owned by this workflow's service" in err
+    assert f"pid {os.getpid()}" in err
+    assert "symphony service status" in err

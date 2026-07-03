@@ -23,8 +23,15 @@ from ..utils import wiki_sweep as wiki_sweep
 from ..utils.keep_awake import KeepAwake
 from ..logging import configure_logging
 from ..orchestrator import Orchestrator
+from ..orchestrator.run_registry import (
+    RunRecord,
+    RunRegistry,
+    clamp_run_history_limit,
+    registry_path_for_workflow,
+)
 from ..progress_md import ProgressFileWriter
 from ..server import build_app, run_server
+from ..service import port_owner_hint
 from ..workflow import WorkflowState, resolve_workflow_path
 
 
@@ -229,13 +236,19 @@ async def _run(args: argparse.Namespace) -> int:
             await orchestrator.stop()
             if keep_awake is not None:
                 keep_awake.stop()
+            owner = port_owner_hint(workflow_path, server_port)
+            owner_sentence = (
+                f" {owner}."
+                if owner
+                else " Stop the other process "
+                f"(`lsof -ti :{server_port}`), pick a different --port, or "
+                "check `symphony service status`."
+            )
             return _fail_startup(
                 log,
                 "http_port_unavailable",
                 f"port {server_port} on {args.host} is already in use or "
-                f"cannot be bound ({exc}). Stop the other process "
-                f"(`lsof -ti :{server_port}`), pick a different --port, or "
-                "check `symphony service status`.",
+                f"cannot be bound ({exc}).{owner_sentence}",
                 host=args.host,
                 port=server_port,
                 error=str(exc),
@@ -338,6 +351,55 @@ def _wiki_sweep_main(argv: list[str]) -> int:
     return 0 if report.is_clean() else 1
 
 
+def _runs_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="symphony runs",
+        description="Print recent run-registry attempts for a WORKFLOW.md.",
+    )
+    parser.add_argument(
+        "workflow",
+        nargs="?",
+        default=None,
+        help="path to WORKFLOW.md (default: ./WORKFLOW.md)",
+    )
+    parser.add_argument("--issue", default=None, help="filter by issue id")
+    parser.add_argument("--limit", type=int, default=50, help="max rows, clamped to 1-200")
+    args = parser.parse_args(argv)
+
+    workflow_path = resolve_workflow_path(args.workflow)
+    registry_path = registry_path_for_workflow(workflow_path)
+    if not registry_path.exists():
+        print(f"no runs recorded for {workflow_path}")
+        return 0
+
+    registry = RunRegistry(registry_path)
+    try:
+        rows = registry.recent_runs(
+            issue_id=args.issue,
+            limit=clamp_run_history_limit(args.limit),
+        )
+    finally:
+        registry.close()
+    if not rows:
+        print(f"no runs recorded for {workflow_path}")
+        return 0
+    print("identifier  attempt  agent  status  started -> completed")
+    for row in rows:
+        print(_format_run_row(row))
+    return 0
+
+
+def _format_run_row(row: RunRecord) -> str:
+    attempt = row.attempt_kind or "-"
+    agent = row.agent_kind or "-"
+    started = row.started_at.isoformat() if row.started_at else "-"
+    completed = row.completed_at.isoformat() if row.completed_at else "-"
+    return (
+        f"{row.identifier}  {attempt}  {agent}  {row.status}  "
+        f"{started} -> {completed}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     if raw_argv and raw_argv[0] == "board":
@@ -354,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
         return service.main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "wiki-sweep":
         return _wiki_sweep_main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "runs":
+        return _runs_main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "tui":
         # Rewrite `symphony tui [...args]` as `symphony --tui [...args]`.
         raw_argv = ["--tui", *raw_argv[1:]]

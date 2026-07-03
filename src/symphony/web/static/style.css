@@ -802,6 +802,42 @@ a { color: inherit; }
   color: #7c2d12;
 }
 
+.drawer-run-history {
+  display: grid;
+  gap: 8px;
+}
+
+.run-history-rows {
+  display: grid;
+  gap: 6px;
+}
+
+.run-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.run-history-main { font-weight: 700; color: var(--text); }
+.run-history-status { color: var(--text-secondary); }
+.run-history-time {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.history-muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .drawer-error, .empty-state {
   padding: 32px 20px;
   color: var(--text-muted);

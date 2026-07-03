@@ -58,6 +58,7 @@ class _StubOrchestrator:
         self._workflow_state = workflow_state
         self.running_identifiers: dict[str, str] = {}
         self.refresh_calls = 0
+        self.run_history_error: str | None = None
 
     @property
     def workflow_state(self) -> WorkflowState:
@@ -92,14 +93,50 @@ class _StubOrchestrator:
     def iter_running_issues(self) -> tuple[Any, ...]:
         return ()
 
-    def issue_attention(self, issue: Any) -> dict[str, str] | None:
+    def issue_attention(self, issue: Any) -> dict[str, Any] | None:
         if issue.identifier == "SEED-1":
             return {
                 "kind": "budget_exhausted",
                 "label": "Budget exhausted",
                 "message": "max_total_turns reached (1/1)",
+                "severity": "warning",
+                "due_at": None,
             }
         return None
+
+    def recent_runs(
+        self, issue_id: str | None = None, limit: int = 50
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        if self.run_history_error is not None:
+            return [], self.run_history_error
+        rows = [
+            {
+                "run_id": "run-seed",
+                "issue_id": "id-SEED-1",
+                "identifier": "SEED-1",
+                "attempt": None,
+                "attempt_kind": "initial",
+                "agent_kind": "claude",
+                "status": "normal",
+                "started_at": "2026-07-03T01:00:00+00:00",
+                "completed_at": "2026-07-03T01:01:00+00:00",
+                "workspace_path": "/tmp/ws/SEED-1",
+            },
+            {
+                "run_id": "run-other",
+                "issue_id": "id-OTHER-1",
+                "identifier": "OTHER-1",
+                "attempt": 1,
+                "attempt_kind": "retry",
+                "agent_kind": "codex",
+                "status": "force_ejected_zombie",
+                "started_at": "2026-07-03T01:02:00+00:00",
+                "completed_at": None,
+                "workspace_path": None,
+            },
+        ]
+        filtered = [r for r in rows if issue_id is None or r["issue_id"] == issue_id]
+        return filtered[:limit], None
 
     def is_paused(self, _issue_id: str) -> bool:
         return False
@@ -165,12 +202,38 @@ async def test_board_returns_columns_and_issues(client: TestClient) -> None:
     seed = payload["issues"][0]
     assert seed["attention"]["kind"] == "budget_exhausted"
     assert seed["attention"]["label"] == "Budget exhausted"
+    assert seed["attention"]["severity"] == "warning"
     assert payload["board"]["read_only"] is False
 
 
 async def test_issue_detail_includes_attention(client: TestClient) -> None:
     detail = await (await client.get("/api/v1/issues/SEED-1")).json()
     assert detail["attention"]["message"] == "max_total_turns reached (1/1)"
+    assert detail["attention"]["due_at"] is None
+
+
+async def test_runs_endpoint_filters_and_clamps(client: TestClient) -> None:
+    resp = await client.get("/api/v1/runs?issue=id-SEED-1&limit=500")
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload["count"] == 1
+    assert payload["runs"][0]["identifier"] == "SEED-1"
+    assert payload["runs"][0]["attempt_kind"] == "initial"
+    assert payload["runs"][0]["workspace_path"] == "/tmp/ws/SEED-1"
+
+
+async def test_runs_endpoint_registry_error_returns_empty_history(
+    client: TestClient,
+) -> None:
+    stub = client.stub  # type: ignore[attr-defined]
+    stub.run_history_error = "run_registry_error: database is locked"
+
+    resp = await client.get("/api/v1/runs")
+
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload["runs"] == []
+    assert payload["registry_error"] == "run_registry_error: database is locked"
 
 
 async def test_create_issue_generates_identifier(client: TestClient) -> None:

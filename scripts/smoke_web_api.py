@@ -66,9 +66,33 @@ def expect(
     actual, payload = request(base_url, method, path, body)
     if actual != status:
         raise SmokeFailure(
-            f"{method} {path}: expected {status}, got {actual}, body={payload!r}"
+            f"{method} {path}: expected {status}, got {actual}, body={payload!r}. "
+            f"Next step: {_diagnostic_hint(path)}"
         )
     return payload
+
+
+def _diagnostic_hint(path: str) -> str:
+    if path == "/api/v1/health":
+        return "check `symphony service status <workflow>` and server logs"
+    return "check `symphony service status <workflow>` and rerun with server logs open"
+
+
+def _check_health(base_url: str) -> None:
+    health = expect(base_url, "GET", "/api/v1/health", 200)
+    status = health.get("status") if isinstance(health, dict) else None
+    if status in {"ok", "starting"}:
+        return
+    reasons = (
+        health.get("degraded_reasons", [])
+        if isinstance(health, dict)
+        else ["invalid health payload"]
+    )
+    raise SmokeFailure(
+        "GET /api/v1/health: service is degraded "
+        f"({', '.join(str(r) for r in reasons) or 'unknown reason'}). "
+        f"Next step: {_diagnostic_hint('/api/v1/health')}"
+    )
 
 
 def run_smoke(
@@ -84,6 +108,9 @@ def run_smoke(
         checks.append(Check(name, True))
 
     try:
+        _check_health(base_url)
+        ok("health")
+
         state = expect(base_url, "GET", "/api/v1/state", 200)
         if "counts" not in state:
             raise SmokeFailure("state payload missing counts")

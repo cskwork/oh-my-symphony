@@ -33,6 +33,7 @@ from typing import Iterable, Literal
 
 from .._shell import _is_wsl_launcher, resolve_bash
 from ..errors import SymphonyError
+from ..service import ProcessRunningPredicate, port_owner_hint
 from ..workflow import (
     ServiceConfig,
     build_service_config,
@@ -57,23 +58,50 @@ class CheckResult:
     message: str
 
 
-def _bind_port(host: str, port: int) -> CheckResult:
+def _bind_port(
+    host: str,
+    port: int,
+    *,
+    workflow_path: Path | None = None,
+    is_running: ProcessRunningPredicate | None = None,
+) -> CheckResult:
     name = f"server.port={port}"
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
     try:
         sock.bind((host, port))
     except OSError as exc:
-        return CheckResult(name, "fail", f"cannot bind {host}:{port} — {exc}")
+        hint = (
+            port_owner_hint(workflow_path, port, is_running=is_running)
+            if workflow_path is not None
+            else None
+        )
+        suffix = hint or (
+            "run `symphony service status <workflow>` or "
+            f"`lsof -ti :{port}` to identify the owner"
+        )
+        return CheckResult(
+            name, "fail", f"cannot bind {host}:{port} — {exc}; {suffix}"
+        )
     finally:
         sock.close()
     return CheckResult(name, "pass", f"{host}:{port} is free")
 
 
-def check_port(cfg: ServiceConfig, host: str = "127.0.0.1") -> CheckResult:
+def check_port(
+    cfg: ServiceConfig,
+    host: str = "127.0.0.1",
+    *,
+    is_running: ProcessRunningPredicate | None = None,
+) -> CheckResult:
     if cfg.server.port is None:
         return CheckResult("server.port", "pass", "no HTTP API configured (server.port unset)")
-    return _bind_port(host, cfg.server.port)
+    return _bind_port(
+        host,
+        cfg.server.port,
+        workflow_path=cfg.workflow_path,
+        is_running=is_running,
+    )
 
 
 def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
@@ -150,6 +178,22 @@ def check_after_create_hook(cfg: ServiceConfig) -> CheckResult:
                 "or replace with a real clone target / `: noop`.",
             )
     return CheckResult("hooks.after_create", "pass", "looks customized")
+
+
+def check_prompts(cfg: ServiceConfig) -> CheckResult:
+    paths = []
+    if cfg.prompts.base_path is not None:
+        paths.append(cfg.prompts.base_path)
+    paths.extend(cfg.prompts.stage_paths.values())
+    if not paths:
+        return CheckResult("prompts", "pass", "built-in template in use")
+    sample = ", ".join(str(p) for p in paths[:3])
+    suffix = "" if len(paths) <= 3 else f", +{len(paths) - 3} more"
+    return CheckResult(
+        "prompts.files",
+        "pass",
+        f"{len(paths)} prompt file{'s' if len(paths) != 1 else ''}: {sample}{suffix}",
+    )
 
 
 def check_workspace_root(cfg: ServiceConfig) -> CheckResult:
@@ -270,6 +314,7 @@ def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]
         check_shell(),
         check_agent_cli(cfg),
         check_pi_auth(cfg),
+        check_prompts(cfg),
         check_after_create_hook(cfg),
         check_workspace_root(cfg),
         check_tracker(cfg),

@@ -30,7 +30,9 @@ from .constants import (
 )
 from .helpers import (
     _CardStatus,
+    _append_attention_meta,
     _append_token_meta,
+    _attention_label,
     _compact_rate_limits,
     _first_meaningful_line,
     _safe_id,
@@ -156,6 +158,11 @@ class IssueCard(Static):
             line.append(" ✓", style="bold green")
         if issue.priority:
             line.append(f" P{issue.priority}", style="bright_red bold")
+        if status.attention:
+            line.append(
+                f"  ! {_attention_label(status.attention)}",
+                style="bold yellow",
+            )
         line.append("  ")
         line.append(_truncate(issue.title or "", 60), style="white")
         if status.runtime == "running":
@@ -238,6 +245,10 @@ class IssueCard(Static):
             meta.append("S to skip Learn", style="dim magenta")
         elif issue.labels:
             meta.append("  ".join(f"#{l}" for l in issue.labels[:3]), style="dim")
+        if status.attention:
+            if meta.plain.strip():
+                meta.append("\n")
+            _append_attention_meta(meta, status.attention, include_due_at=False)
 
         # Idle/completed cards still surface aggregate token spend so an
         # operator can audit cost after a run wraps.
@@ -555,6 +566,9 @@ class DetailPane(Vertical):
                 meta.append(f"  retry#{status.attempt}", style="yellow")
             if status.error:
                 meta.append(f"\nerror: {status.error}", style="red")
+        if status.attention:
+            meta.append("\n")
+            _append_attention_meta(meta, status.attention, include_due_at=True)
         if status.tokens or status.input_tokens or status.output_tokens:
             meta.append("\n")
             _append_token_meta(meta, status, dim=False)
