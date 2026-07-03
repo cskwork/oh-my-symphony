@@ -647,6 +647,74 @@ def test_default_max_total_turns_is_two_hundred(tmp_path):
     assert cfg.agent.max_total_turns == 200
 
 
+def test_default_no_stage_change_watchdog_is_block_after_thirty_turns(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: file, board_root: ./kanban }
+            ---
+            body
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.max_state_turns == 30
+    assert cfg.agent.no_stage_change_action == "block"
+
+
+def test_no_stage_change_watchdog_can_disable_or_move_to_state(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./kanban
+              active_states: [Todo, In Progress, Verify]
+              terminal_states: [Done, Blocked]
+            agent:
+              max_state_turns: 0
+              no_stage_change_action: Verify
+            ---
+            body
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.max_state_turns == 0
+    assert cfg.agent.no_stage_change_action == "Verify"
+
+
+def test_no_stage_change_action_must_be_block_or_configured_state(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./kanban
+              active_states: [Todo, In Progress, Verify]
+              terminal_states: [Done, Blocked]
+            agent:
+              no_stage_change_action: Missing
+            ---
+            body
+            """
+        ),
+    )
+
+    with pytest.raises(ConfigValidationError):
+        build_service_config(load_workflow(path))
+
+
 # --- positive-int validation tightened in improve/observability-and-doctor ---
 
 @pytest.mark.parametrize("field,raw_value", [

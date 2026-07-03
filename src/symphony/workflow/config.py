@@ -30,6 +30,7 @@ from .constants import (
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_RETRIES,
+    DEFAULT_MAX_STATE_TURNS,
     DEFAULT_MAX_TOTAL_TURNS,
     DEFAULT_OPENCODE_COMMAND,
     DEFAULT_WORKSPACE_REUSE_POLICY,
@@ -92,6 +93,8 @@ class AgentConfig:
     max_retry_backoff_ms: int
     max_concurrent_agents_by_state: dict[str, int]
     max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
+    max_state_turns: int = DEFAULT_MAX_STATE_TURNS
+    no_stage_change_action: str = "block"
     # Soft cap for Verify/Learn rewinds back into In Progress. 0 disables.
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
     # Cap on auto-retries scheduled after a worker exits with a non-normal

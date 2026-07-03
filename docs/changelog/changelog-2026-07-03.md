@@ -495,3 +495,49 @@ a non-running paused ticket from looking idle on the board.
   -> `7 passed`.
 - Broader registry/dispatch/API gate: `.venv/bin/python -m pytest tests/test_run_registry.py tests/test_orchestrator_dispatch.py tests/test_webapi.py -q`
   -> `139 passed`.
+
+# 2026-07-03 - E2E hardening item 3: No-stage-change watchdog
+
+## Goal
+
+Stop workers that keep completing turns in the same stage without moving the
+ticket state.
+
+## Decisions
+
+### 1. Count completed turns per normalized state
+
+`agent.max_state_turns` defaults to `30` and counts completed turns while the
+ticket stays in one normalized state. `0` disables the watchdog. The counter is
+stored in issue debug state so it survives attempt continuations and resets to
+zero on any state change or phase-transition rebuild.
+
+- Rejected: using token growth or file changes as the primary signal. Those
+  prove activity, not workflow progress, and were the failure mode in the Pi
+  run.
+
+### 2. Block by default, move only when explicitly configured
+
+The default `agent.no_stage_change_action: block` stops continuation, claims
+and pauses the ticket, optionally persists `budget_exhausted_state`, and writes
+a clear pause reason. A configured state such as `Verify` writes a
+`Stage Watchdog Handoff` note and moves the ticket there without pausing.
+
+- Rejected: always auto-advancing to Verify. That can promote incomplete work
+  and hides that the worker ignored the stage contract.
+
+### 3. Reuse budget persistence for blocked outcomes
+
+The block path extends `Budget Exceeded` notes with a `no_stage_change` detail
+instead of inventing a second blocked-note mechanism. Explicit move actions use
+the separate handoff note because they are not budget-blocked outcomes.
+
+- Rejected: leaving block outcomes in-memory only. Without a tracker note or
+  pause reason, restarts and board views would lose the cause.
+
+## Verification
+
+- Focused gate: `.venv/bin/python -m pytest tests/test_workflow.py::test_default_no_stage_change_watchdog_is_block_after_thirty_turns tests/test_workflow.py::test_no_stage_change_watchdog_can_disable_or_move_to_state tests/test_workflow.py::test_no_stage_change_action_must_be_block_or_configured_state tests/test_orchestrator_dispatch.py::test_no_stage_change_counter_resets_on_state_change tests/test_orchestrator_dispatch.py::test_worker_loop_no_stage_change_watchdog_blocks_and_pauses tests/test_orchestrator_dispatch.py::test_worker_loop_no_stage_change_action_moves_to_verify tests/test_orchestrator_dispatch.py::test_worker_loop_no_stage_change_watchdog_disabled -q`
+  -> `7 passed`.
+- Broader workflow/dispatch gate: `.venv/bin/python -m pytest tests/test_workflow.py tests/test_orchestrator_dispatch.py -q`
+  -> `157 passed`.

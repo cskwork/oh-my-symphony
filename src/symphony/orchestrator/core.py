@@ -115,6 +115,19 @@ _pkg = sys.modules[__package__]
 log = get_logger()
 
 
+def _update_state_turn_counter(debug: _IssueDebug, state: str) -> int:
+    state = normalize_state(state)
+    if not debug.state_turn_state:
+        debug.state_turn_state = state
+        debug.state_turn_count = 1
+    elif debug.state_turn_state == state:
+        debug.state_turn_count += 1
+    else:
+        debug.state_turn_state = state
+        debug.state_turn_count = 0
+    return debug.state_turn_count
+
+
 def _run_record_payload(record: RunRecord) -> dict[str, Any]:
     return {
         "run_id": record.run_id,
@@ -2440,6 +2453,8 @@ class Orchestrator:
                                 running_entry.last_ema_state_total_tokens = 0
                                 running_entry.hit_token_budget = False
                                 running_entry.token_budget_cap = 0
+                                debug.state_turn_state = current_state
+                                debug.state_turn_count = 0
                             log.info(
                                 "worker_phase_transition",
                                 issue_id=issue.id,
@@ -2560,6 +2575,21 @@ class Orchestrator:
                     state = normalize_state(issue.state)
                     active = {s.lower() for s in cfg.tracker.active_states}
                     if state not in active:
+                        break
+                    state_turn_count = _update_state_turn_counter(debug, state)
+                    if (
+                        cfg.agent.max_state_turns > 0
+                        and state_turn_count >= cfg.agent.max_state_turns
+                    ):
+                        running.hit_no_stage_change = True
+                        log.warning(
+                            "no_stage_change_watchdog",
+                            issue_id=running_issue_id,
+                            issue_identifier=running.issue.identifier,
+                            state=running.issue.state,
+                            state_turn_count=state_turn_count,
+                            max_state_turns=cfg.agent.max_state_turns,
+                        )
                         break
                     if turn_number >= cfg.agent.max_turns:
                         # Per-attempt ceiling reached without a terminal
@@ -2782,6 +2812,13 @@ class Orchestrator:
                 f"(consecutive_empty_turns={entry.consecutive_empty_turns}, "
                 f"threshold={EMPTY_TURN_LOOP_THRESHOLD})"
             )
+        elif budget_kind == "no_stage_change":
+            debug = self._issue_debug.get(issue_id)
+            count = debug.state_turn_count if debug is not None else 0
+            budget_detail = (
+                f"(state_turns={count}, "
+                f"max_state_turns={cfg.agent.max_state_turns})"
+            )
         else:
             budget_detail = f"(max_total_turns={cfg.agent.max_total_turns})"
         note_body = (
@@ -2824,6 +2861,49 @@ class Orchestrator:
                 error=str(persist_exc),
             )
             self._record_tracker_error(issue_id, persist_exc)
+            return False
+
+    async def _persist_no_stage_change_handoff(
+        self,
+        *,
+        cfg: ServiceConfig,
+        entry: RunningEntry,
+        issue_id: str,
+        target_state: str,
+        turn_count: int,
+        state_name: str,
+    ) -> bool:
+        note_body = (
+            f"Symphony stopped this worker: no stage change after {turn_count} "
+            f"turns in {state_name}. "
+            f"The workflow is configured to hand off to {target_state}, so "
+            "Symphony moved the ticket there for the next stage."
+        )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                entry.issue,
+                target_state,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                entry.issue,
+                "Stage Watchdog Handoff",
+                note_body,
+            )
+            self._clear_tracker_error(issue_id)
+            return True
+        except Exception as exc:
+            log.warning(
+                "no_stage_change_handoff_failed",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                target_state=target_state,
+                error=str(exc),
+            )
+            self._record_tracker_error(issue_id, exc)
             return False
 
     # ------------------------------------------------------------------
@@ -3367,6 +3447,54 @@ class Orchestrator:
                         "max_total_tokens reached; workflow config unavailable"
                     )
                     return
+
+            if entry.hit_no_stage_change:
+                count = debug.state_turn_count
+                state_name = entry.issue.state or debug.state_turn_state
+                action = cfg.agent.no_stage_change_action if cfg is not None else "block"
+                if cfg is not None and action != "block":
+                    persisted = await self._persist_no_stage_change_handoff(
+                        cfg=cfg,
+                        entry=entry,
+                        issue_id=issue_id,
+                        target_state=action,
+                        turn_count=count,
+                        state_name=state_name,
+                    )
+                    if persisted:
+                        entry.issue = replace(entry.issue, state=action)
+                    debug.last_error = (
+                        f"no stage change after {count} turns in {state_name}; "
+                        f"moved to {action}"
+                    )
+                    return
+                self._claimed.add(issue_id)
+                target_state = (
+                    cfg.agent.budget_exhausted_state if cfg is not None else ""
+                )
+                if cfg is not None and target_state:
+                    persisted = await self._persist_budget_exhausted_state(
+                        cfg=cfg,
+                        entry=entry,
+                        issue_id=issue_id,
+                        target_state=target_state,
+                        budget_kind="no_stage_change",
+                    )
+                    if persisted:
+                        entry.issue = replace(entry.issue, state=target_state)
+                pause_reason = (
+                    f"no stage change after {count} turns in {state_name} - "
+                    "operator action required"
+                )
+                debug.last_error = pause_reason
+                self._paused_issue_ids.add(issue_id)
+                self._pause_reasons[issue_id] = pause_reason
+                self._set_issue_flags(
+                    issue_id,
+                    paused=True,
+                    pause_reason=pause_reason,
+                )
+                return
 
             max_total_turns = cfg.agent.max_total_turns if cfg is not None else 60
             if debug.completed_turn_count >= max_total_turns:

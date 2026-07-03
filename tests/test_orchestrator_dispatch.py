@@ -3132,6 +3132,206 @@ def test_worker_loop_stops_before_starting_past_total_turn_budget(monkeypatch, t
     asyncio.run(_run())
 
 
+async def _run_fake_same_state_worker(
+    *,
+    orch: Orchestrator,
+    issue: Issue,
+    cfg: ServiceConfig,
+    monkeypatch,
+    tmp_path: Path,
+) -> tuple[list[str], list[tuple[str, str]], list[tuple[str, str, str]]]:
+    import symphony.orchestrator as _orch_mod
+
+    turns: list[str] = []
+    moved: list[tuple[str, str]] = []
+    notes: list[tuple[str, str, str]] = []
+
+    class _Backend:
+        async def start(self):
+            return None
+
+        async def initialize(self):
+            return None
+
+        async def start_session(self, *, initial_prompt, issue_title):
+            return "thread-1"
+
+        async def run_turn(self, *, prompt, is_continuation):
+            turns.append(prompt)
+            return None
+
+        async def stop(self):
+            return None
+
+    class _Workspace:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+    class _StubWS:
+        async def create_or_reuse(self, identifier):
+            return _Workspace(tmp_path)
+
+        async def before_run(self, path):
+            return None
+
+        async def after_run_best_effort(self, path):
+            return None
+
+    def _move(_cfg, captured_issue, target_state):
+        moved.append((captured_issue.identifier, target_state))
+
+    def _append(_cfg, captured_issue, heading, body):
+        notes.append((captured_issue.identifier, heading, body))
+
+    orch._loop = asyncio.get_running_loop()
+    _install_running_entry(orch, issue)
+    _stub_workflow_state_returning(orch, cfg, monkeypatch)
+    orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+    monkeypatch.setattr(_orch_mod, "build_backend", lambda _init: _Backend())
+    monkeypatch.setattr(orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [issue])
+    monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
+    monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
+
+    try:
+        await orch._run_agent_attempt(issue, attempt=None, cfg=cfg)
+    finally:
+        for retry in list(orch._retry.values()):
+            retry.timer_handle.cancel()
+    return turns, moved, notes
+
+
+def test_no_stage_change_counter_resets_on_state_change():
+    debug = _IssueDebug()
+
+    assert core_module._update_state_turn_counter(debug, "in progress") == 1
+    assert core_module._update_state_turn_counter(debug, "in progress") == 2
+    assert core_module._update_state_turn_counter(debug, "verify") == 0
+    assert debug.state_turn_state == "verify"
+    assert debug.state_turn_count == 0
+    assert core_module._update_state_turn_counter(debug, "verify") == 1
+
+
+def test_worker_loop_no_stage_change_watchdog_blocks_and_pauses(
+    monkeypatch, tmp_path
+):
+    orch = _orch()
+    issue = _issue("MT-NOSTAGE", state="In Progress")
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress",),
+        terminal_states=("Done", "Cancelled", "Blocked"),
+    )
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_turns=100,
+            max_total_turns=100,
+            max_state_turns=2,
+            budget_exhausted_state="Blocked",
+            auto_commit_on_done=False,
+        ),
+    )
+
+    turns, moved, notes = asyncio.run(
+        _run_fake_same_state_worker(
+            orch=orch,
+            issue=issue,
+            cfg=cfg,
+            monkeypatch=monkeypatch,
+            tmp_path=tmp_path,
+        )
+    )
+
+    assert len(turns) == 2
+    assert orch._retry == {}
+    assert issue.id in orch._claimed
+    assert issue.id in orch._paused_issue_ids
+    assert orch._pause_reasons[issue.id] == (
+        "no stage change after 2 turns in In Progress - operator action required"
+    )
+    debug = orch._issue_debug[issue.id]
+    assert debug.last_error == (
+        "no stage change after 2 turns in In Progress - operator action required"
+    )
+    assert moved == [("MT-NOSTAGE", "Blocked")]
+    assert notes and notes[0][1] == "Budget Exceeded"
+    assert "no_stage_change" in notes[0][2]
+
+
+def test_worker_loop_no_stage_change_action_moves_to_verify(monkeypatch, tmp_path):
+    orch = _orch()
+    issue = _issue("MT-NOSTAGE-MOVE", state="In Progress")
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress", "Verify"),
+        terminal_states=("Done", "Cancelled", "Blocked"),
+    )
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_turns=100,
+            max_total_turns=100,
+            max_state_turns=2,
+            no_stage_change_action="Verify",
+            auto_commit_on_done=False,
+        ),
+    )
+
+    turns, moved, notes = asyncio.run(
+        _run_fake_same_state_worker(
+            orch=orch,
+            issue=issue,
+            cfg=cfg,
+            monkeypatch=monkeypatch,
+            tmp_path=tmp_path,
+        )
+    )
+
+    assert len(turns) == 2
+    assert orch._retry == {}
+    assert issue.id not in orch._paused_issue_ids
+    assert issue.id not in orch._claimed
+    assert moved == [("MT-NOSTAGE-MOVE", "Verify")]
+    assert notes and notes[0][1] == "Stage Watchdog Handoff"
+    assert "no stage change after 2 turns in In Progress" in notes[0][2]
+
+
+def test_worker_loop_no_stage_change_watchdog_disabled(monkeypatch, tmp_path):
+    orch = _orch()
+    issue = _issue("MT-NOSTAGE-OFF", state="In Progress")
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress",),
+        terminal_states=("Done", "Cancelled", "Blocked"),
+    )
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_turns=3,
+            max_total_turns=100,
+            max_state_turns=0,
+            auto_commit_on_done=False,
+        ),
+    )
+
+    turns, _moved, _notes = asyncio.run(
+        _run_fake_same_state_worker(
+            orch=orch,
+            issue=issue,
+            cfg=cfg,
+            monkeypatch=monkeypatch,
+            tmp_path=tmp_path,
+        )
+    )
+
+    assert len(turns) == 3
+    assert issue.id not in orch._paused_issue_ids
+    assert "no stage change" not in (orch._issue_debug[issue.id].last_error or "")
+
+
 def test_find_running_issue_id_resolves_human_identifier():
     """Server endpoints take `OLV-002` style ids — resolve to internal id."""
     orch = _orch()

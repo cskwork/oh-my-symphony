@@ -69,6 +69,7 @@ from .constants import (
     DEFAULT_MAX_CONCURRENT_AGENTS,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_RETRY_BACKOFF_MS,
+    DEFAULT_MAX_STATE_TURNS,
     DEFAULT_MAX_TOTAL_TURNS,
     DEFAULT_MAX_TURNS,
     DEFAULT_OPENCODE_COMMAND,
@@ -277,6 +278,16 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         DEFAULT_MAX_TOTAL_TURNS,
         name="agent.max_total_turns",
     )
+    max_state_turns = _validated_nonnegative_or_default(
+        agent_raw.get("max_state_turns"),
+        DEFAULT_MAX_STATE_TURNS,
+        name="agent.max_state_turns",
+    )
+    no_stage_change_action = _validated_no_stage_change_action(
+        agent_raw.get("no_stage_change_action"),
+        active_states=tracker.active_states,
+        terminal_states=tracker.terminal_states,
+    )
     agent_kind = _as_str(agent_raw.get("kind"), DEFAULT_AGENT_KIND).strip().lower() or DEFAULT_AGENT_KIND
     if agent_kind not in SUPPORTED_AGENT_KINDS:
         raise ConfigValidationError(
@@ -300,6 +311,8 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             agent_raw.get("max_concurrent_agents_by_state")
         ),
         max_total_turns=max_total_turns,
+        max_state_turns=max_state_turns,
+        no_stage_change_action=no_stage_change_action,
         max_attempts=_validated_nonnegative_or_default(
             agent_raw.get("max_attempts"),
             DEFAULT_MAX_ATTEMPTS,
@@ -654,3 +667,26 @@ def _validated_after_done_failure_policy(value: Any) -> str:
             value=value,
         )
     return value
+
+
+def _validated_no_stage_change_action(
+    value: Any,
+    *,
+    active_states: tuple[str, ...],
+    terminal_states: tuple[str, ...],
+) -> str:
+    action = _as_str(value, "block").strip() or "block"
+    if action.lower() == "block":
+        return "block"
+    configured = {
+        state.strip().lower(): state.strip()
+        for state in (*active_states, *terminal_states)
+        if state.strip()
+    }
+    key = action.lower()
+    if key not in configured:
+        raise ConfigValidationError(
+            "agent.no_stage_change_action must be 'block' or a configured tracker state",
+            value=action,
+        )
+    return configured[key]

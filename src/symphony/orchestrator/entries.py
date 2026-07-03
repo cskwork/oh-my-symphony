@@ -96,6 +96,9 @@ class RunningEntry:
     # non-success outcome in `_on_worker_exit`: no automatic continuation is
     # scheduled. The operator must transition the ticket or resume manually.
     hit_max_turns: bool = False
+    # Set when completed turns keep returning in the same workflow state.
+    # This is cumulative across attempts via `_IssueDebug.state_turn_count`.
+    hit_no_stage_change: bool = False
     # Set when the current state's `agent.max_total_tokens` budget is
     # crossed. Worker exit refreshes the ticket: a stage change continues,
     # unchanged state is budget-blocked.
@@ -142,6 +145,8 @@ class _IssueDebug:
     current_attempt_kind: str | None = None
     completed_turn_count: int = 0
     rewind_count: int = 0
+    state_turn_state: str = ""
+    state_turn_count: int = 0
     last_workspace: Path | None = None
     last_error: str | None = None
     tracker_error: str | None = None
