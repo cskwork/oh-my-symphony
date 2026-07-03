@@ -40,3 +40,43 @@ optional highlighter should not block the TUI.
 
 - Rejected: adding a hard tree-sitter Markdown dependency. It would make a
   cosmetic editor feature part of the runtime install contract.
+
+# 2026-07-03 - Operator Trust Program spec
+
+## Goal
+
+Define the next improvement program for Symphony as a product-facing trust
+layer, not only a reliability backlog.
+
+## Decisions
+
+### 1. Combine options 1-3 into one phased spec
+
+The selected scope covers operator trust signals, reliability backbone
+completion, and onboarding polish. Keeping them in one spec makes the outcome
+testable end to end: a healthy system must expose health, explain stuck work,
+avoid leaked backend processes, and teach new operators how to verify the same
+surfaces.
+
+- Rejected: three separate specs. They would duplicate decisions around health,
+  run history, and doctor checks.
+- Rejected: extending only the reliability plan. That would keep the work as an
+  engineering checklist and under-specify the user-facing trust surfaces.
+
+### 2. Keep Symphony single-node and file-first
+
+The spec preserves Markdown tickets as the human source of truth and the
+existing SQLite run registry as the runtime ledger. Health, attention, and run
+history are additive surfaces over the current architecture.
+
+- Rejected: external queues, distributed locks, or managed observability for
+  this program. They do not match the current product shape or failure budget.
+
+### 3. Re-audit backend lifecycle before editing
+
+Recent commits may already satisfy parts of the older R2/R7 handoff. The spec
+therefore requires implementation to prove current behavior first, then change
+only the failing gaps.
+
+- Rejected: blindly reimplementing the older handoff. The live branch is ahead
+  of that document, so direct replay risks churn and duplicate fixes.

@@ -1,0 +1,116 @@
+# Tasks: Operator Trust Program
+
+- [ ] 1. Re-audit current trust and reliability state
+- [ ] 1.1 Map current implementation against this spec
+  - Read current `Orchestrator.health()`, `/api/v1/health`, `issue_attention`, RunRegistry, backend lifecycle code, doctor, README, and examples.
+  - Record which requirements are already satisfied and which require code changes.
+  - Files: `docs/spec/operator-trust-program/audit.md` or a ticket-specific work artifact under `docs/`.
+  - Tests: none required for the audit, but every "already satisfied" claim must cite an existing test or add one in a later task.
+  - _Requirements: 4.6, 7.1_
+
+- [ ] 2. Health Snapshot foundation
+- [ ] 2.1 Add health derivation tests
+  - Cover healthy, startup pending, tick error degraded, and registry degraded states.
+  - Files: `tests/test_orchestrator_health.py`, `tests/test_webapi.py` or server API tests.
+  - Tests: focused health tests fail before implementation when a required field or degraded reason is missing.
+  - _Requirements: 1.1, 1.2, 1.3, 1.4_
+- [ ] 2.2 Implement shared Health Snapshot fields
+  - Extend `Orchestrator.health()` and thread the same object into `/api/v1/health` and the existing state snapshot.
+  - Keep fields additive and stable.
+  - Files: `src/symphony/orchestrator/core.py`, `src/symphony/server.py`, `src/symphony/webapi.py` as applicable.
+  - Tests: health API and snapshot tests pass.
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 7.2_
+- [ ] 2.3 Improve port ownership messaging
+  - Detect service-owned busy ports when metadata is available and preserve a clear fallback when owner is unknown.
+  - Files: `src/symphony/cli/main.py`, `src/symphony/cli/doctor.py`, service metadata helpers if needed.
+  - Tests: direct-run and doctor tests for busy own-service port and unknown busy port.
+  - _Requirements: 1.5, 5.2_
+
+- [ ] 3. Attention Signals
+- [ ] 3.1 Add attention priority tests
+  - Cover budget exhausted, retry scheduled, stalled, lease blocked, tracker error, terminal cleanup, and multiple-cause priority.
+  - Files: `tests/test_orchestrator_dispatch.py`, `tests/test_webapi.py`, TUI tests where existing fixtures fit.
+  - Tests: focused tests fail before missing signal implementation.
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+- [ ] 3.2 Implement the shared attention taxonomy
+  - Extend `issue_attention(issue)` and include attention payloads in board and detail APIs.
+  - Files: `src/symphony/orchestrator/core.py`, `src/symphony/webapi.py`.
+  - Tests: API payload tests pass and signal priority is deterministic.
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 7.2_
+- [ ] 3.3 Render Attention Signals in operator UIs
+  - Add readable web badges/drawer rows and TUI/card/detail text where appropriate.
+  - Files: `src/symphony/web/static/app.js`, `src/symphony/web/static/style.css`, TUI card/detail files.
+  - Tests: `tests/test_web_static_contract.py`, web API tests, TUI render tests.
+  - _Requirements: 2.6, 7.3_
+
+- [ ] 4. Run History reader
+- [ ] 4.1 Add RunRegistry history query
+  - Implement bounded recent-run lookup with optional issue filter.
+  - Files: `src/symphony/orchestrator/run_registry.py`, `tests/test_run_registry.py`.
+  - Tests: empty history, issue filter, bounded limit, error/orphaned row shape.
+  - _Requirements: 3.1, 3.2, 3.3, 3.4_
+- [ ] 4.2 Add Run History API and CLI
+  - Add `GET /api/v1/runs?issue=&limit=` and `symphony runs [--issue ID] [--limit N]`.
+  - Files: API router files, CLI router files, tests for both paths.
+  - Tests: API contract tests and CLI routing/output tests.
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
+- [ ] 4.3 Add web drawer history section
+  - Render recent attempts in the issue drawer without blocking normal board load.
+  - Files: `src/symphony/web/static/app.js`, `src/symphony/web/static/style.css`.
+  - Tests: static contract tests for history section strings and API use.
+  - _Requirements: 3.1, 3.2, 3.4, 7.3_
+
+- [ ] 5. Backend Lifecycle Cleanup
+- [ ] 5.1 Verify process-group spawn and termination behavior
+  - Add or confirm tests for POSIX `start_new_session`, bounded terminate/kill escalation, and already-exited short-circuit.
+  - Files: `src/symphony/_shell.py`, backend files, `tests/test_backends.py`, `tests/test_backends_lifecycle.py`.
+  - Tests: lifecycle tests pass without raw `proc.wait()`.
+  - _Requirements: 4.1, 4.2, 7.4_
+- [ ] 5.2 Verify EOF and malformed-stream failure classification
+  - Add or confirm tests for Codex EOF completion failure and malformed-line streak handling across streaming backends.
+  - Files: backend files and lifecycle tests.
+  - Tests: focused EOF/malformed-stream tests pass and emit classified failure reasons.
+  - _Requirements: 4.3, 4.4, 7.4_
+- [ ] 5.3 Verify force-eject process-group cleanup
+  - Capture `agent_pid` or backend-specific child pid and kill the recorded process group before retry scheduling.
+  - Files: `src/symphony/orchestrator/core.py`, `tests/test_orchestrator_dispatch.py`.
+  - Tests: force-eject test proves kill helper receives the recorded pid before retry.
+  - _Requirements: 4.5, 7.4_
+
+- [ ] 6. Doctor v2 and Smoke Check
+- [ ] 6.1 Expand doctor checks
+  - Add prompt-file existence, port ownership, command availability, reliable auth warnings, and optional online tracker ping where feasible.
+  - Files: `src/symphony/cli/doctor.py`, `tests/test_doctor.py`.
+  - Tests: pass/warn/fail rows for prompt missing, own-service port, unknown busy port, unavailable auth probe.
+  - _Requirements: 5.1, 5.2, 5.3_
+- [ ] 6.2 Add local service Smoke Check
+  - Add a script or CLI command that checks health, board state, and at least one read-only API path.
+  - Files: `scripts/` or CLI module, smoke tests.
+  - Tests: smoke passes against a temporary aiohttp service and fails with endpoint/status details.
+  - _Requirements: 5.4, 5.5_
+
+- [ ] 7. Fresh-Clone Quickstart and examples
+- [ ] 7.1 Update README quickstart paths
+  - Lead with file tracker, doctor, service start, health, board, run history, and smoke check.
+  - Files: `README.md`, `README.ko.md`.
+  - Tests: doc grep or existing doc contract checks for key commands and no stale lane claims.
+  - _Requirements: 6.1, 6.2, 6.3, 6.5_
+- [ ] 7.2 Align examples and skill references
+  - Ensure examples use four active lanes and advanced trackers are credentialed secondary paths.
+  - Files: `examples/*`, `skills/using-symphony/*`, related docs.
+  - Tests: prompt/workflow render smoke and doc reference grep.
+  - _Requirements: 6.2, 6.4_
+
+- [ ] 8. Final verification and changelog
+- [ ] 8.1 Run focused and full verification
+  - Run focused tests from each completed slice, then the full Python suite.
+  - Run `symphony doctor ./WORKFLOW.md`; if `9999` is busy, verify ownership or rerun on an alternate configured port.
+  - Run one real local service smoke against a file board.
+  - Files: no product files unless verification exposes a defect.
+  - Tests: focused slice tests, `python -m pytest -q`, doctor, smoke.
+  - _Requirements: 7.4, 7.5_
+- [ ] 8.2 Record decisions and rejected alternatives
+  - Append implementation decisions, rejected alternatives, and verification evidence to the date changelog.
+  - Files: `docs/changelog/changelog-2026-07-03.md`.
+  - Tests: `git diff --check` and spec traceability review.
+  - _Requirements: 7.5_
