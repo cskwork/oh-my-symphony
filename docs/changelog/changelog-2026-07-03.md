@@ -810,8 +810,8 @@ Do not merge or release yet.
 
 Evidence:
 
-- Latest local release tag is `v0.8.0`; the requested next release target is
-  `v0.8.1` / `0.8.1`.
+- At triage time, the latest local release tag was `v0.8.0`; release numbering
+  still needed reconciliation before tagging.
 - Version source files currently say `0.9.1` in both `pyproject.toml` and
   `src/symphony/__init__.py`, so release numbering needs reconciliation before
   tagging.
@@ -1184,5 +1184,45 @@ Rejected alternatives:
 - `PYTHONPATH=src .venv/bin/python -m pytest tests/test_workflow.py tests/test_backends.py -q`
   -> `138 passed`.
 - `git diff --check` -> passed.
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1029 passed, 2 skipped, 2 warnings`.
+
+# 2026-07-03 - v0.9.1 release closeout
+
+## Goal
+
+Close the release after the blockers were fixed, pushed, merged to `dev` and
+`main`, and proven by a fresh four-agent E2E run.
+
+## Decision
+
+Publish `v0.9.1`, matching the source version already declared in
+`pyproject.toml` and `src/symphony/__init__.py`.
+
+Evidence:
+
+- Remote `origin/dev` and `origin/main` both point to
+  `d129b450755067a5018e4f21a64ad59cc42945a3`.
+- Tag `v0.9.1` dereferences to
+  `d129b450755067a5018e4f21a64ad59cc42945a3`.
+- GitHub release `v0.9.1` was published.
+- The landing-page version badge was updated from `v0.9.0` to `v0.9.1`.
+
+Rejected alternatives:
+
+- Rejected: leave the landing page at `v0.9.0`. It is a visible public version
+  marker and would contradict the published release.
+- Rejected: back-tag `v0.8.1`. The source version is already `0.9.1`, and the
+  verified release tag should match package metadata.
+
+## Verification
+
+- Fresh r8 four-agent E2E from pushed `dev` reached `Human Review` for
+  OpenCode, Pi, Claude, and Codex.
+- `/api/v1/state` ended with `running=0` and `retrying=0`.
+- Branch-archive browser gates passed for all four generated apps:
+  OpenCode, Pi, Claude, and Codex.
+- `symphony service stop --force` closed the r8 service ports and left no
+  process referencing the temp root.
 - `PYTHONPATH=src .venv/bin/python -m pytest -q`
   -> `1029 passed, 2 skipped, 2 warnings`.
