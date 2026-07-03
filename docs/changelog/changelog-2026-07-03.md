@@ -81,6 +81,65 @@ only the failing gaps.
 - Rejected: blindly reimplementing the older handoff. The live branch is ahead
   of that document, so direct replay risks churn and duplicate fixes.
 
+# 2026-07-03 - Operator Trust Program audit and spec alignment
+
+## Goal
+
+Verify the day-old Operator Trust Program spec (`8838bfa`) against the code
+actually on `dev`, update the spec to match reality, and leave a detailed
+implementation plan for the remaining gaps.
+
+## Decisions
+
+### 1. Record the audit as a spec artifact, not a chat summary
+
+`docs/spec/operator-trust-program/audit.md` completes spec task 1.1 with
+file/test evidence per requirement. Verification: focused suites (48 passed)
+and the full suite (942 passed, 2 skipped) are green on `dev`, confirming
+`1818d60` superseded the older `feat/reliability-hardening` WIP and its five
+red backend tests.
+
+- Rejected: re-implementing from the 2026-07-02 reliability handoff. The
+  audit shows backend lifecycle (R4) is fully landed; replaying the handoff
+  would churn proven code.
+
+### 2. Align spec data models with the landed implementation
+
+The Health Snapshot ships as `ok`/`degraded` with `tick.*`/`run_registry.*`
+sub-objects, and the Attention Signal ships as `{kind, label, message}`.
+design.md now documents those shapes; `starting`, `workflow_path`,
+`severity`, and `due_at` remain as additive planned fields.
+
+- Rejected: renaming implemented fields to the spec's original names
+  (`healthy`, `consecutive_tick_errors`, `severity`). That breaks
+  `/api/v1/health` and attention consumers for cosmetic gain and violates
+  the spec's own additive-only compatibility NFR.
+
+### 3. Reuse `status` as the run-history terminal cause
+
+The `runs` table has no `error` column; terminal causes such as
+`force_ejected_zombie` already live in `status`. The Run History Row exposes
+`status` as-is instead of adding a schema migration.
+
+- Rejected: adding an `error` column. A migration plus dual-write brings new
+  failure modes for information the ledger already stores.
+
+### 4. Re-scope doctor's prompt-file check to a visibility row
+
+Missing prompt files already fail config load with
+`ConfigValidationError("prompt file not found")` before doctor's checks run,
+so existence is enforced upstream. Doctor gains a row listing the resolved
+prompt template paths instead.
+
+- Rejected: a duplicate existence check inside doctor. It could never fire —
+  config load raises first.
+
+Remaining work is sequenced in
+`docs/plans/2026-07-03-operator-trust-implementation.md` (slices A-K:
+health `starting` status, owner-aware port messages, full attention
+taxonomy, TUI rendering, run history query/API/CLI/drawer, doctor prompt
+row, smoke health check, README proof path, final verification).
+
 # 2026-07-03 - Public docs surface sync
 
 ## Goal

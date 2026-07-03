@@ -77,9 +77,13 @@ _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
 
 **Purpose:** Ensure failed or ejected workers do not leak into retries.
 
+**Status (audited 2026-07-03):** Verified done on `dev` by commit `1818d60`;
+see `audit.md` Requirement 4. Remaining work is documentation of the accepted
+OpenCode malformed-stream deviation, not code.
+
 **Responsibilities:**
-- Re-audit current backend lifecycle behavior before editing.
-- Verify or finish POSIX process groups, bounded termination, EOF turn failure, malformed-stream failure, and force-eject process-group kill.
+- Re-audit current backend lifecycle behavior before editing. (done — `audit.md`)
+- Verify or finish POSIX process groups, bounded termination, EOF turn failure, malformed-stream failure, and force-eject process-group kill. (done)
 - Keep existing behavior when tests already prove it.
 
 **Interface:** input backend subprocess handles and emitted pid events / output classified failures and cleanup results / dependencies `backends/*`, `_shell.py`, `orchestrator/core.py`, backend lifecycle tests.
@@ -117,43 +121,65 @@ _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
 
 ### Health Snapshot
 
+The base shape below is already implemented (`Orchestrator.health()`,
+`core.py:609`); fields marked "planned" are the additive remainder. See
+`audit.md` for the field-by-field verification.
+
 | Field | Type | Required | Validation |
 |---|---|---|---|
-| status | string | yes | one of `starting`, `healthy`, `degraded`, `unhealthy` |
-| generated_at | ISO timestamp | yes | UTC timestamp string |
-| workflow_path | string | yes | absolute or workflow-relative path already known to the process |
-| last_tick_at | ISO timestamp or null | yes | null only before first completed tick |
-| consecutive_tick_errors | integer | yes | non-negative |
-| degraded_reasons | list[string] | yes | stable machine-readable strings |
-| registry | object | yes | includes status and concise error when degraded |
+| status | string | yes | one of `starting` (planned), `ok`, `degraded` |
+| degraded_reasons | list[string] | yes | stable machine-readable strings (`tick_loop_dead`, `tick_failures`, `tracker_fetch_failures`, `run_registry_error`) |
 | version | string | yes | package version |
+| generated_at | ISO timestamp | yes | UTC timestamp string |
+| workflow_path | string | planned | path already known to the process; additive |
+| tick | object | yes | `alive`, `started`, `last_completed_at` (null before first tick), `seconds_since_last`, `consecutive_failures`, `error_count`, `loop_restarts`, `last_error` |
+| tracker | object | yes | `consecutive_fetch_failures` |
+| run_registry | object | yes | `enabled`, `error_count`, `last_error` (concise, no secrets) |
+| counts | object | yes | `running`, `retrying` |
 
 **Relationships:** Derived by orchestrator; embedded in `/api/v1/health` and state snapshot.
 
 ### Attention Signal
 
+The implemented base shape is `{kind, label, message}`
+(`Orchestrator.issue_attention`, `core.py:735`); `severity` and `due_at` are
+additive. A separate `reason` field was dropped — `message` already carries
+the concise cause.
+
 | Field | Type | Required | Validation |
 |---|---|---|---|
-| kind | string | yes | one of documented signal kinds |
-| severity | string | yes | `info`, `warning`, or `error` |
-| message | string | yes | concise operator-facing text |
-| due_at | ISO timestamp or null | no | present for retry signals when known |
-| reason | string or null | no | concise cause, no secrets |
+| kind | string | yes | one of `budget_exhausted` (implemented), `stalled`, `lease_blocked`, `tracker_error`, `retry_scheduled` (planned) |
+| label | string | yes | short human-readable badge text |
+| message | string | yes | concise operator-facing cause, no secrets |
+| severity | string | planned | `info`, `warning`, or `error`; additive |
+| due_at | ISO timestamp or null | planned | present for retry signals when known; additive |
+
+**Priority when multiple causes apply (highest first):** `stalled`,
+`lease_blocked`, `budget_exhausted`, `tracker_error`, `retry_scheduled`.
+Permanent or intervention-needing causes outrank transient ones; the order is
+pinned by tests.
 
 **Relationships:** Attached to issue card and issue-detail payloads.
 
 ### Run History Row
 
+The `runs` table already stores everything below; no schema change is
+needed. There is no separate `error` column — terminal cause is carried in
+`status` (for example `force_ejected_zombie`), so the row exposes `status`
+as-is instead of a derived error field.
+
 | Field | Type | Required | Validation |
 |---|---|---|---|
+| run_id | string | yes | registry primary key |
 | issue_id | string | yes | issue identifier from tracker |
+| identifier | string | yes | human-facing ticket identifier |
+| attempt | integer | yes | existing registry value |
 | attempt_kind | string | yes | existing registry value |
 | agent_kind | string | no | existing registry value when available |
-| status | string | yes | existing registry status |
+| status | string | yes | existing registry status; doubles as terminal cause |
 | started_at | ISO timestamp | yes | registry timestamp |
 | completed_at | ISO timestamp or null | no | null for active/orphaned rows |
 | workspace_path | string or null | no | no existence guarantee |
-| error | string or null | no | concise error only |
 
 **Relationships:** Read from RunRegistry; exposed by API, CLI, and web drawer.
 
@@ -217,6 +243,25 @@ _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
 **Decision:** Use shared `Orchestrator.health()` plus additive API fields.
 
 **Rationale:** Inconsistent health answers are the problem this program is meant to remove.
+
+### Decision: Align spec data models with the landed implementation
+
+**Context:** The 2026-07-03 audit (`audit.md`) found that commit `1818d60` had
+already implemented the Health Snapshot and the first Attention Signal with
+field names and status values that differ from this spec's original tables
+(`ok` vs `healthy`, `tick.consecutive_failures` vs `consecutive_tick_errors`,
+`{kind, label, message}` vs `{kind, severity, message, due_at, reason}`).
+
+**Options considered:**
+1. Update the spec to the implemented shape and add remaining fields additively - pros: no breaking API change, existing tests stay authoritative / cons: spec loses its original cleaner naming.
+2. Rename the implemented fields to match the spec - pros: spec stays pristine / cons: breaks `/api/v1/health` and attention consumers for cosmetic gain, violates the compatibility NFR.
+
+**Decision:** Update the spec to the implemented shape; add `starting`,
+`workflow_path`, `severity`, and `due_at` as additive fields only.
+
+**Rationale:** The compatibility NFR says additions must be additive unless a
+break is explicitly approved. Field renames are exactly the kind of break the
+NFR forbids, and the implemented shape is already covered by passing tests.
 
 ### Decision: Audit before editing backend lifecycle code
 
