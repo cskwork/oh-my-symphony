@@ -591,3 +591,54 @@ failures cannot leave the mkdir fallback lock behind.
   -> `1 passed`.
 - Broader workspace gate: `.venv/bin/python -m pytest tests/test_workspace.py -q`
   -> `28 passed`.
+
+# 2026-07-03 - E2E hardening item 5: Verify QA and telemetry
+
+## Goal
+
+Make Verify reject browser-app shim-only QA and pin the live state telemetry
+shape across supported agent kinds.
+
+## Decisions
+
+### 1. Browser UI QA must use a real browser
+
+Both file and linear Verify prompts now require Playwright or headless Chromium
+for browser UI deliverables, against `file://` or a tiny static server. DOM
+shims are allowed only as smoke tests, not final Verify evidence. Missing
+browser dependencies require `## Environment Block`, `Blocked`, and stop.
+
+- Rejected: letting zero-dependency DOM shims pass Verify. They do not exercise
+  browser behavior, storage, focus, reload, or event semantics reliably enough
+  for QA signoff.
+
+### 2. Keep telemetry normalization in the orchestrator row
+
+The existing `/api/v1/state` path returns `orchestrator.snapshot()`, whose
+running rows already include `agent_kind`, `session_id`, `attention`, and the
+normalized token block. A new regression test pins that shape for codex,
+claude, pi, and opencode by feeding normalized backend events through
+`_on_codex_event`.
+
+- Rejected: adding backend-specific fields to the API row. The UI needs one
+  normalized shape regardless of which CLI produced the events.
+
+### 3. Skip `tokens_per_completed_stage`
+
+The current counters expose state-local token totals and turn counts, but not a
+completed-stage denominator. Adding the metric now would either divide by the
+wrong value or require a broader stats schema change, so this patch leaves it
+out.
+
+- Rejected: deriving it from `completed_turn_count`. Turns are not stages, and
+  the resulting number would be misleading during long-running Verify/Learn
+  work.
+
+## Verification
+
+- Focused gate: `.venv/bin/python -m pytest tests/test_workflow_pipeline_prompt.py::test_verify_stage_demands_review_qa_and_merge_evidence tests/test_orchestrator_dispatch.py::test_running_snapshot_carries_live_telemetry_for_supported_agent_kinds -q`
+  -> `3 passed`.
+- Prompt regression gate: `.venv/bin/python -m pytest tests/test_prompt.py tests/test_workflow_pipeline_prompt.py -q`
+  -> `53 passed`.
+- State route/snapshot gate: `.venv/bin/python -m pytest tests/test_orchestrator_dispatch.py::test_running_snapshot_carries_live_telemetry_for_supported_agent_kinds tests/test_server_routes.py::test_state_route_returns_orchestrator_snapshot -q`
+  -> `2 passed`.

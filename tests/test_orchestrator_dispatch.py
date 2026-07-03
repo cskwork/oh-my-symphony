@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import symphony.orchestrator.core as core_module
-from symphony.backends import EVENT_APPROVAL_DENIED
+from symphony.backends import EVENT_APPROVAL_DENIED, EVENT_SESSION_STARTED
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import Orchestrator, RunningEntry, _IssueDebug, _sort_for_dispatch_fifo
 from symphony.workspace import WorkspaceManager
@@ -1208,6 +1208,39 @@ def test_token_totals_track_cache_input_tokens_separately():
     assert row["tokens"]["cache_input_tokens"] == 90
     assert row["tokens"]["state_cache_input_tokens"] == 90
     assert snap["codex_totals"]["cache_input_tokens"] == 90
+
+
+def test_running_snapshot_carries_live_telemetry_for_supported_agent_kinds():
+    for index, agent_kind in enumerate(("codex", "claude", "pi", "opencode"), start=1):
+        orch = _orch()
+        issue = _issue(f"TEL-{index}", state="In Progress")
+        entry = _install_running_entry(orch, issue)
+        entry.agent_kind = agent_kind
+
+        async def _run() -> dict:
+            await orch._on_codex_event(
+                issue.id,
+                {
+                    "event": EVENT_SESSION_STARTED,
+                    "timestamp": "2026-07-03T00:00:00Z",
+                    "payload": {"session_id": f"{agent_kind}-session"},
+                    "usage": {
+                        "input_tokens": 100 + index,
+                        "output_tokens": 10 + index,
+                        "total_tokens": 110 + (2 * index),
+                    },
+                },
+            )
+            return orch.snapshot()["running"][0]
+
+        row = asyncio.run(_run())
+
+        assert row["agent_kind"] == agent_kind
+        assert row["session_id"] == f"{agent_kind}-session"
+        assert "attention" in row
+        assert row["tokens"]["input_tokens"] == 100 + index
+        assert row["tokens"]["output_tokens"] == 10 + index
+        assert row["tokens"]["total_tokens"] == 110 + (2 * index)
 
 
 def _stub_workflow_state_returning(
