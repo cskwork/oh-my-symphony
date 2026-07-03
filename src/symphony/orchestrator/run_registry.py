@@ -38,6 +38,7 @@ class RunRecord:
     completed_at: datetime | None = None
     owner_pid: int | None = None
     owner_boot_id: str | None = None
+    backend_agent_pid: int | None = None
 
 
 @dataclass(frozen=True)
@@ -165,24 +166,47 @@ class RunRegistry:
         run_id: str,
         now: datetime | None = None,
         progress_at: datetime | None = None,
+        backend_agent_pid: int | None = None,
     ) -> bool:
         now = _utc(now)
         expires = now + self._lease_ttl
         progress = _utc(progress_at) if progress_at is not None else None
-        if progress is None:
+        if progress is None and backend_agent_pid is None:
             sql = """
                 UPDATE runs
                 SET updated_at = ?, lease_expires_at = ?
                 WHERE issue_id = ? AND run_id = ? AND status = 'active'
             """
             args = (_iso(now), _iso(expires), issue_id, run_id)
-        else:
+        elif progress is None:
+            sql = """
+                UPDATE runs
+                SET updated_at = ?, lease_expires_at = ?, backend_agent_pid = ?
+                WHERE issue_id = ? AND run_id = ? AND status = 'active'
+            """
+            args = (_iso(now), _iso(expires), backend_agent_pid, issue_id, run_id)
+        elif backend_agent_pid is None:
             sql = """
                 UPDATE runs
                 SET updated_at = ?, lease_expires_at = ?, last_progress_at = ?
                 WHERE issue_id = ? AND run_id = ? AND status = 'active'
             """
             args = (_iso(now), _iso(expires), _iso(progress), issue_id, run_id)
+        else:
+            sql = """
+                UPDATE runs
+                SET updated_at = ?, lease_expires_at = ?, last_progress_at = ?,
+                    backend_agent_pid = ?
+                WHERE issue_id = ? AND run_id = ? AND status = 'active'
+            """
+            args = (
+                _iso(now),
+                _iso(expires),
+                _iso(progress),
+                backend_agent_pid,
+                issue_id,
+                run_id,
+            )
         cur = self._connect().execute(sql, args)
         return cur.rowcount > 0
 
@@ -433,7 +457,8 @@ class RunRegistry:
                 last_progress_at TEXT,
                 completed_at TEXT,
                 owner_pid INTEGER,
-                owner_boot_id TEXT
+                owner_boot_id TEXT,
+                backend_agent_pid INTEGER
             )
             """
         )
@@ -446,6 +471,8 @@ class RunRegistry:
             conn.execute("ALTER TABLE runs ADD COLUMN owner_pid INTEGER")
         if "owner_boot_id" not in existing:
             conn.execute("ALTER TABLE runs ADD COLUMN owner_boot_id TEXT")
+        if "backend_agent_pid" not in existing:
+            conn.execute("ALTER TABLE runs ADD COLUMN backend_agent_pid INTEGER")
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_runs_issue_status_lease
@@ -565,6 +592,7 @@ def _parse(value: str | None) -> datetime | None:
 
 def _record(row: sqlite3.Row) -> RunRecord:
     owner_pid = row["owner_pid"]
+    backend_agent_pid = row["backend_agent_pid"]
     return RunRecord(
         run_id=str(row["run_id"]),
         issue_id=str(row["issue_id"]),
@@ -581,6 +609,9 @@ def _record(row: sqlite3.Row) -> RunRecord:
         completed_at=_parse(row["completed_at"]),
         owner_pid=int(owner_pid) if owner_pid is not None else None,
         owner_boot_id=row["owner_boot_id"],
+        backend_agent_pid=(
+            int(backend_agent_pid) if backend_agent_pid is not None else None
+        ),
     )
 
 

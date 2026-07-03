@@ -41,6 +41,7 @@ VERIFY_RULES = (
     "## Environment Block",
     "## QA Evidence",
     "## AC Scorecard",
+    "Evidence cells must cite files under `docs/DEMO-1/` as `qa/...` or `work/...`",
     "## QA Failure",
     "git merge-tree --write-tree",
     "## Merge Status",

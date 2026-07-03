@@ -50,7 +50,7 @@ diff matches plan
 ## AC Scorecard
 | signal | source | result | evidence |
 | --- | --- | --- | --- |
-| version bumped | pytest | pass | SMA-1/qa/version.log |
+| version bumped | pytest | pass | qa/version.log |
 
 ## Merge Status
 merged to main with --no-ff
@@ -124,6 +124,28 @@ def test_verify_contract_passes_with_review_qa_scorecard_and_merge(
     result = evaluate_contract(
         producing_state="Verify",
         ticket_body=_complete_verify_body(),
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_verify_contract_normalizes_docs_prefixed_evidence_path(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
+    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | docs/SMA-1/qa/version.log |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
         identifier="SMA-1",
         docs_root=docs_root,
     )
@@ -236,7 +258,29 @@ def test_verify_missing_evidence_file_rewinds(tmp_path: Path) -> None:
     )
 
     assert result.passed is False
-    assert any("SMA-1/qa/version.log" in item for item in result.missing)
+    assert any("qa/version.log" in item for item in result.missing)
+
+
+def test_verify_rejects_source_anchor_prose_as_evidence_cell(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
+    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | No secrets in examples/foo.js:1 |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is False
+    assert any("source anchors/prose" in item for item in result.missing)
 
 
 def test_verify_bug_repro_not_closed_rewinds(tmp_path: Path) -> None:
@@ -281,9 +325,9 @@ def test_verify_scorecard_fail_row_warns_without_rewind(tmp_path: Path) -> None:
     (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
     (docs_root / "SMA-1" / "qa" / "ac2.log").write_text("ok")
     body = _complete_verify_body().replace(
-        "| version bumped | pytest | pass | SMA-1/qa/version.log |",
-        "| version bumped | pytest | pass | SMA-1/qa/version.log |\n"
-        "| handles empty input | pytest | fail | SMA-1/qa/ac2.log |",
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | qa/version.log |\n"
+        "| handles empty input | pytest | fail | qa/ac2.log |",
     )
 
     result = evaluate_contract(

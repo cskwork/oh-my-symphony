@@ -209,6 +209,40 @@ actions versions, concurrency, and reruns visible in the repo.
 - Rejected: rerunning the failed dynamic deployment as the only fix. The rerun
   failed at the same deploy step and did not expose a repo-side error.
 
+# 2026-07-03 - Two release-blocker fixes
+
+## Goal
+
+Close the concrete blockers from the four-agent rerun plan before attempting
+another operator gate: force-stop child process cleanup and Verify evidence
+path clarity.
+
+## Decisions
+
+### 1. Persist backend agent PIDs in the run registry
+
+Backends already emit `agent_pid`, and the orchestrator already uses the live
+value for force-eject. Persisting that PID on registry heartbeat gives
+`symphony service stop --force` a durable cleanup list after the orchestrator
+process has been killed.
+
+- Rejected: scanning the process table for agent command names. That would be
+  platform-specific and could kill unrelated OpenCode/Pi sessions.
+- Rejected: relying only on cooperative SIGTERM. The release rerun showed forced
+  service stop can outlive the orchestrator cleanup path.
+
+### 2. Resolve Verify evidence paths under `docs/<ticket>/`
+
+Verify scorecard/security evidence now resolves `qa/...`, `work/...`, and
+prefixed `docs/<ticket>/...` coordinates to files under the ticket docs
+directory. Source anchors and prose are rejected with guidance to put those
+details inside a durable evidence file.
+
+- Rejected: accepting source file anchors as evidence cells. They prove where a
+  reviewer looked, not where the durable QA artefact lives.
+- Rejected: soft-warning fabricated evidence paths. Missing evidence remains a
+  hard contract failure because it means the handoff is not auditable.
+
 # 2026-07-03 - Operator Trust Program implementation
 
 ## Goal

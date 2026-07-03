@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from .errors import SymphonyError
+from .orchestrator.run_registry import RunRegistry, registry_path_for_workflow
 from .workflow import (
     ServerConfig,
     build_service_config,
@@ -433,6 +434,47 @@ def terminate_process(pid: int | None, *, force: bool = False) -> bool:
     return True
 
 
+def _active_backend_pids(workflow_path: Path) -> list[int]:
+    registry_path = registry_path_for_workflow(workflow_path)
+    if not registry_path.exists():
+        return []
+    registry = RunRegistry(registry_path)
+    try:
+        pids: list[int] = []
+        seen: set[int] = set()
+        for lease in registry.active_leases():
+            pid = lease.backend_agent_pid
+            if pid is None or pid in seen:
+                continue
+            seen.add(pid)
+            pids.append(pid)
+        return pids
+    except Exception as exc:
+        print(
+            f"warning: could not inspect active backend processes: {exc}",
+            file=sys.stderr,
+        )
+        return []
+    finally:
+        registry.close()
+
+
+def _terminate_active_backend_processes(record: ServiceRecord) -> bool:
+    all_stopped = True
+    for pid in _active_backend_pids(record.workflow_path):
+        if not is_process_running(pid):
+            continue
+        terminate_process(pid, force=True)
+        stopped = _wait_until(
+            lambda pid=pid: not is_process_running(pid),
+            timeout_s=2.0,
+        )
+        if not stopped:
+            all_stopped = False
+            print(f"warning: backend agent pid={pid} is still running", file=sys.stderr)
+    return all_stopped
+
+
 def _run_doctor_or_print(cfg: Any, *, host: str, port: int) -> bool:
     from dataclasses import replace
 
@@ -643,6 +685,9 @@ def _stop(args: argparse.Namespace) -> int:
         if not stopped:
             all_stopped = False
             print(f"warning: {label} pid={pid} is still running", file=sys.stderr)
+
+    if args.force and not _terminate_active_backend_processes(record):
+        all_stopped = False
 
     if not all_stopped:
         print(

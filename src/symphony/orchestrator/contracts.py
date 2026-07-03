@@ -112,6 +112,7 @@ _SECURITY_FAIL_TOKENS = frozenset({"fail", "failed", "critical"})
 
 # Evidence cells that name no real artefact — never treated as a cited path.
 _PATH_PLACEHOLDERS = frozenset({"", "n/a", "na", "none", "-", "--", "tbd", "—"})
+_EVIDENCE_ARTIFACT_PREFIXES = ("qa/", "work/")
 
 
 def evaluate_contract(
@@ -351,12 +352,9 @@ def _cited_paths_exist(
 ) -> list[str]:
     """Return messages for cited evidence paths that do not exist on disk.
 
-    Collects the evidence column of `## AC Scorecard` (last cell) and the
-    `path:line` evidence column of `## Security Audit` (last cell), strips
-    a trailing `:line`, and checks each resolves under `docs_root`. Bare
-    placeholders (`n/a`, `-`, empty, …) and non-path tokens are skipped.
-    A no-op when `docs_root` is unavailable — mirrors the Done branch,
-    which only checks the filesystem when given a root.
+    Collects the evidence column of `## AC Scorecard` and `## Security Audit`.
+    Evidence paths must point under `docs/<identifier>/qa/` or
+    `docs/<identifier>/work/`; source anchors belong inside those artefacts.
     """
     if docs_root is None or not identifier:
         return []
@@ -365,15 +363,36 @@ def _cited_paths_exist(
         for row in _parse_markdown_table(body, heading):
             if not row:
                 continue
-            cited = _extract_cited_path(row[-1])
+            cell = row[-1]
+            cited = _extract_cited_path(cell)
             if cited is None:
                 continue
-            candidate = docs_root / cited
+            artifact_path = _normalise_ticket_artifact_path(cited, identifier)
+            if artifact_path is None:
+                missing.append(
+                    f"evidence cell `{cell}` must cite a docs/{identifier} "
+                    "artefact as `qa/...` or `work/...`; put source "
+                    "anchors/prose inside that artefact"
+                )
+                continue
+            candidate = docs_root / identifier / artifact_path
             if not candidate.exists():
                 missing.append(
-                    f"cited evidence path `{cited}` does not exist under docs root"
+                    f"cited evidence path `{cited}` does not exist under "
+                    f"docs/{identifier}; cite evidence as `qa/...` or `work/...`"
                 )
     return missing
+
+
+def _normalise_ticket_artifact_path(cited: str, identifier: str) -> str | None:
+    path = cited.strip().lstrip("./")
+    for prefix in (f"docs/{identifier}/", f"{identifier}/"):
+        if path.startswith(prefix):
+            path = path[len(prefix) :]
+            break
+    if path.startswith(_EVIDENCE_ARTIFACT_PREFIXES):
+        return path
+    return None
 
 
 def _extract_cited_path(cell: str) -> str | None:

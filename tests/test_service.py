@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from symphony import cli
 from symphony import service as service_module
+from symphony.issue import Issue
+from symphony.orchestrator.run_registry import RunRegistry, registry_path_for_workflow
 from symphony.service import (
     ServiceRecord,
     ServiceLockError,
@@ -28,6 +31,19 @@ def _workflow(tmp_path: Path) -> Path:
     workflow = tmp_path / "WORKFLOW.md"
     workflow.write_text("---\ntracker: {kind: file}\n---\nbody\n", encoding="utf-8")
     return workflow
+
+
+def _issue(identifier: str = "SMA-1") -> Issue:
+    return Issue(
+        id=f"id-{identifier}",
+        identifier=identifier,
+        title=f"{identifier} title",
+        description="",
+        priority=None,
+        state="Verify",
+        created_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+    )
 
 
 def _record(workflow_path: Path, *, pid: int | None = 1234, port: int = 9999) -> ServiceRecord:
@@ -174,6 +190,56 @@ def test_service_stop_keeps_record_when_process_survives(
     assert rc == 1
     assert "record kept" in captured.err
     assert load_record(workflow) is not None
+
+
+def test_force_stop_terminates_active_backend_processes_from_registry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234))
+    registry = RunRegistry(
+        registry_path_for_workflow(workflow),
+        lease_ttl=timedelta(minutes=5),
+    )
+    issue = _issue()
+    now = datetime.now(timezone.utc)
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "workspaces" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="pi",
+        now=now,
+    )
+    assert run_id
+    assert registry.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=1),
+        backend_agent_pid=5678,
+    )
+    registry.close()
+    live_pids = {1234, 1235, 5678}
+    stopped: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(
+        service_module,
+        "is_process_running",
+        lambda pid: pid in live_pids,
+    )
+
+    def _stop_pid(pid, *, force=False):  # noqa: ANN001, ANN002
+        stopped.append((pid, force))
+        live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _stop_pid)
+
+    rc = service_main(["stop", "--force", "--timeout", "0", str(workflow)])
+
+    assert rc == 0
+    assert stopped == [(1235, False), (1234, False), (5678, True)]
+    assert 5678 not in live_pids
+    assert load_record(workflow) is None
 
 
 def test_service_lock_blocks_second_start_for_same_workflow(tmp_path: Path) -> None:

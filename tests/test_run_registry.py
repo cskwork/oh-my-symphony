@@ -50,6 +50,30 @@ def test_run_registry_active_lease_blocks_second_claim(tmp_path: Path) -> None:
     assert registry.has_active_lease(issue.id, now=now + timedelta(seconds=1)) is True
 
 
+def test_run_registry_heartbeat_persists_backend_agent_pid(tmp_path: Path) -> None:
+    registry = RunRegistry(tmp_path / "state.db", lease_ttl=timedelta(seconds=60))
+    now = datetime(2026, 7, 2, 1, 0, tzinfo=timezone.utc)
+    issue = _issue()
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="opencode",
+        now=now,
+    )
+    assert run_id
+
+    assert registry.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=1),
+        backend_agent_pid=4242,
+    )
+
+    assert registry.get_run(run_id).backend_agent_pid == 4242
+
+
 def test_run_registry_expires_stale_lease_before_reclaim(tmp_path: Path) -> None:
     registry = RunRegistry(tmp_path / "state.db", lease_ttl=timedelta(seconds=30))
     now = datetime(2026, 7, 2, 1, 0, tzinfo=timezone.utc)

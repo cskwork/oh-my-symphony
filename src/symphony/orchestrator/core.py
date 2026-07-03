@@ -399,7 +399,12 @@ class Orchestrator:
         )
 
     def _heartbeat_run_lease(
-        self, issue_id: str, entry: RunningEntry, *, progress: datetime | None = None
+        self,
+        issue_id: str,
+        entry: RunningEntry,
+        *,
+        progress: datetime | None = None,
+        backend_agent_pid: int | None = None,
     ) -> bool:
         """Refresh the entry's lease; returns False only on a real conflict.
 
@@ -417,6 +422,7 @@ class Orchestrator:
                 issue_id=issue_id,
                 run_id=entry.run_id,
                 progress_at=progress,
+                backend_agent_pid=backend_agent_pid or entry.codex_app_server_pid,
             ),
             True,
         )
@@ -2982,6 +2988,7 @@ class Orchestrator:
         pid = event.get("codex_app_server_pid") or event.get("agent_pid")
         if isinstance(pid, int):
             entry.codex_app_server_pid = pid
+            self._heartbeat_run_lease(issue_id, entry, backend_agent_pid=pid)
         payload = event.get("payload") or {}
         if isinstance(payload, dict):
             msg = self._preview_from_payload(payload)

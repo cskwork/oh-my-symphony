@@ -14,6 +14,7 @@ Verify has three jobs: review, QA, and merge preflight/merge.
    - For bugs, close the reproduction loop by saving `docs/{{ issue.identifier }}/qa/repro-after.log`.
 5. Append `## QA Evidence` with commands, exit codes, and top evidence paths.
 6. Append `## AC Scorecard` with one row per acceptance criterion: signal, source, result, evidence path.
+   - Evidence cells must cite files under `docs/{{ issue.identifier }}/` as `qa/...` or `work/...`. Put source anchors and prose inside those evidence files, not in the table cell.
 7. If any required command fails or evidence disproves an AC, append `## QA Failure`, set state to `In Progress`, and stop.
 {% if agent.auto_merge_on_done %}
 8. Merge Gate:
