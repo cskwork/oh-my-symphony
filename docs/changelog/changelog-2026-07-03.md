@@ -1097,3 +1097,46 @@ Rejected alternatives:
 - `git diff --check` -> passed.
 - `PYTHONPATH=src .venv/bin/python -m pytest -q`
   -> `1025 passed, 2 skipped, 2 warnings`.
+
+# 2026-07-03 - Terminal cleanup and retry resume hardening
+
+## Goal
+
+Remove the r6 release blockers where a paused retry could not be resumed over
+HTTP and terminal-state reconciliation raced worker-exit auto-commit.
+
+## Decision
+
+Resume now resolves both running workers and held retry entries, while pause
+remains running-only. Reconcile also copies the terminal tracker state into the
+running entry, gives recent terminal workers a 60-second natural-exit grace, and
+marks workspaces whose cleanup has already started so worker exit cannot run a
+second git snapshot against the same worktree.
+
+Evidence from r6:
+
+- `POST /api/v1/REL-601/resume` returned `issue_not_running` even though
+  `/api/v1/state` showed a paused retry for `REL-601`.
+- `REL-601` reached `Human Review`, but reconcile and worker-exit cleanup both
+  attempted auto-commit; one hit `index.lock`, then the final snapshot refused
+  a protected root-file deletion.
+- Branch tips did not match board state after the race, so the full release
+  gate stayed red despite the browser app passing.
+
+Rejected alternatives:
+
+- Rejected: make pause operate on retry entries too. A retry is not currently
+  executing a backend process; resume is the action operators need there.
+- Rejected: silence auto-commit failures. Protected deletion refusals are
+  release-safety signals and must remain visible.
+- Rejected: rely on a global git lock around auto-commit. The root issue was
+  duplicate cleanup ownership, not generic git concurrency.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_server_routes.py::test_resume_route_releases_paused_retry_worker tests/test_server_routes.py::test_resume_route_returns_404_for_unknown_identifier tests/test_orchestrator_dispatch.py::test_reconcile_terminate_terminal_commits_before_remove -q`
+  -> `3 passed`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_server_routes.py -q`
+  -> `16 passed`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_orchestrator_dispatch.py::test_reconcile_part_b_skips_paused_worker_on_terminal_state tests/test_orchestrator_dispatch.py::test_reconcile_terminate_terminal_commits_before_remove tests/test_orchestrator_dispatch.py::test_reconcile_terminate_terminal_skips_commit_when_auto_off tests/test_orchestrator_dispatch.py::test_on_worker_exit_commits_workspace_at_done tests/test_orchestrator_dispatch.py::test_on_worker_exit_commits_workspace_for_non_done_terminal_state -q`
+  -> `5 passed`.

@@ -83,10 +83,12 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
 
     async def handle_resume(request: web.Request) -> web.Response:
         identifier = request.match_info.get("identifier", "")
-        issue_id = orchestrator.find_running_issue_id(identifier)
+        issue_id = orchestrator.find_resumable_issue_id(identifier)
         if issue_id is None:
             return _error_response(
-                404, "issue_not_running", f"no running worker for {identifier}"
+                404,
+                "issue_not_resumable",
+                f"no running or retry-held worker for {identifier}",
             )
         changed = orchestrator.resume_worker(issue_id)
         return web.json_response(

@@ -2559,6 +2559,10 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
 
             expected = ["commit:MT-RC", f"remove:{Path('/tmp/ws-rc')}"]
             assert calls == expected, f"commit must precede remove; got {calls}"
+
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert calls == expected, "worker exit must not repeat reconcile cleanup"
+            assert orch._retry == {}, "terminal reconcile must not schedule continuation"
         finally:
             worker_task.cancel()
             try:

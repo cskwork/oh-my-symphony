@@ -1057,6 +1057,16 @@ class Orchestrator:
                 return issue_id
         return None
 
+    def find_resumable_issue_id(self, identifier: str) -> str | None:
+        """Resolve an identifier for resume across running and held retries."""
+        issue_id = self.find_running_issue_id(identifier)
+        if issue_id is not None:
+            return issue_id
+        for issue_id, retry in self._retry.items():
+            if retry.identifier == identifier:
+                return issue_id
+        return None
+
     async def skip_learn(self, identifier: str) -> tuple[bool, str]:
         """Move an idle Learn ticket to Human Review with an audit note."""
         cfg = self._workflow_state.current()
@@ -3553,7 +3563,12 @@ class Orchestrator:
                     )
                 return
             self._completed.add(issue_id)
-            if cfg is not None and cfg.agent.auto_commit_on_done:
+            cleanup_started = entry.workspace_cleanup_started
+            if (
+                cfg is not None
+                and cfg.agent.auto_commit_on_done
+                and not cleanup_started
+            ):
                 # Snapshot whatever the agent left in the worktree, even if
                 # the ticket isn't strictly at Done. The worker stopped
                 # cleanly (`reason == "normal"`); any subsequent reconcile or
@@ -3581,7 +3596,9 @@ class Orchestrator:
                 else set()
             )
             is_terminal = normalize_state(entry.issue.state) in terminal_states
-            if is_done and cfg is not None and self._workspace_manager is not None:
+            if cleanup_started:
+                pass
+            elif is_done and cfg is not None and self._workspace_manager is not None:
                 merge_ok = await self._auto_merge_done_gate_or_block(
                     cfg,
                     entry.issue,
@@ -4089,7 +4106,7 @@ class Orchestrator:
         # capture artefacts. Reserve cancellation for genuinely-stuck
         # workers — the worker's own loop will exit cleanly within a tick
         # or two when the agent transitions to a terminal state.
-        RECONCILE_RECENT_EVENT_GRACE_S = 10.0
+        RECONCILE_RECENT_EVENT_GRACE_S = 60.0
         now = datetime.now(timezone.utc)
         for issue in refreshed:
             entry = self._running.get(issue.id)
@@ -4136,6 +4153,20 @@ class Orchestrator:
     ) -> None:
         state = normalize_state(issue.state)
         if state in terminal:
+            entry.issue = Issue(
+                id=issue.id,
+                identifier=issue.identifier or entry.issue.identifier,
+                title=issue.title or entry.issue.title,
+                description=entry.issue.description,
+                priority=entry.issue.priority,
+                state=issue.state,
+                branch_name=entry.issue.branch_name,
+                url=entry.issue.url,
+                labels=entry.issue.labels,
+                blocked_by=entry.issue.blocked_by,
+                created_at=entry.issue.created_at,
+                updated_at=entry.issue.updated_at,
+            )
             last_seen = entry.last_codex_timestamp
             age = (now - last_seen).total_seconds() if last_seen else None
             if age is not None and age < recent_grace_s:
@@ -4148,6 +4179,15 @@ class Orchestrator:
                     last_event_age_s=round(age, 1),
                 )
                 return
+            if entry.exit_started_at is not None:
+                log.info(
+                    "reconcile_skip_exiting_worker",
+                    issue_id=issue.id,
+                    identifier=issue.identifier,
+                    state=issue.state,
+                    exit_started_at=entry.exit_started_at.isoformat(),
+                )
+                return
             log.info(
                 "reconcile_terminate_terminal",
                 issue_id=issue.id,
@@ -4158,6 +4198,7 @@ class Orchestrator:
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
             if self._workspace_manager is not None:
+                entry.workspace_cleanup_started = True
                 if cfg.agent.auto_commit_on_done:
                     # Snapshot before remove — `git worktree remove
                     # --force` would otherwise discard whatever the
@@ -4209,6 +4250,20 @@ class Orchestrator:
                 updated_at=entry.issue.updated_at,
             )
         else:
+            entry.issue = Issue(
+                id=issue.id,
+                identifier=issue.identifier or entry.issue.identifier,
+                title=issue.title or entry.issue.title,
+                description=entry.issue.description,
+                priority=entry.issue.priority,
+                state=issue.state,
+                branch_name=entry.issue.branch_name,
+                url=entry.issue.url,
+                labels=entry.issue.labels,
+                blocked_by=entry.issue.blocked_by,
+                created_at=entry.issue.created_at,
+                updated_at=entry.issue.updated_at,
+            )
             # R8 — a state outside both active and terminal sets is
             # out-of-workflow drift (column deleted or renamed remotely).
             # Reap the workspace like the terminal path; leaking the
@@ -4222,6 +4277,7 @@ class Orchestrator:
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
             if self._workspace_manager is not None:
+                entry.workspace_cleanup_started = True
                 if cfg.agent.auto_commit_on_done:
                     await _pkg.commit_workspace_on_done(
                         entry.workspace_path,

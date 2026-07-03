@@ -91,6 +91,10 @@ class RunningEntry:
     # Set when the worker's own `finally` starts exit cleanup. The task done
     # callback is only a fallback for workers that never reached this point.
     exit_started_at: datetime | None = None
+    # Set when reconcile already snapshotted/removed this workspace after a
+    # terminal or inactive tracker move. Worker exit must not repeat that git
+    # cleanup against the same worktree.
+    workspace_cleanup_started: bool = False
     # Set when the per-attempt `max_turns` ceiling halted the worker without
     # the ticket having reached a terminal state. Treated as an explicit
     # non-success outcome in `_on_worker_exit`: no automatic continuation is

@@ -38,6 +38,7 @@ class _StubOrchestrator:
     )
     issue_payloads: dict[str, dict[str, Any]] = field(default_factory=dict)
     running_ids: dict[str, str] = field(default_factory=dict)
+    retry_ids: dict[str, str] = field(default_factory=dict)
     paused_ids: set[str] = field(default_factory=set)
     refresh_calls: int = 0
 
@@ -54,6 +55,9 @@ class _StubOrchestrator:
 
     def find_running_issue_id(self, identifier: str) -> str | None:
         return self.running_ids.get(identifier)
+
+    def find_resumable_issue_id(self, identifier: str) -> str | None:
+        return self.running_ids.get(identifier) or self.retry_ids.get(identifier)
 
     def is_paused(self, issue_id: str) -> bool:
         return issue_id in self.paused_ids
@@ -224,13 +228,34 @@ async def test_resume_route_releases_paused_worker(client: TestClient) -> None:
     assert payload["changed"] is True
 
 
+async def test_resume_route_releases_paused_retry_worker() -> None:
+    app, orch = _make_app_with_stub()
+    orch.running_ids = {}
+    orch.retry_ids = {"MT-1": "iss-1"}
+    orch.paused_ids.add("iss-1")
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        resp = await client.post("/api/v1/MT-1/resume")
+        assert resp.status == 200
+        payload = await resp.json()
+        assert payload["issue_identifier"] == "MT-1"
+        assert payload["issue_id"] == "iss-1"
+        assert payload["paused"] is False
+        assert payload["changed"] is True
+        assert "iss-1" not in orch.paused_ids
+    finally:
+        await client.close()
+
+
 async def test_resume_route_returns_404_for_unknown_identifier(
     client: TestClient,
 ) -> None:
     resp = await client.post("/api/v1/UNKNOWN-99/resume")
     assert resp.status == 404
     payload = await resp.json()
-    assert payload["error"]["code"] == "issue_not_running"
+    assert payload["error"]["code"] == "issue_not_resumable"
 
 
 async def test_debug_tasks_route_returns_list(client: TestClient) -> None:
