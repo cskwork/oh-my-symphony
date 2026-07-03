@@ -15,9 +15,9 @@ route table.
 
 Source of truth lives in `skills/using-symphony/`. `.claude/skills/` is a thin
 symlink layer for Claude Code's native discovery only — do not edit through it.
-`skills/symphony-oneshot/` and `skills/symphony-monorepo/` are support bundles
-for templates/scripts/references used by the router, not separate activation
-routes.
+`skills/using-symphony/oneshot/` and `skills/using-symphony/monorepo/` are
+branch-specific subfolders for templates/scripts/references used by the
+router, not separate activation routes.
 
 ## Available skill (operator-facing)
 

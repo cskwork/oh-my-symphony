@@ -247,8 +247,8 @@ details inside a durable evidence file.
 
 ## Goal
 
-Collapse Symphony's operator skill discovery to one routed skill while keeping
-the OneShot and monorepo templates available at their existing paths.
+Collapse Symphony's operator skill discovery to one routed skill and keep all
+branch-specific references inside that skill folder.
 
 ## Decisions
 
@@ -256,13 +256,15 @@ the OneShot and monorepo templates available at their existing paths.
 
 `skills/using-symphony/SKILL.md` now classifies operator requests by intent:
 operate, configure, customize, delegate, OneShot, bootstrapping, monorepo, and
-triage. `skills/symphony-oneshot/` and `skills/symphony-monorepo/` remain as
-support bundles without `SKILL.md`, so templates/scripts still resolve but
-agents no longer see competing top-level Symphony skills.
+triage. OneShot and monorepo references live under
+`skills/using-symphony/oneshot/` and `skills/using-symphony/monorepo/`, so
+progressive disclosure stays co-located with the router instead of crossing
+out to sibling skill directories.
 
-- Rejected: moving every OneShot and monorepo file under `using-symphony/`.
-  That would churn tested paths such as `skills/symphony-oneshot/templates/`
-  without improving routing.
+- Rejected: keeping sibling support bundles under `skills/symphony-oneshot/`
+  and `skills/symphony-monorepo/`. That preserved old paths, but it split one
+  skill's branch references across directories and made the router less
+  predictable.
 
 ### 2. Treat board ticket descriptions as worker prompts
 

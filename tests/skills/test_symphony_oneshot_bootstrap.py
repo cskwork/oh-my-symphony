@@ -1,4 +1,4 @@
-"""Contract: symphony-oneshot bootstrap seeds the vault skeleton the gate needs.
+"""Contract: the OneShot subfolder seeds the vault skeleton the gate needs.
 
 `reference/lanes.md` documents the Deliver gate as literal bash that greps the
 vault before a ticket may close. The Brief/Plan lanes only ever populate those
@@ -26,7 +26,7 @@ import pytest
 from symphony._shell import resolve_bash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ONESHOT = REPO_ROOT / "skills" / "symphony-oneshot"
+ONESHOT = REPO_ROOT / "skills" / "using-symphony" / "oneshot"
 BOOTSTRAP = ONESHOT / "templates" / "bootstrap.sh"
 LANES = ONESHOT / "reference" / "lanes.md"
 WORKFLOW = ONESHOT / "templates" / "WORKFLOW.oneshot.md"

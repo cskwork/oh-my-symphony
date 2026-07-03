@@ -24,7 +24,15 @@ SKILLS_DIR = REPO_ROOT / "skills"
 SKILL_MD_FILES = sorted(SKILLS_DIR.glob("*/SKILL.md"))
 
 # Subdirectories a skill bundle uses to hold referenced files.
-BUNDLE_SUBDIRS = {"reference", "references", "templates", "scripts", "assets"}
+BUNDLE_SUBDIRS = {
+    "assets",
+    "monorepo",
+    "oneshot",
+    "reference",
+    "references",
+    "scripts",
+    "templates",
+}
 
 # Markdown link target: [text](target)
 _MD_LINK = re.compile(r"\]\(([^)]+)\)")

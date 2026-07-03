@@ -20,8 +20,6 @@ cp -R skills "$TARGET/"
 cp AGENTS.md GEMINI.md "$TARGET/"
 mkdir -p "$TARGET/.claude/skills"
 ln -s ../../skills/using-symphony "$TARGET/.claude/skills/using-symphony"
-ln -s ../../skills/symphony-oneshot "$TARGET/.claude/skills/symphony-oneshot"   # support bundle path
-ln -s ../../skills/symphony-monorepo "$TARGET/.claude/skills/symphony-monorepo" # support bundle path
 chmod +x "$TARGET/tui-open.sh"
 ```
 
@@ -52,9 +50,8 @@ python3.12 -m venv .venv
 | `WORKFLOW.md` | Runtime config and prompt entrypoint |
 | `docs/symphony-prompts/` | Worker prompts; dispatched agents read these |
 | `skills/using-symphony/` | Canonical operator router skill |
-| `skills/symphony-oneshot/`, `skills/symphony-monorepo/` | Support bundles for router templates, scripts, and references |
+| `skills/using-symphony/oneshot/`, `skills/using-symphony/monorepo/` | Router branch subfolders for templates, scripts, and references |
 | `.claude/skills/using-symphony` | Claude Code discovery symlink to the router |
-| `.claude/skills/symphony-*` | Compatibility symlinks so bundled templates can read support files by path |
 | `AGENTS.md` | Codex entrypoint pointing to repo skills |
 | `GEMINI.md` | Gemini entrypoint pointing to repo skills |
 | `tui-open.sh`, `tui-open.bat` | One-shot board launchers |

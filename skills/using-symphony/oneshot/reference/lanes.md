@@ -186,7 +186,7 @@ Outputs:
 Setup:
   - Start the app per brief.md's "How to run" — capture the URL.
   - If no Playwright config exists, copy the stub:
-      cp .claude/skills/symphony-oneshot/templates/playwright-qa.spec.ts tests/e2e/qa.spec.ts
+      cp .claude/skills/using-symphony/oneshot/templates/playwright-qa.spec.ts tests/e2e/qa.spec.ts
       npm i -D @playwright/test axe-playwright
       npx playwright install chromium
   - Edit qa.spec.ts to cover every flow listed in brief.md's Proof requirements.
@@ -199,7 +199,7 @@ Build the markdown report:
   - Findings (any flake, layout bug, a11y violation)
   - Sign-off block ending with `Verdict: APPROVED FOR DELIVERY` or `Verdict: BLOCKED — see Findings`
 Render to PDF:
-  bash .claude/skills/symphony-oneshot/templates/qa-pdf.sh
+  bash .claude/skills/using-symphony/oneshot/templates/qa-pdf.sh
   # uses Playwright itself to render qa-report.md → qa-report.pdf — no pandoc/wkhtmltopdf needed
 Verify artifact exists + log sha256:
   test -s .oneshot/vault/artifacts/qa-report.pdf || exit 1

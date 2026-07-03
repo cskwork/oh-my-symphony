@@ -16,9 +16,9 @@ or support bundle. `.claude/skills/` is a thin symlink layer for Claude Code's
 native discovery — do not edit through it, edit the canonical files under
 `skills/`.
 
-`skills/symphony-oneshot/` and `skills/symphony-monorepo/` are support bundles
-with templates, scripts, and references used by the router. They intentionally
-do not expose separate `SKILL.md` activation routes.
+`skills/using-symphony/oneshot/` and `skills/using-symphony/monorepo/` are
+branch-specific subfolders with templates, scripts, and references used by the
+router. They intentionally do not expose separate `SKILL.md` activation routes.
 
 ## Available skill (operator-facing)
 

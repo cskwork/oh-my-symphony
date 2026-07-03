@@ -1,4 +1,4 @@
-"""Contract: symphony-monorepo support bundle ships a parseable WORKFLOW.
+"""Contract: the monorepo subfolder ships a parseable WORKFLOW.
 
 `setup-monorepo.sh` deliberately does NOT emit a per-service WORKFLOW (that is
 workspace-specific); it copies prompts, wires permissions, and points the user
@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MONOREPO = REPO_ROOT / "skills" / "symphony-monorepo"
+MONOREPO = REPO_ROOT / "skills" / "using-symphony" / "monorepo"
 SETUP = MONOREPO / "scripts" / "setup-monorepo.sh"
 TEMPLATE = MONOREPO / "references" / "workflow-template.md"
 

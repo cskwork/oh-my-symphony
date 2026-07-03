@@ -232,7 +232,7 @@ Acceptance criteria:
 
 Verification:
 - npx playwright test tests/e2e/qa.spec.ts --reporter=list,json
-- bash .claude/skills/symphony-oneshot/templates/qa-pdf.sh"
+- bash .claude/skills/using-symphony/oneshot/templates/qa-pdf.sh"
 
 symphony board new DELIVER-1 "Final packaging + sign-off" --priority 2 --state Deliver \
   --description "Goal:
@@ -373,7 +373,7 @@ cd "$ONESHOT_ROOT"
 mkdir -p .oneshot/vault/artifacts/screenshots .oneshot/vault/artifacts/test-results
 if [ ! -f tests/e2e/qa.spec.ts ]; then
   mkdir -p tests/e2e
-  cp .claude/skills/symphony-oneshot/templates/playwright-qa.spec.ts tests/e2e/qa.spec.ts
+  cp .claude/skills/using-symphony/oneshot/templates/playwright-qa.spec.ts tests/e2e/qa.spec.ts
 fi
 test -f package.json || { echo "QA lane requires a node project (no package.json found)" >&2; exit 1; }
 npm i -D @playwright/test axe-playwright marked
@@ -389,11 +389,11 @@ QA_BASE_URL="<the running app URL>" npx playwright test tests/e2e/qa.spec.ts \
   --output=.oneshot/vault/artifacts/test-results
 ```
 
-Build `qa-report.md` (see `.claude/skills/symphony-oneshot/reference/qa-browser.md` for exact format). End with a single literal line: `Verdict: APPROVED FOR DELIVERY` or `Verdict: BLOCKED — see Findings`.
+Build `qa-report.md` (see `.claude/skills/using-symphony/oneshot/reference/qa-browser.md` for exact format). End with a single literal line: `Verdict: APPROVED FOR DELIVERY` or `Verdict: BLOCKED — see Findings`.
 
 Render PDF (writes the sha256 to a separate file the Deliver gate verifies):
 ```bash
-bash .claude/skills/symphony-oneshot/templates/qa-pdf.sh
+bash .claude/skills/using-symphony/oneshot/templates/qa-pdf.sh
 test -s .oneshot/vault/artifacts/qa-report.pdf || { echo "PDF not produced"; exit 1; }
 test -s .oneshot/vault/artifacts/qa-report.pdf.sha256 || { echo "sha256 not written"; exit 1; }
 ```

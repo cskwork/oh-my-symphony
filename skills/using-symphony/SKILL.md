@@ -25,15 +25,15 @@ State the route in one line, then open only the reference that route needs.
 | edit `WORKFLOW.md`, agent kind, hooks, prompts, workspace, Slack hooks | CONFIGURE | `reference/workflow-config.md` |
 | rename lanes, add state prompts, change pipeline shape | CUSTOMIZE | `reference/customization.md` |
 | break a large request into Symphony board tickets | DELEGATE | `reference/delegation.md` |
-| one prompt should become a full evidence-gated delivery pipeline | ONESHOT | `../symphony-oneshot/reference/operations.md` |
-| OneShot plan quality, ticket slicing, QA/PDF, vault, or lane gates | ONESHOT-DEEP | `../symphony-oneshot/reference/decomposition.md`, then the needed OneShot reference |
+| one prompt should become a full evidence-gated delivery pipeline | ONESHOT | `oneshot/reference/operations.md` |
+| OneShot plan quality, ticket slicing, QA/PDF, vault, or lane gates | ONESHOT-DEEP | `oneshot/reference/decomposition.md`, then the needed OneShot reference |
 | bootstrap Symphony into another repo | BOOTSTRAP | `reference/bootstrapping.md` |
-| bootstrap isolated worktrees for a monorepo/polyrepo | MONOREPO | `../symphony-monorepo/references/workflow-template.md` and `../symphony-monorepo/scripts/setup-monorepo.sh` |
+| bootstrap isolated worktrees for a monorepo/polyrepo | MONOREPO | `monorepo/references/workflow-template.md` and `monorepo/scripts/setup-monorepo.sh` |
 | worker exit, auth stall, blank TUI, stuck service, platform issue | TRIAGE | `reference/troubleshooting.md` or `reference/platform-compat.md` |
 
-Support bundles under `skills/symphony-oneshot/` and
-`skills/symphony-monorepo/` intentionally do not have their own `SKILL.md`.
-They provide templates, scripts, and deep references for this router.
+Branch-specific subfolders under `oneshot/` and `monorepo/` intentionally do
+not have their own `SKILL.md`. They provide templates, scripts, and deep
+references for this router.
 
 ## Core Model
 
@@ -147,9 +147,9 @@ is off whenever the block is absent — no extra cleanup needed.
 | Edit `WORKFLOW.md`, agent kind, hooks, tracker, workspace | `reference/workflow-config.md` |
 | Rename lanes, add per-state prompts, customize pipelines | `reference/customization.md` |
 | Delegate independent sub-tasks to Symphony workers | `reference/delegation.md` |
-| Run a single prompt through the OneShot pipeline | `../symphony-oneshot/reference/operations.md` |
-| Improve OneShot issue decomposition | `../symphony-oneshot/reference/decomposition.md` |
-| Bootstrap a monorepo worktree workflow | `../symphony-monorepo/references/workflow-template.md` |
+| Run a single prompt through the OneShot pipeline | `oneshot/reference/operations.md` |
+| Improve OneShot issue decomposition | `oneshot/reference/decomposition.md` |
+| Bootstrap a monorepo worktree workflow | `monorepo/references/workflow-template.md` |
 | Diagnose `worker_exit`, `hook_failed`, blank TUI, auth stalls | `reference/troubleshooting.md` |
 | Set up/debug Windows, macOS, Linux behavior | `reference/platform-compat.md` |
 | Configure `.gitignore` for Symphony-generated docs/logs | `reference/gitignore-recommendations.md` |
