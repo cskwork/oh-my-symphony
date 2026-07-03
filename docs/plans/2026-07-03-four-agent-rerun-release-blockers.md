@@ -73,6 +73,30 @@ The release gate is still red:
 - Do not merge, tag, or publish until a fresh four-agent run satisfies the full
   acceptance gate below.
 
+## Follow-up Status - Fresh `dev` Rerun
+
+Status at `2026-07-03 18:14 KST` from
+`/private/tmp/symphony-release-e2e-r3-ywgA6n/repo` on port `10090`:
+
+- The temp workflow used the normal `kanban/` board and isolated workspaces at
+  `/private/tmp/symphony-release-e2e-r3-ywgA6n/workspaces`.
+- `symphony doctor ./WORKFLOW.md` passed before launch.
+- `REL-301` (OpenCode) is still running in `Verify`; final handoff is not
+  proven.
+- `REL-302` (Pi) is still running in `In Progress`; final handoff is not
+  proven.
+- `REL-303` (Claude) is paused on a visible provider quota error:
+  `You've hit your session limit · resets 7:30pm (Asia/Seoul)`.
+- `REL-304` (Codex) reached `Blocked` because the required browser gate failed
+  before app load: Chromium tried to use the operator's default profile/crashpad
+  path and hit macOS `Operation not permitted` on
+  `~/Library/Application Support/Chromium/Crashpad/settings.dat`.
+- A host rerun of the Codex app with an isolated browser profile passed the
+  operator gate, so the app is not the current observed failure. The release
+  blocker is the shared browser-gate launch environment used by workers.
+- The release gate remains red. Do not merge to `main`, tag, or publish until a
+  fresh clone from the fixed `dev` branch completes all acceptance gates.
+
 ## Goal
 
 Run Symphony end-to-end with four live agent backends building the same static

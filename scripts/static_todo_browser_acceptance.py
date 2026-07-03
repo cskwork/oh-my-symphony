@@ -5,14 +5,42 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import re
 import sys
+import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from playwright.async_api import Page, async_playwright
 
 
 WAIT_MS = 5_000
+BROWSER_ARGS = ["--disable-crashpad", "--disable-crash-reporter"]
+
+
+def _browser_env(home: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    env["XDG_CACHE_HOME"] = str(home / ".cache")
+    return env
+
+
+@asynccontextmanager
+async def _launch_chromium(playwright):
+    with tempfile.TemporaryDirectory(prefix="static-todo-browser-") as browser_home:
+        home = Path(browser_home)
+        (home / ".config").mkdir(parents=True, exist_ok=True)
+        (home / ".cache").mkdir(parents=True, exist_ok=True)
+        browser = await playwright.chromium.launch(
+            args=BROWSER_ARGS,
+            env=_browser_env(home),
+        )
+        try:
+            yield browser
+        finally:
+            await browser.close()
 
 
 async def _first_visible(page: Page, selectors: list[str]):
@@ -182,57 +210,56 @@ async def check_app(app_dir: Path) -> None:
         raise AssertionError(f"{index} missing")
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch()
-        context = await browser.new_context()
-        page = await context.new_page()
-        errors: list[str] = []
-        page.on("pageerror", lambda exc: errors.append(str(exc)))
-        page.on(
-            "console",
-            lambda msg: errors.append(msg.text) if msg.type == "error" else None,
-        )
-        await page.goto(index.resolve().as_uri(), wait_until="networkidle")
-        await page.evaluate("localStorage.clear()")
-        await page.reload(wait_until="networkidle")
-        await _assert_booted(page, errors)
+        async with _launch_chromium(playwright) as browser:
+            context = await browser.new_context()
+            page = await context.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda exc: errors.append(str(exc)))
+            page.on(
+                "console",
+                lambda msg: errors.append(msg.text) if msg.type == "error" else None,
+            )
+            await page.goto(index.resolve().as_uri(), wait_until="networkidle")
+            await page.evaluate("localStorage.clear()")
+            await page.reload(wait_until="networkidle")
+            await _assert_booted(page, errors)
 
-        await _add(page, "alpha task", via_enter=True)
-        await _add(page, "beta task", via_enter=False)
-        body = await page.locator("body").inner_text()
-        if not re.search(
-            r"2\s+active|active\s*[:(]?\s*2|2\s+items?\s+left|"
-            r"2\s+item\(s\)\s+left|2\s+remaining",
-            body,
-            re.I,
-        ):
-            raise AssertionError("active count did not show two active todos")
+            await _add(page, "alpha task", via_enter=True)
+            await _add(page, "beta task", via_enter=False)
+            body = await page.locator("body").inner_text()
+            if not re.search(
+                r"2\s+active|active\s*[:(]?\s*2|2\s+items?\s+left|"
+                r"2\s+item\(s\)\s+left|2\s+remaining",
+                body,
+                re.I,
+            ):
+                raise AssertionError("active count did not show two active todos")
 
-        await _toggle(page, "alpha task")
-        await _click_named(page, ["completed"])
-        completed = await page.locator("body").inner_text()
-        if "alpha task" not in completed or "beta task" in completed:
-            raise AssertionError("completed filter did not isolate completed todo")
-        await _click_named(page, ["active"])
-        active = await page.locator("body").inner_text()
-        if "beta task" not in active or "alpha task" in active:
-            raise AssertionError("active filter did not isolate active todo")
+            await _toggle(page, "alpha task")
+            await _click_named(page, ["completed"])
+            completed = await page.locator("body").inner_text()
+            if "alpha task" not in completed or "beta task" in completed:
+                raise AssertionError("completed filter did not isolate completed todo")
+            await _click_named(page, ["active"])
+            active = await page.locator("body").inner_text()
+            if "beta task" not in active or "alpha task" in active:
+                raise AssertionError("active filter did not isolate active todo")
 
-        await _click_named(page, ["all"])
-        await _edit_enter(page, "beta task", "beta edited")
-        await _edit_escape(page, "beta edited", "discarded draft")
-        await _click_named(page, ["active"])
-        await page.reload(wait_until="networkidle")
-        reloaded = await page.locator("body").inner_text()
-        if "beta edited" not in reloaded or "alpha task" in reloaded:
-            raise AssertionError("todos or selected filter did not persist")
-        await _click_named(page, ["all"])
-        await _edit_empty_deletes(page, "beta edited")
-        await _click_named(page, ["clear completed", "clear"])
-        if await page.get_by_text("alpha task", exact=False).count():
-            raise AssertionError("clear completed did not remove completed todo")
-        await _add(page, "delete me", via_enter=False)
-        await _delete(page, "delete me")
-        await browser.close()
+            await _click_named(page, ["all"])
+            await _edit_enter(page, "beta task", "beta edited")
+            await _edit_escape(page, "beta edited", "discarded draft")
+            await _click_named(page, ["active"])
+            await page.reload(wait_until="networkidle")
+            reloaded = await page.locator("body").inner_text()
+            if "beta edited" not in reloaded or "alpha task" in reloaded:
+                raise AssertionError("todos or selected filter did not persist")
+            await _click_named(page, ["all"])
+            await _edit_empty_deletes(page, "beta edited")
+            await _click_named(page, ["clear completed", "clear"])
+            if await page.get_by_text("alpha task", exact=False).count():
+                raise AssertionError("clear completed did not remove completed todo")
+            await _add(page, "delete me", via_enter=False)
+            await _delete(page, "delete me")
 
 
 async def main(argv: list[str]) -> int:

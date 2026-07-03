@@ -975,3 +975,54 @@ Rejected alternatives:
   -> `1 passed`.
 - `PYTHONPATH=src .venv/bin/pytest tests/test_backends.py::test_claude_success_subtype_with_is_error_true_fails_turn tests/test_backends_edges.py::TestClaudeIsErrorResultBranches -q`
   -> `7 passed`.
+
+# 2026-07-03 - Static todo browser gate profile isolation
+
+## Goal
+
+Make the release browser gate reliable inside Symphony worker workspaces instead
+of depending on the operator's default Chromium profile directories.
+
+## Decision
+
+Launch Chromium with a temporary writable `HOME`, `XDG_CONFIG_HOME`, and
+`XDG_CACHE_HOME`, plus crash reporter disable flags, for each
+`scripts/static_todo_browser_acceptance.py` run.
+
+Evidence from the fresh `dev` rerun:
+
+- Temp run root: `/private/tmp/symphony-release-e2e-r3-ywgA6n`.
+- `REL-304` (Codex) generated a valid app, but its worker-side browser gate
+  failed before app load on
+  `~/Library/Application Support/Chromium/Crashpad/settings.dat: Operation not
+  permitted`.
+- Running the same generated app through the host acceptance script after
+  isolating browser state passed, proving the failure was browser launch
+  environment, not the todo app behavior.
+
+Rejected alternatives:
+
+- Rejected: telling workers to rerun outside the sandbox. The release gate must
+  be a repeatable command in worker workspaces.
+- Rejected: ignoring the browser gate when Node checks pass. Earlier Pi evidence
+  already proved DOM shims and Node harnesses can miss real browser failures.
+- Rejected: sharing a persistent browser profile. A release gate should not
+  depend on mutable operator-local state.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/pytest tests/test_static_todo_browser_acceptance.py -q`
+  failed before the fix because the module had no isolated browser profile
+  launcher.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_static_todo_browser_acceptance.py -q`
+  -> `1 passed`.
+- `.venv/bin/python -m py_compile scripts/static_todo_browser_acceptance.py`
+  -> passed.
+- `.venv/bin/python scripts/static_todo_browser_acceptance.py /private/tmp/symphony-release-e2e-r3-ywgA6n/workspaces/REL-304/examples/e2e-todo/codex`
+  -> `PASS`.
+- `PYTHONPATH=src SYMPHONY_BROWSER_E2E=1 .venv/bin/python -m pytest tests/test_web_browser_e2e.py -q -rs`
+  -> `1 passed`.
+- `PYTHONPATH=src .venv/bin/python -m symphony.cli doctor ./WORKFLOW.md`
+  -> all checks `PASS`.
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1024 passed, 2 skipped, 2 warnings`.
