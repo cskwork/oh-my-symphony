@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import symphony.orchestrator.core as core_module
+from symphony.backends import EVENT_APPROVAL_DENIED
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import Orchestrator, RunningEntry, _IssueDebug, _sort_for_dispatch_fifo
 from symphony.workspace import WorkspaceManager
@@ -961,6 +962,43 @@ def test_on_codex_event_records_backend_agent_pid():
         )
 
         assert entry.codex_app_server_pid == 4242
+
+    asyncio.run(_run())
+
+
+def test_on_codex_event_records_approval_denial_last_error():
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        entry = RunningEntry(
+            issue=issue,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=Path("/tmp"),
+        )
+        orch._running[issue.id] = entry
+
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": EVENT_APPROVAL_DENIED,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "method": "item/commandExecution/requestApproval",
+                    "command": "rm -rf build",
+                    "reason": "rm with recursive and force flags is blocked",
+                },
+            },
+        )
+
+        debug = orch._issue_debug[issue.id]
+        assert debug.last_error == (
+            "approval denied: rm with recursive and force flags is blocked "
+            "(rm -rf build)"
+        )
+        assert orch._running_row(issue.id, entry)["last_error"] == debug.last_error
 
     asyncio.run(_run())
 

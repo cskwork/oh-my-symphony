@@ -34,6 +34,7 @@ from .. import __version__
 from .._shell import kill_process_group
 from ..backends import (
     EVENT_AGENT_RETRY,
+    EVENT_APPROVAL_DENIED,
     EVENT_COMPACTION,
     EVENT_OTHER_MESSAGE,
     EVENT_TURN_FAILED,
@@ -883,6 +884,7 @@ class Orchestrator:
             "attempt_kind": entry.attempt_kind,
             "last_event": entry.last_codex_event,
             "last_message": entry.last_codex_message,
+            "last_error": debug.last_error or entry.last_error,
             "started_at": _to_iso(entry.started_at),
             "last_event_at": _to_iso(entry.last_codex_timestamp),
             "paused": self.is_paused(issue_id),
@@ -2872,6 +2874,21 @@ class Orchestrator:
                 # this turn. Cleared on EVENT_TURN_COMPLETED after the
                 # empty-loop check so the next turn starts fresh.
                 entry.current_turn_message = msg[:400]
+            if ev_name == EVENT_APPROVAL_DENIED:
+                command = str(payload.get("command") or "")
+                reason = str(payload.get("reason") or "approval denied")
+                debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
+                if command:
+                    debug.last_error = f"approval denied: {reason} ({command})"
+                else:
+                    debug.last_error = f"approval denied: {reason}"
+                log.warning(
+                    "approval_denied",
+                    issue_id=issue_id,
+                    identifier=entry.issue.identifier,
+                    command=command,
+                    reason=reason,
+                )
         # Token deltas (§13.5).
         usage = event.get("usage") or {}
         delta_out = 0

@@ -403,3 +403,50 @@ keeping venv install outside the lock to preserve useful concurrency.
 - Pi real Chromium interaction and persistence test passed.
 - Final documentation checks for this plan are recorded with the work that
   added the plan file.
+
+# 2026-07-03 - E2E hardening item 1: Codex approvals
+
+## Goal
+
+Keep unattended Codex app-server turns from stalling on server-initiated
+approval requests.
+
+## Decisions
+
+### 1. Reply to every JSON-RPC request that carries an id
+
+Codex server-initiated requests now bypass notification handling and receive an
+immediate JSON-RPC response on stdin. Known approval methods are answered
+affirmatively, except dangerous commands are declined so the turn can continue.
+Unknown request methods receive a `-32601` JSON-RPC error instead of being left
+pending.
+
+- Rejected: relying on stall cancellation. It only retries the same unanswered
+  approval request.
+- Rejected: using `cancel` for denied commands. `decline`/`denied` preserves the
+  turn and gives the worker a chance to choose a safer command.
+
+### 2. Keep the denylist tight and allow-biased
+
+The new approval policy blocks only recursive-force `rm`, `sudo`, `mkfs`, `dd`
+to `/dev`, `shred`, `find -delete`, and `git clean` with both `-f` and `-x`.
+The classifier intentionally scans command text without shell-quote parsing, so
+quoted examples such as `echo "rm -rf"` may be denied.
+
+- Rejected: full shell parsing. It adds complexity and still cannot safely model
+  every chained shell expression in an unattended safety guard.
+
+### 3. Surface denials in state
+
+`approval_denied` updates issue debug `last_error`, logs a warning, and appears
+in running state rows so `/api/v1/state` can show the operator what was blocked.
+
+- Rejected: emitting only backend telemetry. That would require log-diving and
+  would not satisfy the board/state attention requirement.
+
+## Verification
+
+- Focused gate: `.venv/bin/python -m pytest tests/test_codex_approvals.py tests/test_orchestrator_dispatch.py::test_on_codex_event_records_approval_denial_last_error -q`
+  -> `32 passed`.
+- Broader backend/dispatch gate: `.venv/bin/python -m pytest tests/test_codex_approvals.py tests/test_backends.py tests/test_backends_edges.py tests/test_orchestrator_dispatch.py -q`
+  -> `281 passed`.

@@ -40,6 +40,7 @@ from ..logging import get_logger
 from ..workspace import validate_agent_cwd
 from . import (
     EVENT_APPROVAL_AUTO_APPROVED,
+    EVENT_APPROVAL_DENIED,
     EVENT_MALFORMED,
     EVENT_NOTIFICATION,
     EVENT_OTHER_MESSAGE,
@@ -56,6 +57,7 @@ from . import (
     ToolDescriptor,
     TurnResult,
 )
+from .approval_policy import dangerous_command_reason
 
 
 log = get_logger()
@@ -580,13 +582,10 @@ class CodexAppServerBackend(BaseAgentBackend):
         self._next_id += 1
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = future
-        body = json.dumps(
-            {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params},
-            ensure_ascii=False,
-        )
         try:
-            self._process.stdin.write((body + "\n").encode("utf-8"))
-            await self._process.stdin.drain()
+            await self._write_json_rpc(
+                {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params}
+            )
         except (BrokenPipeError, ConnectionResetError) as exc:
             self._pending.pop(msg_id, None)
             raise PortExit("stdin closed", error=str(exc)) from exc
@@ -604,6 +603,15 @@ class CodexAppServerBackend(BaseAgentBackend):
                 method=method,
             )
         return response.get("result") or {}
+
+    async def _write_json_rpc(self, payload: dict[str, Any]) -> None:
+        if self._process is None or self._process.stdin is None:
+            raise ResponseError("subprocess not started")
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        # Existing request writes are line-atomic and unlocked. Server-request
+        # replies come from this single reader task, so keep the same discipline.
+        self._process.stdin.write((body + "\n").encode("utf-8"))
+        await self._process.stdin.drain()
 
     async def _stdout_reader(self) -> None:
         assert self._process is not None and self._process.stdout is not None
@@ -637,6 +645,9 @@ class CodexAppServerBackend(BaseAgentBackend):
                 fut = self._pending.pop(msg["id"])
                 if not fut.done():
                     fut.set_result(msg)
+                continue
+            if isinstance(msg, dict) and "id" in msg and msg.get("method"):
+                await self._handle_server_request(msg)
                 continue
             await self._handle_notification(msg if isinstance(msg, dict) else {})
         rc = self._process.returncode if self._process is not None else None
@@ -750,6 +761,93 @@ class CodexAppServerBackend(BaseAgentBackend):
             return
         await self._emit(_normalize_event_name(method), params)
 
+    async def _handle_server_request(self, msg: dict[str, Any]) -> None:
+        method = str(msg.get("method") or "")
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        msg_id = msg.get("id")
+        result: dict[str, Any] | None
+        error: dict[str, Any] | None = None
+
+        if method == "item/commandExecution/requestApproval":
+            command = _command_text(params.get("command"))
+            reason = dangerous_command_reason(command)
+            if reason is not None:
+                result = {"decision": "decline"}
+                await self._emit(
+                    EVENT_APPROVAL_DENIED,
+                    {"method": method, "command": command, "reason": reason},
+                )
+            else:
+                result = {"decision": "accept"}
+                await self._emit(
+                    EVENT_APPROVAL_AUTO_APPROVED,
+                    _approval_event_payload(method, params, command=command),
+                )
+        elif method == "item/fileChange/requestApproval":
+            result = {"decision": "accept"}
+            await self._emit(
+                EVENT_APPROVAL_AUTO_APPROVED,
+                _approval_event_payload(method, params),
+            )
+        elif method == "mcpServer/elicitation/request":
+            result = {"action": "accept", "content": {}}
+            await self._emit(
+                EVENT_APPROVAL_AUTO_APPROVED,
+                _approval_event_payload(method, params),
+            )
+        elif method == "item/tool/requestUserInput":
+            result = {"answers": _empty_user_input_answers(params)}
+            await self._emit(
+                EVENT_APPROVAL_AUTO_APPROVED,
+                _approval_event_payload(method, params),
+            )
+        elif method == "item/permissions/requestApproval":
+            permissions = params.get("permissions")
+            result = {
+                "permissions": permissions if isinstance(permissions, dict) else {},
+                "scope": "session",
+            }
+            await self._emit(
+                EVENT_APPROVAL_AUTO_APPROVED,
+                _approval_event_payload(method, params),
+            )
+        elif method == "execCommandApproval":
+            command = _command_text(params.get("command"))
+            reason = dangerous_command_reason(command)
+            if reason is not None:
+                result = {"decision": "denied"}
+                await self._emit(
+                    EVENT_APPROVAL_DENIED,
+                    {"method": method, "command": command, "reason": reason},
+                )
+            else:
+                result = {"decision": "approved"}
+                await self._emit(
+                    EVENT_APPROVAL_AUTO_APPROVED,
+                    _approval_event_payload(method, params, command=command),
+                )
+        elif method == "applyPatchApproval":
+            result = {"decision": "approved"}
+            await self._emit(
+                EVENT_APPROVAL_AUTO_APPROVED,
+                _approval_event_payload(method, params),
+            )
+        else:
+            result = None
+            error = {
+                "code": -32601,
+                "message": f"unsupported server request: {method}",
+            }
+
+        response: dict[str, Any] = {"jsonrpc": "2.0", "id": msg_id}
+        if error is not None:
+            response["error"] = error
+        else:
+            response["result"] = result or {}
+        await self._write_json_rpc(response)
+
     def _update_tokens_absolute(self, payload: dict[str, Any]) -> None:
         # Upstream §13.5 — prefer absolute totals, ignore delta-style payloads.
         if not isinstance(payload, dict):
@@ -862,6 +960,51 @@ def _normalize_event_name(method: str) -> str:
     if "notif" in lower:
         return EVENT_NOTIFICATION
     return EVENT_OTHER_MESSAGE
+
+
+def _command_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return " ".join(str(part) for part in value)
+    return ""
+
+
+def _empty_user_input_answers(params: dict[str, Any]) -> dict[str, dict[str, list[Any]]]:
+    questions = params.get("questions")
+    if not isinstance(questions, list):
+        return {}
+    answers: dict[str, dict[str, list[Any]]] = {}
+    for question in questions:
+        if not isinstance(question, dict):
+            continue
+        question_id = question.get("id")
+        if isinstance(question_id, str) and question_id:
+            answers[question_id] = {"answers": []}
+    return answers
+
+
+def _approval_event_payload(
+    method: str,
+    params: dict[str, Any],
+    *,
+    command: str | None = None,
+) -> dict[str, str]:
+    payload = {"method": method}
+    if command:
+        payload["command"] = command[:400]
+        return payload
+    for key in ("tool", "name", "serverName", "server", "path"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            payload["tool"] = value.strip()[:400]
+            return payload
+    for key in ("message", "reason", "prompt"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            payload["message"] = value.strip()[:400]
+            return payload
+    return payload
 
 
 def linear_graphql_tool() -> ToolDescriptor:
