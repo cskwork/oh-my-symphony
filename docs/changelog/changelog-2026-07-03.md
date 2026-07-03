@@ -450,3 +450,48 @@ in running state rows so `/api/v1/state` can show the operator what was blocked.
   -> `32 passed`.
 - Broader backend/dispatch gate: `.venv/bin/python -m pytest tests/test_codex_approvals.py tests/test_backends.py tests/test_backends_edges.py tests/test_orchestrator_dispatch.py -q`
   -> `281 passed`.
+
+# 2026-07-03 - E2E hardening item 2: Pause reasons
+
+## Goal
+
+Make empty-response and operator pauses explain themselves after worker exit,
+restart, and API refresh.
+
+## Decisions
+
+### 1. Persist pause reasons with issue flags
+
+`issue_flags` now has nullable `pause_reason`, migrated in place for existing
+SQLite registries. The reason is stored only while `paused` is true and is
+cleared with the paused flag.
+
+- Rejected: storing the reason only in `_IssueDebug.last_error`. Debug state is
+  process-local and does not survive restart.
+
+### 2. Keep manual and automatic pauses on one path
+
+Manual `pause_worker()` records `operator pause` unless the caller supplies a
+reason. Empty-response auto-pause records the threshold/count and the
+`resume_worker` recovery path in the same registry field.
+
+- Rejected: adding a separate empty-loop registry table. The pause flag is
+  already the scheduler gate, so splitting the reason would add another source
+  of truth.
+
+### 3. Show paused tickets as attention before retry/budget signals
+
+`issue_attention()` now reports `{kind: paused, label: Paused}` after
+stalled/lease checks and before budget, tracker, and retry branches. This keeps
+a non-running paused ticket from looking idle on the board.
+
+- Rejected: making retry timers carry the pause explanation. Paused tickets may
+  be non-running without a retry row, and retry attention is less direct than
+  the paused gate itself.
+
+## Verification
+
+- Focused gate: `.venv/bin/python -m pytest tests/test_run_registry.py::test_run_registry_persists_issue_flags_across_reopen tests/test_run_registry.py::test_run_registry_clears_issue_flags_independently tests/test_orchestrator_dispatch.py::test_persisted_issue_flags_block_dispatch_after_restart tests/test_orchestrator_dispatch.py::test_pause_resume_write_through_issue_flags tests/test_orchestrator_dispatch.py::test_pause_worker_persists_custom_reason tests/test_orchestrator_dispatch.py::test_issue_attention_reports_paused_non_running_ticket tests/test_orchestrator_dispatch.py::test_g2_empty_response_loop_pause_reason_persists_and_rehydrates -q`
+  -> `7 passed`.
+- Broader registry/dispatch/API gate: `.venv/bin/python -m pytest tests/test_run_registry.py tests/test_orchestrator_dispatch.py tests/test_webapi.py -q`
+  -> `139 passed`.

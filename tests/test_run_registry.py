@@ -235,6 +235,7 @@ def test_run_registry_persists_issue_flags_across_reopen(tmp_path: Path) -> None
         retry_attempt=3,
         budget_exhausted=True,
         paused=True,
+        pause_reason="operator pause",
         now=now,
     )
     registry.close()
@@ -247,13 +248,18 @@ def test_run_registry_persists_issue_flags_across_reopen(tmp_path: Path) -> None
     assert flags.retry_attempt == 3
     assert flags.budget_exhausted is True
     assert flags.paused is True
+    assert flags.pause_reason == "operator pause"
     assert flags.updated_at == now
 
 
 def test_run_registry_clears_issue_flags_independently(tmp_path: Path) -> None:
     registry = RunRegistry(tmp_path / "state.db")
     registry.set_issue_flags(
-        "id-MT-1", retry_attempt=2, budget_exhausted=True, paused=True
+        "id-MT-1",
+        retry_attempt=2,
+        budget_exhausted=True,
+        paused=True,
+        pause_reason="needs inspection",
     )
 
     registry.clear_issue_flags("id-MT-1", retry_attempt=True, paused=True)
@@ -263,6 +269,7 @@ def test_run_registry_clears_issue_flags_independently(tmp_path: Path) -> None:
     assert flags.retry_attempt is None
     assert flags.budget_exhausted is True
     assert flags.paused is False
+    assert flags.pause_reason is None
 
     registry.clear_issue_flags("id-MT-1", budget_exhausted=True)
     assert registry.get_issue_flags("id-MT-1") is None

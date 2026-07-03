@@ -46,6 +46,7 @@ class IssueFlags:
     retry_attempt: int | None
     budget_exhausted: bool
     paused: bool
+    pause_reason: str | None
     updated_at: datetime
 
 
@@ -348,6 +349,7 @@ class RunRegistry:
         retry_attempt: int | None | object = _UNSET,
         budget_exhausted: bool | object = _UNSET,
         paused: bool | object = _UNSET,
+        pause_reason: str | None | object = _UNSET,
         now: datetime | None = None,
     ) -> None:
         existing = self.get_issue_flags(issue_id)
@@ -358,17 +360,23 @@ class RunRegistry:
             existing.budget_exhausted if existing is not None else False
         )
         next_paused = existing.paused if existing is not None else False
+        next_pause_reason = existing.pause_reason if existing is not None else None
         if retry_attempt is not _UNSET:
             next_retry_attempt = retry_attempt  # type: ignore[assignment]
         if budget_exhausted is not _UNSET:
             next_budget_exhausted = bool(budget_exhausted)
         if paused is not _UNSET:
             next_paused = bool(paused)
+        if pause_reason is not _UNSET:
+            next_pause_reason = pause_reason  # type: ignore[assignment]
+        elif not next_paused:
+            next_pause_reason = None
         self._write_issue_flags(
             issue_id,
             retry_attempt=next_retry_attempt,
             budget_exhausted=next_budget_exhausted,
             paused=next_paused,
+            pause_reason=next_pause_reason,
             now=now,
         )
 
@@ -389,6 +397,7 @@ class RunRegistry:
             retry_attempt=None if retry_attempt else existing.retry_attempt,
             budget_exhausted=False if budget_exhausted else existing.budget_exhausted,
             paused=False if paused else existing.paused,
+            pause_reason=None if paused else existing.pause_reason,
             now=now,
         )
 
@@ -450,10 +459,20 @@ class RunRegistry:
                 retry_attempt INTEGER,
                 budget_exhausted INTEGER NOT NULL DEFAULT 0,
                 paused INTEGER NOT NULL DEFAULT 0,
+                pause_reason TEXT,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        issue_flag_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(issue_flags)").fetchall()
+        }
+        if "pause_reason" not in issue_flag_columns:
+            try:
+                conn.execute("ALTER TABLE issue_flags ADD COLUMN pause_reason TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     def _write_issue_flags(
         self,
@@ -462,9 +481,12 @@ class RunRegistry:
         retry_attempt: int | None,
         budget_exhausted: bool,
         paused: bool,
+        pause_reason: str | None,
         now: datetime | None,
     ) -> None:
         conn = self._connect()
+        if not paused:
+            pause_reason = None
         if retry_attempt is None and not budget_exhausted and not paused:
             conn.execute("DELETE FROM issue_flags WHERE issue_id = ?", (issue_id,))
             return
@@ -472,12 +494,14 @@ class RunRegistry:
         conn.execute(
             """
             INSERT INTO issue_flags (
-                issue_id, retry_attempt, budget_exhausted, paused, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
+                issue_id, retry_attempt, budget_exhausted, paused,
+                pause_reason, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(issue_id) DO UPDATE SET
                 retry_attempt = excluded.retry_attempt,
                 budget_exhausted = excluded.budget_exhausted,
                 paused = excluded.paused,
+                pause_reason = excluded.pause_reason,
                 updated_at = excluded.updated_at
             """,
             (
@@ -485,6 +509,7 @@ class RunRegistry:
                 retry_attempt,
                 1 if budget_exhausted else 0,
                 1 if paused else 0,
+                pause_reason,
                 updated_at,
             ),
         )
@@ -567,5 +592,6 @@ def _issue_flags(row: sqlite3.Row) -> IssueFlags:
         ),
         budget_exhausted=bool(row["budget_exhausted"]),
         paused=bool(row["paused"]),
+        pause_reason=row["pause_reason"],
         updated_at=_parse(row["updated_at"]) or datetime.now(timezone.utc),
     )

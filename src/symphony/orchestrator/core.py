@@ -208,6 +208,7 @@ class Orchestrator:
         #     ticket still in `_paused_issue_ids` is born-paused via a
         #     pre-cleared event in `_dispatch`.
         self._paused_issue_ids: set[str] = set()
+        self._pause_reasons: dict[str, str] = {}
         self._pause_events: dict[str, asyncio.Event] = {}
         # Rolling EMA of completion `total_tokens` per state. Keys are the
         # lowercased state name (normalize_state). Persisted to
@@ -325,6 +326,8 @@ class Orchestrator:
                 self._turn_budget_exhausted.add(issue_id)
             if flag.paused:
                 self._paused_issue_ids.add(issue_id)
+                if flag.pause_reason:
+                    self._pause_reasons[issue_id] = str(flag.pause_reason)
             if flag.retry_attempt is not None:
                 self._persisted_retry_attempts[issue_id] = int(flag.retry_attempt)
                 debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
@@ -600,6 +603,7 @@ class Orchestrator:
         self._running.clear()
         self._retry.clear()
         self._paused_issue_ids.clear()
+        self._pause_reasons.clear()
         self._pause_events.clear()
         self._turn_budget_exhausted.clear()
         self._lease_blocked.clear()
@@ -815,6 +819,16 @@ class Orchestrator:
                 self._lease_blocked[issue.id],
                 "error",
             )
+        if issue.id in self._paused_issue_ids:
+            return _attention_signal(
+                "paused",
+                "Paused",
+                self._pause_reasons.get(
+                    issue.id,
+                    "paused; resume via resume_worker after inspecting the ticket",
+                ),
+                "warning",
+            )
         if issue.id in self._turn_budget_exhausted:
             debug = self._issue_debug.get(issue.id, _IssueDebug())
             return _attention_signal(
@@ -918,7 +932,7 @@ class Orchestrator:
     def is_paused(self, issue_id: str) -> bool:
         return issue_id in self._paused_issue_ids
 
-    def pause_worker(self, issue_id: str) -> bool:
+    def pause_worker(self, issue_id: str, reason: str | None = None) -> bool:
         """Queue a pause that takes effect at the next turn boundary.
 
         Returns True if the issue is currently running and a pause was
@@ -936,8 +950,14 @@ class Orchestrator:
             return False
         if issue_id in self._paused_issue_ids:
             return False
+        pause_reason = reason or "operator pause"
         self._paused_issue_ids.add(issue_id)
-        self._set_issue_flags(issue_id, paused=True)
+        self._pause_reasons[issue_id] = pause_reason
+        self._set_issue_flags(
+            issue_id,
+            paused=True,
+            pause_reason=pause_reason,
+        )
         event = self._pause_events.get(issue_id)
         if event is None:
             event = asyncio.Event()
@@ -964,6 +984,7 @@ class Orchestrator:
         if issue_id not in self._paused_issue_ids:
             return False
         self._paused_issue_ids.discard(issue_id)
+        self._pause_reasons.pop(issue_id, None)
         self._clear_issue_flags(issue_id, paused=True)
         event = self._pause_events.get(issue_id)
         if event is not None and not event.is_set():
@@ -3080,8 +3101,19 @@ class Orchestrator:
                 # budget_exhausted_state lets the loop re-dispatch immediately
                 # on the next tick (verified live on olive-clone 2026-05-20).
                 if issue_id not in self._paused_issue_ids:
+                    pause_reason = (
+                        f"empty_response_loop: {entry.consecutive_empty_turns} "
+                        f"consecutive empty turns "
+                        f"(threshold {EMPTY_TURN_LOOP_THRESHOLD}); resume via "
+                        "resume_worker after inspecting the ticket"
+                    )
                     self._paused_issue_ids.add(issue_id)
-                    self._set_issue_flags(issue_id, paused=True)
+                    self._pause_reasons[issue_id] = pause_reason
+                    self._set_issue_flags(
+                        issue_id,
+                        paused=True,
+                        pause_reason=pause_reason,
+                    )
                     pause_event = self._pause_events.get(issue_id)
                     if pause_event is None:
                         pause_event = asyncio.Event()
@@ -3751,6 +3783,7 @@ class Orchestrator:
         if cfg is None:
             self._claimed.discard(issue_id)
             self._paused_issue_ids.discard(issue_id)
+            self._pause_reasons.pop(issue_id, None)
             self._persisted_retry_attempts.pop(issue_id, None)
             self._clear_issue_flags(issue_id, retry_attempt=True, paused=True)
             return
@@ -3774,6 +3807,7 @@ class Orchestrator:
             # filtered out by workflow change); drop any pause flag so
             # we don't leak it across the resurrection of the same id.
             self._paused_issue_ids.discard(issue_id)
+            self._pause_reasons.pop(issue_id, None)
             self._persisted_retry_attempts.pop(issue_id, None)
             self._clear_issue_flags(issue_id, retry_attempt=True, paused=True)
             log.info("retry_release", issue_id=issue_id, identifier=retry.identifier)

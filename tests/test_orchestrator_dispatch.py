@@ -518,7 +518,7 @@ def test_persisted_issue_flags_block_dispatch_after_restart(tmp_path):
     paused = _issue("MT-PAUSED", state="Todo")
     exhausted = _issue("MT-BUDGET", state="Todo")
     registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
-    registry.set_issue_flags(paused.id, paused=True)
+    registry.set_issue_flags(paused.id, paused=True, pause_reason="needs review")
     registry.set_issue_flags(exhausted.id, budget_exhausted=True)
     registry.close()
 
@@ -527,6 +527,7 @@ def test_persisted_issue_flags_block_dispatch_after_restart(tmp_path):
 
     assert restarted.is_paused(paused.id)
     assert paused.id in restarted._paused_issue_ids
+    assert restarted._pause_reasons[paused.id] == "needs review"
     assert exhausted.id in restarted._turn_budget_exhausted
     assert restarted._should_dispatch(paused, cfg) is False
     assert restarted._should_dispatch(exhausted, cfg) is False
@@ -600,9 +601,31 @@ def test_pause_resume_write_through_issue_flags(tmp_path):
         flags = registry.get_issue_flags(issue.id)
         assert flags is not None
         assert flags.paused is True
+        assert flags.pause_reason == "operator pause"
+        assert orch._pause_reasons[issue.id] == "operator pause"
 
         assert orch.resume_worker(issue.id) is True
         assert registry.get_issue_flags(issue.id) is None
+        assert issue.id not in orch._pause_reasons
+
+    asyncio.run(_run())
+
+
+def test_pause_worker_persists_custom_reason(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-PAUSE-REASON", state="Todo")
+
+    async def _run() -> None:
+        orch._run_registry = registry
+        _install_running_entry(orch, issue)
+
+        assert orch.pause_worker(issue.id, reason="checking filesystem") is True
+        flags = registry.get_issue_flags(issue.id)
+        assert flags is not None
+        assert flags.paused is True
+        assert flags.pause_reason == "checking filesystem"
+        assert orch._pause_reasons[issue.id] == "checking filesystem"
 
     asyncio.run(_run())
 
@@ -2825,6 +2848,22 @@ def test_issue_attention_reports_budget_exhaustion():
     assert attention["message"] == "max_total_turns reached (1/1)"
 
 
+def test_issue_attention_reports_paused_non_running_ticket():
+    orch = _orch()
+    issue = _issue("MT-PAUSED-ATTN", state="In Progress")
+
+    orch._paused_issue_ids.add(issue.id)
+    orch._pause_reasons[issue.id] = "needs operator inspection"
+
+    attention = orch.issue_attention(issue)
+
+    assert attention is not None
+    assert attention["kind"] == "paused"
+    assert attention["label"] == "Paused"
+    assert attention["severity"] == "warning"
+    assert attention["message"] == "needs operator inspection"
+
+
 def test_issue_attention_reports_retry_scheduled():
     orch = _orch()
     issue = _issue("MT-RETRY", state="In Progress")
@@ -3717,6 +3756,77 @@ def test_g2_auto_pause_blocks_redispatch_through_eligible(monkeypatch):
         "auto-paused ticket must not enter dispatch even when it's the "
         "only candidate and a slot is free"
     )
+
+
+def test_g2_empty_response_loop_pause_reason_persists_and_rehydrates(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    cfg = _make_config(
+        max_concurrent=1,
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+    )
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-EMPTY-REASON", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+        monkeypatch.setattr(
+            orch, "_tracker_call_update_state", lambda *_a, **_k: None
+        )
+        monkeypatch.setattr(
+            orch, "_tracker_call_append_note", lambda *_a, **_k: None
+        )
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=tmp_path / "ws" / issue.identifier,
+            )
+            orch._running[issue.id] = entry
+
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100},
+            }
+            for _ in range(3):
+                await orch._on_codex_event(issue.id, empty_event)
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+    flags = registry.get_issue_flags(issue.id)
+    assert flags is not None
+    assert flags.paused is True
+    assert flags.pause_reason == (
+        "empty_response_loop: 3 consecutive empty turns (threshold 3); "
+        "resume via resume_worker after inspecting the ticket"
+    )
+
+    restarted = _orch()
+    restarted._ensure_run_registry(cfg)
+
+    assert issue.id in restarted._paused_issue_ids
+    assert restarted._pause_reasons[issue.id] == flags.pause_reason
 
 
 def test_g2_resume_worker_clears_auto_pause(monkeypatch):
