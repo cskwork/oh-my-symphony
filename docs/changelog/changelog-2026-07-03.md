@@ -283,3 +283,57 @@ live Claude/Codex account.
   board-viewer warning; live smoke against `http://127.0.0.1:54017` passed
   all nine checks; `/api/v1/health` returned `status: ok` and
   `/api/v1/runs?limit=5` returned an empty run list.
+
+# 2026-07-03 - OpenCode long-turn stall fix
+
+## Goal
+
+Stop healthy OpenCode turns from being cancelled as stalled when the
+per-turn CLI subprocess is still alive but has not emitted final JSON yet.
+
+## Decisions
+
+### 1. Emit backend liveness as a normalized heartbeat event
+
+`OpenCodeBackend` now emits `other_message` payloads with
+`type: opencode_heartbeat` while its turn subprocess is alive. That gives the
+orchestrator's existing event-based stall detector a real progress signal
+without changing shared scheduler semantics.
+
+- Rejected: probing subprocess liveness from the orchestrator. That would put
+  backend-specific process knowledge in the shared stall path and skip the
+  existing run-lease heartbeat refresh done by progress events.
+
+### 2. Keep progress filtering conservative
+
+OpenCode marks only `opencode_heartbeat` as progress. Assistant text, metadata,
+and future catch-all frames still do not reset the stall timer unless the
+backend explicitly classifies them.
+
+- Rejected: treating every `other_message` payload as progress. Prior stall
+  fixes showed that echo/meta frames can mask real model silence.
+
+### 3. Leave cancel exit classification unchanged
+
+The fix does not reclassify `CancelledError` worker exits. Existing
+`reason=normal` handling still protects token-budget persistence and the
+auto-commit snapshot path for cancelled turns.
+
+- Rejected: adding a separate cancelled outcome for stall kills. That would
+  risk losing budget-exhausted state and mid-turn work snapshots.
+
+## Verification
+
+- Backend regression tests: `.venv/bin/python -m pytest tests/test_backends.py -x -q`
+  -> `86 passed`.
+- Full suite: `.venv/bin/python -m pytest -q` -> `967 passed, 2 skipped,
+  2 warnings`.
+- Long-turn run-path smoke: temp file-board workflow with `agent.kind:
+  opencode`, `stall_timeout_ms=35000`, and a 65 s subprocess. `/api/v1/state`
+  at 57 s showed `last_event=other_message`; final log had one dispatch,
+  normal turn completion, and no `stalled_session`.
+- Real OpenCode CLI E2E: temp file-board workflow using
+  `/Users/danny/.opencode/bin/opencode run --format json --auto`; one dispatch
+  completed normally and reported an OpenCode session id.
+- Real Pi CLI E2E: temp file-board workflow using `pi --mode json -p ""`; one
+  dispatch completed normally with token totals reported.

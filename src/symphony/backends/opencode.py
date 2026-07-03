@@ -22,6 +22,7 @@ from ..errors import PortExit, ResponseError, TurnFailed, TurnTimeout
 from ..logging import get_logger
 from ..workspace import validate_agent_cwd
 from . import (
+    EVENT_OTHER_MESSAGE,
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
@@ -34,6 +35,7 @@ from . import (
 log = get_logger()
 
 MAX_LINE_BYTES = 10 * 1024 * 1024
+HEARTBEAT_INTERVAL_S = 30.0
 TOKEN_KEYS = {
     "cached",
     "cache_input_tokens",
@@ -65,8 +67,7 @@ class OpenCodeBackend(BaseAgentBackend):
     """One subprocess per turn; parses OpenCode raw JSON events."""
 
     def is_progress_event(self, event: dict[str, Any]) -> bool:
-        del event
-        return False
+        return event.get("type") == "opencode_heartbeat"
 
     def __init__(self, init: BackendInit) -> None:
         validate_agent_cwd(init.cwd, init.workspace_root)
@@ -150,6 +151,7 @@ class OpenCodeBackend(BaseAgentBackend):
             await self._reap(proc)
             raise ResponseError("backend closed during spawn")
         self._active_proc = proc
+        heartbeat_task = asyncio.create_task(self._emit_heartbeats(proc))
         try:
             timeout_s = self._opencode.turn_timeout_ms / 1000.0
             assert proc.stdout is not None and proc.stderr is not None
@@ -205,7 +207,20 @@ class OpenCodeBackend(BaseAgentBackend):
                 last_message=response[:400],
             )
         finally:
+            heartbeat_task.cancel()
             self._active_proc = None
+
+    async def _emit_heartbeats(self, proc: asyncio.subprocess.Process) -> None:
+        # OpenCode emits no JSON until the per-turn subprocess exits; liveness
+        # keeps the shared stall detector from cancelling healthy long turns.
+        while proc.returncode is None:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_S)
+            if proc.returncode is not None:
+                return
+            await self._emit(
+                EVENT_OTHER_MESSAGE,
+                {"type": "opencode_heartbeat", "pid": proc.pid},
+            )
 
     def _command_for_turn(self, *, prompt: str, is_continuation: bool) -> str:
         cmd = self._opencode.command

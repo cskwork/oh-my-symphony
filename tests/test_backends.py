@@ -692,6 +692,53 @@ async def test_opencode_plain_stdout_is_valid_result_until_json_schema_stabilize
 
 
 @pytest.mark.asyncio
+async def test_opencode_emits_heartbeats_while_turn_subprocess_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict] = []
+    proc = _FakeSubprocess(stdout_blob=b"plain answer", returncode=None)
+
+    async def record(event: dict) -> None:
+        events.append(event)
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN001
+        del args, kwargs
+        return proc
+
+    async def fake_safe_proc_wait(wait_proc, *, timeout=None):  # noqa: ANN001
+        del timeout
+        assert wait_proc is proc
+        await asyncio.sleep(0.15)
+        proc.returncode = 0
+        return 0
+
+    monkeypatch.setattr(
+        opencode_module.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(opencode_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(opencode_module, "HEARTBEAT_INTERVAL_S", 0.03)
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=record)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert result.status == EVENT_TURN_COMPLETED
+    assert any(
+        event["event"] == EVENT_OTHER_MESSAGE
+        and event["payload"]["type"] == "opencode_heartbeat"
+        and event["agent_pid"] == 98765
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_gemini_session_id_is_minted_locally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1913,6 +1960,20 @@ def test_gemini_backend_is_progress_event_is_always_false(tmp_path: Path) -> Non
     )
     assert backend.is_progress_event({"type": "assistant"}) is False
     assert backend.is_progress_event({"type": "message_end"}) is False
+    assert backend.is_progress_event({}) is False
+
+
+def test_opencode_backend_is_progress_event_accepts_only_heartbeat(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert backend.is_progress_event({"type": "opencode_heartbeat"}) is True
+    assert backend.is_progress_event({"type": "assistant"}) is False
     assert backend.is_progress_event({}) is False
 
 
