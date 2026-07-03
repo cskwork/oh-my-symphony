@@ -11,8 +11,10 @@ import sys
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from playwright.async_api import Page, async_playwright
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 
 WAIT_MS = 5_000
@@ -205,6 +207,15 @@ async def _assert_booted(page: Page, errors: list[str]) -> None:
 
 
 async def check_app(app_dir: Path) -> None:
+    try:
+        from playwright.async_api import async_playwright
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Playwright is required for the browser acceptance gate; install "
+            "the browser extra with `pip install -e '.[browser]'` or "
+            "`pip install -e '.[dev,browser]'`."
+        ) from exc
+
     index = app_dir / "index.html"
     if not index.exists():
         raise AssertionError(f"{index} missing")

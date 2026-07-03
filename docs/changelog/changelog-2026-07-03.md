@@ -1360,3 +1360,49 @@ Rejected alternatives:
   environment by auth configuration (`selectedAuthType` / `GEMINI_API_KEY`),
   but this AGY/Kiro compatibility change now has live workflow proof for both
   newly added backends.
+
+# 2026-07-03 - CI optional Playwright import fix
+
+## Goal
+
+Restore the GitHub `Tests` workflow after commit `fe0b73b` failed in CI while
+the local full suite passed.
+
+## Decision
+
+Make `scripts/static_todo_browser_acceptance.py` importable without Playwright
+installed, and require Playwright only when the browser acceptance gate actually
+runs.
+
+Evidence from GitHub Actions:
+
+- Run `28665556820` on `main` failed in `python -m pytest -q`.
+- The only failure was
+  `tests/test_static_todo_browser_acceptance.py::test_launch_chromium_uses_isolated_writable_home`.
+- The failure happened while loading the script module:
+  `ModuleNotFoundError: No module named 'playwright'`.
+- CI installs `.[dev]`, while Playwright is intentionally in the `browser`
+  optional extra. The local suite passed because the operator environment has
+  Playwright installed.
+
+Rejected alternatives:
+
+- Rejected: add Playwright to the default `dev` extra. That would make every
+  unit-test install pull a browser automation dependency even though this test
+  only validates `_launch_chromium` with fakes.
+- Rejected: skip the test when Playwright is missing. The behavior under test
+  is isolated profile construction and does not need a real Playwright import.
+
+## Verification
+
+- `.venv/bin/python -S - <<'PY' ... exec_module(...) ... PY`
+  -> `import_without_site_packages=ok`.
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_static_todo_browser_acceptance.py -q`
+  -> `1 passed`.
+- `PYTHONPATH=src .venv/bin/python -m py_compile scripts/static_todo_browser_acceptance.py`
+  -> passed.
+- `git diff --check`
+  -> passed.
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1054 passed, 2 skipped, 2 warnings`.
+- Pending after push: GitHub Actions rerun on `dev` and `main`.
