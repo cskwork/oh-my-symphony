@@ -186,6 +186,16 @@ class _FakeStream:
         return blob
 
 
+class _BlockingStream:
+    async def readline(self) -> bytes:
+        await asyncio.Future()
+        return b""
+
+    async def read(self) -> bytes:
+        await asyncio.Future()
+        return b""
+
+
 class _FakeSubprocess:
     pid = 98765
 
@@ -230,6 +240,14 @@ def _install_subprocess_double(
     monkeypatch.setattr(module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
     return commands
+
+
+async def _wait_until_backend_has_pid(backend: object) -> None:
+    for _ in range(100):
+        if getattr(backend, "pid") is not None:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("backend did not expose a subprocess pid")
 
 
 def test_factory_returns_codex_backend(tmp_path: Path) -> None:
@@ -476,6 +494,88 @@ def test_claude_success_result_with_string_false_is_not_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_success_subtype_with_is_error_true_fails_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict] = []
+    _install_subprocess_double(
+        monkeypatch,
+        claude_module,
+        [
+            _FakeSubprocess(
+                stdout_lines=[
+                    b'{"type":"system","subtype":"init","session_id":"claude-rate"}\n',
+                    b'{"type":"assistant","error":"rate_limit","message":{"content":['
+                    b'{"type":"text","text":"session limit"}]}}\n',
+                    b'{"type":"result","subtype":"success","is_error":true,'
+                    b'"result":"session limit","session_id":"claude-rate","usage":{}}\n',
+                ]
+            )
+        ],
+    )
+
+    async def _capture_event(event: dict) -> None:
+        events.append(event)
+
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_capture_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    with pytest.raises(TurnFailed, match="success"):
+        await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert [event["event"] for event in events][-1] == EVENT_TURN_FAILED
+    assert events[-1]["payload"]["is_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_claude_run_turn_cancellation_terminates_active_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    proc = _FakeSubprocess(returncode=None)
+    proc.stdout = _BlockingStream()
+    proc.stderr = _BlockingStream()
+    terminated: list[_FakeSubprocess] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN001
+        del args, kwargs
+        return proc
+
+    async def fake_terminate_process_tree(wait_proc):  # noqa: ANN001
+        terminated.append(wait_proc)
+        wait_proc.returncode = -15
+        return -15
+
+    monkeypatch.setattr(
+        claude_module.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        claude_module, "terminate_process_tree", fake_terminate_process_tree
+    )
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    task = asyncio.create_task(backend.run_turn(prompt="first", is_continuation=False))
+    await _wait_until_backend_has_pid(backend)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert terminated == [proc]
+
+
+@pytest.mark.asyncio
 async def test_claude_same_state_continuation_adds_resume_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -544,6 +644,55 @@ async def test_claude_fresh_backend_first_turn_does_not_resume(
 
 
 @pytest.mark.asyncio
+async def test_gemini_run_turn_cancellation_terminates_active_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("gemini", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    proc = _FakeSubprocess(returncode=None)
+    proc.stdout = _BlockingStream()
+    proc.stderr = _BlockingStream()
+    terminated: list[_FakeSubprocess] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN001
+        del args, kwargs
+        return proc
+
+    async def fake_safe_proc_wait(wait_proc, *, timeout=None):  # noqa: ANN001
+        del wait_proc, timeout
+        await asyncio.Future()
+        return 0
+
+    async def fake_terminate_process_tree(wait_proc):  # noqa: ANN001
+        terminated.append(wait_proc)
+        wait_proc.returncode = -15
+        return -15
+
+    monkeypatch.setattr(
+        gemini_module.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(gemini_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(
+        gemini_module, "terminate_process_tree", fake_terminate_process_tree
+    )
+    backend = GeminiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    task = asyncio.create_task(backend.run_turn(prompt="first", is_continuation=False))
+    await _wait_until_backend_has_pid(backend)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert terminated == [proc]
+
+
+@pytest.mark.asyncio
 async def test_pi_same_state_continuation_adds_session_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -607,6 +756,47 @@ async def test_pi_fresh_backend_first_turn_does_not_reuse_session(
     await backend.run_turn(prompt="phase prompt", is_continuation=False)
 
     assert "--session" not in commands[0]
+
+
+@pytest.mark.asyncio
+async def test_pi_run_turn_cancellation_terminates_active_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    proc = _FakeSubprocess(returncode=None)
+    proc.stdout = _BlockingStream()
+    proc.stderr = _BlockingStream()
+    terminated: list[_FakeSubprocess] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN001
+        del args, kwargs
+        return proc
+
+    async def fake_terminate_process_tree(wait_proc):  # noqa: ANN001
+        terminated.append(wait_proc)
+        wait_proc.returncode = -15
+        return -15
+
+    monkeypatch.setattr(
+        pi_module.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(pi_module, "terminate_process_tree", fake_terminate_process_tree)
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    task = asyncio.create_task(backend.run_turn(prompt="first", is_continuation=False))
+    await _wait_until_backend_has_pid(backend)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert terminated == [proc]
 
 
 @pytest.mark.asyncio
@@ -736,6 +926,53 @@ async def test_opencode_emits_heartbeats_while_turn_subprocess_runs(
         and event["agent_pid"] == 98765
         for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_opencode_run_turn_cancellation_terminates_active_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    proc = _FakeSubprocess(returncode=None)
+    proc.stdout = _BlockingStream()
+    proc.stderr = _BlockingStream()
+    terminated: list[_FakeSubprocess] = []
+
+    async def fake_create_subprocess_exec(*args, **kwargs):  # noqa: ANN001
+        del args, kwargs
+        return proc
+
+    async def fake_safe_proc_wait(wait_proc, *, timeout=None):  # noqa: ANN001
+        del wait_proc, timeout
+        await asyncio.Future()
+        return 0
+
+    async def fake_terminate_process_tree(wait_proc):  # noqa: ANN001
+        terminated.append(wait_proc)
+        wait_proc.returncode = -15
+        return -15
+
+    monkeypatch.setattr(
+        opencode_module.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(opencode_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(opencode_module, "terminate_process_tree", fake_terminate_process_tree)
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    task = asyncio.create_task(backend.run_turn(prompt="first", is_continuation=False))
+    await _wait_until_backend_has_pid(backend)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert terminated == [proc]
 
 
 @pytest.mark.asyncio

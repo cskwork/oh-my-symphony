@@ -434,7 +434,9 @@ def terminate_process(pid: int | None, *, force: bool = False) -> bool:
     return True
 
 
-def _active_backend_pids(workflow_path: Path) -> list[int]:
+def _active_backend_pids(
+    workflow_path: Path, *, owner_pid: int | None = None
+) -> list[int]:
     registry_path = registry_path_for_workflow(workflow_path)
     if not registry_path.exists():
         return []
@@ -442,8 +444,15 @@ def _active_backend_pids(workflow_path: Path) -> list[int]:
     try:
         pids: list[int] = []
         seen: set[int] = set()
-        for lease in registry.active_leases():
-            pid = lease.backend_agent_pid
+        records = list(registry.active_leases())
+        if owner_pid is not None:
+            records.extend(
+                row
+                for row in registry.recent_runs(limit=200)
+                if row.owner_pid == owner_pid
+            )
+        for record in records:
+            pid = record.backend_agent_pid
             if pid is None or pid in seen:
                 continue
             seen.add(pid)
@@ -459,9 +468,99 @@ def _active_backend_pids(workflow_path: Path) -> list[int]:
         registry.close()
 
 
+def _owned_workspace_paths(workflow_path: Path, *, owner_pid: int | None) -> list[Path]:
+    if owner_pid is None:
+        return []
+    registry_path = registry_path_for_workflow(workflow_path)
+    if not registry_path.exists():
+        return []
+    registry = RunRegistry(registry_path)
+    try:
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for row in registry.recent_runs(limit=200):
+            if row.owner_pid != owner_pid:
+                continue
+            try:
+                resolved = row.workspace_path.resolve(strict=False)
+            except OSError:
+                resolved = row.workspace_path
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(resolved)
+        return paths
+    except Exception as exc:
+        print(
+            f"warning: could not inspect workflow workspace paths: {exc}",
+            file=sys.stderr,
+        )
+        return []
+    finally:
+        registry.close()
+
+
+def _workspace_bound_process_pids(workspace_paths: list[Path]) -> list[int]:
+    if _IS_WIN32 or not workspace_paths:
+        return []
+    needles = [str(path) for path in workspace_paths if str(path)]
+    if not needles:
+        return []
+    try:
+        completed = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        print(
+            f"warning: could not inspect workspace-bound processes: {exc}",
+            file=sys.stderr,
+        )
+        return []
+    pids: list[int] = []
+    current_pid = os.getpid()
+    for line in completed.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pid_text, _, command = stripped.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        if any(needle in command for needle in needles):
+            pids.append(pid)
+    return pids
+
+
 def _terminate_active_backend_processes(record: ServiceRecord) -> bool:
     all_stopped = True
-    for pid in _active_backend_pids(record.workflow_path):
+    pids: list[int] = []
+    seen: set[int] = set()
+    for pid in _active_backend_pids(
+        record.workflow_path, owner_pid=record.orchestrator_pid
+    ):
+        if pid in seen:
+            continue
+        seen.add(pid)
+        pids.append(pid)
+    for pid in _workspace_bound_process_pids(
+        _owned_workspace_paths(
+            record.workflow_path,
+            owner_pid=record.orchestrator_pid,
+        )
+    ):
+        if pid in seen:
+            continue
+        seen.add(pid)
+        pids.append(pid)
+    for pid in pids:
         if not is_process_running(pid):
             continue
         terminate_process(pid, force=True)

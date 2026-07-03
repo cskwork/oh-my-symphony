@@ -266,6 +266,9 @@ class PiBackend(BaseAgentBackend):
                 turn_id=self._session_id,
                 last_message=self._last_message,
             )
+        except asyncio.CancelledError:
+            await self._reap(proc)
+            raise
         finally:
             self._active_proc = None
 

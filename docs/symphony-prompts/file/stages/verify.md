@@ -10,6 +10,7 @@ Verify has three jobs: review, QA, and merge preflight/merge.
 4. Run the real acceptance checks. Save durable proof under `docs/{{ issue.identifier }}/qa/`.
    - For trivial non-runtime changes, the QA half may be short: run the relevant static/content check and explain why no runtime path changed.
    - Browser UI work must drive Playwright/headless Chromium against `file://` or a tiny static server for core flows (add/toggle/edit-cancel via Escape/delete/filter/reload persistence as applicable). DOM shims are smoke only, never final Verify authority.
+   - Test the exact declared launch path. If the app claims direct `file://` support, fail on module-script/CORS boot errors instead of switching to HTTP.
    - If browser deps are unavailable, append `## Environment Block` naming what is missing, set state to `Blocked`, and stop.
    - For bugs, close the reproduction loop by saving `docs/{{ issue.identifier }}/qa/repro-after.log`.
 5. Append `## QA Evidence` with commands, exit codes, and top evidence paths.

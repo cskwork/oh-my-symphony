@@ -242,6 +242,126 @@ def test_force_stop_terminates_active_backend_processes_from_registry(
     assert load_record(workflow) is None
 
 
+def test_force_stop_terminates_owned_backend_process_after_run_completed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234))
+    registry = RunRegistry(
+        registry_path_for_workflow(workflow),
+        lease_ttl=timedelta(minutes=5),
+        owner_pid=1234,
+    )
+    issue = _issue()
+    now = datetime.now(timezone.utc)
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "workspaces" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="opencode",
+        now=now,
+    )
+    assert run_id
+    assert registry.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=1),
+        backend_agent_pid=5678,
+    )
+    assert registry.complete_run(
+        issue_id=issue.id,
+        run_id=run_id,
+        status="normal",
+        now=now + timedelta(seconds=2),
+    )
+    registry.close()
+    live_pids = {1234, 1235, 5678}
+    stopped: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(
+        service_module,
+        "is_process_running",
+        lambda pid: pid in live_pids,
+    )
+
+    def _stop_pid(pid, *, force=False):  # noqa: ANN001, ANN002
+        stopped.append((pid, force))
+        live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _stop_pid)
+
+    rc = service_main(["stop", "--force", "--timeout", "0", str(workflow)])
+
+    assert rc == 0
+    assert stopped == [(1235, False), (1234, False), (5678, True)]
+    assert 5678 not in live_pids
+    assert load_record(workflow) is None
+
+
+def test_force_stop_terminates_processes_referencing_owned_workspace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234))
+    registry = RunRegistry(
+        registry_path_for_workflow(workflow),
+        lease_ttl=timedelta(minutes=5),
+        owner_pid=1234,
+    )
+    issue = _issue()
+    workspace = tmp_path / "workspaces" / issue.identifier
+    now = datetime.now(timezone.utc)
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=workspace,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+        now=now,
+    )
+    assert run_id
+    assert registry.complete_run(
+        issue_id=issue.id,
+        run_id=run_id,
+        status="normal",
+        now=now + timedelta(seconds=1),
+    )
+    registry.close()
+    live_pids = {1234, 1235, 9010}
+    stopped: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(
+        service_module,
+        "is_process_running",
+        lambda pid: pid in live_pids,
+    )
+
+    def _stop_pid(pid, *, force=False):  # noqa: ANN001, ANN002
+        stopped.append((pid, force))
+        live_pids.discard(pid)
+        return True
+
+    class _Completed:
+        stdout = (
+            f" 9010 node helper --working-dir {workspace}\n"
+            " 9020 unrelated process\n"
+        )
+
+    def _fake_run(*args, **kwargs):  # noqa: ANN001, ANN002
+        del args, kwargs
+        return _Completed()
+
+    monkeypatch.setattr(service_module, "terminate_process", _stop_pid)
+    monkeypatch.setattr(service_module.subprocess, "run", _fake_run)
+
+    rc = service_main(["stop", "--force", "--timeout", "0", str(workflow)])
+
+    assert rc == 0
+    assert stopped == [(1235, False), (1234, False), (9010, True)]
+    assert 9010 not in live_pids
+    assert load_record(workflow) is None
+
+
 def test_service_lock_blocks_second_start_for_same_workflow(tmp_path: Path) -> None:
     workflow = _workflow(tmp_path)
 

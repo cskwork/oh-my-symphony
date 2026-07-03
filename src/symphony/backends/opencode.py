@@ -206,6 +206,9 @@ class OpenCodeBackend(BaseAgentBackend):
                 turn_id=self.session_id,
                 last_message=response[:400],
             )
+        except asyncio.CancelledError:
+            await self._reap(proc)
+            raise
         finally:
             heartbeat_task.cancel()
             self._active_proc = None

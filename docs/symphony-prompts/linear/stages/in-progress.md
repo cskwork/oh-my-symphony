@@ -15,6 +15,7 @@ Plan, build, and self-check in one stage. Ship the smallest correct change.
 5. Save durable work notes under `docs/{{ issue.identifier }}/work/` (at least one file). For user-visible behavior, explain how a user observes the change.
 6. Append `## Implementation` with intent per change and decisions worth recording.
 7. Self-critique before moving on: re-read the ticket/spec, check null/empty/boundary/error paths, add any missing tests, and append `## Self-Critique`.
+   - Static browser apps that claim direct `file://` support must boot from `file://`; do not use `<script type="module">` or dynamic `import()` unless the acceptance path explicitly serves the app over HTTP.
 8. Append `## Pipeline Route`: always route to `Verify`. Record whether Verify may use the trivial non-runtime QA short path, but never skip Verify.
 9. Set state to `Verify`.
 

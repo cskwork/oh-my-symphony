@@ -19,6 +19,44 @@ Version-source conflict to resolve before tagging:
 Do not tag until the intended release number is reconciled in both version
 source files.
 
+## Follow-up Status - Current Working Tree
+
+The forced-stop leak blocker is fixed in the current working tree:
+
+- OpenCode, Pi, Claude, and Gemini now reap their active subprocess when a
+  worker task is cancelled during shutdown.
+- `service stop --force` also scans recent rows owned by the stopped
+  orchestrator PID and POSIX processes whose command line references one of
+  that orchestrator's registered workspace paths.
+- Live smoke evidence: `/private/tmp/symphony-stop-smoke-GDrYsW` started one
+  fake OpenCode worker on port `10085` with backend PID `18456`;
+  `service stop ./WORKFLOW.md --timeout 2 --force` stopped the service, `curl`
+  to `/api/v1/state` failed with connection error `7`, `ps -p 18456` returned
+  no process row, and a process sweep found no command line referencing the
+  smoke or prior full-run temp roots.
+
+The release gate is still red:
+
+- The latest full four-agent E2E run performed for this blocker work did not
+  reach a clean all-agent handoff.
+- OpenCode and Pi pass `scripts/static_todo_browser_acceptance.py` against the
+  saved app artefacts from `/private/tmp/symphony-full-e2e-M5J5f4`.
+- Claude currently cannot prove a fresh run on this machine: an isolated
+  `claude -p --output-format stream-json --verbose --permission-mode
+  acceptEdits` probe returned `is_error: true` with a session-limit message and
+  reset time `7:30pm (Asia/Seoul)`.
+- The Claude backend now treats explicit `is_error: true` as failure even when
+  the terminal subtype says `success`, so future rate limits surface as
+  backend failures instead of empty successful turns.
+- Codex reached `Blocked`; the saved app uses `<script type="module">`, which
+  Chromium blocks from `file://`, so the static app never boots under the
+  release acceptance path.
+- `scripts/static_todo_browser_acceptance.py` is now checked in as the
+  operator-level browser acceptance gate and fails fast on that module/CORS
+  boot error.
+- Do not merge, tag, or publish until a fresh four-agent run satisfies the full
+  acceptance gate below.
+
 ## Goal
 
 Run Symphony end-to-end with four live agent backends building the same static
@@ -223,7 +261,8 @@ Do not merge or release until all checks below are true:
 3. All four `after_create` hooks complete without git lock errors.
 4. All four tickets reach `Human Review` or the agreed terminal handoff state.
 5. `/api/v1/state` has no unexpected `running` or `retrying` entries.
-6. Every generated todo app passes the external browser acceptance script.
+6. Every generated todo app passes
+   `scripts/static_todo_browser_acceptance.py <app-dir>`.
 7. Every generated todo app has a passing Node harness.
 8. No `stage_contract_failed` remains unresolved in the final ticket body.
 9. `symphony service stop --force` leaves no temp-run child agent processes.

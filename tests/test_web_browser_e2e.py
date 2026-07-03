@@ -85,6 +85,12 @@ class _StubOrchestrator:
     def issue_snapshot(self, _identifier: str) -> dict[str, Any] | None:
         return None
 
+    def recent_runs(
+        self, issue_id: str | None = None, limit: int = 50
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        del issue_id, limit
+        return [], None
+
     def request_refresh(self) -> bool:
         return False
 

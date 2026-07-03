@@ -248,6 +248,9 @@ class ClaudeCodeBackend(BaseAgentBackend):
                 turn_id=str(terminal.get("session_id") or self._session_id or ""),
                 last_message=self._last_message,
             )
+        except asyncio.CancelledError:
+            await self._reap(proc)
+            raise
         finally:
             self._active_proc = None
 
@@ -403,14 +406,19 @@ def _extract_text(message: dict[str, Any]) -> str:
 
 def _is_error_result(event: dict[str, Any]) -> bool:
     subtype = str(event.get("subtype") or "").lower()
-    if subtype == "success":
-        return False
-    if subtype.startswith("error"):
-        return True
-
     value = event.get("is_error")
     if isinstance(value, bool):
-        return value
+        if value:
+            return True
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes"}
-    return bool(value)
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes"}:
+            return True
+    elif value:
+        return True
+
+    if subtype.startswith("error"):
+        return True
+    if subtype == "success":
+        return False
+    return False

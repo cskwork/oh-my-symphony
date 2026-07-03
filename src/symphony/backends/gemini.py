@@ -239,6 +239,9 @@ class GeminiBackend(BaseAgentBackend):
                 turn_id=self._session_id,
                 last_message=last_message[:400],
             )
+        except asyncio.CancelledError:
+            await self._reap(proc)
+            raise
         finally:
             self._active_proc = None
 

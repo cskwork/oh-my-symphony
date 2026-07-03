@@ -28,6 +28,7 @@ IN_PROGRESS_RULES = (
     "## Done Signals",
     "## Implementation",
     "## Self-Critique",
+    "Static browser apps that claim direct `file://` support must boot from `file://`",
     "## Pipeline Route",
     "state to `Verify`",
 )
@@ -37,6 +38,7 @@ VERIFY_RULES = (
     "## Security Audit",
     "## Review Findings",
     "Browser UI work must drive Playwright/headless Chromium",
+    "fail on module-script/CORS boot errors",
     "DOM shims are smoke only, never final Verify authority",
     "## Environment Block",
     "## QA Evidence",

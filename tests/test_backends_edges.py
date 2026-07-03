@@ -133,13 +133,19 @@ class TestClaudeIsErrorResultBranches:
     Existing tests cover the happy and the most-reported branches. These
     pin the rarer ones that a future refactor could silently invert."""
 
-    def test_subtype_success_overrides_string_is_error_yes(self) -> None:
-        # Per docstring: subtype=="success" short-circuits BEFORE is_error.
+    def test_is_error_overrides_success_subtype(self) -> None:
+        # Claude rate-limit results can report subtype=success with is_error=true.
         assert (
             _is_error_result(
                 {"type": "result", "subtype": "success", "is_error": "yes"}
             )
-            is False
+            is True
+        )
+        assert (
+            _is_error_result(
+                {"type": "result", "subtype": "success", "is_error": True}
+            )
+            is True
         )
 
     def test_subtype_starts_with_error_short_circuits_true(self) -> None:

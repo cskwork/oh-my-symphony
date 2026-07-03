@@ -243,6 +243,61 @@ details inside a durable evidence file.
 - Rejected: soft-warning fabricated evidence paths. Missing evidence remains a
   hard contract failure because it means the handoff is not auditable.
 
+# 2026-07-03 - Release stop cleanup follow-up
+
+## Goal
+
+Close the leak that the fresh four-agent E2E exposed after the first
+force-stop fix: cooperative shutdown closed the API port but left worker
+subprocesses alive.
+
+## Decisions
+
+### 1. Reap backend subprocesses on task cancellation
+
+OpenCode, Pi, Claude, and Gemini create subprocesses per turn. When the
+orchestrator cancelled a worker during service shutdown, the backend `finally`
+blocks cleared `_active_proc` before `client.stop()` could terminate the
+subprocess. Cancellation now reaps the process tree first, then re-raises the
+cancel so shutdown can continue normally.
+
+- Rejected: treating the service fallback as the only cleanup layer. It is
+  useful defense in depth, but the backend that owns the subprocess should
+  stop it while it still has the process object.
+
+### 2. Keep a force-stop fallback for completed owned rows and workspace helpers
+
+The run registry can already contain `status: normal` rows by the time
+`service stop --force` inspects it, even if a backend PID is still live. Force
+stop now scans recent rows owned by the stopped orchestrator PID, and also
+terminates POSIX processes whose command line names one of those registered
+workspace paths. This catches helper processes that start a separate process
+group, such as browser/tool kernels under a ticket workspace.
+
+- Rejected: broad command-name killing. Cleanup stays constrained to the
+  service's own registry owner PID and workspace paths.
+
+### 3. Treat Claude `is_error` as authoritative
+
+Claude Code can emit a terminal result with `subtype: success` and
+`is_error: true` for quota/rate-limit failures. The backend now treats the
+explicit error flag as authoritative so the operator sees a backend failure
+instead of a successful empty turn loop.
+
+- Rejected: relying on the terminal subtype alone. The live CLI returned a
+  contradictory payload, and the explicit `is_error` flag carries the failure.
+
+### 4. Make the static todo browser gate reusable
+
+The operator-level browser acceptance script now lives at
+`scripts/static_todo_browser_acceptance.py`. It drives Playwright against
+`file://`, exercises add/toggle/filter/edit/reload/delete flows, and fails fast
+on browser boot console errors such as Chromium blocking module scripts from
+`file://`.
+
+- Rejected: keeping the acceptance script as a temp-run artifact. The release
+  gate needs a durable command workers and operators can both rerun.
+
 # 2026-07-03 - Operator Trust Program implementation
 
 ## Goal
