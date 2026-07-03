@@ -96,6 +96,16 @@ def test_stale_record_is_reported_stopped(tmp_path: Path) -> None:
     assert status.recorded_port == 9999
 
 
+def test_service_status_uses_current_process_checker(tmp_path: Path, monkeypatch) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234))
+    monkeypatch.setattr(service_module, "is_process_running", lambda pid: pid == 1234)
+
+    status = service_status(workflow, port=9999)
+
+    assert status.state == "running"
+
+
 def test_process_running_returns_false_for_invalid_pids() -> None:
     assert is_process_running(None) is False
     assert is_process_running(0) is False

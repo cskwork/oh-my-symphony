@@ -263,7 +263,7 @@ def service_status(
     workflow_path: str | Path,
     *,
     port: int | None = None,
-    is_running: ProcessRunningPredicate = is_process_running,
+    is_running: ProcessRunningPredicate | None = None,
 ) -> ServiceStatus:
     """Report persisted service state for a workflow.
 
@@ -279,6 +279,9 @@ def service_status(
             requested_port=port,
             recorded_port=None,
         )
+
+    if is_running is None:
+        is_running = is_process_running
 
     state: ServiceState = (
         "running" if is_running(record.orchestrator_pid) else "stopped"

@@ -1405,4 +1405,51 @@ Rejected alternatives:
   -> passed.
 - `PYTHONPATH=src .venv/bin/python -m pytest -q`
   -> `1054 passed, 2 skipped, 2 warnings`.
+- GitHub Actions rerun exposed a second CI-only failure; see the service
+  status late-binding fix below.
+
+# 2026-07-03 - CI service status late-binding fix
+
+## Goal
+
+Restore the GitHub `Tests` workflow after the Playwright import fix exposed a
+second CI-only failure in `tests/test_service.py`.
+
+## Decision
+
+Resolve the service process checker at call time when `service_status()` is
+called without an explicit `is_running` predicate.
+
+Evidence from GitHub Actions:
+
+- Run `28665920111` on `main` and run `28665918597` on `dev` failed in
+  `python -m pytest -q`.
+- The only failure was
+  `tests/test_service.py::test_start_cleans_live_viewer_from_stale_record_before_doctor`.
+- The failing assertion was `assert rc == 1`; CI got `rc == 0` because PID
+  `1234` was live on the runner.
+- Root cause: `service_status()` bound `is_process_running` in the function
+  default at import time. The test monkeypatched `service_module.is_process_running`,
+  but the default still called the original implementation.
+
+Rejected alternatives:
+
+- Rejected: change the test to use a different fake PID. Any literal PID can
+  collide with a real process on a CI host.
+- Rejected: patch only `_start_locked()` to pass `is_process_running`
+  explicitly. That would fix this caller but keep the same stale-default trap
+  for future callers.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/python -m pytest tests/test_service.py::test_service_status_uses_current_process_checker tests/test_service.py::test_start_cleans_live_viewer_from_stale_record_before_doctor -q`
+  -> `2 passed`.
+- `git diff --check`
+  -> passed.
+- `PYTHONPATH=src .venv/bin/python -m py_compile src/symphony/service.py`
+  -> passed.
+- `PYTHONPATH=src .venv/bin/python -m pytest -q`
+  -> `1055 passed, 2 skipped, 2 warnings`.
+- `PYTHONPATH=src .venv/bin/python -m symphony.cli doctor ./WORKFLOW.md --no-color`
+  -> passed all 11 checks.
 - Pending after push: GitHub Actions rerun on `dev` and `main`.
