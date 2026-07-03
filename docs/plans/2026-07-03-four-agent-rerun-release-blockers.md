@@ -21,6 +21,22 @@ source files.
 
 ## Follow-up Status - Current Working Tree
 
+Update after `dev` promotion:
+
+- `feat/e2e-production-hardening` and `dev` now both point to
+  `998bdeef78c6cf130297bcc08f2e9196e21ad57b`.
+- Remote `origin/dev` was read back at the same SHA.
+- A clean `origin/dev` clone at `/private/tmp/symphony-release-e2e-14zh0I/repo`
+  started all four release-gate tickets on port `10086`.
+- The run is not a release pass. `REL-303` (Claude) failed immediately and
+  auto-paused with `turn_error: turn_failed: success`, proving the Claude
+  backend still masked the real provider error when an error result also used
+  `subtype: success`.
+- The follow-up fix changes the Claude failure reason to prefer actionable
+  result/error/API fields and records that reason in the emitted failure event.
+- Cleanup passed for this failed attempt: forced service stop closed port
+  `10086`, and a process sweep found no command line referencing the temp root.
+
 The forced-stop leak blocker is fixed in the current working tree:
 
 - OpenCode, Pi, Claude, and Gemini now reap their active subprocess when a

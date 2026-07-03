@@ -935,3 +935,43 @@ Rejected alternatives:
 
 - `PYTHONPATH=src .venv/bin/pytest tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_with_visible_reason tests/test_orchestrator_dispatch.py::test_retry_timer_reparks_paused_ticket_without_dispatching tests/test_orchestrator_dispatch.py::test_resume_worker_releases_held_retry_immediately -q`
   -> `3 passed`.
+
+# 2026-07-03 - Claude error result reason for release E2E
+
+## Goal
+
+Make the four-agent release gate diagnosable when Claude Code emits an error
+result whose `subtype` is still `success`.
+
+## Decision
+
+Format Claude failed-result messages from actionable fields (`error`,
+`message`, `result`, API error fields) before considering `subtype`, and add
+that computed text as the emitted turn-failure `reason`.
+
+Evidence from the clean `dev` four-agent attempt:
+
+- `dev` was fast-forwarded and pushed to `998bdee`.
+- Temp run root: `/private/tmp/symphony-release-e2e-14zh0I`.
+- Four tickets dispatched from a clean `origin/dev` clone on port `10086`.
+- `REL-303` (Claude) failed immediately and auto-paused with
+  `turn_error: turn_failed: success`, losing the provider's actionable cause.
+- `service stop ./WORKFLOW.md --timeout 15 --force` closed the port and a
+  process sweep found no command line referencing the temp root.
+
+Rejected alternatives:
+
+- Rejected: treat `subtype: success` as the displayed reason for error
+  results. It is a transport label in this failure shape, not the operator
+  action text.
+- Rejected: only attach the raw payload. The issue board and logs need a short
+  reason string that tells the operator what happened.
+
+## Verification
+
+- `PYTHONPATH=src .venv/bin/pytest tests/test_backends.py::test_claude_success_subtype_with_is_error_true_fails_turn -q`
+  failed before the fix with `Actual message: 'turn_failed: success'`.
+- `PYTHONPATH=src .venv/bin/pytest tests/test_backends.py::test_claude_success_subtype_with_is_error_true_fails_turn -q`
+  -> `1 passed`.
+- `PYTHONPATH=src .venv/bin/pytest tests/test_backends.py::test_claude_success_subtype_with_is_error_true_fails_turn tests/test_backends_edges.py::TestClaudeIsErrorResultBranches -q`
+  -> `7 passed`.

@@ -235,11 +235,14 @@ class ClaudeCodeBackend(BaseAgentBackend):
                 raise TurnFailed(err_msg)
 
             if _is_error_result(terminal):
-                payload = {**terminal, "stderr_tail": list(self._stderr_tail)}
+                reason = _error_result_message(terminal)
+                payload = {
+                    **terminal,
+                    "reason": reason,
+                    "stderr_tail": list(self._stderr_tail),
+                }
                 await self._emit(EVENT_TURN_FAILED, payload)
-                raise TurnFailed(
-                    str(terminal.get("subtype") or terminal.get("error") or "claude turn failed")
-                )
+                raise TurnFailed(reason)
 
             self._last_message = str(terminal.get("result") or "")[:400]
             await self._emit(EVENT_TURN_COMPLETED, terminal)
@@ -422,3 +425,20 @@ def _is_error_result(event: dict[str, Any]) -> bool:
     if subtype == "success":
         return False
     return False
+
+
+def _error_result_message(event: dict[str, Any]) -> str:
+    """Return a human-actionable reason for Claude result failures."""
+    for key in ("error", "message", "result", "api_error_message", "api_error_status"):
+        value = event.get(key)
+        if isinstance(value, dict):
+            text = _extract_text(value)
+        else:
+            text = str(value or "").strip()
+        if text and text.lower() != "success":
+            return text
+
+    subtype = str(event.get("subtype") or "").strip()
+    if subtype.lower().startswith("error"):
+        return subtype
+    return "claude turn failed"

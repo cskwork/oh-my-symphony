@@ -525,11 +525,12 @@ async def test_claude_success_subtype_with_is_error_true_fails_turn(
     )
 
     await backend.start_session(initial_prompt="hi", issue_title="Fix login")
-    with pytest.raises(TurnFailed, match="success"):
+    with pytest.raises(TurnFailed, match="session limit"):
         await backend.run_turn(prompt="first", is_continuation=False)
 
     assert [event["event"] for event in events][-1] == EVENT_TURN_FAILED
     assert events[-1]["payload"]["is_error"] is True
+    assert events[-1]["payload"]["reason"] == "session limit"
 
 
 @pytest.mark.asyncio
