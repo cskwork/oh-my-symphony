@@ -22,6 +22,20 @@ a Jira-style TUI you never have to leave your terminal for.
 
 [**Try it in 60 seconds, no AI CLI required →**](#try-it-in-60-seconds-no-agent-cli-required)
 
+## Contents
+
+- [Why Symphony?](#why-symphony)
+- [How it works](#how-it-works)
+- [Pick an agent](#pick-an-agent)
+- [Install](#install)
+- [Try it in 60 seconds](#try-it-in-60-seconds-no-agent-cli-required)
+- [Quickstart](#quickstart--your-first-task-end-to-end)
+- [Run](#run)
+- [Layout](#layout)
+- [Tests](#tests)
+- [Design notes](#design-notes)
+- [What is not implemented](#what-is-not-implemented)
+
 ## Why Symphony?
 
 - **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ OpenCode ↔ Pi with one

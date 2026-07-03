@@ -22,6 +22,20 @@
 
 [**AI CLI 없이 60초 만에 체험하기 →**](#try-it-in-60-seconds-no-agent-cli-required)
 
+## 목차
+
+- [Symphony를 쓰는 이유](#why-symphony)
+- [작동 방식](#how-it-works)
+- [에이전트 선택](#pick-an-agent)
+- [설치](#install)
+- [60초 체험](#try-it-in-60-seconds-no-agent-cli-required)
+- [첫 작업 Quickstart](#quickstart--your-first-task-end-to-end)
+- [실행](#run)
+- [구조](#layout)
+- [테스트](#tests)
+- [설계 메모](#design-notes)
+- [아직 구현하지 않은 것](#what-is-not-implemented)
+
 ## Why Symphony?
 
 - **벤더 종속 없음.** Codex ↔ Claude Code ↔ Gemini ↔ OpenCode ↔ Pi를 YAML 한 줄로

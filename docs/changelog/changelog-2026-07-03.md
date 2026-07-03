@@ -120,3 +120,32 @@ surfaces do not diverge.
 
 - Rejected: only updating the English README. The repo already presents Korean
   as a first-class operator surface.
+
+# 2026-07-03 - README navigation and Pages deploy ownership
+
+## Goal
+
+Make the long GitHub README easier to navigate and replace the opaque legacy
+Pages dynamic deploy path with a repo-owned workflow that can be rerun and
+debugged directly.
+
+## Decisions
+
+### 1. Add a compact top-level table of contents
+
+The README now links to the major operator sections before the long feature
+and setup walkthrough. The Korean README mirrors the same navigation so the two
+entry docs stay structurally aligned.
+
+- Rejected: a full heading-by-heading table. The README is already long, and a
+  dense table would push the useful content farther down.
+
+### 2. Use an explicit static Pages workflow
+
+The generated `pages-build-deployment` job uploaded the `docs/` artifact, then
+failed in the deploy step with only `Deployment failed, try again later.` A
+checked-in workflow keeps the same `docs/` source but makes permissions,
+actions versions, concurrency, and reruns visible in the repo.
+
+- Rejected: rerunning the failed dynamic deployment as the only fix. The rerun
+  failed at the same deploy step and did not expose a repo-side error.
