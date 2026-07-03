@@ -642,3 +642,92 @@ out.
   -> `53 passed`.
 - State route/snapshot gate: `.venv/bin/python -m pytest tests/test_orchestrator_dispatch.py::test_running_snapshot_carries_live_telemetry_for_supported_agent_kinds tests/test_server_routes.py::test_state_route_returns_orchestrator_snapshot -q`
   -> `2 passed`.
+
+# 2026-07-03 - Four-agent rerun release gate
+
+## Goal
+
+Decide whether the post-fix four-agent todo E2E run is clean enough to merge
+`feat/e2e-production-hardening` to `dev`, merge `dev` to `main`, and cut the
+next release.
+
+## Decision
+
+Do not merge or release yet.
+
+Evidence:
+
+- Latest local release tag is `v0.8.0`; the requested next release target is
+  `v0.8.1` / `0.8.1`.
+- Version source files currently say `0.9.1` in both `pyproject.toml` and
+  `src/symphony/__init__.py`, so release numbering needs reconciliation before
+  tagging.
+- The fresh temp run dispatched OpenCode, Pi, Claude, and Codex tickets and all
+  four `after_create` hooks completed.
+- OpenCode external Node harness and browser QA passed, but the Symphony Verify
+  worker was still active when the run was stopped.
+- Pi Node harness passed, but real browser proof failed: `#empty-state` had
+  `display: block` while parent `#main` had `display: none`, so the empty state
+  was not visible.
+- Claude was intentionally paused/stopped by operator request, so a complete
+  Claude Verify/Learn lifecycle was not proven.
+- Codex reached Human Review after repairing a Verify evidence-citation
+  contract failure.
+- Forced service stop left temp-run OpenCode and Pi child process groups alive;
+  they were terminated manually.
+
+Rejected alternatives:
+
+- Rejected: merge because most checks passed. The Pi browser defect and
+  incomplete lifecycle fail the release condition.
+- Rejected: rely on Node DOM shims for browser UI signoff. The Pi empty-state
+  failure is a concrete counterexample.
+- Rejected: tag from current version files. `v0.8.0` is the latest release tag
+  while source files say `0.9.1`; the next tag must use the operator-approved
+  release number after the gate is green.
+
+## Verification
+
+- Release-blocker plan recorded at
+  `docs/plans/2026-07-03-four-agent-rerun-release-blockers.md`.
+- Temp service on port `10082` was stopped.
+- Temp-run OpenCode and Pi orphan process groups were terminated.
+
+# 2026-07-03 - Human Review confirmation gate spec
+
+## Goal
+
+Specify the fix for a live-run handoff gap: a ticket can correctly reach
+`Human Review` and ask the operator to `Confirm Done`, while the service web
+board has no visible confirm action.
+
+## Decision
+
+Add a focused spec for the service-board Human Review confirmation gate and the
+Verify evidence path rule that caused RERUN-204 to rewind.
+
+Evidence:
+
+- TUI and standalone `tools/board-viewer` already have Human Review confirm
+  behavior.
+- The service web board (`src/symphony/web/static/app.js`) has `Skip Learn`
+  but no `Confirm Done` action.
+- The service API (`src/symphony/webapi.py`) has issue CRUD and `skip-learn`
+  but no narrow `/api/v1/issues/{id}/confirm-done` route.
+- The host checkout lacks the `docs/llm-wiki/verify-evidence-contract.md`
+  page produced by the RERUN-204 workspace.
+
+Rejected alternatives:
+
+- Rejected: let agents mark Done. That weakens the production handoff rule.
+- Rejected: rely on drag/drop or generic PATCH. That is not an explicit human
+  confirmation affordance.
+- Rejected: fix only the standalone viewer. The live service board is the
+  missing path.
+
+## Verification
+
+- `symphony doctor ./WORKFLOW.md` -> expected sandbox-local FAIL for
+  `/Users/danny/symphony_workspaces` writability; prompt, tracker, and viewer
+  checks passed.
+- Spec written at `docs/spec/human-review-confirmation-gate/`.
