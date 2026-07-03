@@ -13,6 +13,7 @@ htmlcov/
 .omx/
 .playwright-mcp/
 .symphony/
+.domain-agent/
 
 # Auto-generated kanban mirror (regenerated on every TUI launch)
 /WORKFLOW-PROGRESS.md
