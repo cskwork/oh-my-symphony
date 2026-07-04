@@ -1,3 +1,41 @@
+# 2026-07-04 - Fix issue-detail JSON serialization for YAML timestamps
+
+## Root Cause
+
+The 9999 web app failed to load `CODEX-E2E-001` with
+`Object of type datetime is not JSON serializable` because
+`GET /api/v1/issues/<ID>` returned raw parsed frontmatter. PyYAML converts
+unquoted YAML timestamps such as `updated_at: 2026-07-04T14:27:00Z` into Python
+`datetime` objects. The board list path already serialized `Issue.created_at`
+and `Issue.updated_at`, but the detail drawer also included the raw
+`frontmatter` map, so `aiohttp.web.json_response` failed before sending the
+ticket payload.
+
+## Decision
+
+Normalize the issue-detail `frontmatter` through a narrow JSON-safety helper
+that converts `datetime` and `date` values to ISO strings recursively. This
+keeps the UI contract JSON-only without changing tracker parsing or rewriting
+ticket files.
+
+- Rejected: quoting timestamps in the current ticket only. That would hide the
+  bug for one card while leaving any agent-authored unquoted timestamp broken.
+- Rejected: replacing every `web.json_response` with a broad `default=str`.
+  That would mask future non-JSON API leaks outside the known YAML timestamp
+  boundary.
+
+## Verification
+
+- Added
+  `tests/test_webapi.py::test_issue_detail_serializes_unquoted_frontmatter_timestamps`.
+- Red: the new test reproduced HTTP 500 with
+  `Object of type datetime is not JSON serializable`.
+- Green: `pytest tests/test_webapi.py::test_issue_detail_serializes_unquoted_frontmatter_timestamps -q`.
+- Green: `pytest tests/test_webapi.py -q` -> 22 passed.
+- Green: `pytest tests/test_webapi.py tests/test_web_api_smoke_script.py -q` -> 24 passed.
+
+---
+
 # 2026-07-04 - README 9999 admin UI showcase
 
 ## Decision

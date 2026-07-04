@@ -212,6 +212,33 @@ async def test_issue_detail_includes_attention(client: TestClient) -> None:
     assert detail["attention"]["due_at"] is None
 
 
+async def test_issue_detail_serializes_unquoted_frontmatter_timestamps(
+    client: TestClient, board_dir: Path
+) -> None:
+    (board_dir / "kanban" / "TIME-1.md").write_text(
+        """---
+id: TIME-1
+identifier: TIME-1
+title: timestamp ticket
+state: Todo
+priority: 1
+created_at: 2026-07-04T13:50:00Z
+updated_at: 2026-07-04T14:27:00Z
+---
+
+Timestamp body.
+""",
+        encoding="utf-8",
+    )
+
+    resp = await client.get("/api/v1/issues/TIME-1")
+
+    assert resp.status == 200
+    detail = await resp.json()
+    assert detail["frontmatter"]["created_at"] == "2026-07-04T13:50:00+00:00"
+    assert detail["frontmatter"]["updated_at"] == "2026-07-04T14:27:00+00:00"
+
+
 async def test_runs_endpoint_filters_and_clamps(client: TestClient) -> None:
     resp = await client.get("/api/v1/runs?issue=id-SEED-1&limit=500")
     assert resp.status == 200

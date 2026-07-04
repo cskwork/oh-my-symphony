@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -188,6 +189,16 @@ def _issue_card(
         "created_at": issue.created_at.isoformat() if issue.created_at else None,
         "updated_at": issue.updated_at.isoformat() if issue.updated_at else None,
     }
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _columns_payload(cfg: ServiceConfig) -> list[dict[str, Any]]:
@@ -462,7 +473,12 @@ def _register_issue_routes(
         )
         live = _live_by_identifier(orchestrator).get(identifier)
         return web.json_response(
-            {**card, "description": body_text, "frontmatter": front, "live": live}
+            {
+                **card,
+                "description": body_text,
+                "frontmatter": _json_safe(front),
+                "live": live,
+            }
         )
 
     async def handle_issue_patch(request: web.Request) -> web.Response:
