@@ -1118,6 +1118,28 @@ pre,
 }
 .settings-section-head .settings-section-title { margin-bottom: 0; }
 
+.settings-info-grid {
+  display: grid;
+  grid-template-columns: minmax(130px, max-content) minmax(0, 1fr);
+  gap: 8px 14px;
+  align-items: baseline;
+}
+.settings-info-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+.settings-info-value {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  letter-spacing: 0;
+  word-break: break-word;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

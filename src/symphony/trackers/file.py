@@ -130,6 +130,9 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
         healed = _auto_heal_markdown_in_front_matter(path, lines, end)
         if healed is not None:
             return healed
+        healed = _auto_heal_misindented_top_level_front_matter(path, lines, end)
+        if healed is not None:
+            return healed
         raise SymphonyError(
             "invalid YAML front matter", path=str(path), error=str(exc)
         ) from exc
@@ -196,6 +199,44 @@ def _auto_heal_markdown_in_front_matter(
     original_body = "\n".join(lines[end + 1 :]).strip()
     body = "\n\n".join(part for part in (moved_text, original_body) if part)
     return front, body
+
+
+def _auto_heal_misindented_top_level_front_matter(
+    _path: Path, lines: list[str], end: int
+) -> tuple[dict[str, Any], str] | None:
+    """Read tickets where an agent indented a canonical top-level key."""
+    yaml_lines: list[str] = []
+    changed = False
+    for line in lines[1:end]:
+        fixed = _unindent_misindented_top_level_key(line)
+        changed = changed or fixed != line
+        yaml_lines.append(fixed)
+    if not changed:
+        return None
+
+    try:
+        parsed = yaml.safe_load("\n".join(yaml_lines))
+    except yaml.YAMLError:
+        return None
+    if parsed is None:
+        front: dict[str, Any] = {}
+    elif not isinstance(parsed, dict):
+        return None
+    else:
+        front = parsed
+    body = "\n".join(lines[end + 1 :]).strip()
+    return front, body
+
+
+def _unindent_misindented_top_level_key(line: str) -> str:
+    stripped = line.lstrip(" ")
+    indent = len(line) - len(stripped)
+    if indent <= 0 or indent > 2:
+        return line
+    key_match = _YAML_TOP_LEVEL_KEY.match(stripped)
+    if key_match and key_match.group("key") in _CANONICAL_FRONT_MATTER_KEYS:
+        return stripped
+    return line
 
 
 def _looks_like_front_matter_line(line: str) -> bool:

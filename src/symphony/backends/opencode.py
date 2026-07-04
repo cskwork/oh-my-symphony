@@ -52,9 +52,11 @@ TOKEN_KEYS = {
     "output_tokens",
     "prompt",
     "prompt_tokens",
+    "reasoning",
     "thoughts",
     "tool",
     "total",
+    "totalTokens",
     "total_tokens",
 }
 
@@ -310,17 +312,29 @@ class OpenCodeBackend(BaseAgentBackend):
             "cacheWrite",
             "cached",
         )
+        cache = usage.get("cache")
+        if isinstance(cache, dict):
+            input_tokens += _int_value(
+                cache,
+                "read",
+                "write",
+                "cache_read",
+                "cache_write",
+                "cacheRead",
+                "cacheWrite",
+            )
         output_tokens = _int_value(
             usage,
             "output_tokens",
             "completion_tokens",
             "output",
             "completion",
+            "reasoning",
             "candidates",
             "thoughts",
             "tool",
         )
-        total_tokens = _int_value(usage, "total_tokens", "total")
+        total_tokens = _int_value(usage, "total_tokens", "totalTokens", "total")
         if total_tokens == 0 and (input_tokens or output_tokens):
             total_tokens = input_tokens + output_tokens
         self._latest_usage["input_tokens"] += input_tokens
@@ -398,7 +412,7 @@ def _usage_dicts(value: Any) -> Iterable[dict[str, Any]]:
         return
     if TOKEN_KEYS.intersection(value.keys()):
         yield value
-    for key in ("usage", "tokens", "stats", "cost"):
+    for key in ("usage", "tokens", "stats", "cost", "part", "info"):
         yield from _usage_dicts(value.get(key))
 
 

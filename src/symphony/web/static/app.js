@@ -1659,6 +1659,7 @@
       el('h3', null, 'Board info'),
       el('div', { class: 'kv-grid' }, [
         kv('Workflow path', wf.workflow_path),
+        kv('Default agent', (wf.agent && wf.agent.kind) || '—'),
         kv('Tracker kind', state.board ? state.board.board.tracker_kind : '—'),
         kv('Polling interval', `${wf.polling_interval_ms} ms`),
       ]),

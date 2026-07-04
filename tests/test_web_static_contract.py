@@ -20,6 +20,8 @@ def test_web_board_defaults_to_active_lanes_with_terminal_group() -> None:
     assert "function buildRunHistorySection(detail)" in js
     assert "api.getRuns({ issue: identifier, limit: 10 })" in js
     assert "Run history" in js
+    assert "Default agent" in js
+    assert "(wf.agent && wf.agent.kind) ||" in js
     assert "function buildMobileLaneTabs(columns)" in js
     assert "function isMobileBoardViewport()" in js
     assert "Review and parked" in js

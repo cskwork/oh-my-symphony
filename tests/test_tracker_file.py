@@ -196,6 +196,38 @@ def test_parse_ticket_file_auto_heals_markdown_inside_front_matter(tmp_path):
     assert path.read_text(encoding="utf-8") == original_text
 
 
+def test_parse_ticket_file_auto_heals_misindented_updated_at(tmp_path):
+    original_text = textwrap.dedent(
+        """\
+        ---
+        id: TASK-002
+        identifier: TASK-002
+        title: Auth
+        state: Learn
+        labels:
+        - auth
+        agent:
+          kind: opencode
+        created_at: '2026-07-04T00:00:02Z'
+          updated_at: '2026-07-04T02:35:57Z'
+        ---
+        Body.
+        """
+    )
+    path = _write(tmp_path, "TASK-002.md", original_text)
+
+    front, body = parse_ticket_file(path)
+    issue = issue_from_file(path)
+
+    assert front["updated_at"] == "2026-07-04T02:35:57Z"
+    assert body == "Body."
+    assert issue is not None
+    assert issue.state == "Learn"
+    assert issue.agent_kind == "opencode"
+    assert issue.updated_at is not None
+    assert path.read_text(encoding="utf-8") == original_text
+
+
 def test_fetch_candidate_filters_by_active(tmp_path):
     root = tmp_path / "board"
     _write(root, "A.md", "---\nid: A\ntitle: a\nstate: Todo\n---\n")

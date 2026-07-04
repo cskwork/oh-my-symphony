@@ -2,7 +2,7 @@
 // XSS 가드: utils.el() 만 사용해 createTextNode 경로로만 사용자 입력 렌더.
 
 import { el } from "./utils.js";
-import { fetchSettings, saveSettings } from "./api.js";
+import { fetchSettings, fetchSymphonyState, saveSettings } from "./api.js";
 
 const DOGRAH_FIELDS = [
   { key: "base_url", label: "Base URL", placeholder: "http://localhost:8000", type: "text" },
@@ -28,6 +28,10 @@ const state = {
   databases: {}, // { name: { driver, host, port, user, password, database } }
   configPath: "",
   envPath: "",
+  defaultAgentKind: "",
+  workflowPath: "",
+  branchPolicy: null,
+  workflowError: "",
   prevFocus: null,
 };
 
@@ -261,12 +265,49 @@ function renderPaths() {
     : "";
 }
 
+function renderWorkflowInfo() {
+  const node = document.getElementById("settings-workflow-info");
+  if (!node) return;
+  node.replaceChildren();
+  if (state.workflowError) {
+    node.appendChild(
+      el("p", { class: "settings-empty" }, `Workflow 상태를 불러오지 못했습니다: ${state.workflowError}`)
+    );
+    return;
+  }
+  const policy = state.branchPolicy || {};
+  const featureBaseBranch = policy.feature_base_branch || policy.base_branch || "(current branch)";
+  const mergeTargetBranch = policy.auto_merge_target_branch || policy.merge_target_branch || "(current branch)";
+  const rows = [
+    ["Agent default", state.defaultAgentKind || "—"],
+    ["Feature base branch", featureBaseBranch],
+    ["Merge target branch", mergeTargetBranch],
+  ];
+  if (state.workflowPath) rows.push(["Workflow path", state.workflowPath]);
+  for (const [label, value] of rows) {
+    node.appendChild(el("span", { class: "settings-info-label" }, label));
+    node.appendChild(el("span", { class: "settings-info-value" }, String(value)));
+  }
+}
+
 async function loadAndRender() {
   setStatus("불러오는 중…", "");
-  const r = await fetchSettings();
+  const [r, sym] = await Promise.all([fetchSettings(), fetchSymphonyState()]);
   if (!r.ok) {
     setStatus(`설정 로드 실패: ${r.error?.message || r.status}`, "error");
     return;
+  }
+  if (sym.ok) {
+    const wf = sym.data?.workflow || {};
+    state.defaultAgentKind = wf.default_agent_kind || "";
+    state.workflowPath = wf.workflow_path || "";
+    state.branchPolicy = wf.branch_policy || null;
+    state.workflowError = "";
+  } else {
+    state.defaultAgentKind = "";
+    state.workflowPath = "";
+    state.branchPolicy = null;
+    state.workflowError = sym.error?.message || String(sym.status || "unknown");
   }
   const cfg = r.data?.config || {};
   state.dograh = {
@@ -297,6 +338,7 @@ async function loadAndRender() {
   renderDatabases();
   renderEnvPreview();
   renderPaths();
+  renderWorkflowInfo();
 }
 
 async function handleSave() {

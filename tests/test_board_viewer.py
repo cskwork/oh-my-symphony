@@ -332,6 +332,12 @@ def test_theme_switcher_static_contract() -> None:
     assert "function bindThemeControls(" in js
     assert "applyTheme(readTheme())" in js
 
+    settings_js = Path("tools/board-viewer/src/js/settings.js").read_text(encoding="utf-8")
+    assert 'id="settings-workflow-info"' in html
+    assert "fetchSymphonyState" in settings_js
+    assert "Agent default" in settings_js
+    assert ".settings-info-grid" in css
+
     # 3) CSS theme overrides re-declare the key variables
     for selector in ('[data-theme="focus"]', '[data-theme="command"]'):
         assert f":root{selector}" in css, f"missing block: :root{selector}"

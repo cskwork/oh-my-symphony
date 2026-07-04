@@ -994,6 +994,36 @@ async def test_opencode_extracts_text_from_jsonl_part_frames(
 
 
 @pytest.mark.asyncio
+async def test_opencode_extracts_usage_from_jsonl_step_finish_part_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OpenCode 1.17 reports usage on step-finish part.tokens."""
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    stdout = (
+        b'{"type":"text","sessionID":"ses_x","part":{"type":"text","text":"DONE"}}\n'
+        b'{"type":"step_finish","sessionID":"ses_x","part":{"type":"step-finish",'
+        b'"tokens":{"total":21044,"input":8817,"output":3,"reasoning":0,'
+        b'"cache":{"write":0,"read":12224}}}}\n'
+    )
+    _install_subprocess_double(
+        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Token accounting")
+    await backend.run_turn(prompt="first", is_continuation=False)
+
+    usage = backend.latest_usage
+    assert usage["input_tokens"] == 21041
+    assert usage["output_tokens"] == 3
+    assert usage["total_tokens"] == 21044
+
+
+@pytest.mark.asyncio
 async def test_opencode_emits_heartbeats_while_turn_subprocess_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

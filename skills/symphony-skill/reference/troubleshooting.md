@@ -39,6 +39,8 @@ tail -F log/symphony.log
 | `agent_compaction phase=start/end`       | Pi backend triggered context compaction (`/compact` or auto when nearing the model's context window) | Informational — a sudden token-count drop on the next turn is now attributable     |
 | `agent_internal_retry phase=start/end`   | Pi backend retried an upstream LLM call internally (transient error)                              | Informational — recoverable; if `final_error` is set the turn ultimately failed   |
 | `empty_response_loop consecutive_empty_turns=N` with `input_tokens=0` AND `output_tokens=0` every turn | Backend CLI output schema drifted (often after an opencode/gemini upgrade) — Symphony parsed neither text nor tokens, so every turn looks empty | See "Backend CLI update broke response parsing" below; fix the backend extractor, do NOT raise the threshold |
+| `worker_exit reason=issue_state_refresh_failed` after a nonblank turn | Worker finished, but Symphony could not re-read the ticket state; malformed file-tracker frontmatter can make the ticket disappear from the board | Run `symphony board ls --workflow ./WORKFLOW.md`, inspect the ticket's YAML frontmatter, and fix indentation/key syntax. The v0.9.3 release auto-heals the common `  updated_at:` top-level-key misindent on read |
+| `hook before_run exited 42` with `workspace kanban points to <other-project>/kanban` | A reused workspace path belongs to another Symphony board with the same ticket ID, so host-board symlinks point at the wrong project | Use a project-scoped `workspace.root` such as `~/symphony_workspaces/<project>`, then resume. If the foreign worktree is no longer needed, remove it from its owning repo with `git -C <foreign-repo> worktree remove --force <path>` after checking `git status --short` |
 | `OSError [Errno 48]` on startup          | Port already in use                                      | `lsof -ti :9999 \| xargs -r kill`                                                   |
 | `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                   |
 | `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)             |
@@ -292,10 +294,11 @@ Then compare against the backend's extractors in
 `src/symphony/backends/<kind>.py`: `_response_from_events` / `_extract_text` for
 text, `_update_usage_from_events` / `_usage_dicts` for tokens. Recent opencode
 (>= 1.x) streams JSONL frames `{"type":"text","sessionID":...,"part":{"type":"text","text":...}}`
-and reports tokens under the assistant message `info.tokens` — nested paths the
-old flat-key scan missed. Fixed for text in 0.9.3 (`_text_from_event` reads
-`part.text` from `type=="text"` frames); token accounting for the new shape is a
-known follow-up.
+and reports tokens on `step_finish.part.tokens`, including nested `cache.read` /
+`cache.write`. Older flat-key scans miss both nested paths. Fixed in the
+v0.9.3 release: `_text_from_event` reads `part.text` from `type=="text"` frames,
+and `_usage_dicts` descends through `part` / `info` usage containers for token
+accounting.
 
 Fix pattern: extend the backend's text/usage extractor to the new schema. Do
 NOT raise `EMPTY_TURN_LOOP_THRESHOLD` — that only delays the false block and

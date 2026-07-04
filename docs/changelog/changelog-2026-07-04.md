@@ -91,10 +91,9 @@ pins the JSONL shape.
 - Rejected: **a deep/generic text search** across every nested dict — risks
   grabbing tool-call arguments and file contents as "response". The
   `type=="text"` predicate is precise to opencode's serialization.
-- Known follow-up (not G2-blocking): token usage still reads 0 for opencode
-  1.17 — usage lives under the assistant message `info.tokens`, a path
-  `_usage_dicts` does not yet traverse. This only affects `max_total_tokens`
-  budgeting and telemetry for opencode, not dispatch correctness. Tracked in
+- Known follow-up (not G2-blocking, fixed in the v0.9.3 release update below): token usage still
+  reads 0 for opencode 1.17. This only affects `max_total_tokens` budgeting and
+  telemetry for opencode, not dispatch correctness. Tracked in
   `skills/symphony-skill/reference/troubleshooting.md`.
 
 Operator playbook added: "Backend CLI update broke response parsing" in
@@ -103,3 +102,104 @@ smoking gun, the capture-the-real-schema recipe, and the fix pattern, so the
 next CLI-upgrade drift is a 2-minute triage instead of a rediscovery.
 
 Patch bump 0.9.2 -> 0.9.3 (restores opencode response parsing for opencode >= 1.x).
+
+## Follow-up (v0.9.3 release update) — OpenCode 1.17 token accounting
+
+Live probe:
+
+```bash
+opencode run --format json --auto "reply with DONE only"
+```
+
+OpenCode 1.17.13 emitted usage on a `step_finish` frame:
+`part.type == "step-finish"` with `part.tokens` containing `input`, `output`,
+`reasoning`, `cache.read`, `cache.write`, and `total`. Symphony's `_usage_dicts`
+never descended through `part`, so the backend emitted useful `message` text but
+left every token bucket at 0. That matches the TASK-002 monitor evidence:
+nonblank `last_message`, `input_tokens=0`, then a separate
+`worker_exit reason=issue_state_refresh_failed` after the turn.
+
+Fix: `OpenCodeBackend` now descends into `part` and `info` usage containers,
+reads `totalTokens` as an alias, folds nested `cache.read` / `cache.write` into
+input-side tokens, and treats `reasoning` as output-side tokens when totals need
+to be derived. New
+`tests/test_backends.py::test_opencode_extracts_usage_from_jsonl_step_finish_part_tokens`
+pins the real OpenCode 1.17 `step_finish.part.tokens` schema.
+
+- Rejected: **deep traversal of every nested dict**. OpenCode frames also carry
+  tool and text payloads; scanning all children would risk treating user-facing
+  content or tool arguments as telemetry. The parser only follows known telemetry
+  containers.
+- Not part of this fix: `issue_state_refresh_failed`. The failure fires after a
+  successful turn when tracker state refresh returns `None`; it is a separate
+  board/workspace reliability issue, not a token parser symptom.
+
+Included in the v0.9.3 release tag update (restores OpenCode token telemetry for opencode >= 1.x).
+
+## Follow-up (v0.9.3 release update) — issue-state refresh RCA and operator UI
+
+Live `jira-symphony` showed TASK-002 stuck in paused retry with
+`worker_exit reason=issue_state_refresh_failed` after a successful nonblank
+OpenCode turn. This was separate from the token parser issue. The ticket file
+had malformed YAML:
+
+```yaml
+created_at: '2026-07-04T00:00:02Z'
+  updated_at: '2026-07-04T02:35:57Z'
+```
+
+That made the file tracker skip TASK-002, so the worker could not refresh the
+post-turn state and paused for operator inspection. Current-board repair was to
+unindent `updated_at`, after which `symphony board ls --workflow ...` showed
+TASK-002 back in `Learn`, and `POST /api/v1/TASK-002/resume` moved it from
+`retrying` to a running `Learn` retry.
+
+Hardening: `parse_ticket_file` now auto-heals the common case where an agent
+accidentally indents a canonical top-level key by one or two spaces. It does not
+rewrite the file during read, but the next normal tracker write serializes
+canonical YAML. New
+`tests/test_tracker_file.py::test_parse_ticket_file_auto_heals_misindented_updated_at`
+pins the observed TASK-002 shape.
+
+Operator UI: Settings now shows the workflow default agent on both web surfaces.
+The 9999 Symphony app renders `Default agent` from `/api/v1/workflow.agent.kind`
+under `Settings > Board info`; the board-viewer Settings modal renders
+`Agent default` from `/api/symphony/state.workflow.default_agent_kind`. The value
+on the live board is `opencode`.
+
+- Rejected: **only patch the current ticket**. That restores one board but lets
+  the next agent-authored YAML indentation mistake remove a ticket from refresh.
+- Rejected: **deep YAML text surgery on every read**. The heal only runs after a
+  YAML parse failure and only unindents known ticket frontmatter keys with shallow
+  accidental indentation, avoiding legitimate nested data such as `agent.kind`
+  and `blocked_by[].state`.
+
+## Follow-up (operator) — TASK-003 workspace collision RCA
+
+After TASK-002 resumed and completed, live `jira-symphony` moved to TASK-003
+and paused before the first agent turn:
+
+```text
+hook before_run exited 42;
+workspace kanban points to /Users/danny/Documents/PARA/Resource/learn-codex-kr/kanban,
+expected /Users/danny/Documents/PARA/Resource/jira-symphony/kanban
+```
+
+The path `/Users/danny/symphony_workspaces/TASK-003` was not a `jira-symphony`
+worktree. It was a clean, older `learn-codex-kr` worktree registered under
+`learn-codex-kr/.git/worktrees/TASK-003`, with `kanban` linked to that project's
+board. Symphony derives workspace paths from `workspace.root / ticket-id`, so
+two boards using the same global `~/symphony_workspaces` root and the same
+identifier (`TASK-003`) collide.
+
+Operator fix: change the `jira-symphony` workflow root to
+`~/symphony_workspaces/jira-symphony`, then resume the ticket. The orchestrator
+reloads WORKFLOW on each tick and rebuilds the `WorkspaceManager` when
+`workspace.root` changes, so no stale foreign worktree has to be deleted.
+
+- Rejected: **remove the foreign worktree as the primary fix**. Its status was
+  clean, but it belongs to another project; deleting it would only free this one
+  identifier and would not prevent the next cross-board `TASK-*` collision.
+- Rejected: **only patch the `kanban` symlink inside the existing directory**.
+  That would mutate a worktree registered to `learn-codex-kr` and mix project
+  ownership in one checkout.
