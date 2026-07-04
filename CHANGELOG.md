@@ -8,25 +8,89 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — public documentation sync
+## [Unreleased]
+
+Post-v0.10.0 changes will be listed here.
+
+## [0.10.0] - 2026-07-05 - Codex E2E reliability hardening
+
+### Added
+
+- State-local same-state turn watchdogs via `agent.max_state_turns_by_state`,
+  with budget notes that report the effective per-state limit.
+- Token attention signals via `agent.token_attention_threshold_by_state`; high
+  token use stays telemetry unless an explicit hard cap is configured.
+- Stage-aware prompt context compaction behind
+  `agent.compact_issue_context: true`, including full-ticket path links for file
+  workflows so workers can audit the raw card when needed.
+- Workspace owner sidecars and hook-output manifests under the workspace root,
+  so reused `TASK-*` paths and failed `after_create` setup are diagnosable.
+- Structured contract-failure rows and scoped rewind prompts for Verify evidence
+  failures, including row numbers and expected artifact path shapes.
 
 ### Changed
 
-- README, Korean README, and the GitHub Pages landing page now describe the
-  current five-backend surface: Codex, Claude Code, Gemini, OpenCode, and Pi.
-- Public docs now call out the current local reliability boundary: SQLite run
-  leases, persisted retry/pause/budget issue flags, file-tracker write locks,
-  and `/api/v1/health`.
-- Architecture docs now include `webapi.py`, packaged web assets,
-  `workflow/mutate.py`, `orchestrator/run_registry.py`, the Jira tracker
-  adapter, and the OpenCode backend.
-- Operator skill discovery now uses one routed `symphony-skill` skill (renamed
-  from `using-symphony`). OneShot and monorepo assets live under
-  `skills/symphony-skill/` subfolders for branch-specific templates, scripts,
-  and references.
-- "Open the orchestrator" now defaults to opening the service `--port` web app
-  (`http://127.0.0.1:9999/`); the `--viewer-port` board (`8765`) is the
-  secondary card board. Documented in the operator skill.
+- OpenCode token accounting now follows the 1.17 `step_finish.part.tokens`
+  schema, including nested cache and reasoning fields without double-counting
+  explicit cache totals.
+- `symphony doctor` now reports masked setup commands such as `|| true` and
+  piped `tail` as warnings by default, with
+  `hooks.fail_on_warning_patterns: true` available when a workflow wants those
+  checks to fail.
+- Workflow state renames carry the new per-state turn-cap map along with the
+  existing concurrency and token maps.
+- Public docs now lead with the built-in 9999 browser admin UI and a sanitized
+  screenshot, while still keeping the terminal TUI visible.
+
+### Fixed
+
+- `GET /api/v1/issues/<ID>` now serializes raw YAML frontmatter `date` and
+  `datetime` values before returning JSON, fixing the `CODEX-E2E-001` detail
+  drawer load failure.
+- File tickets auto-heal shallow accidental indentation on canonical top-level
+  metadata keys such as `updated_at`, preventing post-turn refresh failures from
+  malformed agent-authored YAML.
+- Verify contract checks reject placeholder or prose-only evidence cells, so
+  quality gates require durable artifacts rather than hollow table entries.
+- File-board dependency blockers now apply beyond `Todo`; unresolved dependency
+  IDs stay visible through `blocked_dependency` instead of letting held work run.
+
+### Verification
+
+- `rtk pytest -q` -> 1,108 passed, 2 skipped during the reliability hardening
+  pass.
+- `pytest tests/test_webapi.py tests/test_web_api_smoke_script.py -q` -> 24
+  passed for the issue-detail serialization fix.
+- Fresh remote-clone Codex E2E rerun reached `Human Review` on `CODEX-E2E-002`
+  with `worker_exit reason=normal` and the issue detail API returning string
+  timestamps.
+- Copied-board prompt measurement showed compact Verify context reducing
+  `TASK-005` from 5,453 to 3,944 `o200k_base` tokens, a 27.7% reduction.
+
+## [0.9.3] - 2026-07-04 - OpenCode telemetry and refresh hardening
+
+### Fixed
+
+- OpenCode 1.17 JSONL text extraction now reads `type=="text"` frames under
+  `part.text`, preventing productive OpenCode turns from being counted as empty.
+- OpenCode 1.17 token usage now reads `step_finish.part.tokens`, restoring
+  token telemetry for `max_total_tokens` and operator visibility.
+- File-tracker ticket parsing auto-heals the observed shallow `updated_at`
+  indentation issue before normal tracker writes serialize canonical YAML.
+
+## [0.9.2] - 2026-07-04 - OpenCode empty-turn preview
+
+### Fixed
+
+- OpenCode completed-turn events now emit the response under the `message`
+  preview key so the orchestrator can reset the empty-response-loop guard.
+
+## [0.9.1] - 2026-07-03 - Landing page version sync
+
+### Changed
+
+- Synchronized source version and public landing-page badge after the v0.9.1
+  release closeout.
 
 ## [0.9.0] — 4-stage pipeline simplification
 
@@ -842,7 +906,12 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.10.0
+[0.9.3]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.9.3
+[0.9.2]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.9.2
+[0.9.1]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.9.1
+[0.9.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.9.0
 [0.4.8]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.8
 [0.4.7]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.7
 [0.4.3]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.4.3

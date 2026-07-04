@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oh-my-symphony"
-version = "0.9.3"
+version = "0.10.0"
 description = "Multi-agent fork of OpenAI Symphony — supports Codex CLI, Claude Code CLI, Gemini CLI, OpenCode CLI, and Pi CLI behind one local Kanban orchestrator with TUI and web board."
 readme = "README.md"
 requires-python = ">=3.12"
