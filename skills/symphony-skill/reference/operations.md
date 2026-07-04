@@ -69,6 +69,19 @@ symphony service restart ./WORKFLOW.md
 symphony service stop ./WORKFLOW.md
 ```
 
+**"Open the orchestrator" → open the `--port` web app (default 9999).** The
+orchestrator serves a full browsable web app at `http://127.0.0.1:<--port>/`
+(default `9999`), not just the JSON API under `/api/v1/`. This is the default
+page to open. Treat the `--viewer-port` board (default `8765`) as the
+secondary read/write card board. So when the operator says "open the
+orchestrator", open the service `--port`:
+
+```bash
+open http://127.0.0.1:9999/        # macOS
+xdg-open http://127.0.0.1:9999/    # Linux
+start http://127.0.0.1:9999/       # Windows
+```
+
 Use `symphony service ...` for normal headless operation. It records a
 per-workflow run-state file under `.symphony/run/` and refuses to start the
 same `WORKFLOW.md` a second time on another port, which prevents duplicate
