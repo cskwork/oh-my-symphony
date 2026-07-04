@@ -10,7 +10,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Post-v0.10.0 changes will be listed here.
+Post-v0.10.1 changes will be listed here.
+
+## [0.10.1] - 2026-07-05 - Prompt compaction default-on
+
+### Changed
+
+- Prompt context compaction now defaults on for new workflows. Workflows that
+  need the full raw ticket history in every first-turn prompt can set
+  `agent.compact_issue_context: false`.
 
 ## [0.10.0] - 2026-07-05 - Codex E2E reliability hardening
 
@@ -906,7 +914,8 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.10.1
 [0.10.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.10.0
 [0.9.3]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.9.3
 [0.9.2]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.9.2

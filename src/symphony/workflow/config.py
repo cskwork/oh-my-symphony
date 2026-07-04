@@ -115,8 +115,9 @@ class AgentConfig:
     # In Progress without spending a model turn on one-line triage.
     auto_triage_actionable_todo: bool = True
     # Render first-turn prompts with state-relevant ticket context instead
-    # of the whole accumulating Markdown body. Default off for rollback.
-    compact_issue_context: bool = False
+    # of the whole accumulating Markdown body. Workflows can opt out when a
+    # custom ticket format needs full raw history in every worker prompt.
+    compact_issue_context: bool = True
     # When a ticket reaches the Done state cleanly, snapshot the workspace
     # into a single git commit (`git init` if no enclosing repo found).
     # Default ON so a fresh `pip install oh-my-symphony` plus a

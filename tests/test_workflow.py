@@ -393,7 +393,7 @@ def test_build_service_config_reads_compact_issue_context(tmp_path):
     assert cfg.agent.compact_issue_context is True
 
 
-def test_build_service_config_compact_issue_context_defaults_false(tmp_path):
+def test_build_service_config_compact_issue_context_defaults_true(tmp_path):
     path = _write(
         tmp_path,
         textwrap.dedent(
@@ -402,6 +402,28 @@ def test_build_service_config_compact_issue_context_defaults_false(tmp_path):
             tracker:
               kind: file
               board_root: ./board
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.compact_issue_context is True
+
+
+def test_build_service_config_compact_issue_context_can_opt_out(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              compact_issue_context: false
             ---
             Hello
             """

@@ -346,7 +346,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             agent_raw.get("auto_triage_actionable_todo", True)
         ),
         compact_issue_context=bool(
-            agent_raw.get("compact_issue_context", False)
+            agent_raw.get("compact_issue_context", True)
         ),
         auto_commit_on_done=bool(
             agent_raw.get("auto_commit_on_done", True)
