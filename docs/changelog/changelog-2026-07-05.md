@@ -117,9 +117,9 @@ researched, started, and exercised through real customer workflows.
 
 ## Decision
 
-Update the operator skill, OneShot decomposition guide, and file/Linear worker
-prompts so app delivery starts with a product-readiness brief and ends with a
-merged-target release verification ticket.
+Update the operator skill and OneShot/delegation guides so app delivery starts
+with a product-readiness brief and ends with a merged-target release
+verification ticket.
 
 Also update ticket-registration guidance to route by work type before slicing:
 bugfix, feature/enhancement, customer-facing app delivery, release/integration,
@@ -150,8 +150,13 @@ workflow is `Not market-ready` and rewinds or blocks delivery.
 
 ## Verification
 
-- Prompt contract tests cover the new `## Product Contract`, merged-target app
-  release proof, `curl 000` startup failure handling, and market-ready wording.
 - Skill guidance tests cover product discovery, release matrix ticketing, and
   work-type-specific issue registration for bugfix, feature, app-delivery, and
   release-verification routes.
+
+## Correction
+
+The production-readiness guidance belongs in the Symphony skill used by agents
+when registering board issues, not in the built-in worker prompt templates.
+The prompt-template edits were reverted so existing workflows keep their current
+stage prompt contract unless an operator explicitly updates a workflow prompt.

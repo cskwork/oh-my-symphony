@@ -95,7 +95,6 @@ Keep sections compact. Overflow goes to `docs/{{ issue.identifier }}/<stage>/det
 | `## Triage` | 1-2 lines | n/a |
 | `## Reproduction` | command + 3-10 line failure excerpt | raw trace/log under `reproduce/` |
 | `## Plan` | goal, before, after, 4-8 steps | full task list, risk notes |
-| `## Product Contract` | customer, workflow, required functionality, assumptions, market-ready gaps | research notes, workflow map |
 | `## Acceptance Tests` | one proof per criterion | setup/fixtures |
 | `## Done Signals` | expected observable pass state | payloads, long logs |
 | `## Difficulty` | 1 line verdict + 1 line why | n/a |
@@ -125,7 +124,6 @@ Style rules:
 ## Hard rules
 
 - Never skip Verify. Never mark `Done` without `## QA Evidence`, `## Merge Status`, and explicit human confirmation from Human Review.
-- For customer-facing app delivery, `Done` means the merged target branch starts through the declared launch path and the core customer workflows work. A shell, mock-only UI, or unverified feature worktree is `Not market-ready`.
 - Never silence failing tests, hide errors, or add fake success paths. Fix the root cause or move the ticket to `Blocked`.
 - Touch only what the ticket requires. No drive-by refactors.
 - Record non-trivial decisions in `docs/changelog/changelog-YYYY-MM-DD.md` (append; do not overwrite).

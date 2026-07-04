@@ -8,7 +8,6 @@ Goal for this lane: make the smallest correct change and leave a card that expla
 2. If the CLI supports subagents (for example Claude Code Task tool), delegate broad exploration, repo search, or verification sweeps to fresh-context subagents and keep the main context focused on ticket, plan, and diff. If no subagent support exists, do the same work locally and keep notes brief.
 3. Produce or refresh these sections before editing source:
    - `## Plan` -- user goal, before state, after target, rejected approaches if any, and concrete implementation steps.
-   - `## Product Contract` -- for app/product work, name the target customer, core workflow this ticket owns, required functionality, data/auth/deploy assumptions, and what market-ready behavior would still be missing after this ticket.
    - `## Acceptance Tests` -- one proof per acceptance criterion, with the signal and command or artifact that will prove it.
    - `## Done Signals` -- exact visible state Verify should see, including what would still be `Not proven`.
    - `## Difficulty` -- `trivial`, `standard`, or `complex` with one-line rationale.
@@ -17,7 +16,6 @@ Goal for this lane: make the smallest correct change and leave a card that expla
 6. Append `## Implementation` with what changed, why this approach, and any alternatives rejected because they were too risky, broad, or speculative.
 7. Self-critique before moving on: re-read the ticket/spec, check null/empty/boundary/error paths, add any missing tests, and append `## Self-Critique` with risk, not-covered items, and the exact focus for Verify.
    - Static browser apps that claim direct `file://` support must boot from `file://`; do not use `<script type="module">` or dynamic `import()` unless the acceptance path explicitly serves the app over HTTP.
-   - App/product tickets must leave a customer-observable workflow, not only isolated components. If the core workflow is incomplete, say `Not market-ready` and keep the ticket in scope for Verify to fail or rewind.
 8. Append `## Pipeline Route`: always route to `Verify`. Record whether Verify may use the trivial non-runtime QA short path, but never skip Verify.
 9. Set state to `Verify`.
 

@@ -26,11 +26,6 @@ IN_PROGRESS_RULES = (
     "proof map",
     "before state",
     "after target",
-    "## Product Contract",
-    "target customer",
-    "market-ready behavior",
-    "customer-observable workflow",
-    "Not market-ready",
     "what would still be `Not proven`",
     "## Plan",
     "## Acceptance Tests",
@@ -53,12 +48,6 @@ VERIFY_RULES = (
     "Browser UI work must drive Playwright/headless Chromium",
     "fail on module-script/CORS boot errors",
     "DOM shims are smoke only, never final Verify authority",
-    "App delivery or release-verification tickets must prove the merged target branch as a product",
-    "clean install/setup",
-    "browser/API smoke for each core customer workflow",
-    "Testing only the current feature worktree is not enough",
-    "curl 000",
-    "Not market-ready",
     "## Environment Block",
     "## QA Evidence",
     "## AC Scorecard",
@@ -66,7 +55,6 @@ VERIFY_RULES = (
     "## QA Failure",
     "git merge-tree --write-tree",
     "## Merge Status",
-    "post-merge target SHA",
     "Set state to `Learn`",
 )
 
@@ -237,12 +225,9 @@ def test_base_prompt_declares_four_stage_pipeline_and_skip_learn(flavor: str) ->
     assert "operator may skip Learn to Human Review" in text
     assert "Use `Not proven` when evidence is missing" in text
     assert "Never skip Verify" in text
-    assert "customer-facing app delivery" in text
-    assert "merged target branch starts through the declared launch path" in text
-    assert "## Product Contract" in text
 
 
-def test_operator_skill_requires_product_discovery_and_release_verify() -> None:
+def test_operator_skill_routes_ticket_registration_by_work_type() -> None:
     skill = (REPO_ROOT / "skills" / "symphony-skill" / "SKILL.md").read_text(
         encoding="utf-8"
     )
