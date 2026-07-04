@@ -58,6 +58,7 @@ from ..issue import (
     parse_iso_timestamp,
 )
 from ..skills import normalize_skill_names
+from ..ticket_markdown import parse_body_dependency_ids
 from ..workflow import TrackerConfig
 
 
@@ -256,7 +257,10 @@ def issue_from_file(path: Path) -> Issue | None:
     if not (raw_id and title and state):
         return None
     identifier = str(raw_id)
-    blockers = _parse_blockers(front.get("blocked_by"))
+    blockers = _merge_body_dependency_blockers(
+        _parse_blockers(front.get("blocked_by")),
+        body,
+    )
     return Issue(
         id=identifier,
         identifier=identifier,
@@ -308,6 +312,19 @@ def _parse_blockers(value: Any) -> list[BlockerRef]:
                 )
             )
     return out
+
+
+def _merge_body_dependency_blockers(
+    blockers: list[BlockerRef], body: str | None
+) -> list[BlockerRef]:
+    merged = list(blockers)
+    existing = {blocker.identifier or blocker.id for blocker in merged}
+    for identifier in parse_body_dependency_ids(body):
+        if identifier in existing:
+            continue
+        merged.append(BlockerRef(id=identifier, identifier=identifier, state=None))
+        existing.add(identifier)
+    return merged
 
 
 def _file_ctime_iso(path: Path) -> str | None:

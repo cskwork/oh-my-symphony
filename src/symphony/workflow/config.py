@@ -85,6 +85,9 @@ class HooksConfig:
     # None preserves legacy behaviour and keeps existing positional
     # `HooksConfig(...)` callers source-compatible.
     after_done: str | None = None
+    # Doctor warning patterns are advisory by default. Workflows that treat
+    # setup masking as release-blocking can opt into a fatal doctor result.
+    fail_on_warning_patterns: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,7 @@ class AgentConfig:
     max_concurrent_agents_by_state: dict[str, int]
     max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
     max_state_turns: int = DEFAULT_MAX_STATE_TURNS
+    max_state_turns_by_state: dict[str, int] = field(default_factory=dict)
     no_stage_change_action: str = "block"
     # Soft cap for Verify/Learn rewinds back into In Progress. 0 disables.
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
@@ -110,6 +114,9 @@ class AgentConfig:
     # File-board optimization: actionable Todo tickets can be routed to
     # In Progress without spending a model turn on one-line triage.
     auto_triage_actionable_todo: bool = True
+    # Render first-turn prompts with state-relevant ticket context instead
+    # of the whole accumulating Markdown body. Default off for rollback.
+    compact_issue_context: bool = False
     # When a ticket reaches the Done state cleanly, snapshot the workspace
     # into a single git commit (`git init` if no enclosing repo found).
     # Default ON so a fresh `pip install oh-my-symphony` plus a
@@ -165,6 +172,9 @@ class AgentConfig:
     # Optional per-state override for `max_total_tokens`. Keys are state
     # names lowercased by the parser, e.g. "review" or "in progress".
     max_total_tokens_by_state: dict[str, int] = field(default_factory=dict)
+    # Attention-only per-state token thresholds. These never cancel or block
+    # workers; they only surface unusually large turns to operators.
+    token_attention_threshold_by_state: dict[str, int] = field(default_factory=dict)
     # Target tracker state to transition the ticket to when
     # `max_total_turns` is exhausted. Empty string (default, legacy) =
     # no transition; the in-memory `_turn_budget_exhausted` guard alone

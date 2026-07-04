@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from symphony.orchestrator.parsing import _parse_findings_rows
 from symphony.orchestrator.contracts import ContractResult, evaluate_contract
 
 
@@ -33,13 +34,13 @@ def _complete_verify_body() -> str:
 ## Security Audit
 | check | verdict | evidence |
 | --- | --- | --- |
-| secrets | pass | n/a |
-| input-validation | pass | n/a |
-| injection | pass | n/a |
-| xss | pass | n/a |
-| csrf | pass | n/a |
-| authz | pass | n/a |
-| rate-limit | pass | n/a |
+| secrets | pass | qa/security.md |
+| input-validation | pass | qa/security.md |
+| injection | pass | qa/security.md |
+| xss | pass | qa/security.md |
+| csrf | pass | qa/security.md |
+| authz | pass | qa/security.md |
+| rate-limit | pass | qa/security.md |
 
 ## Review
 diff matches plan
@@ -55,6 +56,13 @@ diff matches plan
 ## Merge Status
 merged to main with --no-ff
 """
+
+
+def _write_verify_artifacts(docs_root: Path, identifier: str = "SMA-1") -> None:
+    qa = docs_root / identifier / "qa"
+    qa.mkdir(parents=True, exist_ok=True)
+    (qa / "version.log").write_text("ok")
+    (qa / "security.md").write_text("security audit evidence")
 
 
 def test_in_progress_contract_passes_with_sections_and_work_file(
@@ -118,8 +126,7 @@ def test_verify_contract_passes_with_review_qa_scorecard_and_merge(
     tmp_path: Path,
 ) -> None:
     docs_root = tmp_path / "docs"
-    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
-    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    _write_verify_artifacts(docs_root)
 
     result = evaluate_contract(
         producing_state="Verify",
@@ -136,8 +143,7 @@ def test_verify_contract_normalizes_docs_prefixed_evidence_path(
     tmp_path: Path,
 ) -> None:
     docs_root = tmp_path / "docs"
-    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
-    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    _write_verify_artifacts(docs_root)
     body = _complete_verify_body().replace(
         "| version bumped | pytest | pass | qa/version.log |",
         "| version bumped | pytest | pass | docs/SMA-1/qa/version.log |",
@@ -265,8 +271,7 @@ def test_verify_rejects_source_anchor_prose_as_evidence_cell(
     tmp_path: Path,
 ) -> None:
     docs_root = tmp_path / "docs"
-    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
-    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    _write_verify_artifacts(docs_root)
     body = _complete_verify_body().replace(
         "| version bumped | pytest | pass | qa/version.log |",
         "| version bumped | pytest | pass | No secrets in examples/foo.js:1 |",
@@ -283,12 +288,107 @@ def test_verify_rejects_source_anchor_prose_as_evidence_cell(
     assert any("source anchors/prose" in item for item in result.missing)
 
 
+def test_contract_failure_reports_expected_evidence_path_shape(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | validated in source |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is False
+    assert result.failures
+    failure = result.failures[0]
+    assert failure.section == "## AC Scorecard"
+    assert failure.row == 1
+    assert failure.found == "validated in source"
+    assert "docs/SMA-1/qa/evidence.md" in failure.expected
+    assert "work/verify.log" in failure.expected
+    assert "## AC Scorecard row 1" in result.note
+    assert "validated in source" in result.note
+    assert "docs/SMA-1/qa/evidence.md" in result.note
+
+
+def test_contract_failure_rejects_placeholder_evidence_cells(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | - |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is False
+    assert result.failures
+    assert result.failures[0].found == "-"
+    assert "docs/SMA-1/qa/evidence.md" in result.note
+
+
+def test_contract_failure_note_round_trips_backticked_evidence_scope(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | `validated in source` |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is False
+    rows = _parse_findings_rows(result.note)
+    assert rows == [
+        {
+            "severity": "CONTRACT",
+            "file": "",
+            "line": 1,
+            "fix": (
+                "## AC Scorecard row 1: found ``validated in source``; "
+                "expected evidence must cite a durable artifact such as "
+                "`docs/SMA-1/qa/evidence.md`, `qa/evidence.md`, "
+                "`docs/SMA-1/work/verify.log`, or `work/verify.log`; "
+                "put source anchors/prose inside that artifact"
+            ),
+            "section": "## AC Scorecard",
+            "found": "`validated in source`",
+            "expected": (
+                "evidence must cite a durable artifact such as "
+                "`docs/SMA-1/qa/evidence.md`, `qa/evidence.md`, "
+                "`docs/SMA-1/work/verify.log`, or `work/verify.log`; "
+                "put source anchors/prose inside that artifact"
+            ),
+        }
+    ]
+
+
 def test_verify_bug_repro_not_closed_rewinds(tmp_path: Path) -> None:
     docs_root = tmp_path / "docs"
     (docs_root / "SMA-1" / "reproduce").mkdir(parents=True)
     (docs_root / "SMA-1" / "reproduce" / "repro.spec.ts").write_text("test")
-    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
-    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    _write_verify_artifacts(docs_root)
 
     result = evaluate_contract(
         producing_state="Verify",
@@ -305,8 +405,7 @@ def test_verify_bug_repro_closed_passes(tmp_path: Path) -> None:
     docs_root = tmp_path / "docs"
     (docs_root / "SMA-1" / "reproduce").mkdir(parents=True)
     (docs_root / "SMA-1" / "reproduce" / "repro.spec.ts").write_text("test")
-    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
-    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    _write_verify_artifacts(docs_root)
     (docs_root / "SMA-1" / "qa" / "repro-after.log").write_text("0 failures")
 
     result = evaluate_contract(
@@ -321,8 +420,7 @@ def test_verify_bug_repro_closed_passes(tmp_path: Path) -> None:
 
 def test_verify_scorecard_fail_row_warns_without_rewind(tmp_path: Path) -> None:
     docs_root = tmp_path / "docs"
-    (docs_root / "SMA-1" / "qa").mkdir(parents=True)
-    (docs_root / "SMA-1" / "qa" / "version.log").write_text("ok")
+    _write_verify_artifacts(docs_root)
     (docs_root / "SMA-1" / "qa" / "ac2.log").write_text("ok")
     body = _complete_verify_body().replace(
         "| version bumped | pytest | pass | qa/version.log |",

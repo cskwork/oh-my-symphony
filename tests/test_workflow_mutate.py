@@ -35,6 +35,8 @@ agent:
     Doing: 2
   max_total_tokens_by_state:
     Doing: 1000
+  max_state_turns_by_state:
+    Doing: 7
 
 prompts:
   base: ./prompts/base.md
@@ -129,6 +131,7 @@ def test_rename_column_updates_per_state_maps(workflow: Path) -> None:
     assert "Building: ./prompts/stages/doing.md" in text
     assert "Building: 2" in text
     assert "Building: 1000" in text
+    assert "Building: 7" in text
 
 
 def test_remove_column_reports_removed_and_fallback(workflow: Path) -> None:

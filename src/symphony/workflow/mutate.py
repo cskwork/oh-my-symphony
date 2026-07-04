@@ -239,6 +239,7 @@ def apply_states_update(workflow_path: Path, specs: list[StateSpec]) -> StatesUp
     agent = data.get("agent")
     if isinstance(agent, dict):
         _rename_state_keyed_map(agent, "max_concurrent_agents_by_state", renamed, removed)
+        _rename_state_keyed_map(agent, "max_state_turns_by_state", renamed, removed)
         _rename_state_keyed_map(agent, "max_total_tokens_by_state", renamed, removed)
 
     _add_stage_prompts(data, workflow_path, [s for s in specs if not s.terminal and s.name in added])

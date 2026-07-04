@@ -1024,6 +1024,68 @@ async def test_opencode_extracts_usage_from_jsonl_step_finish_part_tokens(
 
 
 @pytest.mark.asyncio
+async def test_opencode_preserves_step_finish_cache_and_reasoning_token_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin OpenCode 1.17 cache/reasoning fields without inventing warnings."""
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    stdout = (
+        b'{"type":"text","sessionID":"ses_y","part":{"type":"text",'
+        b'"text":"DONE with cache"}}\n'
+        b'{"type":"step_finish","sessionID":"ses_y","part":{"type":"step-finish",'
+        b'"tokens":{"total":4096,"input":900,"output":12,"reasoning":2048,'
+        b'"cache":{"write":256,"read":880}}}}\n'
+    )
+    _install_subprocess_double(
+        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Token accounting")
+    await backend.run_turn(prompt="first", is_continuation=False)
+
+    usage = backend.latest_usage
+    assert usage["input_tokens"] == 2036
+    assert usage["output_tokens"] == 12
+    assert usage["total_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_opencode_does_not_double_count_explicit_and_nested_cache_tokens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit cache totals are authoritative when nested cache detail exists."""
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    stdout = (
+        b'{"type":"text","sessionID":"ses_z","part":{"type":"text",'
+        b'"text":"DONE with explicit cache"}}\n'
+        b'{"type":"step_finish","sessionID":"ses_z","part":{"type":"step-finish",'
+        b'"tokens":{"total":115,"input":100,"output":5,'
+        b'"cache_input_tokens":10,"cache":{"read":10}}}}\n'
+    )
+    _install_subprocess_double(
+        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Token accounting")
+    await backend.run_turn(prompt="first", is_continuation=False)
+
+    usage = backend.latest_usage
+    assert usage["input_tokens"] == 110
+    assert usage["output_tokens"] == 5
+    assert usage["total_tokens"] == 115
+
+
+@pytest.mark.asyncio
 async def test_opencode_emits_heartbeats_while_turn_subprocess_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

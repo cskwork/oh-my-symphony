@@ -34,13 +34,13 @@ _BUG_ID = "BUG-7"
 _VERIFY_BODY = """## Security Audit
 | check | verdict | evidence |
 | --- | --- | --- |
-| secrets | pass | n/a |
-| input-validation | pass | n/a |
-| injection | pass | n/a |
-| xss | pass | n/a |
-| csrf | pass | n/a |
-| authz | pass | n/a |
-| rate-limit | pass | n/a |
+| secrets | pass | BUG-7/qa/security.md |
+| input-validation | pass | BUG-7/qa/security.md |
+| injection | pass | BUG-7/qa/security.md |
+| xss | pass | BUG-7/qa/security.md |
+| csrf | pass | BUG-7/qa/security.md |
+| authz | pass | BUG-7/qa/security.md |
+| rate-limit | pass | BUG-7/qa/security.md |
 
 ## Review
 diff matches plan
@@ -83,6 +83,7 @@ def _seed_qa_artefacts(docs_root: Path) -> None:
     qa = docs_root / _BUG_ID / "qa"
     qa.mkdir(parents=True)
     (qa / "version.log").write_text("ok")
+    (qa / "security.md").write_text("security evidence")
 
 
 def test_verify_bug_repro_not_closed_rewinds(tmp_path: Path) -> None:

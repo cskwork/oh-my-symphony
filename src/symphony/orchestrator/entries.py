@@ -69,6 +69,9 @@ class RunningEntry:
     stats_cache_input_tokens: int = 0
     stats_output_tokens: int = 0
     stats_total_tokens: int = 0
+    # Cumulative run-local total at the last completed-turn token attention
+    # check. Separate from stats so attention still works when stats are off.
+    token_attention_total_tokens: int = 0
     # The state the current turn STARTED in. Captured at worker_turn_started
     # so the EMA samples the stage that actually consumed the tokens. Without
     # this, `_update_token_ema` reads `entry.issue.state` at
@@ -154,4 +157,5 @@ class _IssueDebug:
     last_workspace: Path | None = None
     last_error: str | None = None
     tracker_error: str | None = None
+    token_attention: dict[str, str | None] | None = None
     recent_events: list[dict[str, Any]] = field(default_factory=list)

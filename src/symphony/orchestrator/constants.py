@@ -96,6 +96,9 @@ _REVIEW_FINDINGS_HEADING_RE = re.compile(
 _QA_FAILURE_HEADING_RE = re.compile(
     r"^##\s+QA\s+Failure\s*:?\s*$", re.IGNORECASE | re.MULTILINE
 )
+_CONTRACT_FAILURE_HEADING_RE = re.compile(
+    r"^##\s+Contract\s+Failure\s*:?\s*$", re.IGNORECASE | re.MULTILINE
+)
 _NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
 # Bullet list rows: `- path/to/file.py` (optionally with surrounding backticks).
 # Two forms, tried in order:

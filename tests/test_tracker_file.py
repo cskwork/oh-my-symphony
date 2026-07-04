@@ -276,6 +276,145 @@ def test_fetch_candidate_resolves_blocker_state_from_current_board(tmp_path):
     assert issues["B"].blocked_by[0].state == "Review"
 
 
+def test_body_dependencies_become_blockers_with_state(tmp_path):
+    root = tmp_path / "board"
+    _write(
+        root,
+        "TASK-004.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: TASK-004
+            title: Upstream review
+            state: Human Review
+            ---
+            waiting for approval
+            """
+        ),
+    )
+    _write(
+        root,
+        "TASK-005.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: TASK-005
+            title: Dependent task
+            state: Todo
+            ---
+            ## Request
+            Continue after upstream review.
+
+            ## Dependencies
+            - TASK-004 must be accepted first.
+
+            ## Acceptance Criteria
+            - It waits for the dependency.
+            """
+        ),
+    )
+
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "Human Review"), terminal=("Done",))
+    )
+    issues = {i.identifier: i for i in fbt.fetch_candidate_issues()}
+
+    blocker = issues["TASK-005"].blocked_by[0]
+    assert blocker.identifier == "TASK-004"
+    assert blocker.state == "Human Review"
+
+
+def test_unknown_body_dependency_remains_blocker_without_state(tmp_path):
+    root = tmp_path / "board"
+    _write(
+        root,
+        "TASK-005.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: TASK-005
+            title: Dependent task
+            state: Todo
+            ---
+            ## Request
+            Continue after external dependency.
+
+            ## Dependencies
+            TASK-999 is referenced but not on this board.
+
+            ## Acceptance Criteria
+            - It does not silently run.
+            """
+        ),
+    )
+
+    fbt = FileBoardTracker(_tracker(root, active=("Todo",), terminal=("Done",)))
+    issue = fbt.fetch_candidate_issues()[0]
+
+    blocker = issue.blocked_by[0]
+    assert blocker.identifier == "TASK-999"
+    assert blocker.state is None
+
+
+def test_body_dependency_ids_outside_dependencies_section_are_ignored(tmp_path):
+    root = tmp_path / "board"
+    path = _write(
+        root,
+        "TASK-005.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: TASK-005
+            title: Mention only
+            state: Todo
+            ---
+            ## Request
+            Coordinate with TASK-004 before release notes move.
+
+            ## Acceptance Criteria
+            - TASK-004 remains just historical context here.
+            """
+        ),
+    )
+
+    issue = issue_from_file(path)
+
+    assert issue is not None
+    assert issue.blocked_by == ()
+
+
+def test_body_dependency_heading_inside_fenced_code_is_ignored(tmp_path):
+    root = tmp_path / "board"
+    path = _write(
+        root,
+        "TASK-005.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: TASK-005
+            title: Code sample mention
+            state: Todo
+            ---
+            ## Request
+            Preserve this example:
+
+            ```markdown
+            ## Dependencies
+            - TASK-004 is part of the example, not this ticket.
+            ```
+
+            ## Acceptance Criteria
+            - The sample does not block dispatch.
+            """
+        ),
+    )
+
+    issue = issue_from_file(path)
+
+    assert issue is not None
+    assert issue.blocked_by == ()
+
+
 def test_fetch_issues_by_states(tmp_path):
     root = tmp_path / "board"
     _write(root, "A.md", "---\nid: A\ntitle: a\nstate: Done\n---\n")

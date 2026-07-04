@@ -11,9 +11,19 @@ from pathlib import Path
 import pytest
 
 import symphony.orchestrator.core as core_module
-from symphony.backends import EVENT_APPROVAL_DENIED, EVENT_SESSION_STARTED
+from symphony.backends import (
+    EVENT_APPROVAL_DENIED,
+    EVENT_SESSION_STARTED,
+    EVENT_TURN_COMPLETED,
+)
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
-from symphony.orchestrator import Orchestrator, RunningEntry, _IssueDebug, _sort_for_dispatch_fifo
+from symphony.orchestrator import (
+    Orchestrator,
+    RunningEntry,
+    _is_auto_triage_todo_candidate,
+    _IssueDebug,
+    _sort_for_dispatch_fifo,
+)
 from symphony.workspace import WorkspaceManager
 from symphony.workflow import (
     AgentConfig,
@@ -286,6 +296,30 @@ def test_todo_with_terminal_blocker_eligible():
     blocker = BlockerRef(id="z", identifier="MT-9", state="Done")
     issue = _issue("MT-1", state="Todo", blocked_by=(blocker,))
     assert orch._should_dispatch(issue, cfg) is True
+
+
+def test_active_state_issue_with_unresolved_blocker_is_ineligible():
+    cfg = _make_config(active_states=("Todo", "In Progress", "Verify"))
+    orch = _orch()
+    blocker = BlockerRef(id="MT-9", identifier="MT-9", state="Verify")
+    issue = _issue("MT-1", state="In Progress", blocked_by=(blocker,))
+
+    assert orch._eligible(issue, cfg, owning_retry=False) is False
+
+
+def test_auto_triage_refuses_todo_with_body_dependency():
+    cfg = _make_config(tracker_kind="file", active_states=("Todo", "In Progress"))
+    issue = _issue(
+        "MT-1",
+        state="Todo",
+        description=(
+            "## Request\nBuild it.\n\n"
+            "## Dependencies\nMT-9 must finish first.\n\n"
+            "## Acceptance Criteria\n1. It works."
+        ),
+    )
+
+    assert _is_auto_triage_todo_candidate(issue, cfg) is False
 
 
 def test_per_state_concurrency_cap():
@@ -1208,6 +1242,216 @@ def test_token_totals_track_cache_input_tokens_separately():
     assert row["tokens"]["cache_input_tokens"] == 90
     assert row["tokens"]["state_cache_input_tokens"] == 90
     assert snap["codex_totals"]["cache_input_tokens"] == 90
+
+
+def test_token_totals_delta_cumulative_reports_without_double_counting():
+    orch = _orch()
+    issue = _issue("TOK-DELTA", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+
+    first_delta, _ = orch._apply_token_totals(
+        entry,
+        {
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "total_tokens": 110,
+        },
+    )
+    second_delta, _ = orch._apply_token_totals(
+        entry,
+        {
+            "input_tokens": 140,
+            "output_tokens": 15,
+            "total_tokens": 155,
+        },
+    )
+
+    assert first_delta == 110
+    assert second_delta == 45
+    assert entry.codex_total_tokens == 155
+    assert orch.snapshot()["codex_totals"]["total_tokens"] == 155
+
+
+def test_productive_zero_token_turn_reports_attention(monkeypatch):
+    cfg = _make_config(active_states=("In Progress",))
+    orch = _orch()
+    issue = _issue("TOK-ZERO", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": EVENT_TURN_COMPLETED,
+                "timestamp": "2026-07-04T00:00:00Z",
+                "payload": {"message": "Implemented the migration."},
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
+            },
+        )
+
+    asyncio.run(_run())
+
+    attention = orch.issue_attention(issue)
+    assert entry.cancelled_at is None
+    assert attention is not None
+    assert attention["kind"] == "token_telemetry_suspect"
+    assert attention["label"] == "Token telemetry"
+    assert attention["severity"] == "warning"
+    assert "zero total tokens" in attention["message"]
+
+
+def test_high_token_turn_without_threshold_records_without_attention(monkeypatch):
+    cfg = _make_config(active_states=("In Progress",))
+    orch = _orch()
+    issue = _issue("TOK-HIGH", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": EVENT_TURN_COMPLETED,
+                "timestamp": "2026-07-04T00:00:00Z",
+                "payload": {"message": "Finished a reasoning-heavy turn."},
+                "usage": {
+                    "input_tokens": 8_000_000,
+                    "output_tokens": 50_000,
+                    "total_tokens": 8_050_000,
+                },
+            },
+        )
+
+    asyncio.run(_run())
+
+    assert entry.codex_total_tokens == 8_050_000
+    assert entry.cancelled_at is None
+    assert issue.id not in orch._turn_budget_exhausted
+    assert orch.issue_attention(issue) is None
+
+
+def test_high_token_turn_without_hard_cap_does_not_block(monkeypatch):
+    cfg = _replace_agent_field(
+        _make_config(active_states=("In Progress",)),
+        token_attention_threshold_by_state={"in progress": 1_000},
+    )
+    orch = _orch()
+    issue = _issue("TOK-HIGH-SOFT", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    persisted: list[str] = []
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _persist(*args, **kwargs):
+        persisted.append(str(kwargs.get("budget_kind")))
+        return True
+
+    monkeypatch.setattr(orch, "_persist_budget_exhausted_state", _persist)
+
+    async def _run() -> None:
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": EVENT_TURN_COMPLETED,
+                "timestamp": "2026-07-04T00:00:00Z",
+                "payload": {"message": "Finished a reasoning-heavy turn."},
+                "usage": {
+                    "input_tokens": 8_000_000,
+                    "output_tokens": 50_000,
+                    "total_tokens": 8_050_000,
+                },
+            },
+        )
+
+    asyncio.run(_run())
+
+    attention = orch.issue_attention(issue)
+    assert entry.cancelled_at is None
+    assert issue.id not in orch._turn_budget_exhausted
+    assert persisted == []
+    assert attention is not None
+    assert attention["kind"] == "token_attention_threshold"
+
+
+def test_high_token_turn_above_explicit_threshold_warns_only(monkeypatch):
+    base_cfg = _make_config(active_states=("In Progress",))
+    cfg = _replace_agent_field(
+        base_cfg,
+        token_attention_threshold_by_state={"in progress": 1_000},
+    )
+    orch = _orch()
+    issue = _issue("TOK-THRESHOLD", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": EVENT_TURN_COMPLETED,
+                "timestamp": "2026-07-04T00:00:00Z",
+                "payload": {"message": "Finished a large turn."},
+                "usage": {
+                    "input_tokens": 1_200,
+                    "output_tokens": 50,
+                    "total_tokens": 1_250,
+                },
+            },
+        )
+
+    asyncio.run(_run())
+
+    attention = orch.issue_attention(issue)
+    assert entry.cancelled_at is None
+    assert issue.id not in orch._turn_budget_exhausted
+    assert attention is not None
+    assert attention["kind"] == "token_attention_threshold"
+    assert attention["severity"] == "warning"
+    assert "1250/1000" in attention["message"]
+
+
+def test_token_attention_threshold_never_persists_budget_state(monkeypatch):
+    cfg = _replace_agent_field(
+        _make_config(active_states=("In Progress",)),
+        token_attention_threshold_by_state={"in progress": 1_000},
+        budget_exhausted_state="Blocked",
+    )
+    orch = _orch()
+    issue = _issue("TOK-SOFT-NO-PERSIST", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _persist(*args, **kwargs):
+        raise AssertionError("token attention must not persist budget state")
+
+    monkeypatch.setattr(orch, "_persist_budget_exhausted_state", _persist)
+
+    async def _run() -> None:
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": EVENT_TURN_COMPLETED,
+                "timestamp": "2026-07-04T00:00:00Z",
+                "payload": {"message": "Finished a large turn."},
+                "usage": {
+                    "input_tokens": 1_200,
+                    "output_tokens": 50,
+                    "total_tokens": 1_250,
+                },
+            },
+        )
+
+    asyncio.run(_run())
+
+    attention = orch.issue_attention(issue)
+    assert entry.cancelled_at is None
+    assert issue.id not in orch._turn_budget_exhausted
+    assert attention is not None
+    assert attention["kind"] == "token_attention_threshold"
 
 
 def test_running_snapshot_carries_live_telemetry_for_supported_agent_kinds():
@@ -2389,6 +2633,62 @@ def test_retry_timer_reparks_paused_ticket_without_dispatching(monkeypatch):
     asyncio.run(_run())
 
 
+def test_retry_timer_waits_for_unresolved_blocker_then_recovers(monkeypatch):
+    cfg = _make_config(active_states=("In Progress", "Verify"), terminal_states=("Done",))
+    orch = _orch()
+    blocker = BlockerRef(id="MT-9", identifier="MT-9", state="Verify")
+    issue = _issue("MT-1", state="In Progress", blocked_by=(blocker,))
+    released = replace(
+        issue,
+        blocked_by=(replace(blocker, state="Done"),),
+    )
+    candidates = [issue]
+    dispatched: list[tuple[str, int | None]] = []
+
+    async def _fake_fetch(_cfg):
+        return candidates
+
+    def _capture_dispatch(matched_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append((matched_issue.identifier, attempt))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fake_fetch)
+    monkeypatch.setattr(orch, "_dispatch", _capture_dispatch)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=1,
+            delay_ms=60_000,
+            error="turn_error",
+            kind="retry",
+        )
+        try:
+            orch._retry[issue.id].timer_handle.cancel()
+            await orch._on_retry_timer(issue.id)
+
+            assert dispatched == []
+            requeued = orch._retry.get(issue.id)
+            assert requeued is not None
+            assert requeued.attempt == 2
+            assert requeued.error == "not eligible at retry time"
+            assert orch.issue_attention(issue)["kind"] == "blocked_dependency"  # type: ignore[index]
+
+            requeued.timer_handle.cancel()
+            candidates[0] = released
+            await orch._on_retry_timer(issue.id)
+
+            assert dispatched == [("MT-1", 2)]
+            assert issue.id not in orch._retry
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def test_resume_worker_releases_held_retry_immediately(monkeypatch):
     """Resume must kick the retry-hold timer so the operator doesn't wait it out."""
     cfg = _make_config()
@@ -3025,6 +3325,20 @@ def test_issue_attention_reports_tracker_error():
     assert attention["message"] == "update failed"
 
 
+def test_issue_attention_reports_unresolved_dependency():
+    orch = _orch()
+    blocker = BlockerRef(id="TASK-999", identifier="TASK-999", state=None)
+    issue = _issue("MT-BLOCKED", state="In Progress", blocked_by=(blocker,))
+
+    attention = orch.issue_attention(issue)
+
+    assert attention is not None
+    assert attention["kind"] == "blocked_dependency"
+    assert attention["label"] == "Blocked dependency"
+    assert attention["severity"] == "warning"
+    assert attention["message"] == "waiting on unresolved dependency: TASK-999"
+
+
 def test_issue_attention_priority_order():
     orch = _orch()
     issue = _issue("MT-PRIORITY", state="In Progress")
@@ -3055,6 +3369,15 @@ def test_issue_attention_priority_order():
             orch._turn_budget_exhausted.clear()
             assert orch.issue_attention(issue)["kind"] == "tracker_error"  # type: ignore[index]
             orch._issue_debug[issue.id].tracker_error = None
+            orch._issue_debug[issue.id].token_attention = {
+                "kind": "token_attention_threshold",
+                "label": "Token threshold",
+                "message": "turn used 1250/1000 total tokens in In Progress",
+                "severity": "warning",
+                "due_at": None,
+            }
+            assert orch.issue_attention(issue)["kind"] == "token_attention_threshold"  # type: ignore[index]
+            orch._issue_debug[issue.id].token_attention = None
             assert orch.issue_attention(issue)["kind"] == "retry_scheduled"  # type: ignore[index]
         finally:
             for retry in list(orch._retry.values()):
@@ -3340,6 +3663,47 @@ def test_worker_loop_no_stage_change_watchdog_blocks_and_pauses(
     assert moved == [("MT-NOSTAGE", "Blocked")]
     assert notes and notes[0][1] == "Budget Exceeded"
     assert "no_stage_change" in notes[0][2]
+
+
+def test_verify_state_turn_cap_blocks_with_budget_artifact(monkeypatch, tmp_path):
+    orch = _orch()
+    issue = _issue("MT-VERIFY-CAP", state="Verify")
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress", "Verify"),
+        terminal_states=("Done", "Cancelled", "Blocked"),
+    )
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_turns=100,
+            max_total_turns=100,
+            max_state_turns=30,
+            max_state_turns_by_state={"verify": 2},
+            budget_exhausted_state="Blocked",
+            auto_commit_on_done=False,
+        ),
+    )
+
+    turns, moved, notes = asyncio.run(
+        _run_fake_same_state_worker(
+            orch=orch,
+            issue=issue,
+            cfg=cfg,
+            monkeypatch=monkeypatch,
+            tmp_path=tmp_path,
+        )
+    )
+
+    assert len(turns) == 2
+    assert moved == [("MT-VERIFY-CAP", "Blocked")]
+    assert notes and notes[0][1] == "Budget Exceeded"
+    note_body = notes[0][2]
+    assert "no_stage_change" in note_body
+    assert "state_turns=2" in note_body
+    assert "effective_max_state_turns=2" in note_body
+    assert "max_state_turns=30" not in note_body
 
 
 def test_worker_loop_no_stage_change_action_moves_to_verify(monkeypatch, tmp_path):
@@ -4900,6 +5264,58 @@ def test_apply_dispatch_env_empty_list_when_findings_missing(monkeypatch):
         "missing Review Findings / QA Failure must produce an empty list, "
         "not omit the env var entirely"
     )
+    monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)
+
+
+def test_apply_dispatch_env_uses_latest_contract_failure_scope(monkeypatch):
+    """Contract Failure rows must become first-class rewind scope."""
+    import json as _json
+    import os
+
+    monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)
+    cfg = _make_config()
+    orch = _orch()
+    issue = _issue(
+        "MT-CONTRACT",
+        state="In Progress",
+        description=(
+            "## Review Findings\n"
+            "- HIGH: src/old.py:9 — stale review issue\n\n"
+            "## Contract Failure\n"
+            "Stage `Verify` did not produce the required outputs.\n\n"
+            "Failing rows:\n"
+            "- ## AC Scorecard row 1: found `validated in source`; "
+            "expected evidence must cite a durable artifact such as "
+            "`docs/MT-CONTRACT/qa/evidence.md`, `qa/evidence.md`, "
+            "`docs/MT-CONTRACT/work/verify.log`, or `work/verify.log`\n"
+        ),
+    )
+
+    orch._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=True)
+
+    raw = os.environ.get("SYMPHONY_REWIND_SCOPE")
+    assert raw is not None
+    rows = _json.loads(raw)
+    assert rows == [
+        {
+            "severity": "CONTRACT",
+            "file": "",
+            "line": 1,
+            "fix": (
+                "## AC Scorecard row 1: found `validated in source`; "
+                "expected evidence must cite a durable artifact such as "
+                "`docs/MT-CONTRACT/qa/evidence.md`, `qa/evidence.md`, "
+                "`docs/MT-CONTRACT/work/verify.log`, or `work/verify.log`"
+            ),
+            "section": "## AC Scorecard",
+            "found": "validated in source",
+            "expected": (
+                "evidence must cite a durable artifact such as "
+                "`docs/MT-CONTRACT/qa/evidence.md`, `qa/evidence.md`, "
+                "`docs/MT-CONTRACT/work/verify.log`, or `work/verify.log`"
+            ),
+        }
+    ]
     monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)
 
 

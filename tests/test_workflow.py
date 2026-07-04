@@ -289,6 +289,130 @@ def test_build_service_config_reads_state_token_budgets(tmp_path):
     }
 
 
+def test_build_service_config_reads_state_token_attention_thresholds(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              token_attention_threshold_by_state:
+                "In Progress": 2500000
+                Learn: 500000
+                Invalid: 0
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.token_attention_threshold_by_state == {
+        "in progress": 2_500_000,
+        "learn": 500_000,
+    }
+    assert cfg.agent.max_total_tokens == 0
+    assert cfg.agent.max_total_tokens_by_state == {}
+
+
+def test_build_service_config_reads_state_turn_caps(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./kanban
+            agent:
+              max_state_turns: 30
+              max_state_turns_by_state:
+                "In Progress": 6
+                " Verify ": 3
+                ignored: 0
+            ---
+            body
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.max_state_turns == 30
+    assert cfg.agent.max_state_turns_by_state == {
+        "in progress": 6,
+        "verify": 3,
+    }
+
+
+def test_max_total_tokens_defaults_disabled_for_reasoning_heavy_work(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./kanban
+            ---
+            body
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.max_total_tokens == 0
+    assert cfg.agent.max_total_tokens_by_state == {}
+    assert cfg.agent.token_attention_threshold_by_state == {}
+
+
+def test_build_service_config_reads_compact_issue_context(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              compact_issue_context: true
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.compact_issue_context is True
+
+
+def test_build_service_config_compact_issue_context_defaults_false(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.compact_issue_context is False
+
+
 def test_build_service_config_reads_codex_model_and_reasoning(tmp_path):
     path = _write(
         tmp_path,
@@ -698,6 +822,39 @@ def test_no_stage_change_watchdog_can_disable_or_move_to_state(tmp_path):
 
     assert cfg.agent.max_state_turns == 0
     assert cfg.agent.no_stage_change_action == "Verify"
+
+
+def test_hooks_warning_policy_defaults_to_nonfatal_and_can_opt_in(tmp_path):
+    default_path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: file, board_root: ./kanban }
+            ---
+            body
+            """
+        ),
+    )
+    default_cfg = build_service_config(load_workflow(default_path))
+    strict_path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: file, board_root: ./kanban }
+            hooks:
+              fail_on_warning_patterns: true
+            ---
+            body
+            """
+        ),
+    )
+
+    strict_cfg = build_service_config(load_workflow(strict_path))
+
+    assert default_cfg.hooks.fail_on_warning_patterns is False
+    assert strict_cfg.hooks.fail_on_warning_patterns is True
 
 
 def test_no_stage_change_action_must_be_block_or_configured_state(tmp_path):

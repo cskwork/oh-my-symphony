@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from symphony.issue import BlockerRef, Issue
-from symphony.prompt import build_prompt_env, render
+from symphony.prompt import build_first_turn_prompt, build_prompt_env, render
 from symphony.workflow import build_service_config, load_workflow
 
 
@@ -294,3 +294,84 @@ def test_base_prompt_omits_token_budget_directive_by_default(workflow: str) -> N
         build_prompt_env(_issue("Verify"), attempt=None),
     )
     assert "Token budget" not in rendered
+
+
+def test_file_base_prompt_renders_full_ticket_path_outside_description() -> None:
+    cfg = _load("WORKFLOW.file.example.md")
+    rendered = render(
+        cfg.prompt_template_for_state("Verify"),
+        build_prompt_env(
+            _issue("Verify", description="ticket body marker"),
+            attempt=None,
+            full_ticket_path="kanban/DEMO-1.md",
+        ),
+    )
+
+    full_ticket_index = rendered.index("Full ticket: kanban/DEMO-1.md")
+    description_index = rendered.index("## Description")
+    description_block = rendered.split("## Description", 1)[1].split(
+        "## Production pipeline",
+        1,
+    )[0]
+
+    assert full_ticket_index < description_index
+    assert "ticket body marker" in description_block
+    assert "Full ticket: kanban/DEMO-1.md" not in description_block
+
+
+def test_contract_rewind_prompt_uses_failing_rows_not_full_history() -> None:
+    body = """\
+Original task: make contract failures cheap and specific.
+
+## Acceptance Criteria
+
+- Contract rewind prompt includes failing rows and expected evidence shape.
+
+## Contract Failure
+Stage `Verify` did not produce the required outputs.
+Missing:
+- old vague failure
+
+```text
+stale historical log that must not be resent
+```
+
+## Implementation
+
+large implementation history that should not be in a contract rewind
+
+## Contract Failure
+Stage `Verify` did not produce the required outputs.
+
+Failing rows:
+- `## AC Scorecard` row 1 evidence `validated in source`
+  expected durable evidence such as `docs/DEMO-1/qa/evidence.md`,
+  `qa/...`, or `work/...`.
+
+Symphony rewound the ticket so the producing stage can complete the contract.
+"""
+    prompt, env = build_first_turn_prompt(
+        prompt_template=(
+            "Full ticket: {{ issue.full_ticket_path }}\n"
+            "## Description\n\n{{ issue.description }}"
+        ),
+        issue=_issue("Verify", description=body),
+        attempt=None,
+        language="en",
+        max_turns=3,
+        is_rewind=True,
+        compact_issue_context=True,
+        full_ticket_path="kanban/DEMO-1.md",
+    )
+
+    compact_description = env["issue"]["description"]
+    assert "Full ticket: kanban/DEMO-1.md" in prompt
+    assert "Original task: make contract failures cheap and specific." in prompt
+    assert "## Acceptance Criteria" in compact_description
+    assert "`## AC Scorecard` row 1" in compact_description
+    assert "validated in source" in compact_description
+    assert "docs/DEMO-1/qa/evidence.md" in compact_description
+
+    assert "old vague failure" not in compact_description
+    assert "stale historical log" not in compact_description
+    assert "large implementation history" not in compact_description

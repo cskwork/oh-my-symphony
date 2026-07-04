@@ -275,6 +275,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             hooks_raw.get("timeout_ms"), DEFAULT_HOOK_TIMEOUT_MS, name="hooks.timeout_ms"
         ),
         after_done=hooks_raw.get("after_done") if isinstance(hooks_raw.get("after_done"), str) else None,
+        fail_on_warning_patterns=bool(
+            hooks_raw.get("fail_on_warning_patterns", False)
+        ),
     )
 
     agent_raw = cfg.get("agent") or {}
@@ -325,6 +328,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         ),
         max_total_turns=max_total_turns,
         max_state_turns=max_state_turns,
+        max_state_turns_by_state=_normalize_state_map(
+            agent_raw.get("max_state_turns_by_state")
+        ),
         no_stage_change_action=no_stage_change_action,
         max_attempts=_validated_nonnegative_or_default(
             agent_raw.get("max_attempts"),
@@ -338,6 +344,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         ),
         auto_triage_actionable_todo=bool(
             agent_raw.get("auto_triage_actionable_todo", True)
+        ),
+        compact_issue_context=bool(
+            agent_raw.get("compact_issue_context", False)
         ),
         auto_commit_on_done=bool(
             agent_raw.get("auto_commit_on_done", True)
@@ -369,6 +378,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         ),
         max_total_tokens_by_state=_normalize_state_map(
             agent_raw.get("max_total_tokens_by_state")
+        ),
+        token_attention_threshold_by_state=_normalize_state_map(
+            agent_raw.get("token_attention_threshold_by_state")
         ),
         budget_exhausted_state=_as_str(
             agent_raw.get("budget_exhausted_state"), ""

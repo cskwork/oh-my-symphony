@@ -50,6 +50,25 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
+class ContractFailure:
+    """Structured row-level contract failure detail."""
+
+    contract: str
+    section: str
+    row: int | None
+    found: str
+    expected: str
+
+
+@dataclass(frozen=True)
+class MarkdownTableRow:
+    """Parsed Markdown table data row with a 1-based data-row index."""
+
+    cells: tuple[str, ...]
+    row: int
+
+
+@dataclass(frozen=True)
 class ContractResult:
     """Outcome of a stage-contract evaluation.
 
@@ -59,6 +78,7 @@ class ContractResult:
     into `_tracker_call_append_note(cfg, issue, heading, body)`; `note`
     is the fully rendered markdown for callers that just want one string.
 
+    `failures` carries structured row-level details for prompt compaction.
     `warnings` carries soft advisories (e.g. a non-passing AC Scorecard
     row this release) that do NOT flip `passed` to False. Callers that
     only read `passed`/`missing` keep working; callers that want to
@@ -70,6 +90,7 @@ class ContractResult:
     note_heading: str = ""
     note_body: str = ""
     warnings: list[str] = field(default_factory=list)
+    failures: tuple[ContractFailure, ...] = field(default_factory=tuple)
 
     @property
     def note(self) -> str:
@@ -184,10 +205,16 @@ def _evaluate_verify_contract(
                 "is a clean `## Review` (expected `## Review Findings`)"
             )
 
-    missing.extend(_cited_paths_exist(body, docs_root, identifier))
+    evidence_failures = _cited_path_failures(body, docs_root, identifier)
+    missing.extend(_failure_missing_message(failure) for failure in evidence_failures)
     missing.extend(_bug_repro_closed(docs_root, identifier))
     scorecard_problems = _scorecard_all_pass(body)[1]
-    return _build_result(producing_state, missing, warnings=scorecard_problems)
+    return _build_result(
+        producing_state,
+        missing,
+        warnings=scorecard_problems,
+        failures=evidence_failures,
+    )
 
 
 def _evaluate_done_contract(
@@ -290,21 +317,30 @@ def _parse_markdown_table(body: str, heading: str) -> list[list[str]]:
     around the table does not corrupt the parse. Returns `[]` when the
     section or table is absent.
     """
+    return [list(row.cells) for row in _parse_markdown_table_rows(body, heading)]
+
+
+def _parse_markdown_table_rows(body: str, heading: str) -> list[MarkdownTableRow]:
+    """Parse table data rows under `heading`, preserving data-row numbers."""
     section = _section_body_text(body, heading)
     if not section:
         return []
-    rows: list[list[str]] = []
+    rows: list[tuple[str, ...]] = []
     for line in section.splitlines():
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        cells = tuple(c.strip() for c in stripped.strip("|").split("|"))
         # Drop the header/body separator row (cells made only of - : spaces).
         if cells and all(set(c) <= set("-: ") and c for c in cells):
             continue
         rows.append(cells)
     # First remaining row is the header; data rows follow.
-    return rows[1:] if len(rows) > 1 else []
+    data_rows = rows[1:] if len(rows) > 1 else []
+    return [
+        MarkdownTableRow(cells=row, row=index)
+        for index, row in enumerate(data_rows, start=1)
+    ]
 
 
 def _normalize_cell(cell: str) -> str:
@@ -347,10 +383,10 @@ def _scorecard_all_pass(body: str) -> tuple[bool, list[str]]:
     return (not problems, problems)
 
 
-def _cited_paths_exist(
+def _cited_path_failures(
     body: str, docs_root: Path | None, identifier: str
-) -> list[str]:
-    """Return messages for cited evidence paths that do not exist on disk.
+) -> list[ContractFailure]:
+    """Return structured failures for invalid or absent evidence paths.
 
     Collects the evidence column of `## AC Scorecard` and `## Security Audit`.
     Evidence paths must point under `docs/<identifier>/qa/` or
@@ -358,30 +394,52 @@ def _cited_paths_exist(
     """
     if docs_root is None or not identifier:
         return []
-    missing: list[str] = []
+    failures: list[ContractFailure] = []
+    expected_shape = _expected_evidence_shape(identifier)
     for heading in (_QA_SCORECARD, _VERIFY_REQUIRED_AUDIT):
-        for row in _parse_markdown_table(body, heading):
-            if not row:
+        for row in _parse_markdown_table_rows(body, heading):
+            if not row.cells:
                 continue
-            cell = row[-1]
+            cell = row.cells[-1]
             cited = _extract_cited_path(cell)
             if cited is None:
+                failures.append(
+                    ContractFailure(
+                        contract="Verify",
+                        section=heading,
+                        row=row.row,
+                        found=cell,
+                        expected=expected_shape,
+                    )
+                )
                 continue
             artifact_path = _normalise_ticket_artifact_path(cited, identifier)
             if artifact_path is None:
-                missing.append(
-                    f"evidence cell `{cell}` must cite a docs/{identifier} "
-                    "artefact as `qa/...` or `work/...`; put source "
-                    "anchors/prose inside that artefact"
+                failures.append(
+                    ContractFailure(
+                        contract="Verify",
+                        section=heading,
+                        row=row.row,
+                        found=cell,
+                        expected=expected_shape,
+                    )
                 )
                 continue
             candidate = docs_root / identifier / artifact_path
             if not candidate.exists():
-                missing.append(
-                    f"cited evidence path `{cited}` does not exist under "
-                    f"docs/{identifier}; cite evidence as `qa/...` or `work/...`"
+                failures.append(
+                    ContractFailure(
+                        contract="Verify",
+                        section=heading,
+                        row=row.row,
+                        found=cited,
+                        expected=(
+                            f"existing durable artifact under docs/{identifier} "
+                            "as `qa/...` or `work/...`"
+                        ),
+                    )
                 )
-    return missing
+    return failures
 
 
 def _normalise_ticket_artifact_path(cited: str, identifier: str) -> str | None:
@@ -418,31 +476,79 @@ def _extract_cited_path(cell: str) -> str | None:
         return None
     return path_part
 
+def _expected_evidence_shape(identifier: str) -> str:
+    return (
+        "evidence must cite a durable artifact such as "
+        f"`docs/{identifier}/qa/evidence.md`, `qa/evidence.md`, "
+        f"`docs/{identifier}/work/verify.log`, or `work/verify.log`; "
+        "put source anchors/prose inside that artifact"
+    )
+
+
+def _failure_missing_message(failure: ContractFailure) -> str:
+    row = f" row {failure.row}" if failure.row is not None else ""
+    return (
+        f"{failure.section}{row} evidence {_markdown_code_span(failure.found)} is invalid: "
+        f"{failure.expected}"
+    )
+
+
+def _markdown_code_span(value: str) -> str:
+    """Render ``value`` as a code span without colliding with its backticks."""
+    text = value or ""
+    runs = [len(match.group(0)) for match in re.finditer(r"`+", text)]
+    fence = "`" * (max(runs, default=0) + 1)
+    if text.startswith("`") or text.endswith("`"):
+        return f"{fence} {text} {fence}"
+    return f"{fence}{text}{fence}"
+
 
 def _build_result(
     producing_state: str,
     missing: list[str],
     *,
     warnings: list[str] | None = None,
+    failures: list[ContractFailure] | tuple[ContractFailure, ...] | None = None,
 ) -> ContractResult:
     warn_list = list(warnings or [])
     if not missing:
         return ContractResult(passed=True, warnings=warn_list)
-    body = _format_failure_body(producing_state, missing)
+    failure_tuple = tuple(failures or ())
+    body = _format_failure_body(producing_state, missing, failure_tuple)
     return ContractResult(
         passed=False,
         missing=list(missing),
         note_heading="Contract Failure",
         note_body=body,
         warnings=warn_list,
+        failures=failure_tuple,
     )
 
 
-def _format_failure_body(producing_state: str, missing: list[str]) -> str:
+def _format_failure_body(
+    producing_state: str,
+    missing: list[str],
+    failures: tuple[ContractFailure, ...] = (),
+) -> str:
     """Render the body of the `## Contract Failure` ticket note."""
-    bullets = "\n".join(f"- {item}" for item in missing)
-    return (
-        f"Stage `{producing_state}` did not produce the required outputs.\n"
-        f"Missing:\n{bullets}\n"
+    chunks = [f"Stage `{producing_state}` did not produce the required outputs."]
+    if failures:
+        rows = "\n".join(
+            f"- {failure.section} row {failure.row}: "
+            f"found {_markdown_code_span(failure.found)}; "
+            f"expected {failure.expected}"
+            for failure in failures
+        )
+        chunks.append(f"Failing rows:\n{rows}")
+    other_missing = [
+        item
+        for item in missing
+        if not any(item == _failure_missing_message(failure) for failure in failures)
+    ]
+    if other_missing:
+        bullets = "\n".join(f"- {item}" for item in other_missing)
+        chunks.append(f"Missing:\n{bullets}")
+    chunks.append(
         "Symphony rewound the ticket so the producing stage can complete the contract."
     )
+    return "\n".join(chunks)

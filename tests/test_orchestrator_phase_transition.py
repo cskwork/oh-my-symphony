@@ -123,6 +123,7 @@ def _make_config(
     active_states: tuple[str, ...] = ("Todo", "In Progress", "Verify", "Learn"),
     prompt_template: str | None = None,
     prompts: PromptConfig | None = None,
+    compact_issue_context: bool = False,
 ) -> ServiceConfig:
     # Prompt template references {{ issue.state }} and {{ is_rewind }} so
     # the rendered first prompt is observably different across phase
@@ -150,6 +151,7 @@ def _make_config(
             max_retry_backoff_ms=300_000,
             max_concurrent_agents_by_state={},
             max_attempts=max_attempts,
+            compact_issue_context=compact_issue_context,
         ),
         codex=CodexConfig(
             command="codex app-server",
@@ -852,6 +854,72 @@ def test_contract_validation_uses_fresh_ticket_body(
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
+    assert notes == []
+    assert updates == []
+
+
+def test_contract_validation_uses_raw_ticket_body_when_prompt_compacted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(
+        max_turns=4,
+        active_states=("In Progress", "Verify"),
+        compact_issue_context=True,
+        prompt_template=(
+            "state={{ issue.state }} rewind={{ is_rewind }}\n"
+            "{{ issue.description }}"
+        ),
+    )
+    compact_only_body = """\
+## Acceptance Criteria
+
+- Compact prompt keeps this scope.
+
+## Contract Failure
+Prior failure context for the prompt only.
+"""
+    issue = _make_issue(state="In Progress")
+    issue = replace(issue, description=compact_only_body)
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    full_body = _CONTRACT_CLEAN_BODY
+    refreshes = [
+        replace(issue, state="Verify", description=compact_only_body),
+        replace(issue, state="Verify", description=full_body),
+        replace(issue, state="Done", description=full_body),
+    ]
+
+    async def _refresh(_self, _cfg, _issue_id):  # noqa: ANN001
+        return refreshes.pop(0)
+
+    notes: list[tuple[str, str]] = []
+    updates: list[str] = []
+
+    monkeypatch.setattr(Orchestrator, "_refresh_issue_state", _refresh)
+    monkeypatch.setattr(Orchestrator, "_refresh_issue_full", _refresh)
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_append_note",
+        staticmethod(lambda _cfg, _issue, heading, body: notes.append((heading, body))),
+    )
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_update_state",
+        staticmethod(lambda _cfg, _issue, target: updates.append(target)),
+    )
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    prompts = [
+        call[1]["initial_prompt"]
+        for inst in instances
+        for call in inst.calls
+        if call[0] == "start_session"
+    ]
+    assert len(prompts) == 2
+    assert "Compact prompt keeps this scope." in prompts[0]
+    assert "## Plan" not in prompts[0]
     assert notes == []
     assert updates == []
 

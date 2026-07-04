@@ -83,7 +83,10 @@ def _normalize_state_map(value: Any) -> dict[str, int]:
             continue
         if ivalue <= 0:
             continue
-        out[key.lower()] = ivalue
+        normalized_key = _normalize_state_key(key)
+        if not normalized_key:
+            continue
+        out[normalized_key] = ivalue
     return out
 
 

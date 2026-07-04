@@ -1,6 +1,7 @@
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.
 {% if attempt %}Retry attempt {{ attempt }}. Read the previous `## Resolution`, `## Blocker`, `## QA Failure`, or `## Review Findings` section first; fix the root cause, not the symptom.{% endif %}{% if is_rewind %}Rewind turn from a Verify or Learn finding. Read the most recent `## Review Findings`, `## QA Failure`, or `## Learn Defect` section first; fix exactly those items, do NOT open new scope. Agent context is fresh: only the ticket body and `docs/{{ issue.identifier }}/` survive.{% endif %}
+{% if issue.full_ticket_path %}Full ticket: {{ issue.full_ticket_path }}{% endif %}
 
 {% if issue.description %}
 ## Description

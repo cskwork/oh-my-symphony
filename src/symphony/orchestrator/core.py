@@ -557,6 +557,7 @@ class Orchestrator:
             cfg.workspace_root,
             cfg.hooks,
             workflow_dir=cfg.workflow_path.parent,
+            board_root=cfg.tracker.board_root,
             reuse_policy=cfg.workspace_reuse_policy,
             hook_env=_branch_hook_env(cfg),
         )
@@ -880,6 +881,24 @@ class Orchestrator:
                 debug.tracker_error,
                 "warning",
             )
+        if issue.blocked_by:
+            cfg = self._workflow_state.current()
+            if cfg is not None:
+                terminal = {normalize_state(s) for s in cfg.tracker.terminal_states}
+            else:
+                terminal = {"done", "cancelled", "canceled", "blocked", "archive"}
+            for blocker in issue.blocked_by:
+                if blocker.state and normalize_state(blocker.state) in terminal:
+                    continue
+                identifier = blocker.identifier or blocker.id or "unknown"
+                return _attention_signal(
+                    "blocked_dependency",
+                    "Blocked dependency",
+                    f"waiting on unresolved dependency: {identifier}",
+                    "warning",
+                )
+        if debug.token_attention:
+            return debug.token_attention
         retry = self._retry.get(issue.id)
         if retry is not None:
             return self._retry_attention(retry)
@@ -1386,12 +1405,15 @@ class Orchestrator:
                 cfg.workspace_root,
                 cfg.hooks,
                 workflow_dir=cfg.workflow_path.parent,
+                board_root=cfg.tracker.board_root,
                 reuse_policy=cfg.workspace_reuse_policy,
                 hook_env=_branch_hook_env(cfg),
             )
         elif self._workspace_manager is not None:
             self._workspace_manager.update_hooks(
-                cfg.hooks, workflow_dir=cfg.workflow_path.parent
+                cfg.hooks,
+                workflow_dir=cfg.workflow_path.parent,
+                board_root=cfg.tracker.board_root,
             )
             self._workspace_manager.update_reuse_policy(cfg.workspace_reuse_policy)
             self._workspace_manager.update_hook_env(_branch_hook_env(cfg))
@@ -1696,8 +1718,9 @@ class Orchestrator:
             )
             if current_in_state >= per_state_cap:
                 return False
-        # Blocker rule for Todo (§8.2).
-        if state == "todo" and issue.blocked_by:
+        # Blockers apply to every active state; downstream work must wait
+        # if an upstream dependency regresses or is unknown.
+        if issue.blocked_by:
             for blocker in issue.blocked_by:
                 if not blocker.state or normalize_state(blocker.state) not in terminal:
                     return False
@@ -1929,6 +1952,99 @@ class Orchestrator:
             cap = by_state.get("learn")
         return cap if cap is not None else cfg.agent.max_total_tokens
 
+    def _max_state_turns_for_state(
+        self, cfg: ServiceConfig, state: str
+    ) -> int:
+        """Same-state turn cap from per-state config w/ global fallback."""
+        key = (state or "").lower()
+        by_state = cfg.agent.max_state_turns_by_state
+        cap = by_state.get(key)
+        if cap is None and key == "learn":
+            cap = by_state.get("learning")
+        if cap is None and key == "learning":
+            cap = by_state.get("learn")
+        return cap if cap is not None else cfg.agent.max_state_turns
+
+    def _token_attention_threshold_for_state(
+        self, cfg: ServiceConfig, state: str
+    ) -> int:
+        """Attention-only threshold from explicit per-state config."""
+        key = (state or "").lower()
+        by_state = cfg.agent.token_attention_threshold_by_state
+        threshold = by_state.get(key)
+        if threshold is None and key == "learn":
+            threshold = by_state.get("learning")
+        if threshold is None and key == "learning":
+            threshold = by_state.get("learn")
+        return threshold or 0
+
+    def _ticket_prompt_path(
+        self, cfg: ServiceConfig, issue: Issue
+    ) -> str | None:
+        if cfg.tracker.kind != "file":
+            return None
+        tracker = getattr(self, "_tracker", None)
+        find_path = getattr(tracker, "find_path", None)
+        if find_path is None:
+            return None
+        path = find_path(issue.identifier)
+        return str(path) if path is not None else None
+
+    def _record_token_attention_for_turn(
+        self, entry: RunningEntry, cfg: ServiceConfig | None
+    ) -> int:
+        turn_total = max(
+            entry.codex_total_tokens - entry.token_attention_total_tokens,
+            0,
+        )
+        entry.token_attention_total_tokens = entry.codex_total_tokens
+        debug = self._issue_debug.setdefault(entry.issue.id, _IssueDebug())
+        state = entry.state_at_turn_start or entry.issue.state
+        if entry.current_turn_message.strip() and turn_total == 0:
+            debug.token_attention = _attention_signal(
+                "token_telemetry_suspect",
+                "Token telemetry",
+                (
+                    "productive turn reported zero total tokens; "
+                    "backend telemetry may be incomplete"
+                ),
+                "warning",
+            )
+            log.warning(
+                "token_telemetry_suspect",
+                issue_id=entry.issue.id,
+                identifier=entry.issue.identifier,
+                state=state,
+                turn_total_tokens=turn_total,
+            )
+            return turn_total
+        threshold = (
+            self._token_attention_threshold_for_state(cfg, state)
+            if cfg is not None
+            else 0
+        )
+        if threshold > 0 and turn_total > threshold:
+            debug.token_attention = _attention_signal(
+                "token_attention_threshold",
+                "Token threshold",
+                (
+                    f"turn used {turn_total}/{threshold} total tokens "
+                    f"in {state}"
+                ),
+                "warning",
+            )
+            log.warning(
+                "token_attention_threshold_exceeded",
+                issue_id=entry.issue.id,
+                identifier=entry.issue.identifier,
+                state=state,
+                turn_total_tokens=turn_total,
+                threshold=threshold,
+            )
+            return turn_total
+        debug.token_attention = None
+        return turn_total
+
     # ------------------------------------------------------------------
     # A2-orch + C3 — backend subprocess env injection
     # ------------------------------------------------------------------
@@ -1950,10 +2066,10 @@ class Orchestrator:
 
         On rewind dispatches also sets:
           * ``SYMPHONY_REWIND_SCOPE`` — JSON list of finding rows parsed
-            from the ticket's most recent `## Review Findings` or
-            `## QA Failure` section. Empty list when parsing fails (the
-            env var is informational; an empty list signals "rewind, no
-            machine-readable scope" without unsetting).
+            from the latest applicable failure section (`## Review Findings`,
+            `## QA Failure`, or `## Contract Failure`). Empty list when
+            parsing fails (the env var is informational; an empty list
+            signals "rewind, no machine-readable scope" without unsetting).
 
         On forward dispatches the rewind scope env var is UNSET so a
         previous-turn value can't bleed across.
@@ -2220,6 +2336,8 @@ class Orchestrator:
                     token_ema=self._token_ema_for_state(issue.state),
                     token_budget=self._token_budget_for_state(cfg, issue.state),
                     rewind_scope=None,
+                    compact_issue_context=cfg.agent.compact_issue_context,
+                    full_ticket_path=self._ticket_prompt_path(cfg, issue),
                     extra_context=skill_context,
                 )
                 await client.start_session(
@@ -2609,9 +2727,10 @@ class Orchestrator:
                     if state not in active:
                         break
                     state_turn_count = _update_state_turn_counter(debug, state)
+                    max_state_turns = self._max_state_turns_for_state(cfg, state)
                     if (
-                        cfg.agent.max_state_turns > 0
-                        and state_turn_count >= cfg.agent.max_state_turns
+                        max_state_turns > 0
+                        and state_turn_count >= max_state_turns
                     ):
                         running.hit_no_stage_change = True
                         log.warning(
@@ -2620,7 +2739,8 @@ class Orchestrator:
                             issue_identifier=running.issue.identifier,
                             state=running.issue.state,
                             state_turn_count=state_turn_count,
-                            max_state_turns=cfg.agent.max_state_turns,
+                            effective_max_state_turns=max_state_turns,
+                            global_max_state_turns=cfg.agent.max_state_turns,
                         )
                         break
                     if turn_number >= cfg.agent.max_turns:
@@ -2760,6 +2880,8 @@ class Orchestrator:
                 rewind_scope=(
                     _parse_findings_rows(issue.description) if is_rewind else None
                 ),
+                compact_issue_context=cfg.agent.compact_issue_context,
+                full_ticket_path=self._ticket_prompt_path(cfg, issue),
                 extra_context=skill_context,
             )
             await new_client.start_session(
@@ -2829,6 +2951,7 @@ class Orchestrator:
         issue_id: str,
         target_state: str,
         budget_kind: str,
+        state_turn_limit: int | None = None,
     ) -> bool:
         if not target_state:
             return False
@@ -2847,9 +2970,17 @@ class Orchestrator:
         elif budget_kind == "no_stage_change":
             debug = self._issue_debug.get(issue_id)
             count = debug.state_turn_count if debug is not None else 0
+            state_name = entry.issue.state
+            if not state_name and debug is not None:
+                state_name = debug.state_turn_state
+            limit = (
+                state_turn_limit
+                if state_turn_limit is not None
+                else self._max_state_turns_for_state(cfg, state_name)
+            )
             budget_detail = (
                 f"(state_turns={count}, "
-                f"max_state_turns={cfg.agent.max_state_turns})"
+                f"effective_max_state_turns={limit})"
             )
         else:
             budget_detail = f"(max_total_turns={cfg.agent.max_total_turns})"
@@ -3147,6 +3278,7 @@ class Orchestrator:
                 total_tokens=entry.codex_total_tokens,
                 last_message=(entry.last_codex_message or "")[:160],
             )
+            self._record_token_attention_for_turn(entry, cfg)
             self._record_stats_turn(entry)
             # C3 — adaptive token budget. Sample = per-turn state-local
             # total tokens. `_update_token_ema` no-ops on non-positive
@@ -3506,12 +3638,16 @@ class Orchestrator:
                     cfg.agent.budget_exhausted_state if cfg is not None else ""
                 )
                 if cfg is not None and target_state:
+                    state_turn_limit = self._max_state_turns_for_state(
+                        cfg, state_name
+                    )
                     persisted = await self._persist_budget_exhausted_state(
                         cfg=cfg,
                         entry=entry,
                         issue_id=issue_id,
                         target_state=target_state,
                         budget_kind="no_stage_change",
+                        state_turn_limit=state_turn_limit,
                     )
                     if persisted:
                         entry.issue = replace(entry.issue, state=target_state)

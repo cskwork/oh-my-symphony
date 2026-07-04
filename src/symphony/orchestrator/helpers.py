@@ -21,6 +21,7 @@ from ..errors import ConfigValidationError
 from ..issue import Issue, normalize_state, sort_for_dispatch
 from ..logging import get_logger
 from ..notifications import NotificationEvent, dispatch_notification
+from ..ticket_markdown import parse_body_dependency_ids
 from ..workflow import ServiceConfig, SUPPORTED_AGENT_KINDS
 from .constants import (
     _AUTO_TRIAGE_ACCEPTANCE_RE,
@@ -115,6 +116,8 @@ def _is_auto_triage_todo_candidate(issue: Issue, cfg: ServiceConfig) -> bool:
         return False
     description = issue.description or ""
     if not description.strip():
+        return False
+    if parse_body_dependency_ids(description):
         return False
     if _AUTO_TRIAGE_TRIAGE_RE.search(description):
         return False

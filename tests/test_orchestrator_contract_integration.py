@@ -160,13 +160,13 @@ _VERIFY_BODY_SCORECARD_FAIL = """## Security Audit
 
 | check | verdict | evidence |
 |--------|--------|----------|
-| secrets | pass | n/a |
-| input-validation | pass | n/a |
-| injection | pass | n/a |
-| xss | pass | n/a |
-| csrf | pass | n/a |
-| authz | pass | n/a |
-| rate-limit | pass | n/a |
+| secrets | pass | qa/security.md |
+| input-validation | pass | qa/security.md |
+| injection | pass | qa/security.md |
+| xss | pass | qa/security.md |
+| csrf | pass | qa/security.md |
+| authz | pass | qa/security.md |
+| rate-limit | pass | qa/security.md |
 
 ## Review
 
@@ -180,8 +180,8 @@ diff matches the plan
 
 | signal | source | result | evidence |
 |--------|--------|--------|----------|
-| happy path returns 200 | curl | pass | n/a |
-| edge case rejects bad input | curl | fail | n/a |
+| happy path returns 200 | curl | pass | qa/happy.log |
+| edge case rejects bad input | curl | fail | qa/edge.log |
 
 ## Merge Status
 
@@ -581,6 +581,11 @@ def test_qa_scorecard_fail_warns_without_rewind(
 
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
+    qa_dir = workspace_path / "docs" / "MT-1" / "qa"
+    qa_dir.mkdir(parents=True)
+    (qa_dir / "security.md").write_text("security evidence")
+    (qa_dir / "happy.log").write_text("200")
+    (qa_dir / "edge.log").write_text("400")
     o = _orch(workspace_path)
     issue = _make_issue_from_disk("Verify", _VERIFY_BODY_SCORECARD_FAIL)
     _seed_running_entry(o, issue, workspace_path)

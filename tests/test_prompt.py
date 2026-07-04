@@ -28,10 +28,78 @@ def _issue() -> Issue:
     )
 
 
+def _history_issue() -> Issue:
+    return Issue(
+        id="TASK-004",
+        identifier="TASK-004",
+        title="Prompt compaction",
+        description="""\
+User goal: keep the current audit trail but stop resending stale failure logs.
+
+## Acceptance Criteria
+
+- Rendered compact prompt is shorter than the full ticket prompt.
+
+## Implementation
+
+old implementation that should be dropped
+
+## QA Failure
+
+old repeated failure that should be dropped
+
+## Implementation
+
+latest implementation that should remain
+
+## QA Evidence
+
+- docs/TASK-004/qa/evidence.md
+
+## AC Scorecard
+
+| AC | Result | Evidence |
+|---|---|---|
+| compact | Pass | docs/TASK-004/qa/evidence.md |
+""",
+        priority=1,
+        state="Verify",
+        labels=("backend",),
+    )
+
+
 def test_render_basic():
     env = build_prompt_env(_issue(), attempt=None)
     out = render("ID={{ issue.identifier }} title={{ issue.title }}", env)
     assert out == "ID=MT-649 title=Fix bug"
+
+
+def test_compact_issue_context_changes_rendered_prompt_description():
+    template = "## Description\n\n{{ issue.description }}"
+    issue = _history_issue()
+    raw_prompt, _ = build_first_turn_prompt(
+        prompt_template=template,
+        issue=issue,
+        attempt=None,
+        language="en",
+        max_turns=5,
+    )
+    compact_prompt, env = build_first_turn_prompt(
+        prompt_template=template,
+        issue=issue,
+        attempt=None,
+        language="en",
+        max_turns=5,
+        compact_issue_context=True,
+        full_ticket_path="kanban/TASK-004.md",
+    )
+
+    assert "latest implementation that should remain" in compact_prompt
+    assert "docs/TASK-004/qa/evidence.md" in compact_prompt
+    assert "old implementation that should be dropped" not in compact_prompt
+    assert "old repeated failure that should be dropped" not in compact_prompt
+    assert len(compact_prompt) < len(raw_prompt)
+    assert env["issue"]["full_ticket_path"] == "kanban/TASK-004.md"
 
 
 def test_render_attempt_null_and_int():

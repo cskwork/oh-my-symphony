@@ -303,26 +303,32 @@ class OpenCodeBackend(BaseAgentBackend):
 
     def _apply_usage(self, usage: dict[str, Any]) -> None:
         input_tokens = _int_value(usage, "input_tokens", "prompt_tokens", "input", "prompt")
-        input_tokens += _int_value(
+        explicit_cache_tokens = _int_value(
             usage,
             "cache_input_tokens",
-            "cache_read",
-            "cacheRead",
-            "cache_write",
-            "cacheWrite",
             "cached",
         )
-        cache = usage.get("cache")
-        if isinstance(cache, dict):
-            input_tokens += _int_value(
-                cache,
-                "read",
-                "write",
+        if explicit_cache_tokens:
+            input_tokens += explicit_cache_tokens
+        else:
+            input_tokens += _sum_int_values(
+                usage,
                 "cache_read",
-                "cache_write",
                 "cacheRead",
+                "cache_write",
                 "cacheWrite",
             )
+            cache = usage.get("cache")
+            if isinstance(cache, dict):
+                input_tokens += _sum_int_values(
+                    cache,
+                    "read",
+                    "write",
+                    "cache_read",
+                    "cache_write",
+                    "cacheRead",
+                    "cacheWrite",
+                )
         output_tokens = _int_value(
             usage,
             "output_tokens",
@@ -428,3 +434,18 @@ def _int_value(data: dict[str, Any], *keys: str) -> int:
         if ivalue:
             return ivalue
     return 0
+
+
+def _sum_int_values(data: dict[str, Any], *keys: str) -> int:
+    total = 0
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            ivalue = int(value)
+        except (TypeError, ValueError):
+            continue
+        if ivalue > 0:
+            total += ivalue
+    return total

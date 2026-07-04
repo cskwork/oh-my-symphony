@@ -211,7 +211,7 @@ _CONTRACT_CLEAN_BODY = (
     "## Security Audit\n"
     "| check | verdict | evidence |\n"
     "| --- | --- | --- |\n"
-    "| secrets | pass | n/a |\n"
+    "| secrets | pass | qa/security.md |\n"
     "\n"
     "## Review\n"
     "Clean pass.\n"
@@ -259,6 +259,7 @@ def _seed_running(o: Orchestrator, issue: Issue, tmp_path: Path) -> None:
     (tmp_path / "docs" / issue.identifier / "work" / "notes.md").write_text("ok")
     (tmp_path / "docs" / issue.identifier / "qa").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs" / issue.identifier / "qa" / "version.log").write_text("ok")
+    (tmp_path / "docs" / issue.identifier / "qa" / "security.md").write_text("ok")
     o._running[issue.id] = RunningEntry(
         issue=issue,
         started_at=datetime.now(timezone.utc),

@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -144,6 +145,62 @@ def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
 
 
 _PLACEHOLDER_TOKENS = ("my-org/my-repo", "my-org:my-repo")
+_SETUP_FAILURE_STRINGS = (
+    "PrismaConfigEnvError",
+    "Cannot resolve environment variable",
+    "Traceback",
+    "ModuleNotFoundError",
+)
+_MASKED_AFTER_CREATE_TAIL = re.compile(
+    r"(?:^|[|;&]\s*)tail\s+(?:-\d+\b|-n(?:\s+\d+|\b))"
+)
+
+
+def _after_create_source_lines(cfg: ServiceConfig, hook: str) -> dict[int, int]:
+    """Best-effort map from hook-local line numbers to WORKFLOW.md lines."""
+    try:
+        lines = cfg.workflow_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    hook_lines = hook.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not re.match(r"after_create\s*:", stripped):
+            continue
+        after_colon = stripped.split(":", 1)[1].strip()
+        if after_colon.startswith(("|", ">")):
+            return {
+                local_line: index + 1 + local_line
+                for local_line in range(1, len(hook_lines) + 1)
+            }
+        return {1: index + 1}
+    return {}
+
+
+def _format_hook_source_line(
+    cfg: ServiceConfig, local_line_no: int, source_lines: dict[int, int]
+) -> str:
+    source_line = source_lines.get(local_line_no)
+    if source_line is None:
+        return f"line {local_line_no}"
+    return f"{cfg.workflow_path.name}:{source_line}"
+
+
+def _warning_after_create_lines(cfg: ServiceConfig, hook: str) -> list[str]:
+    source_lines = _after_create_source_lines(cfg, hook)
+    masked: list[str] = []
+    for line_no, raw_line in enumerate(hook.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        has_masking = "|| true" in line or _MASKED_AFTER_CREATE_TAIL.search(line)
+        has_failure_text = any(token in line for token in _SETUP_FAILURE_STRINGS)
+        if not has_masking and not has_failure_text:
+            continue
+        masked.append(
+            f"{_format_hook_source_line(cfg, line_no, source_lines)}: {line}"
+        )
+    return masked
 
 
 def check_pi_auth(cfg: ServiceConfig) -> CheckResult:
@@ -287,6 +344,22 @@ def check_after_create_hook(cfg: ServiceConfig) -> CheckResult:
                 "Switch to the worktree default (see WORKFLOW.file.example.md) "
                 "or replace with a real clone target / `: noop`.",
             )
+    masked_lines = _warning_after_create_lines(cfg, hook)
+    if masked_lines:
+        sample = "; ".join(masked_lines[:2])
+        suffix = "" if len(masked_lines) <= 2 else f"; +{len(masked_lines) - 2} more"
+        status: Status = "fail" if cfg.hooks.fail_on_warning_patterns else "warn"
+        policy = (
+            " hooks.fail_on_warning_patterns is true."
+            if cfg.hooks.fail_on_warning_patterns
+            else ""
+        )
+        return CheckResult(
+            "hooks.after_create",
+            status,
+            "setup command may hide failures or contain known setup failure text: "
+            f"{sample}{suffix}.{policy}",
+        )
     return CheckResult("hooks.after_create", "pass", "looks customized")
 
 

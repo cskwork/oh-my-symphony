@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -110,6 +111,152 @@ async def test_after_create_hook_reruns_on_reuse_when_refresh_policy(tmp_path):
     assert ws2.created_now is False
     assert ws2.path == ws1.path
     assert marker.read_text(encoding="utf-8").strip() == "2"
+
+
+@pytest.mark.asyncio
+async def test_workspace_collision_blocks_before_after_create(tmp_path):
+    root = tmp_path / "ws"
+    workspace = root / "MT-COLLISION"
+    workspace.mkdir(parents=True)
+    owners = root / ".symphony-workspace-owners"
+    owners.mkdir()
+    (owners / "MT-COLLISION.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "workspace_key": "MT-COLLISION",
+                "identity": {
+                    "workflow_dir": str(tmp_path / "foreign-workflow"),
+                    "repo_root": str(tmp_path / "foreign-repo"),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    current_workflow = tmp_path / "current-workflow"
+    current_workflow.mkdir()
+    mgr = WorkspaceManager(
+        root,
+        _hooks(after_create="echo should-not-run > hook-ran"),
+        workflow_dir=current_workflow,
+        reuse_policy="refresh",
+    )
+
+    with pytest.raises(SymphonyError) as exc_info:
+        await mgr.create_or_reuse("MT-COLLISION")
+
+    assert "workspace owner mismatch" in str(exc_info.value)
+    assert not (workspace / "hook-ran").exists()
+
+
+@pytest.mark.asyncio
+async def test_workspace_board_root_collision_blocks_before_after_create(tmp_path):
+    root = tmp_path / "ws"
+    workspace = root / "MT-BOARD"
+    workspace.mkdir(parents=True)
+    workflow = tmp_path / "workflow"
+    workflow.mkdir()
+    current_board = tmp_path / "current-board"
+    current_board.mkdir()
+    foreign_board = tmp_path / "foreign-board"
+    foreign_board.mkdir()
+    owners = root / ".symphony-workspace-owners"
+    owners.mkdir()
+    (owners / "MT-BOARD.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "workspace_key": "MT-BOARD",
+                "identity": {
+                    "workflow_dir": str(workflow.resolve()),
+                    "board_root": str(foreign_board.resolve()),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    mgr = WorkspaceManager(
+        root,
+        _hooks(after_create="echo should-not-run > hook-ran"),
+        workflow_dir=workflow,
+        board_root=current_board,
+        reuse_policy="refresh",
+    )
+
+    with pytest.raises(SymphonyError) as exc_info:
+        await mgr.create_or_reuse("MT-BOARD")
+
+    assert "workspace owner mismatch" in str(exc_info.value)
+    assert "board_root" in str(exc_info.value)
+    assert not (workspace / "hook-ran").exists()
+
+
+@pytest.mark.asyncio
+async def test_hook_failure_preserves_full_output_artifacts(tmp_path):
+    root = tmp_path / "ws"
+    full_stdout = "stdout-" + ("x" * 700)
+    full_stderr = "stderr-" + ("y" * 700)
+    mgr = WorkspaceManager(
+        root,
+        _hooks(
+            after_create=(
+                f"printf '{full_stdout}'; "
+                f"printf '{full_stderr}' >&2; "
+                "exit 7"
+            )
+        ),
+    )
+
+    with pytest.raises(SymphonyError) as exc_info:
+        await mgr.create_or_reuse("MT-HOOK")
+
+    meta_dir = root / ".symphony-workspace-hook-output" / "MT-HOOK"
+    meta = next(meta_dir.glob("*.json"))
+    payload = json.loads(meta.read_text(encoding="utf-8"))
+    stdout_path = Path(payload["stdout"])
+    stderr_path = Path(payload["stderr"])
+    assert stdout_path.read_text(encoding="utf-8") == full_stdout
+    assert stderr_path.read_text(encoding="utf-8") == full_stderr
+    assert str(meta) in str(exc_info.value)
+    assert not (root / "MT-HOOK").exists()
+
+
+@pytest.mark.asyncio
+async def test_hook_output_artifact_records_setup_failure_patterns(tmp_path):
+    root = tmp_path / "ws"
+    mgr = WorkspaceManager(
+        root,
+        _hooks(after_create="printf 'PrismaConfigEnvError: missing DATABASE_URL'"),
+    )
+
+    await mgr.create_or_reuse("MT-WARN")
+
+    meta_dir = root / ".symphony-workspace-hook-output" / "MT-WARN"
+    meta = next(meta_dir.glob("*.json"))
+    payload = json.loads(meta.read_text(encoding="utf-8"))
+    stdout_path = Path(payload["stdout"])
+    assert stdout_path.read_text(encoding="utf-8") == (
+        "PrismaConfigEnvError: missing DATABASE_URL"
+    )
+    assert payload["warning_patterns"] == ["PrismaConfigEnvError"]
+
+
+@pytest.mark.asyncio
+async def test_hook_timeout_writes_output_artifact(tmp_path):
+    root = tmp_path / "ws"
+    mgr = WorkspaceManager(
+        root,
+        _hooks(after_create="sleep 1", timeout_ms=100),
+    )
+
+    with pytest.raises(SymphonyError) as exc_info:
+        await mgr.create_or_reuse("MT-TIMEOUT")
+
+    meta_dir = root / ".symphony-workspace-hook-output" / "MT-TIMEOUT"
+    meta = next(meta_dir.glob("*.json"))
+    payload = json.loads(meta.read_text(encoding="utf-8"))
+    assert payload["returncode"] == -1
+    assert str(meta) in str(exc_info.value)
 
 
 @pytest.mark.asyncio

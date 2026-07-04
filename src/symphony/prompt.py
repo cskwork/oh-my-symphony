@@ -442,6 +442,8 @@ def build_prompt_env(
     token_ema: int = 0,
     token_budget: int = 0,
     rewind_scope: list[dict[str, Any]] | None = None,
+    compact_issue_context: bool = False,
+    full_ticket_path: str | None = None,
 ) -> dict[str, Any]:
     """§12.1 — input variables for prompt rendering.
 
@@ -475,6 +477,16 @@ def build_prompt_env(
         issue_dict = issue_obj.to_template_dict()
     else:
         issue_dict = dict(issue_obj)
+    issue_dict = dict(issue_dict)
+    if compact_issue_context:
+        from .prompt_context import build_issue_prompt_context
+
+        issue_dict["description"] = build_issue_prompt_context(
+            issue_obj,
+            state=issue_dict.get("state") or "",
+            is_rewind=is_rewind,
+        )
+    issue_dict["full_ticket_path"] = full_ticket_path or ""
     from .i18n import normalize_language
 
     return {
@@ -505,6 +517,8 @@ def build_first_turn_prompt(
     token_ema: int = 0,
     token_budget: int = 0,
     rewind_scope: list[dict[str, Any]] | None = None,
+    compact_issue_context: bool = False,
+    full_ticket_path: str | None = None,
     extra_context: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Construct the first-turn prompt sent to a worker.
@@ -543,6 +557,8 @@ def build_first_turn_prompt(
         token_ema=token_ema,
         token_budget=token_budget,
         rewind_scope=rewind_scope,
+        compact_issue_context=compact_issue_context,
+        full_ticket_path=full_ticket_path,
     )
     env["turn_number"] = 1
     env["max_turns"] = max_turns

@@ -70,6 +70,99 @@ def test_after_create_passes_when_customized(tmp_path: Path) -> None:
     assert check_after_create_hook(cfg).status == "pass"
 
 
+def test_after_create_warns_on_masked_install_output(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        hooks:
+          after_create: |
+            pnpm install 2>&1 | tail -2 || true
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+
+    result = check_after_create_hook(cfg)
+
+    assert result.status == "warn"
+    assert "|| true" in result.message
+    assert "tail -2" in result.message
+    assert "pnpm install" in result.message
+    assert "WORKFLOW.md:" in result.message
+
+
+def test_after_create_warning_does_not_fail_by_default(
+    tmp_path: Path, capsys
+) -> None:
+    board = tmp_path / "kanban"
+    board.mkdir()
+    workflow = _write_workflow(
+        tmp_path,
+        textwrap.dedent(f"""\
+        ---
+        tracker: {{ kind: file, board_root: {board} }}
+        workspace: {{ root: {tmp_path / "workspaces"} }}
+        hooks:
+          after_create: |
+            pnpm prisma generate 2>&1 | tail -n 2 || true
+        agent: {{ kind: codex }}
+        codex: {{ command: python -m symphony.mock_codex }}
+        ---
+        body
+        """),
+    )
+
+    rc = doctor_main([str(workflow), "--no-color"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "WARN  hooks.after_create" in captured.out
+    assert "|| true" in captured.out
+    assert "tail -n 2" in captured.out
+
+
+def test_after_create_warning_can_fail_by_policy(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        hooks:
+          fail_on_warning_patterns: true
+          after_create: |
+            pnpm install 2>&1 | tail -2 || true
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+
+    result = check_after_create_hook(cfg)
+
+    assert result.status == "fail"
+    assert "fail_on_warning_patterns" in result.message
+    assert "WORKFLOW.md:" in result.message
+
+
+def test_after_create_warns_on_known_setup_failure_text(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        hooks:
+          after_create: |
+            echo "PrismaConfigEnvError: Cannot resolve environment variable"
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+
+    result = check_after_create_hook(cfg)
+
+    assert result.status == "warn"
+    assert "PrismaConfigEnvError" in result.message
+    assert "WORKFLOW.md:" in result.message
+
+
 def test_agent_cli_pass_for_python_mock(tmp_path: Path) -> None:
     cfg = _build_cfg(
         tmp_path,

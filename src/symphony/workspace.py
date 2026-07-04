@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ._shell import resolve_bash
@@ -17,6 +19,18 @@ from .logging import get_logger
 from .workflow import HooksConfig
 
 log = get_logger()
+
+_OWNER_MARKER_DIR = ".symphony-workspace-owners"
+_HOOK_OUTPUT_DIR = ".symphony-workspace-hook-output"
+_OWNER_MARKER_VERSION = 1
+_OWNER_IDENTITY_KEYS = ("workflow_dir", "board_root", "repo_root")
+_UNSET: object = object()
+_SETUP_FAILURE_STRINGS = (
+    "PrismaConfigEnvError",
+    "Cannot resolve environment variable",
+    "Traceback",
+    "ModuleNotFoundError",
+)
 
 
 def _try_rmtree_once(path: Path) -> tuple[bool, str | None, bool]:
@@ -58,6 +72,23 @@ async def _force_rmtree(path: Path, *, attempts: int = 5) -> tuple[bool, str | N
     return False, last_err
 
 
+def _git_repo_root(path: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    root = result.stdout.strip()
+    if result.returncode != 0 or not root:
+        return None
+    return str(Path(root).resolve())
+
+
 @dataclass(frozen=True)
 class Workspace:
     path: Path
@@ -74,14 +105,17 @@ class WorkspaceManager:
         hooks: HooksConfig,
         *,
         workflow_dir: Path | None = None,
+        board_root: Path | None = None,
         reuse_policy: str = "preserve",
         hook_env: dict[str, str] | None = None,
     ) -> None:
         self._root = root.resolve()
         self._hooks = hooks
         self._workflow_dir = workflow_dir
+        self._board_root = board_root
         self._reuse_policy = reuse_policy
         self._hook_env = dict(hook_env or {})
+        self._owner_identity = self._build_owner_identity()
         self._root.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -89,12 +123,23 @@ class WorkspaceManager:
         return self._root
 
     def update_hooks(
-        self, hooks: HooksConfig, *, workflow_dir: Path | None = None
+        self,
+        hooks: HooksConfig,
+        *,
+        workflow_dir: Path | None = None,
+        board_root: Path | None | object = _UNSET,
     ) -> None:
         # §6.2 — apply reloaded hooks to future executions.
         self._hooks = hooks
+        identity_changed = False
         if workflow_dir is not None:
             self._workflow_dir = workflow_dir
+            identity_changed = True
+        if board_root is not _UNSET:
+            self._board_root = board_root if isinstance(board_root, Path) else None
+            identity_changed = True
+        if identity_changed:
+            self._owner_identity = self._build_owner_identity()
 
     def update_reuse_policy(self, reuse_policy: str) -> None:
         self._reuse_policy = reuse_policy
@@ -117,6 +162,8 @@ class WorkspaceManager:
             )
 
         created_now = not path.exists()
+        if not created_now:
+            self._enforce_workspace_owner(key, path)
         path.mkdir(parents=True, exist_ok=True)
 
         should_run_after_create = created_now or self._reuse_policy == "refresh"
@@ -133,6 +180,7 @@ class WorkspaceManager:
                         )
                 raise
 
+        self._write_workspace_owner_marker(key)
         return Workspace(path=path, workspace_key=key, created_now=created_now)
 
     async def before_run(self, path: Path) -> None:
@@ -214,6 +262,130 @@ class WorkspaceManager:
                 root=str(self._root),
             ) from exc
 
+    def _build_owner_identity(self) -> dict[str, str]:
+        identity: dict[str, str] = {}
+        if self._workflow_dir is None and self._board_root is None:
+            return identity
+        if self._workflow_dir is not None:
+            workflow_dir = self._workflow_dir.resolve()
+            identity["workflow_dir"] = str(workflow_dir)
+            repo_root = _git_repo_root(workflow_dir)
+            if repo_root:
+                identity["repo_root"] = repo_root
+        if self._board_root is not None:
+            identity["board_root"] = str(self._board_root.resolve())
+        return identity
+
+    def _owner_marker_path(self, key: str) -> Path:
+        return self._root / _OWNER_MARKER_DIR / f"{key}.json"
+
+    def _read_workspace_owner_marker(self, key: str) -> dict[str, object] | None:
+        marker = self._owner_marker_path(key)
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _enforce_workspace_owner(self, key: str, path: Path) -> None:
+        if not self._owner_identity:
+            return
+        marker = self._read_workspace_owner_marker(key)
+        if marker is None:
+            return
+        recorded = marker.get("identity")
+        if not isinstance(recorded, dict):
+            return
+        for field in _OWNER_IDENTITY_KEYS:
+            current_value = self._owner_identity.get(field)
+            recorded_value = recorded.get(field)
+            if not current_value or not recorded_value or current_value == recorded_value:
+                continue
+            raise SymphonyError(
+                "workspace owner mismatch",
+                path=str(path),
+                field=field,
+                current=current_value,
+                recorded=recorded_value,
+            )
+
+    def _write_workspace_owner_marker(self, key: str) -> None:
+        if not self._owner_identity:
+            return
+        marker = self._owner_marker_path(key)
+        payload = {
+            "version": _OWNER_MARKER_VERSION,
+            "workspace_key": key,
+            "identity": self._owner_identity,
+        }
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            tmp = marker.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            tmp.replace(marker)
+        except OSError as exc:
+            raise SymphonyError(
+                "workspace owner marker write failed",
+                path=str(marker),
+                error=str(exc),
+            ) from exc
+
+    def _metadata_key_for_cwd(self, cwd: Path) -> str:
+        try:
+            return cwd.resolve().relative_to(self._root).parts[0]
+        except (ValueError, IndexError):
+            return cwd.name or "unknown"
+
+    def _write_hook_output_artifacts(
+        self,
+        *,
+        name: str,
+        cwd: Path,
+        returncode: int,
+        stdout: bytes,
+        stderr: bytes,
+    ) -> Path | None:
+        key = self._metadata_key_for_cwd(cwd)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        base = self._root / _HOOK_OUTPUT_DIR / key / f"{stamp}-{name}"
+        combined = stdout.decode("utf-8", errors="replace") + stderr.decode(
+            "utf-8", errors="replace"
+        )
+        warnings = [token for token in _SETUP_FAILURE_STRINGS if token in combined]
+        payload = {
+            "hook": name,
+            "cwd": str(cwd),
+            "returncode": returncode,
+            "stdout": str(base.with_suffix(".stdout")),
+            "stderr": str(base.with_suffix(".stderr")),
+            "warning_patterns": warnings,
+        }
+        try:
+            base.parent.mkdir(parents=True, exist_ok=True)
+            base.with_suffix(".stdout").write_bytes(stdout)
+            base.with_suffix(".stderr").write_bytes(stderr)
+            meta_path = base.with_suffix(".json")
+            meta_path.write_text(
+                json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        except OSError as exc:
+            log.warning(
+                "hook_output_artifact_failed",
+                hook=name,
+                cwd=str(cwd),
+                error=str(exc),
+            )
+            return None
+        if warnings:
+            log.warning(
+                "hook_output_warning_patterns",
+                hook=name,
+                cwd=str(cwd),
+                artifact=str(meta_path),
+                patterns=warnings,
+            )
+        return meta_path
+
     async def _run_hook(
         self,
         name: str,
@@ -273,13 +445,37 @@ class WorkspaceManager:
 
         try:
             result = await asyncio.to_thread(_do_run)
-        except subprocess.TimeoutExpired:
-            log.error("hook_timeout", hook=name, cwd=str(cwd))
-            raise SymphonyError(f"hook {name} timed out", hook=name)
+        except subprocess.TimeoutExpired as exc:
+            stdout = _coerce_output_bytes(exc.stdout)
+            stderr = _coerce_output_bytes(exc.stderr)
+            artifact = self._write_hook_output_artifacts(
+                name=name,
+                cwd=cwd,
+                returncode=-1,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            log.error(
+                "hook_timeout",
+                hook=name,
+                cwd=str(cwd),
+                artifact=str(artifact) if artifact is not None else "",
+            )
+            message = f"hook {name} timed out"
+            if artifact is not None:
+                message = f"{message}; full output: {artifact}"
+            raise SymphonyError(message, hook=name) from exc
 
         rc = result.returncode or 0
         stderr_bytes = result.stderr or b""
         stdout_bytes = result.stdout or b""
+        artifact = self._write_hook_output_artifacts(
+            name=name,
+            cwd=cwd,
+            returncode=rc,
+            stdout=stdout_bytes,
+            stderr=stderr_bytes,
+        )
         stderr_text = _truncate(stderr_bytes.decode("utf-8", errors="replace")).strip()
         stdout_text = _truncate(stdout_bytes.decode("utf-8", errors="replace")).strip()
         if rc != 0:
@@ -289,18 +485,22 @@ class WorkspaceManager:
                 cwd=str(cwd),
                 returncode=rc,
                 stderr=stderr_text,
+                artifact=str(artifact) if artifact is not None else "",
             )
             message = f"hook {name} exited {rc}"
             if stderr_text:
                 message = f"{message}; stderr: {stderr_text}"
             elif stdout_text:
                 message = f"{message}; stdout: {stdout_text}"
+            if artifact is not None:
+                message = f"{message}; full output: {artifact}"
             raise SymphonyError(message, hook=name, returncode=rc)
         log.info(
             "hook_completed",
             hook=name,
             cwd=str(cwd),
             stdout=stdout_text,
+            artifact=str(artifact) if artifact is not None else "",
         )
 
 
@@ -308,6 +508,14 @@ def _truncate(value: str, limit: int = 400) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...(truncated)"
+
+
+def _coerce_output_bytes(value: bytes | str | None) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    return value.encode("utf-8", errors="replace")
 
 
 async def commit_workspace_on_done(

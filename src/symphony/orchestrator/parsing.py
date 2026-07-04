@@ -7,6 +7,9 @@ The orchestrator scans tickets for two operator-facing sections:
   * `## Review Findings` / `## QA Failure` — severity + file:line + fix
     rows surfaced into the prompt env vars so the next attempt has
     structured guidance instead of free-text scrollback.
+  * `## Contract Failure` — exact failing contract rows surfaced through
+    the same rewind-scope channel when the contract failure is the latest
+    failure section.
 
 Both helpers are deliberately permissive — real agent output routinely
 trails annotations, comments, and stray whitespace that a strict parser
@@ -21,6 +24,7 @@ from typing import Any
 from .constants import (
     _BULLET_PATH_BACKTICK_RE,
     _BULLET_PATH_PLAIN_RE,
+    _CONTRACT_FAILURE_HEADING_RE,
     _NEXT_HEADING_RE,
     _QA_FAILURE_HEADING_RE,
     _REVIEW_FINDINGS_HEADING_RE,
@@ -71,7 +75,7 @@ def _parse_touched_files(text: str | None) -> set[str]:
 
 
 def _parse_findings_rows(text: str | None) -> list[dict[str, Any]]:
-    """Best-effort parse of `## Review Findings` / `## QA Failure` bullets.
+    """Best-effort parse of the latest structured rewind-scope section.
 
     Returns a list of `{severity, file, line, fix}` dicts. Unrecognised
     bullets are skipped silently — the env var is informational, not
@@ -84,6 +88,22 @@ def _parse_findings_rows(text: str | None) -> list[dict[str, Any]]:
     """
     if not text:
         return []
+    latest_contract = _latest_heading_match(text, _CONTRACT_FAILURE_HEADING_RE)
+    latest_review = _latest_heading_match(text, _REVIEW_FINDINGS_HEADING_RE)
+    latest_qa = _latest_heading_match(text, _QA_FAILURE_HEADING_RE)
+    latest_review_qa_start = max(
+        (
+            match.start()
+            for match in (latest_review, latest_qa)
+            if match is not None
+        ),
+        default=-1,
+    )
+    if latest_contract is not None and latest_contract.start() > latest_review_qa_start:
+        return _parse_contract_failure_rows(
+            _body_after_match(text, latest_contract).strip("\n")
+        )
+
     # Prefer Review Findings if both sections are present; QA Failure is a
     # fallback because QA-stage tickets emit it instead.
     body = _section_body(text, _REVIEW_FINDINGS_HEADING_RE)
@@ -134,3 +154,62 @@ def _parse_findings_rows(text: str | None) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _latest_heading_match(
+    text: str, heading_re: re.Pattern[str]
+) -> re.Match[str] | None:
+    matches = list(heading_re.finditer(text or ""))
+    return matches[-1] if matches else None
+
+
+def _body_after_match(text: str, match: re.Match[str]) -> str:
+    after = text[match.end() :]
+    next_heading = _NEXT_HEADING_RE.search(after)
+    return after if next_heading is None else after[: next_heading.start()]
+
+
+def _parse_contract_failure_rows(body: str) -> list[dict[str, Any]]:
+    row_re = re.compile(
+        r"^\s*[-*]\s+"
+        r"(?P<section>##\s+.+?)\s+row\s+(?P<row>\d+):\s+"
+        r"found\s+(?P<fence>`+)(?P<found>.*?)(?P=fence);"
+        r"\s+expected\s+(?P<expected>.+)$",
+        re.IGNORECASE,
+    )
+    rows: list[dict[str, Any]] = []
+    for raw in body.splitlines():
+        match = row_re.match(raw)
+        if not match:
+            continue
+        section = match.group("section").strip()
+        found = _strip_code_span_padding(match.group("found"))
+        expected = match.group("expected").strip()
+        try:
+            row_no = int(match.group("row"))
+        except ValueError:
+            row_no = 0
+        rows.append(
+            {
+                "severity": "CONTRACT",
+                "file": "",
+                "line": row_no,
+                "fix": (
+                    f"{section} row {row_no}: found `{found}`; "
+                    f"expected {expected}"
+                ),
+                "section": section,
+                "found": found,
+                "expected": expected,
+            }
+        )
+    return rows
+
+
+def _strip_code_span_padding(value: str) -> str:
+    """Undo padding added for code spans whose content starts/ends with `."""
+    if value.startswith(" ") and value.endswith(" "):
+        inner = value[1:-1]
+        if inner.startswith("`") or inner.endswith("`"):
+            return inner
+    return value.strip()
