@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MONOREPO = REPO_ROOT / "skills" / "using-symphony" / "monorepo"
+MONOREPO = REPO_ROOT / "skills" / "symphony-skill" / "monorepo"
 SETUP = MONOREPO / "scripts" / "setup-monorepo.sh"
 TEMPLATE = MONOREPO / "references" / "workflow-template.md"
 

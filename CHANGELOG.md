@@ -20,9 +20,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Architecture docs now include `webapi.py`, packaged web assets,
   `workflow/mutate.py`, `orchestrator/run_registry.py`, the Jira tracker
   adapter, and the OpenCode backend.
-- Operator skill discovery now uses one routed `using-symphony` skill.
-  OneShot and monorepo assets live under `skills/using-symphony/` subfolders
-  for branch-specific templates, scripts, and references.
+- Operator skill discovery now uses one routed `symphony-skill` skill (renamed
+  from `using-symphony`). OneShot and monorepo assets live under
+  `skills/symphony-skill/` subfolders for branch-specific templates, scripts,
+  and references.
+- "Open the orchestrator" now defaults to opening the service `--port` web app
+  (`http://127.0.0.1:9999/`); the `--viewer-port` board (`8765`) is the
+  secondary card board. Documented in the operator skill.
 
 ## [0.9.0] — 4-stage pipeline simplification
 

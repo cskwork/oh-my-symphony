@@ -37,8 +37,8 @@ def test_skills_dir_has_skill_files() -> None:
     assert SKILL_MD_FILES, f"no SKILL.md files found under {SKILLS_DIR}"
 
 
-def test_using_symphony_is_the_single_operator_router() -> None:
-    assert [path.parent.name for path in SKILL_MD_FILES] == ["using-symphony"]
+def test_symphony_skill_is_the_single_operator_router() -> None:
+    assert [path.parent.name for path in SKILL_MD_FILES] == ["symphony-skill"]
 
 
 @pytest.mark.parametrize("skill_md", SKILL_MD_FILES, ids=lambda p: p.parent.name)

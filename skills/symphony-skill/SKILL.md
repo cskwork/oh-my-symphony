@@ -1,5 +1,5 @@
 ---
-name: using-symphony
+name: symphony-skill
 description: Single Symphony operator router for Kanban tickets, service/TUI runs, workflow prompts, delegation, OneShot runs, monorepo bootstrap, and worker failure triage.
 ---
 
@@ -114,6 +114,12 @@ symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
 symphony service status ./WORKFLOW.md
 curl -s http://127.0.0.1:9999/api/v1/state | jq
 ```
+
+The `--port` (9999) root serves a browsable web app (`oh-my-symphony`), not
+just the JSON API. **"Open the orchestrator" defaults to opening
+`http://127.0.0.1:9999/`** (`open`/`xdg-open`/`start`); the `--viewer-port`
+board (8765) is the secondary card board — open it only when asked for the
+board view.
 
 Use `symphony service ...` for normal headless operation. It writes
 per-workflow run state under `.symphony/run/` and refuses duplicate starts for
