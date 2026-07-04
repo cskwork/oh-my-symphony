@@ -926,6 +926,36 @@ async def test_opencode_plain_stdout_is_valid_result_until_json_schema_stabilize
 
 
 @pytest.mark.asyncio
+async def test_opencode_turn_completed_payload_carries_message_for_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G2 empty-loop 오탐 방지 위해 preview-key로 응답 전달."""
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict] = []
+
+    async def record(event: dict) -> None:
+        events.append(event)
+
+    _install_subprocess_double(
+        monkeypatch,
+        opencode_module,
+        [_FakeSubprocess(stdout_blob=b"plain answer")],
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=record)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    await backend.run_turn(prompt="first", is_continuation=False)
+
+    completed = [e for e in events if e["event"] == EVENT_TURN_COMPLETED]
+    assert completed
+    assert completed[0]["payload"]["message"] == "plain answer"
+
+
+@pytest.mark.asyncio
 async def test_opencode_emits_heartbeats_while_turn_subprocess_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

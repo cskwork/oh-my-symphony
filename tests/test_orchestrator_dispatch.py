@@ -4677,6 +4677,87 @@ def test_g2_empty_response_loop_resets_on_non_empty_turn(monkeypatch):
     asyncio.run(_run())
 
 
+def test_g2_opencode_shaped_payload_resets_only_with_message_key(monkeypatch):
+    """G2 — opencode's raw EVENT_TURN_COMPLETED payload carries `result`/
+    `response`, never `message`. `_preview_from_payload` only reads `message`
+    (plus a few other preview keys), so a `result`/`response`-only payload
+    must still count as empty; adding `message` (the opencode.py fix) must
+    reset the counter."""
+    import asyncio
+
+    base_cfg = _make_config(max_concurrent=1)
+    cfg = _replace_agent_field(base_cfg, budget_exhausted_state="Blocked")
+    orch = _orch()
+    issue = _issue("MT-OPENCODE-SHAPE", state="In Progress")
+
+    persisted_kinds: list[str] = []
+
+    async def _persist(*, cfg, entry, issue_id, target_state, budget_kind):
+        persisted_kinds.append(budget_kind)
+        return True
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+        monkeypatch.setattr(orch, "_persist_budget_exhausted_state", _persist)
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+
+            # Pre-fix opencode shape: `result`/`response` only, no `message`.
+            result_only_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"result": "did real work", "response": "did real work"},
+                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            }
+            # Post-fix opencode shape: `message` added alongside `result`/`response`.
+            with_message_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "message": "did real work",
+                    "result": "did real work",
+                    "response": "did real work",
+                },
+                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            }
+
+            await orch._on_codex_event(issue.id, result_only_event)
+            assert entry.consecutive_empty_turns == 1, (
+                "result/response-only payload (opencode's pre-fix shape) "
+                "must still count as an empty turn"
+            )
+            await orch._on_codex_event(issue.id, result_only_event)
+            assert entry.consecutive_empty_turns == 2
+
+            await orch._on_codex_event(issue.id, with_message_event)
+            assert entry.consecutive_empty_turns == 0, (
+                "adding the `message` key (opencode.py fix) must reset the counter"
+            )
+            assert entry.cancelled_at is None
+            assert persisted_kinds == []
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------------------------
 # C3 — adaptive token-budget EMA (workflow-v0.5.2 § C3).
 # ---------------------------------------------------------------------------

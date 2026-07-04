@@ -127,6 +127,25 @@ If a workflow legitimately runs >3 turns of pure tool execution with
 no model commentary, raise `EMPTY_TURN_LOOP_THRESHOLD` for that
 workflow. (No config knob yet — open an issue if you need one.)
 
+### Backend contract: response must reach a preview key
+
+`current_turn_message` is fed by `_preview_from_payload`, which reads
+`message` / `lastMessage` / `text` / `summary` / `item` from the event
+payload. **A backend whose `EVENT_TURN_COMPLETED` payload puts its
+response text under some other key produces a blank preview every turn,
+so G2 counts every turn as empty and false-blocks after 3** — regardless
+of real work.
+
+OpenCode hit this (2026-07-04): it emitted the response only under
+`result` / `response`, which the preview helper ignores. Fixed by adding
+`message` to its turn-completed payload (`backends/opencode.py`). The
+latent miscount stayed hidden while stall-cancels kept minting fresh
+entries (counter reset each time); it surfaced once the OpenCode
+liveness-heartbeat fix let turns accumulate on one entry.
+
+Contract for new backends: the turn-completed payload MUST carry the
+response under a preview key (`message` is simplest), or G2 will misfire.
+
 ### Related
 
 - `_persist_budget_exhausted_state` is the shared persistence helper

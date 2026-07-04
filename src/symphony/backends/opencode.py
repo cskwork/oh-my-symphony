@@ -193,7 +193,11 @@ class OpenCodeBackend(BaseAgentBackend):
                     {"session_id": new_sid, "thread_id": new_sid},
                 )
             self._update_usage_from_events(events)
+            # `message` key feeds _preview_from_payload -> current_turn_message so a
+            # productive turn resets the G2 empty-loop counter (opencode delivers
+            # text only at turn end).
             payload = {
+                "message": response,
                 "result": response,
                 "response": response,
                 "session_id": self.session_id,
