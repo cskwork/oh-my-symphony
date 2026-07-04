@@ -7,9 +7,13 @@
 [![Tests](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/cskwork/oh-my-symphony?style=social)](https://github.com/cskwork/oh-my-symphony/stargazers)
 
-> One terminal. One Kanban board. Seven AI coding agents
+> One admin UI. One terminal. One Kanban board. Seven AI coding agents
 > (**Codex**, **Claude Code**, **Gemini**, **AGY/Antigravity**, **Kiro**,
 > **OpenCode**, **Pi**) — pick per ticket, run in parallel, watch live.
+
+![Symphony 9999 admin UI screenshot](docs/admin-ui-screenshot.png)
+
+<sub>`symphony service start ./WORKFLOW.md --port 9999` — the built-in admin UI served at `http://127.0.0.1:9999/`: issue CRUD, drag/drop columns, live run badges, terminal-state grouping, workflow editing, stats, and settings. Screenshot uses sanitized demo data.</sub>
 
 ![symphony tui screenshot](docs/tui-screenshot.svg)
 
@@ -18,7 +22,8 @@
 **Stop juggling AI coding CLIs.** Symphony hands each Kanban ticket to the
 agent you want, runs them concurrently in isolated `git worktree` workspaces,
 and shows live progress — turn counts, token usage, rate-limit headroom — in
-a Jira-style TUI you never have to leave your terminal for.
+the 9999 browser admin UI or a Jira-style TUI you never have to leave your
+terminal for.
 
 [**Try it in 60 seconds, no AI CLI required →**](#try-it-in-60-seconds-no-agent-cli-required)
 

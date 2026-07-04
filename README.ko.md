@@ -7,9 +7,13 @@
 [![Tests](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/cskwork/oh-my-symphony?style=social)](https://github.com/cskwork/oh-my-symphony/stargazers)
 
-> 하나의 터미널, 하나의 칸반 보드, 일곱 개의 AI 코딩 에이전트
+> 하나의 관리자 UI, 하나의 터미널, 하나의 칸반 보드, 일곱 개의 AI 코딩 에이전트
 > (**Codex**, **Claude Code**, **Gemini**, **AGY/Antigravity**, **Kiro**,
 > **OpenCode**, **Pi**) — 티켓마다 골라 쓰고, 병렬로 실행하며, 실시간으로 지켜본다.
+
+![Symphony 9999 admin UI screenshot](docs/admin-ui-screenshot.png)
+
+<sub>`symphony service start ./WORKFLOW.md --port 9999` — `http://127.0.0.1:9999/`에서 열리는 내장 관리자 UI. 이슈 생성/수정/삭제, 드래그 컬럼 이동, 실시간 실행 배지, 터미널 상태 묶음, 워크플로 편집, 통계, 설정을 한 화면에서 다룬다. 스크린샷은 데모 데이터다.</sub>
 
 ![symphony tui screenshot](docs/tui-screenshot.svg)
 
@@ -18,7 +22,7 @@
 **AI 코딩 CLI를 더 이상 저글링하지 말자.** Symphony는 각 칸반 티켓을
 원하는 에이전트에 넘기고, 격리된 `git worktree` 워크스페이스에서 동시에 실행하며,
 실시간 진행 상황 — 턴 수, 토큰 사용량, 레이트 리밋 여유 — 을
-터미널을 벗어날 필요 없는 Jira 스타일 TUI로 보여준다.
+9999 브라우저 관리자 UI 또는 터미널을 벗어날 필요 없는 Jira 스타일 TUI로 보여준다.
 
 [**AI CLI 없이 60초 만에 체험하기 →**](#try-it-in-60-seconds-no-agent-cli-required)
 

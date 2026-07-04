@@ -1,3 +1,33 @@
+# 2026-07-04 - README 9999 admin UI showcase
+
+## Decision
+
+Feature the built-in 9999 browser admin UI before the terminal TUI in both
+README surfaces. The screenshot asset lives at `docs/admin-ui-screenshot.png`
+and is rendered from the real static web app with sanitized demo board data, so
+the public README shows the prettier operator surface without exposing a live
+workflow's ticket content.
+
+- Rejected: using the legacy `tools/board-viewer` screenshots. They show the
+  secondary viewer, not the 9999 orchestrator admin app the operator asked to
+  showcase.
+- Rejected: screenshotting the currently running `jira-symphony` server
+  directly. The app was live on `127.0.0.1:9999`, but public README assets
+  should not include real local ticket data.
+- Rejected: replacing the terminal screenshot. The TUI is still a major
+  operator surface; the README should show both, with the 9999 UI first.
+
+## Verification
+
+- Generated `docs/admin-ui-screenshot.png` from the real web app static assets
+  at the `http://127.0.0.1:9999/#/board` route with mocked API payloads and
+  Playwright Chromium `--single-process`.
+- Visually inspected the generated image: nonblank, board columns rendered,
+  live/retry badges visible, terminal-state group visible.
+- `git diff --check` -> pass.
+
+---
+
 # 2026-07-04 - Fix G2 empty-response-loop false-positive on OpenCode
 
 ## Goal
