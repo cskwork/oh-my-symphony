@@ -64,11 +64,43 @@ GitHub release notes, and the Pages badge should all include the new default.
 - Rejected: retagging `v0.10.0`. A public release already exists, and moving a
   published tag would make downstream provenance ambiguous.
 
-## Planned verification
+## Verification
 
 - `rtk pytest tests/test_workflow.py -k "compact_issue_context" -q`
+  passed: 3 tests.
 - `rtk pytest tests/test_prompt_context.py tests/test_prompt.py::test_compact_issue_context_changes_rendered_prompt_description -q`
+  passed: 8 tests.
 - `python -m py_compile src/symphony/workflow/config.py src/symphony/workflow/builder.py`
+  passed.
 - `git diff --check`
-- Confirm `jira-symphony` has prompt compaction enabled by config or default.
-- Publish `v0.10.1` and rerun a fresh Codex E2E from remote state.
+  passed.
+- Full suite on `dev` pre-push passed: 1110 passed, 2 skipped.
+- Full suite on `main` passed locally and in the pre-push hook: 1110 passed,
+  2 skipped.
+- Confirmed `jira-symphony` has `agent.compact_issue_context: true` in
+  `WORKFLOW.md`. The running local `jira-symphony` service was still version
+  0.9.3 with an active worker, so it needs a restart/upgrade before relying on
+  the 0.10.1 package default.
+- Fresh remote-clone Codex E2E:
+  `/private/tmp/symphony-codex-e2e-compact-xMLREd/repo`, commit
+  `f8a5473532d574eeec38043fdae3ad0d536179db`.
+  The E2E workflow intentionally omitted `agent.compact_issue_context`; loaded
+  config reported `compact_issue_context=True`.
+- Clean release-gate ticket `CODEX-E2E-005` reached `Human Review`, exited with
+  `worker_exit reason=normal`, API reported `running=0` and `retrying=0`, and
+  had no `## Contract Failure` or `## Contract Warning` heading.
+- E2E artifacts:
+  `docs/CODEX-E2E-005/work/compaction-default.md` contained
+  `compact_issue_context default: true`,
+  `docs/CODEX-E2E-005/qa/verify.log` contained
+  `verified compact default true`, and
+  `docs/CODEX-E2E-005/learn/handoff.md` contained the Learn handoff.
+
+## E2E harness note
+
+The first two temporary E2E tickets (`CODEX-E2E-003` and `CODEX-E2E-004`)
+proved the worker could finish, but they were not accepted as the release gate:
+the harness prompts omitted required contract sections or used the wrong
+`AC Scorecard` table shape. The final ticket (`CODEX-E2E-005`) corrected the
+harness to the validator's actual contract and is the evidence used for the
+release decision.
