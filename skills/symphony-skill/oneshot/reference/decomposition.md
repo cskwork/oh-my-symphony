@@ -4,6 +4,27 @@ The Plan lane is the only lane that decides what tickets exist. Quality of
 decomposition is the upper bound on quality of delivery — if the Plan lane
 ships a bad ticket map, no amount of clever Build/Verify/QA work fixes it.
 
+## Route before slicing
+
+Plan must classify the request before creating tickets:
+
+- **Bugfix**: reproduction -> minimal fix -> regression verification.
+- **Feature/enhancement**: behavior contract -> implementation -> changed-flow
+  integration proof.
+- **Customer-facing app delivery**: product brief -> workflow slices ->
+  merged-target release verification.
+- **Release/integration only**: current merged state -> build/start/customer
+  flow proof -> delivery notes.
+- **Docs/config/tooling**: exact surface -> static or command proof ->
+  no-runtime-change rationale.
+- **Research/spike**: evidence gathering -> decision note -> follow-up ticket
+  list.
+
+Do not use the app-delivery pattern for every prompt. A bugfix ticket that
+requires a reproduction log should not be turned into market research; an app
+delivery ticket that needs customer workflows should not be sliced as isolated
+tables and screens.
+
 ## The decomposition checklist (Plan lane runs this)
 
 For each candidate ticket:

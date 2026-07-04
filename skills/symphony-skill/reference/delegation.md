@@ -12,6 +12,22 @@ context only carries the orchestration overhead, not all sub-implementations.
    operator outcome, constraints, out of scope, and proof commands. If the
    request is really one small change, create one ticket instead of a board.
 
+   Classify the work type before decomposition. The ticket map should match the
+   job:
+
+   | Work type | First ticket owns | Final proof owns |
+   | --- | --- | --- |
+   | Bugfix | Reproduction, suspected area, failing test/log | Regression closes repro + focused suite |
+   | Feature/enhancement | Behavior contract and acceptance criteria | Integration for changed workflow |
+   | Customer-facing app delivery | Product brief and workflow matrix | Merged-target release verification |
+   | Release/integration only | Current merged state and release risks | Full launch/build/customer-flow proof |
+   | Docs/config/tooling | Exact affected surface and rollback risk | Static checks + no-runtime-change rationale |
+   | Research/spike | Unknowns, evidence plan, decision criteria | Decision note + follow-up ticket list |
+
+   Do not register product-discovery tickets for a narrow bugfix unless the bug
+   exposes a missing product contract. Do not register a single broad
+   `implement app` ticket when the work is customer-facing app delivery.
+
    For customer-facing app work, frame the product before the implementation
    queue. Do not decompose straight into screens or tables. Capture:
 
@@ -154,10 +170,27 @@ env, broken seed data), the ticket blocks delivery instead of moving to Learn.
 For a bug:
 
 ```text
-TASK-001  Reproduce failure with a failing test/log
+TASK-001  Reproduce failure with failing test/log (no deps)
 TASK-002  Minimal fix + focused tests             (deps: TASK-001)
 TASK-003  Regression verification + full suite    (deps: TASK-002)
 ```
+
+Bugfix ticket descriptions must include the observed failure, expected
+behavior, suspected area or "unknown", reproduction command/log, fix boundary,
+regression command, and what would still be `Not proven`. They should not ask
+the worker to redesign unrelated product flows.
+
+For a bounded feature/enhancement:
+
+```text
+TASK-001  Behavior contract + acceptance matrix   (no deps)
+TASK-002  Implementation + focused tests          (deps: TASK-001)
+TASK-003  Changed-workflow integration proof      (deps: TASK-002)
+```
+
+Feature tickets own one behavior change. If the change becomes a new product
+surface, route it through the app-delivery pattern instead of silently expanding
+scope.
 
 For browser UI:
 

@@ -54,11 +54,17 @@ references for this router.
 Before registering more than one ticket, write the task list first and reject
 bad slices:
 
+- Work-type route: classify the request before ticket creation. Use the bugfix
+  shape for defects, feature/enhancement shape for bounded behavior changes,
+  app-delivery shape for customer-facing products, release-verification shape
+  for final integrated proof, docs/config shape for non-runtime edits, and
+  research/spike shape for unknowns. Do not force every task through the
+  product-delivery shape.
 - Independently testable: if tests require unbuilt work, merge the slice or
   add `blocked_by`.
 - Self-contained prompt: the ticket description includes goal, scope, files,
   acceptance criteria, tests, dependencies, and done evidence.
-- Product-ready app work starts with discovery: target customer, core
+- App-delivery work starts with discovery: target customer, core
   workflows, must-have functionality, data/auth/deployment assumptions, and a
   final merged-app release verification ticket.
 - One contract owner: a ticket owns one behavior/API/data contract, not a

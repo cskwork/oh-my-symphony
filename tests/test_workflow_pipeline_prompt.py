@@ -263,11 +263,23 @@ def test_operator_skill_requires_product_discovery_and_release_verify() -> None:
     ).read_text(encoding="utf-8")
 
     assert "production-ready app delivery planning" in skill
-    assert "Product-ready app work starts with discovery" in skill
+    assert "Work-type route: classify the request before ticket creation" in skill
+    assert "Do not force every task through" in skill
+    assert "product-delivery shape" in skill
+    assert "App-delivery work starts with discovery" in skill
+    assert "Work type | First ticket owns | Final proof owns" in delegation
+    assert "Bugfix | Reproduction, suspected area, failing test/log" in delegation
+    assert "Do not register product-discovery tickets for a narrow bugfix" in delegation
     assert "target customer and the job they need done" in delegation
+    assert "Reproduce failure with failing test/log" in delegation
+    assert "Behavior contract + acceptance matrix" in delegation
     assert "Product readiness brief + release matrix" in delegation
     assert "Release verification on merged target" in delegation
     assert "curl 000" in delegation
+    assert "Route before slicing" in decomposition
+    assert "Bugfix**: reproduction -> minimal fix -> regression verification" in decomposition
+    assert "Feature/enhancement**: behavior contract" in decomposition
+    assert "Do not use the app-delivery pattern for every prompt" in decomposition
     assert "If this is app delivery, is the product defined?" in decomposition
     assert "Merged-target release verification" in decomposition
 

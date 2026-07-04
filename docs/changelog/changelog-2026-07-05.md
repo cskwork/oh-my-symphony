@@ -121,6 +121,12 @@ Update the operator skill, OneShot decomposition guide, and file/Linear worker
 prompts so app delivery starts with a product-readiness brief and ends with a
 merged-target release verification ticket.
 
+Also update ticket-registration guidance to route by work type before slicing:
+bugfix, feature/enhancement, customer-facing app delivery, release/integration,
+docs/config/tooling, or research/spike. Correct issue registration is the
+primary control; product-discovery tickets are required for app delivery but
+would be noise for a narrow defect fix.
+
 The brief must name the target customer, comparable-product/domain research or
 explicit assumptions, core customer workflows, must-have functionality,
 non-goals, data/auth/deploy constraints, and the final release matrix. Verify
@@ -137,10 +143,15 @@ workflow is `Not market-ready` and rewinds or blocks delivery.
 - Rejected: making every small UI ticket run a full product benchmark. The full
   release proof belongs on app delivery and final release-verification tickets;
   smaller tickets still verify their owned workflow and evidence.
+- Rejected: routing every Symphony request through the new-product pattern.
+  Symphony also coordinates bugfixes, bounded feature work, docs/config changes,
+  research spikes, and release verification, each needing a different ticket
+  shape.
 
 ## Verification
 
 - Prompt contract tests cover the new `## Product Contract`, merged-target app
   release proof, `curl 000` startup failure handling, and market-ready wording.
 - Skill guidance tests cover product discovery, release matrix ticketing, and
-  OneShot app decomposition.
+  work-type-specific issue registration for bugfix, feature, app-delivery, and
+  release-verification routes.
