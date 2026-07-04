@@ -47,4 +47,4 @@ Layout (see ``AGENTS.md`` for full SPEC references):
     - ``mock_codex``    — mock Codex app-server, runnable as ``python -m symphony.mock_codex``
 """
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"
