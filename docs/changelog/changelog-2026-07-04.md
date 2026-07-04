@@ -61,3 +61,45 @@ turn's response.
   `EMPTY_TURN_LOOP_THRESHOLD` unchanged at 3.
 
 Patch bump 0.9.1 -> 0.9.2 (fix restores intended behavior).
+
+## Follow-up (0.9.3) — the dominant cause: opencode 1.17 schema drift
+
+Live verification against the paused `jira-symphony` board (TASK-001, blocked
+in `Learn` by exactly this loop) showed 0.9.2 alone was necessary but not
+sufficient. Every `agent_turn_completed` reported `input_tokens=0
+output_tokens=0` with an empty `last_message` — yet opencode had done real work
+(glm-5.2, 8 agentic steps, 27-file commits). Input tokens cannot be zero for a
+12 KB prompt: Symphony's opencode backend was parsing *nothing* out of
+opencode 1.17.13's output. So `response` itself was empty, and 0.9.2's
+`message: response` carried an empty string — the preview stayed blank and G2
+still counted every turn empty.
+
+Root cause: `opencode run --format json` (src/cli/cmd/run.ts `emit`) streams
+JSONL frames `{"type": ..., "sessionID": ..., "part": {...}}`; assistant prose
+is in `type=="text"` frames under `part.text`. Symphony's `_extract_text` only
+scanned flat keys (`response`/`result`/`message`/`text`/`content`/`output`) plus
+`data`, so it never saw `part.text` and returned "". (Confirmed by unit probe:
+`_extract_text({"type":"text","part":{"text":"..."}}) == ""`.)
+
+Fix: `OpenCodeBackend._text_from_event` reads `part.text` from `type=="text"`
+frames, keeping the flat-key scan as a fallback for the raw-stdout and
+non-opencode shapes. tool_use/step_start frames carry no prose, so a genuinely
+empty turn (no text frame) still counts as empty — G2's real detection is
+preserved. New `tests/test_backends.py::test_opencode_extracts_text_from_jsonl_part_frames`
+pins the JSONL shape.
+
+- Rejected: **a deep/generic text search** across every nested dict — risks
+  grabbing tool-call arguments and file contents as "response". The
+  `type=="text"` predicate is precise to opencode's serialization.
+- Known follow-up (not G2-blocking): token usage still reads 0 for opencode
+  1.17 — usage lives under the assistant message `info.tokens`, a path
+  `_usage_dicts` does not yet traverse. This only affects `max_total_tokens`
+  budgeting and telemetry for opencode, not dispatch correctness. Tracked in
+  `skills/symphony-skill/reference/troubleshooting.md`.
+
+Operator playbook added: "Backend CLI update broke response parsing" in
+`skills/symphony-skill/reference/troubleshooting.md` — the `input_tokens=0`
+smoking gun, the capture-the-real-schema recipe, and the fix pattern, so the
+next CLI-upgrade drift is a 2-minute triage instead of a rediscovery.
+
+Patch bump 0.9.2 -> 0.9.3 (restores opencode response parsing for opencode >= 1.x).

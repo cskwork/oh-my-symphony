@@ -38,6 +38,7 @@ tail -F log/symphony.log
 | `reconcile_skip_active_worker`           | Reconcile saw a terminal state but the worker is still emitting events; gives the worker `last_event_age_s` < 10 s grace to exit naturally | Informational — prevents races that previously dropped `agent_turn_completed` and wiped workspaces mid-cleanup |
 | `agent_compaction phase=start/end`       | Pi backend triggered context compaction (`/compact` or auto when nearing the model's context window) | Informational — a sudden token-count drop on the next turn is now attributable     |
 | `agent_internal_retry phase=start/end`   | Pi backend retried an upstream LLM call internally (transient error)                              | Informational — recoverable; if `final_error` is set the turn ultimately failed   |
+| `empty_response_loop consecutive_empty_turns=N` with `input_tokens=0` AND `output_tokens=0` every turn | Backend CLI output schema drifted (often after an opencode/gemini upgrade) — Symphony parsed neither text nor tokens, so every turn looks empty | See "Backend CLI update broke response parsing" below; fix the backend extractor, do NOT raise the threshold |
 | `OSError [Errno 48]` on startup          | Port already in use                                      | `lsof -ti :9999 \| xargs -r kill`                                                   |
 | `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                   |
 | `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)             |
@@ -259,3 +260,49 @@ echo "<prompt>" | pi --mode json -p "" 2>/dev/null \
   | jq -c 'select(.type=="message_end") | .message.usage'
 # one usage block per LLM call
 ```
+
+### Backend CLI update broke response parsing: "ticket did real work but got Blocked with `empty_response_loop`"
+
+Recurring class: an agent CLI (opencode, gemini, ...) ships an update that
+changes its `--format json` output shape, and Symphony's backend parser — pinned
+to the old shape — silently extracts nothing. The ticket keeps doing real work
+(commits, file edits), but Symphony sees every turn as empty and the G2
+empty-response-loop guard blocks it after 3 turns.
+
+The tell is in the `agent_turn_completed` lines: **`input_tokens=0` AND
+`output_tokens=0` on every turn**, with an empty `last_message=`. Input tokens
+can't really be zero — the prompt alone is thousands — so a zero means the parser
+found no usage at all, and it almost certainly found no response text either
+(that is what trips G2: empty `current_turn_message`).
+
+2-minute diagnosis:
+
+```bash
+grep -a agent_turn_completed log/symphony.log | tail -5
+# input_tokens=0 AND output_tokens=0 every turn = parser mismatch (smoking gun)
+
+# Capture the CLI's REAL output schema. Use the exact command from WORKFLOW.md's
+# <kind>: block. opencode buffers all stdout until the turn ends, so give it time:
+cd "$(mktemp -d)"
+timeout 600 opencode run --format json "reply with the word DONE" | head -c 2000
+# See where the assistant text and token usage actually live in the JSON.
+```
+
+Then compare against the backend's extractors in
+`src/symphony/backends/<kind>.py`: `_response_from_events` / `_extract_text` for
+text, `_update_usage_from_events` / `_usage_dicts` for tokens. Recent opencode
+(>= 1.x) streams JSONL frames `{"type":"text","sessionID":...,"part":{"type":"text","text":...}}`
+and reports tokens under the assistant message `info.tokens` — nested paths the
+old flat-key scan missed. Fixed for text in 0.9.3 (`_text_from_event` reads
+`part.text` from `type=="text"` frames); token accounting for the new shape is a
+known follow-up.
+
+Fix pattern: extend the backend's text/usage extractor to the new schema. Do
+NOT raise `EMPTY_TURN_LOOP_THRESHOLD` — that only delays the false block and
+weakens genuine empty-loop detection for every backend.
+
+Contract for backends: the `EVENT_TURN_COMPLETED` payload must carry the
+response under a preview key (`message`) so both the G2 guard and the TUI
+preview see it. A backend that returns text only under private keys
+(`result` / `response`) reads as a blank turn — see
+`docs/dispatch-stability/G2-empty-response-loop.md`.

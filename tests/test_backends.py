@@ -956,6 +956,44 @@ async def test_opencode_turn_completed_payload_carries_message_for_preview(
 
 
 @pytest.mark.asyncio
+async def test_opencode_extracts_text_from_jsonl_part_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """opencode `run --format json` streams {type,sessionID,part} JSONL frames;
+    assistant prose lives in type=="text" frames under part.text. The backend
+    must surface it as the turn message, else G2 counts every opencode turn as
+    empty. tool_use/step_start frames carry no prose and must not pollute it."""
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict] = []
+
+    async def record(event: dict) -> None:
+        events.append(event)
+
+    stdout = (
+        b'{"type":"step_start","sessionID":"ses_x","part":{"type":"step-start"}}\n'
+        b'{"type":"tool_use","sessionID":"ses_x","part":{"type":"tool","tool":"read"}}\n'
+        b'{"type":"text","sessionID":"ses_x","part":{"type":"text",'
+        b'"text":"Learn summary: schema drift resolved."}}\n'
+    )
+    _install_subprocess_double(
+        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=record)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Learn")
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    completed = [e for e in events if e["event"] == EVENT_TURN_COMPLETED]
+    assert completed
+    assert completed[0]["payload"]["message"] == "Learn summary: schema drift resolved."
+    assert result.last_message == "Learn summary: schema drift resolved."
+
+
+@pytest.mark.asyncio
 async def test_opencode_emits_heartbeats_while_turn_subprocess_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

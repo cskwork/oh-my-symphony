@@ -274,8 +274,25 @@ class OpenCodeBackend(BaseAgentBackend):
         return None
 
     def _response_from_events(self, events: Iterable[dict[str, Any]]) -> str:
-        parts = [_extract_text(event) for event in events]
+        parts = [self._text_from_event(event) for event in events]
         return "\n".join(part for part in parts if part).strip()
+
+    @staticmethod
+    def _text_from_event(event: dict[str, Any]) -> str:
+        # opencode `run --format json` streams JSONL frames shaped as
+        # {"type": ..., "sessionID": ..., "part": {...}} (src/cli/cmd/run.ts
+        # `emit`). Assistant prose is carried by type=="text" frames under
+        # part.text; tool_use / step_start frames carry no user-facing prose.
+        # Reading part.text is what keeps `response` non-empty so the G2
+        # empty-loop guard sees a productive turn. Fall back to the flat-key
+        # scan for the pre-JSONL raw shape and non-opencode payloads.
+        if isinstance(event, dict) and event.get("type") == "text":
+            part = event.get("part")
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        return _extract_text(event)
 
     def _update_usage_from_events(self, events: Iterable[dict[str, Any]]) -> None:
         for event in events:
