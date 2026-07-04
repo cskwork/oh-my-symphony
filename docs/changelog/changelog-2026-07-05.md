@@ -104,3 +104,43 @@ the harness prompts omitted required contract sections or used the wrong
 `AC Scorecard` table shape. The final ticket (`CODEX-E2E-005`) corrected the
 harness to the validator's actual contract and is the evidence used for the
 release decision.
+
+---
+
+# 2026-07-05 - Product-ready app delivery gate
+
+## Goal
+
+Prevent Symphony from treating a set of locally passing implementation tickets
+as a production-ready customer app when the final merged product has not been
+researched, started, and exercised through real customer workflows.
+
+## Decision
+
+Update the operator skill, OneShot decomposition guide, and file/Linear worker
+prompts so app delivery starts with a product-readiness brief and ends with a
+merged-target release verification ticket.
+
+The brief must name the target customer, comparable-product/domain research or
+explicit assumptions, core customer workflows, must-have functionality,
+non-goals, data/auth/deploy constraints, and the final release matrix. Verify
+now tells app/release tickets to prove the merged target branch through clean
+setup, build, declared start command, readiness check, browser/API workflow
+smoke, and console/network/server review. A startup failure such as `curl 000`,
+a missing listening port, undocumented manual setup, or a missing must-have
+workflow is `Not market-ready` and rewinds or blocks delivery.
+
+- Rejected: only adding more per-ticket unit tests. Unit tests can pass while
+  the merged app does not start or lacks required customer functionality.
+- Rejected: relying on per-ticket merge proof alone. A clean merge commit proves
+  Git integration, not product readiness.
+- Rejected: making every small UI ticket run a full product benchmark. The full
+  release proof belongs on app delivery and final release-verification tickets;
+  smaller tickets still verify their owned workflow and evidence.
+
+## Verification
+
+- Prompt contract tests cover the new `## Product Contract`, merged-target app
+  release proof, `curl 000` startup failure handling, and market-ready wording.
+- Skill guidance tests cover product discovery, release matrix ticketing, and
+  OneShot app decomposition.

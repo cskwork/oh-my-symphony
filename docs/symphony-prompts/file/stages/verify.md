@@ -15,6 +15,9 @@ Verify has three jobs: review, QA, and merge preflight/merge. Goal for this lane
    - For trivial non-runtime changes, the QA half may be short: run the relevant static/content check and explain why no runtime path changed.
    - Browser UI work must drive Playwright/headless Chromium against `file://` or a tiny static server for core flows (add/toggle/edit-cancel via Escape/delete/filter/reload persistence as applicable). DOM shims are smoke only, never final Verify authority.
    - Test the exact declared launch path. If the app claims direct `file://` support, fail on module-script/CORS boot errors instead of switching to HTTP.
+   - App delivery or release-verification tickets must prove the merged target branch as a product: clean install/setup, production build when available, declared start command, readiness URL or port check, browser/API smoke for each core customer workflow, console/network/server error review, and screenshots or logs under `qa/`.
+   - Run the release proof after prior feature branches are merged into the target branch. Testing only the current feature worktree is not enough for a final app claim.
+   - If the app cannot start, has no listening port, returns `curl 000`, misses a must-have customer function, or needs undocumented manual setup, append `## QA Failure`, mark the app `Not market-ready`, set state to `In Progress`, and stop.
    - If browser deps are unavailable, append `## Environment Block` naming what is missing, set state to `Blocked`, and stop.
    - For bugs, close the reproduction loop by saving `docs/{{ issue.identifier }}/qa/repro-after.log`.
 5. Append `## QA Evidence` with a command manifest: command, exit code, evidence path, what it proves, what it does not prove, and how to re-run.
@@ -29,6 +32,7 @@ Verify has three jobs: review, QA, and merge preflight/merge. Goal for this lane
    - If committed target/branch merge conflicts exist: set state to `Blocked`, append `## Merge Failure` with exact command, target branch, and conflicted paths, then stop.
    - If clean: check whether host dirty tracked files overlap `git diff --name-only <target-branch>..symphony/{{ issue.identifier }}`. Block only on actual overlap or workspace-only path changes.
    - If safe: create the explicit `--no-ff` merge commit on the target branch and record target branch, feature branch, command, and merge SHA under `## Merge Status`.
+   - For final app release verification, record the post-merge target SHA used by the launch proof. If the launch proof ran before the merge, rerun it after the merge.
 {% else %}
 8. Merge Gate is disabled (`agent.auto_merge_on_done` is false). Append `## Merge Status` noting this workflow intentionally leaves branch integration to the operator.
 {% endif %}

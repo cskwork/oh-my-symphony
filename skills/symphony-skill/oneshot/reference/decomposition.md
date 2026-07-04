@@ -8,6 +8,12 @@ ships a bad ticket map, no amount of clever Build/Verify/QA work fixes it.
 
 For each candidate ticket:
 
+0. **If this is app delivery, is the product defined?** — Before Build
+   tickets exist, create a product-readiness brief ticket. It must name the
+   target customer, core workflows, must-have features, non-goals, research
+   sources or assumptions, data/auth/deploy constraints, and the final
+   release-verification matrix. A pretty shell without the necessary customer
+   workflows is not complete.
 1. **Is it independently testable?** — A ticket whose tests need another
    un-built ticket should be merged with that ticket OR sequenced via
    `blocked_by`.
@@ -68,15 +74,22 @@ of implementation when assigning numbers.
 
 ### CRUD web app
 ```
-BUILD-1  Schema + migrations            (no deps)
-BUILD-2  Auth: signup/login/session     (deps: BUILD-1)
-BUILD-3  API: <resource> CRUD           (deps: BUILD-1, BUILD-2)
-BUILD-4  Web UI: list + detail + form   (deps: BUILD-3)
-BUILD-5  Web UI: signup/login pages     (deps: BUILD-2)
-VERIFY-1 Full suite + integration       (deps: BUILD-*)
-QA-1     Playwright golden + edge       (deps: BUILD-4, BUILD-5)
-DELIVER-1 Package + README + tag        (deps: VERIFY-1, QA-1)
+DISCOVERY-1 Product brief + release matrix      (no deps)
+BUILD-1    Schema + migrations                  (deps: DISCOVERY-1)
+BUILD-2    Auth: signup/login/session           (deps: DISCOVERY-1, BUILD-1)
+BUILD-3    API: <resource> CRUD                 (deps: DISCOVERY-1, BUILD-1, BUILD-2)
+BUILD-4    Web UI: primary customer workflow    (deps: BUILD-3)
+BUILD-5    Web UI: secondary/edge workflows     (deps: BUILD-2, BUILD-3)
+VERIFY-1   Merged-target release verification   (deps: BUILD-*)
+QA-1       Playwright golden + accessibility    (deps: VERIFY-1)
+DELIVER-1  Package + README + tag               (deps: VERIFY-1, QA-1)
 ```
+
+`VERIFY-1` must run the declared app from the merged target branch, not just
+the current feature branch. It records install/build/start output, readiness
+checks, browser/API customer-flow proof, console/network/server errors, and a
+market-ready gap list. A startup failure such as no listening port or
+`curl 000` blocks delivery.
 
 ### CLI tool
 ```
@@ -91,13 +104,14 @@ DELIVER-1 README + man page + binary      (deps: VERIFY-1)
 
 ### Static landing page
 ```
-BUILD-1  Hero + nav + footer (semantic HTML)   (no deps)
-BUILD-2  Section components                    (deps: BUILD-1)
-BUILD-3  Styling + responsive                  (deps: BUILD-2)
-BUILD-4  Build pipeline (vite/astro/etc)       (deps: BUILD-3)
-VERIFY-1 Lighthouse + HTML validation          (deps: BUILD-*)
-QA-1     Playwright cross-viewport + a11y      (deps: BUILD-*)
-DELIVER-1 Deploy script + DNS notes            (deps: VERIFY-1, QA-1)
+DISCOVERY-1 Audience + offer + conversion brief       (no deps)
+BUILD-1    Hero + nav + footer (semantic HTML)        (deps: DISCOVERY-1)
+BUILD-2    Section components                         (deps: BUILD-1)
+BUILD-3    Styling + responsive                       (deps: BUILD-2)
+BUILD-4    Build pipeline (vite/astro/etc)            (deps: BUILD-3)
+VERIFY-1   Merged-target browser + launch proof       (deps: BUILD-*)
+QA-1       Playwright cross-viewport + a11y           (deps: VERIFY-1)
+DELIVER-1  Deploy script + DNS notes                  (deps: VERIFY-1, QA-1)
 ```
 
 ## Anti-patterns

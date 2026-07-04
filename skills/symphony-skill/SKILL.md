@@ -1,6 +1,6 @@
 ---
 name: symphony-skill
-description: Single Symphony operator router for Kanban tickets, service/TUI runs, workflow prompts, delegation, OneShot runs, monorepo bootstrap, and worker failure triage.
+description: Single Symphony operator router for Kanban tickets, service/TUI runs, workflow prompts, delegation, production-ready app delivery planning, OneShot runs, monorepo bootstrap, and worker failure triage.
 ---
 
 # Using Symphony
@@ -58,6 +58,9 @@ bad slices:
   add `blocked_by`.
 - Self-contained prompt: the ticket description includes goal, scope, files,
   acceptance criteria, tests, dependencies, and done evidence.
+- Product-ready app work starts with discovery: target customer, core
+  workflows, must-have functionality, data/auth/deployment assumptions, and a
+  final merged-app release verification ticket.
 - One contract owner: a ticket owns one behavior/API/data contract, not a
   grab bag.
 - Small enough for one worker: rough limit <=5 files and <=500 net lines for a

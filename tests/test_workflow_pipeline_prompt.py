@@ -26,6 +26,11 @@ IN_PROGRESS_RULES = (
     "proof map",
     "before state",
     "after target",
+    "## Product Contract",
+    "target customer",
+    "market-ready behavior",
+    "customer-observable workflow",
+    "Not market-ready",
     "what would still be `Not proven`",
     "## Plan",
     "## Acceptance Tests",
@@ -48,6 +53,12 @@ VERIFY_RULES = (
     "Browser UI work must drive Playwright/headless Chromium",
     "fail on module-script/CORS boot errors",
     "DOM shims are smoke only, never final Verify authority",
+    "App delivery or release-verification tickets must prove the merged target branch as a product",
+    "clean install/setup",
+    "browser/API smoke for each core customer workflow",
+    "Testing only the current feature worktree is not enough",
+    "curl 000",
+    "Not market-ready",
     "## Environment Block",
     "## QA Evidence",
     "## AC Scorecard",
@@ -55,6 +66,7 @@ VERIFY_RULES = (
     "## QA Failure",
     "git merge-tree --write-tree",
     "## Merge Status",
+    "post-merge target SHA",
     "Set state to `Learn`",
 )
 
@@ -225,6 +237,39 @@ def test_base_prompt_declares_four_stage_pipeline_and_skip_learn(flavor: str) ->
     assert "operator may skip Learn to Human Review" in text
     assert "Use `Not proven` when evidence is missing" in text
     assert "Never skip Verify" in text
+    assert "customer-facing app delivery" in text
+    assert "merged target branch starts through the declared launch path" in text
+    assert "## Product Contract" in text
+
+
+def test_operator_skill_requires_product_discovery_and_release_verify() -> None:
+    skill = (REPO_ROOT / "skills" / "symphony-skill" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    delegation = (
+        REPO_ROOT
+        / "skills"
+        / "symphony-skill"
+        / "reference"
+        / "delegation.md"
+    ).read_text(encoding="utf-8")
+    decomposition = (
+        REPO_ROOT
+        / "skills"
+        / "symphony-skill"
+        / "oneshot"
+        / "reference"
+        / "decomposition.md"
+    ).read_text(encoding="utf-8")
+
+    assert "production-ready app delivery planning" in skill
+    assert "Product-ready app work starts with discovery" in skill
+    assert "target customer and the job they need done" in delegation
+    assert "Product readiness brief + release matrix" in delegation
+    assert "Release verification on merged target" in delegation
+    assert "curl 000" in delegation
+    assert "If this is app delivery, is the product defined?" in decomposition
+    assert "Merged-target release verification" in decomposition
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

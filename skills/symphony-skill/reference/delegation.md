@@ -12,6 +12,17 @@ context only carries the orchestration overhead, not all sub-implementations.
    operator outcome, constraints, out of scope, and proof commands. If the
    request is really one small change, create one ticket instead of a board.
 
+   For customer-facing app work, frame the product before the implementation
+   queue. Do not decompose straight into screens or tables. Capture:
+
+   - target customer and the job they need done;
+   - comparable product or domain research used, with sources or explicit
+     assumptions when live research is unavailable;
+   - core customer workflows that must work end to end;
+   - must-have functionality, non-goals, and market-ready gaps;
+   - data, auth, permissions, security, deploy, and seed/demo-data assumptions;
+   - the declared launch path and final release verification command set.
+
 2. **Decompose** the request into independent tickets, each with a
    self-contained spec. Independence is critical: Symphony runs eligible
    tickets concurrently up to `agent.max_concurrent_agents`. Use `blocked_by`
@@ -30,6 +41,13 @@ context only carries the orchestration overhead, not all sub-implementations.
 
    Bad slices: `misc cleanup`, `implement app`, `frontend polish`, or two
    tickets that must edit the same behavior without an ordered dependency.
+
+   For a new app or major product surface, the first ticket is a
+   product-readiness brief, not code. It owns the user research summary,
+   customer workflow map, feature inventory, and release acceptance matrix.
+   Build tickets consume that brief. A final release-verification ticket is
+   blocked by every Build ticket and proves the merged target branch runs as a
+   coherent product.
 
 3. **Register** each as a Symphony ticket with a rich description (this
    description is the only context the worker gets, plus the WORKFLOW.md
@@ -94,6 +112,7 @@ Implementation notes:
 Verification:
 - <exact unit/integration command>
 - <lint/type/build command if relevant>
+- For app delivery: <merged-target start command + customer workflow smoke>
 
 Done evidence:
 - Append a Resolution with changed files, tests run, and residual risk.
@@ -115,12 +134,22 @@ distributed lock.
 For a typical app change, separate by behavior and proof surface:
 
 ```text
-TASK-001  Data model / migration / fixtures       (no deps)
-TASK-002  Core service or API behavior + tests    (deps: TASK-001)
-TASK-003  UI flow or CLI surface + tests          (deps: TASK-002)
-TASK-004  Integration verification + full suite   (deps: TASK-001..003)
-TASK-005  Delivery docs / changelog / commit prep (deps: TASK-004)
+TASK-001  Product readiness brief + release matrix (no deps)
+TASK-002  Data model / migration / fixtures        (deps: TASK-001)
+TASK-003  Core service or API behavior + tests     (deps: TASK-001,TASK-002)
+TASK-004  Primary customer workflow UI + tests     (deps: TASK-001,TASK-003)
+TASK-005  Secondary workflow / edge states         (deps: TASK-001,TASK-003)
+TASK-006  Release verification on merged target    (deps: TASK-002..005)
+TASK-007  Delivery docs / changelog / commit prep  (deps: TASK-006)
 ```
+
+The release-verification ticket is not a paperwork ticket. It checks out or
+uses the merged target branch after prior tickets land, runs install/build/start
+from a clean-ish operator path, waits for readiness, drives the core customer
+flows in a browser or API client, records console/network/server failures, and
+states whether the app is market-ready or which customer-critical gaps remain.
+If the app cannot start (`curl 000`, no listening port, failed build, missing
+env, broken seed data), the ticket blocks delivery instead of moving to Learn.
 
 For a bug:
 
@@ -133,10 +162,11 @@ TASK-003  Regression verification + full suite    (deps: TASK-002)
 For browser UI:
 
 ```text
-TASK-001  Data/API contract
-TASK-002  UI implementation
-TASK-003  Responsive/accessibility/browser QA
-TASK-004  Delivery proof
+TASK-001  Product/customer workflow contract
+TASK-002  Data/API contract
+TASK-003  UI implementation
+TASK-004  Responsive/accessibility/browser QA
+TASK-005  Merged-app release proof
 ```
 
 One Verify ticket per release is usually better than one Verify ticket per
