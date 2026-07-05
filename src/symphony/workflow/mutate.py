@@ -23,7 +23,7 @@ from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.error import YAMLError
 
 from ..errors import SymphonyError
-from .constants import SUPPORTED_AGENT_KINDS
+from .constants import DEFAULT_CI_MIN_INTERVAL_MS, SUPPORTED_AGENT_KINDS
 
 _STATE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _/-]{0,39}$")
 _MAX_COLUMNS = 100
@@ -416,11 +416,6 @@ def set_branch_policy(
 # continuous improvement heartbeat
 # ---------------------------------------------------------------------------
 
-# Mirrors the parser floor in workflow/constants.py (DEFAULT_CI_MIN_INTERVAL_MS)
-# so a bad UI edit fails at write time instead of silently landing an
-# unstartable config.
-_CI_MIN_INTERVAL_MS = 60_000
-
 
 def set_continuous_improvement_settings(
     workflow_path: Path,
@@ -445,9 +440,9 @@ def set_continuous_improvement_settings(
             raise WorkflowMutationError(
                 "continuous_improvement.interval_ms must be an integer"
             )
-        if interval_ms < _CI_MIN_INTERVAL_MS:
+        if interval_ms < DEFAULT_CI_MIN_INTERVAL_MS:
             raise WorkflowMutationError(
-                f"continuous_improvement.interval_ms must be >= {_CI_MIN_INTERVAL_MS}"
+                f"continuous_improvement.interval_ms must be >= {DEFAULT_CI_MIN_INTERVAL_MS}"
             )
     if max_turns is not None:
         if isinstance(max_turns, bool) or not isinstance(max_turns, int):

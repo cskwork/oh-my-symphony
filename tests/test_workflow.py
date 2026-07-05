@@ -1154,6 +1154,23 @@ def test_continuous_improvement_interval_ms_enforces_lower_bound(tmp_path):
         build_service_config(load_workflow(path))
 
 
+def test_continuous_improvement_interval_ms_accepts_lower_bound(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x, api_key: xx }
+            continuous_improvement: { interval_ms: 60000 }
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.continuous_improvement.interval_ms == 60_000
+
+
 @pytest.mark.parametrize("raw_value", ["true", "false", "\"48\"", "-1"])
 def test_continuous_improvement_max_turns_rejects_invalid(tmp_path, raw_value):
     path = _write(

@@ -13,6 +13,7 @@ documented defaults. The dispatch-time, harder validation lives in
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -94,7 +95,6 @@ from .constants import (
     LINEAR_DEFAULT_ENDPOINT,
     SUPPORTED_AGENT_KINDS,
     SUPPORTED_WORKSPACE_REUSE_POLICIES,
-    _CI_TICKET_PREFIX_RE,
 )
 from .parser import WorkflowDefinition
 
@@ -793,7 +793,7 @@ def _validated_strict_int(
 
 
 def _validated_ci_agent_kind(value: Any) -> str:
-    """"" (inherit workflow default agent) or a member of SUPPORTED_AGENT_KINDS.
+    """Empty string (inherit workflow default agent) or a member of SUPPORTED_AGENT_KINDS.
 
     Mirrors `webapi._check_agent_kind`'s normalize-then-validate shape.
     """
@@ -811,6 +811,11 @@ def _validated_ci_agent_kind(value: Any) -> str:
             value=kind,
         )
     return kind
+
+
+# Sole consumer is _validated_ci_ticket_prefix below — kept local rather than
+# in constants.py since nothing else in the package needs it.
+_CI_TICKET_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,19}$")
 
 
 def _validated_ci_ticket_prefix(value: Any) -> str:

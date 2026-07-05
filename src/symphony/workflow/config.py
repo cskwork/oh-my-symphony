@@ -412,7 +412,7 @@ class ContinuousImprovementConfig:
     """
 
     enabled: bool = False
-    # Minimum enforced by the parser is 60_000 ms (1 minute).
+    # Minimum enforced by the parser is DEFAULT_CI_MIN_INTERVAL_MS (1 minute).
     interval_ms: int = DEFAULT_CI_INTERVAL_MS
     # 0 means unlimited.
     max_turns: int = DEFAULT_CI_MAX_TURNS

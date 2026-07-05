@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from symphony.workflow import build_service_config, load_workflow
 from symphony.workflow.mutate import (
     StateSpec,
     WorkflowMutationError,
@@ -257,6 +258,14 @@ def test_set_continuous_improvement_settings_partial_update_keeps_others(
     assert "max_turns: 10" in text
 
 
+def test_set_continuous_improvement_settings_accepts_lower_bound_interval(
+    workflow: Path,
+) -> None:
+    set_continuous_improvement_settings(workflow, interval_ms=60_000)
+    text = workflow.read_text(encoding="utf-8")
+    assert "interval_ms: 60000" in text
+
+
 def test_set_continuous_improvement_settings_rejects_invalid_interval(
     workflow: Path,
 ) -> None:
@@ -277,12 +286,15 @@ def test_set_continuous_improvement_settings_agent_kind_roundtrip(
     set_continuous_improvement_settings(workflow, agent_kind="Claude")
     text = workflow.read_text(encoding="utf-8")
     assert "agent_kind: claude" in text
+    cfg = build_service_config(load_workflow(workflow))
+    assert cfg.continuous_improvement.agent_kind == "claude"
 
     # Explicit "" clears back to inherit-workflow-default.
     set_continuous_improvement_settings(workflow, agent_kind="")
     text = workflow.read_text(encoding="utf-8")
-    assert "agent_kind: ''" in text or "agent_kind:" in text
     assert "agent_kind: claude" not in text
+    cfg = build_service_config(load_workflow(workflow))
+    assert cfg.continuous_improvement.agent_kind == ""
 
 
 def test_set_continuous_improvement_settings_rejects_unknown_agent_kind(
