@@ -57,8 +57,11 @@ through the manual bundle handoff.
 - First implementation supports automatic issue registration for the file
   tracker. Other trackers may report `unsupported_tracker` until a safe create
   and update contract exists.
-- The first web surface exposes only `enabled` and `interval_ms`. Command lists,
-  templates, environment variables, and paths are not browser-editable.
+- The first web surface exposes only `enabled`, `interval_ms`, and `max_turns`.
+  Command lists, templates, environment variables, and paths are not
+  browser-editable.
+- The heartbeat turn counter is in-process runtime state. An orchestrator
+  restart resets it; no cross-restart persistence is required.
 - `superloop` is treated as the requested continuous-loop behavior pattern, not
   as a separate installed runtime dependency in this repo.
 
@@ -81,13 +84,15 @@ through the manual bundle handoff.
 continuous_improvement:
   enabled: false
   interval_ms: 1800000
+  max_turns: 48
   ticket_prefix: CI
   max_tickets_per_run: 5
   require_idle_board: true
 ```
 
-Only `enabled` and `interval_ms` are editable in the first web UI. The other
-fields are trusted workflow configuration parsed from `WORKFLOW.md`.
+Only `enabled`, `interval_ms`, and `max_turns` are editable in the first web
+UI. The other fields are trusted workflow configuration parsed from
+`WORKFLOW.md`.
 
 Parsing rules:
 
@@ -97,7 +102,20 @@ Parsing rules:
 - `interval_ms` accepts only positive integers, rejects booleans/strings, and
   enforces a lower bound of `60_000` ms.
 - `max_tickets_per_run` is clamped or validated as a small positive integer.
+- `max_turns` accepts only non-negative integers, rejects booleans/strings,
+  and defaults to `48` (24 hours at the default 30-minute interval). `0` means
+  unlimited turns.
 - `ticket_prefix` is identifier-safe and defaults to `CI`.
+
+## Turn Budget
+
+Each completed heartbeat run consumes one turn. When `turns_used` reaches
+`max_turns` (and `max_turns` is not `0`), the scheduler stops scheduling new
+runs and reports `skipped_reason: max_turns_reached`. The operator resets the
+counter from the web settings card (`POST
+/api/v1/workflow/continuous-improvement/reset-turns`), which zeroes
+`turns_used` and lets scheduling resume on the next due tick. The counter is
+in-memory only; an orchestrator restart also resets it.
 
 ## Baseline Rubric
 
@@ -157,6 +175,8 @@ Expose read-only heartbeat status through `/api/v1/state` or
 
 - `enabled`
 - `interval_ms`
+- `max_turns`
+- `turns_used`
 - `in_flight`
 - `current_phase`
 - `last_started_at`
@@ -170,7 +190,9 @@ Expose read-only heartbeat status through `/api/v1/state` or
 - `last_verified_sha`
 
 The settings card should make the operator able to distinguish disabled,
-waiting, skipped because the board is busy, running, failed, and completed.
+waiting, skipped because the board is busy, running, failed, completed, and
+turn budget exhausted. When the budget is exhausted the card shows a reset
+action that calls the reset-turns endpoint and lets the heartbeat resume.
 
 ## Planned File Changes
 
@@ -241,11 +263,14 @@ Docs:
 - [ ] Add failing tests for default disabled config and default interval.
 - [ ] Add failing tests for strict boolean validation.
 - [ ] Add failing tests for interval validation.
+- [ ] Add failing tests for `max_turns` validation (default 48, `0` means
+  unlimited, rejects booleans/strings/negatives).
 - [ ] Add failing tests proving workflow mutation preserves comments/order.
 - [ ] Add `ContinuousImprovementConfig`.
 - [ ] Add strict parsing helpers for booleans and interval values.
 - [ ] Add `ServiceConfig.continuous_improvement`.
-- [ ] Add `set_continuous_improvement_settings(...)`.
+- [ ] Add `set_continuous_improvement_settings(...)` covering `enabled`,
+  `interval_ms`, and `max_turns`.
 - [ ] Verify with `python -m pytest tests/test_workflow.py -q`.
 - [ ] Commit `feat: add continuous improvement workflow config`.
 
@@ -264,14 +289,18 @@ Docs:
 
 - [ ] Add failing API tests for `GET /api/v1/workflow` including the config.
 - [ ] Add failing API tests for
-  `PUT /api/v1/workflow/continuous-improvement`.
+  `PUT /api/v1/workflow/continuous-improvement` including `max_turns`.
+- [ ] Add failing API tests for
+  `POST /api/v1/workflow/continuous-improvement/reset-turns`.
 - [ ] Add failing validation tests for malformed JSON, wrong schema, Host guard,
   and content-type guard.
-- [ ] Add static UI contract tests for the toggle, interval field, save action,
-  and status labels.
+- [ ] Add static UI contract tests for the toggle, interval field, max-turns
+  field, reset-turns action, save action, and status labels.
 - [ ] Add the workflow payload field and strict PUT handler.
+- [ ] Add the reset-turns POST handler delegating to the orchestrator counter.
 - [ ] Reload workflow state after mutation.
-- [ ] Add a settings card exposing only enable/disable and interval.
+- [ ] Add a settings card exposing enable/disable, interval, and max turns,
+  plus a reset-turns action with the turns-used counter.
 - [ ] Add read-only status rendering.
 - [ ] Verify with `python -m pytest tests/test_webapi.py -q`.
 - [ ] Verify with `python -m pytest tests/test_web_static_contract.py -q`.
@@ -296,10 +325,15 @@ Docs:
   the tick loop.
 - [ ] Add failing tests proving `require_idle_board` postpones while workers are
   running or retrying.
+- [ ] Add failing tests proving the turn budget: each completed run increments
+  `turns_used`; once `turns_used >= max_turns` (non-zero) no further run is
+  scheduled and `skipped_reason` is `max_turns_reached`; `max_turns: 0` never
+  exhausts; resetting the counter resumes scheduling.
 - [ ] Add scheduler fields: `_improvement_task`,
-  `_last_improvement_monotonic`, `_next_improvement_due_monotonic`, and
-  `_improvement_status`.
+  `_last_improvement_monotonic`, `_next_improvement_due_monotonic`,
+  `_improvement_turns_used`, and `_improvement_status`.
 - [ ] Add `_maybe_schedule_continuous_improvement(config_snapshot)`.
+- [ ] Add `reset_continuous_improvement_turns()` for the web API.
 - [ ] Run work in a bounded background task with subprocess timeouts.
 - [ ] Add a fakeable durable lease abstraction.
 - [ ] Verify with the focused orchestrator tests.
@@ -391,6 +425,8 @@ Docs:
 - [ ] Confirm failures become normal Kanban tickets.
 - [ ] Confirm duplicate failures do not create repeated tickets.
 - [ ] Confirm tick loop survives runner errors.
+- [ ] Confirm the heartbeat stops after `max_turns` runs and resumes after
+  reset-turns.
 - [ ] Confirm architecture docs describe the new config, web API, scheduler,
   runner, report writer, and registrar.
 - [ ] Run `python -m pytest -q`.
@@ -404,6 +440,8 @@ Docs:
 - `enabled: "false"` must be rejected, not treated as true.
 - Interval is zero, negative, boolean, string, or unreasonably low.
 - Setting is toggled off while a run is in flight.
+- `max_turns` is lowered below the current `turns_used` while enabled.
+- Reset-turns is called while a run is in flight.
 - Multiple orchestrator processes point at the same workflow directory.
 - Normal Symphony workers are already running when the heartbeat becomes due.
 - Git is unavailable.
