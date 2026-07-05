@@ -29,7 +29,7 @@ import traceback
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Coroutine
 
 from .. import __version__
 from .._shell import kill_process_group
@@ -80,6 +80,7 @@ from .constants import (
     PAUSED_RETRY_HOLD_MS,
     RETRY_BASE_MS,
     STALL_FORCE_EJECT_GRACE_S,
+    STOP_BACKGROUND_TASKS_TIMEOUT_S,
     TICK_DEGRADED_AFTER_CONSECUTIVE_FAILURES,
     TICK_FAILURE_BACKOFF_MAX_S,
     TICK_LOOP_MAX_RESTARTS,
@@ -295,6 +296,12 @@ class Orchestrator:
         # R8 — issue_id -> failed escalation attempts. Keeps a retry-capped
         # ticket out of dispatch while its terminal-state move is retried.
         self._pending_escalations: dict[str, int] = {}
+        # Initiative B — strong references for fire-and-forget tasks
+        # (worker-exit cleanup, retry firing, escalations). The event loop
+        # keeps only weak references to tasks, so an unreferenced task can
+        # be garbage-collected mid-flight and its exception vanishes with
+        # it. `_spawn_supervised` is the only sanctioned way to fire one.
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------
     # dispatch-state views (initiative A). Read-only aliases so the many
@@ -325,6 +332,60 @@ class Orchestrator:
     @property
     def _turn_budget_exhausted(self) -> set[str]:
         return self._dispatch_state.turn_budget_exhausted
+
+    # ------------------------------------------------------------------
+    # supervised background tasks (initiative B)
+    # ------------------------------------------------------------------
+
+    def _spawn_supervised(
+        self, coro: Coroutine[Any, Any, None], *, name: str
+    ) -> asyncio.Task[None]:
+        """Fire-and-forget with a strong reference and loud failure.
+
+        The event loop keeps only weak references to tasks; a bare
+        `create_task` whose result nobody holds can be garbage-collected
+        mid-flight, and any exception it raised vanishes with it. Every
+        orchestrator fire-and-forget goes through here so the task is
+        pinned until done, failures land in the log, and `stop()` can
+        drain the set before closing shared resources.
+        """
+        loop = self._loop
+        task = (
+            loop.create_task(coro, name=name)
+            if loop is not None
+            else asyncio.create_task(coro, name=name)
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+        return task
+
+    def _on_background_task_done(self, task: asyncio.Task[None]) -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error(
+                "background_task_failed",
+                task_name=task.get_name(),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    async def _drain_background_tasks(self) -> None:
+        """Give in-flight cleanup a bounded window, then cancel stragglers."""
+        pending = [task for task in self._background_tasks if not task.done()]
+        if not pending:
+            return
+        _done, still_pending = await asyncio.wait(
+            pending, timeout=STOP_BACKGROUND_TASKS_TIMEOUT_S
+        )
+        for task in still_pending:
+            log.warning(
+                "background_task_cancelled_on_stop",
+                task_name=task.get_name(),
+            )
+            task.cancel()
 
     # ------------------------------------------------------------------
     # public accessors for API / TUI layers
@@ -708,6 +769,10 @@ class Orchestrator:
                 await entry.worker_task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Worker exits above may have fired supervised cleanup tasks
+        # (lease release, registry writes). Let them land before closing
+        # the registry; cancel anything still stuck after the bound.
+        await self._drain_background_tasks()
         self._running.clear()
         self._retry.clear()
         self._paused_issue_ids.clear()
@@ -1130,7 +1195,10 @@ class Orchestrator:
         retry = self._retry.get(issue_id)
         if retry is not None and self._loop is not None:
             retry.timer_handle.cancel()
-            asyncio.create_task(self._on_retry_timer(issue_id))
+            self._spawn_supervised(
+                self._on_retry_timer(issue_id),
+                name=f"symphony-retry-now-{identifier}",
+            )
         return True
 
     def find_running_issue_id(self, identifier: str) -> str | None:
@@ -2304,7 +2372,10 @@ class Orchestrator:
                 entry.cancelled_at.isoformat() if entry.cancelled_at else None
             ),
         )
-        asyncio.create_task(self._on_worker_exit(issue_id, reason, error))
+        self._spawn_supervised(
+            self._on_worker_exit(issue_id, reason, error),
+            name=f"symphony-worker-exit-{issue_id}",
+        )
 
     # ------------------------------------------------------------------
     # worker (§16.5)
@@ -3978,18 +4049,19 @@ class Orchestrator:
                 max_retries=max_retries,
                 last_error=error,
             )
-            # `self._loop.create_task` instead of the bare
-            # `asyncio.create_task` — `_schedule_retry` is a sync method
-            # and may be reached from worker_exit callbacks where the
-            # current task is in cleanup; binding to the orchestrator's
-            # owned loop sidesteps "no running event loop" errors.
-            self._loop.create_task(
+            # `_spawn_supervised` binds to the orchestrator's owned loop —
+            # `_schedule_retry` is a sync method and may be reached from
+            # worker_exit callbacks where the current task is in cleanup,
+            # so a bare `asyncio.create_task` could hit "no running event
+            # loop" errors.
+            self._spawn_supervised(
                 self._escalate_max_retries(
                     issue_id=issue_id,
                     identifier=identifier,
                     attempt=attempt,
                     error=error,
-                )
+                ),
+                name=f"symphony-escalate-{identifier}",
             )
             self._persisted_retry_attempts.pop(issue_id, None)
             self._clear_issue_flags(issue_id, retry_attempt=True)
@@ -3997,7 +4069,10 @@ class Orchestrator:
         due = self._loop.time() + delay_ms / 1000.0
         handle = self._loop.call_later(
             delay_ms / 1000.0,
-            lambda: asyncio.create_task(self._on_retry_timer(issue_id)),
+            lambda: self._spawn_supervised(
+                self._on_retry_timer(issue_id),
+                name=f"symphony-retry-{identifier}",
+            ),
         )
         self._dispatch_state.schedule_retry(
             issue_id,

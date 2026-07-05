@@ -128,3 +128,53 @@ def test_prune_claims_not_in_keeps_in_flight() -> None:
 
     assert pruned == {"B", "C"}
     assert state.claimed == {"A"}
+
+
+# ---------------------------------------------------------------------------
+# supervised background tasks (initiative B) — strong refs + loud failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_spawn_supervised_pins_task_and_logs_failure() -> None:
+    from pathlib import Path as _P
+
+    from symphony.orchestrator import Orchestrator
+    from symphony.workflow.state import WorkflowState
+
+    orch = Orchestrator(WorkflowState(_P("/tmp/no.md")))
+
+    async def _boom() -> None:
+        raise RuntimeError("supervised failure")
+
+    task = orch._spawn_supervised(_boom(), name="test-boom")
+    assert task in orch._background_tasks
+    with pytest.raises(RuntimeError):
+        await task
+    # done-callbacks run on the next loop slice
+    await asyncio.sleep(0)
+    assert task not in orch._background_tasks
+
+
+@pytest.mark.asyncio
+async def test_drain_background_tasks_cancels_stragglers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pathlib import Path as _P
+
+    import symphony.orchestrator.core as core_module
+    from symphony.orchestrator import Orchestrator
+    from symphony.workflow.state import WorkflowState
+
+    orch = Orchestrator(WorkflowState(_P("/tmp/no.md")))
+
+    async def _hang() -> None:
+        await asyncio.Future()
+
+    task = orch._spawn_supervised(_hang(), name="test-hang")
+    monkeypatch.setattr(core_module, "STOP_BACKGROUND_TASKS_TIMEOUT_S", 0.05)
+
+    await orch._drain_background_tasks()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task

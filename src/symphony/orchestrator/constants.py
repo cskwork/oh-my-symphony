@@ -52,6 +52,12 @@ TICK_DEGRADED_AFTER_CONSECUTIVE_FAILURES = 3
 TICK_LOOP_MAX_RESTARTS = 3
 TICK_FAILURE_BACKOFF_MAX_S = 30.0
 
+# Initiative B — how long `stop()` waits for supervised background tasks
+# (worker-exit cleanup, retry firing, escalations) to finish before
+# cancelling the stragglers. Bounded so shutdown can never hang on a
+# stuck cleanup, long enough that lease release / registry writes land.
+STOP_BACKGROUND_TASKS_TIMEOUT_S = 5.0
+
 # G2 — empty-response loop guard. Three consecutive `EVENT_TURN_COMPLETED`
 # events whose turn produced no fresh preview text trigger the escalation
 # path (`empty_response_loop` budget kind). The threshold is conservative
