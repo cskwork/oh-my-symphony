@@ -3514,7 +3514,6 @@ def test_worker_loop_stops_before_starting_past_total_turn_budget(monkeypatch, t
     checked the total-turn cap. A normal active-state loop must stop before
     starting the extra turn.
     """
-    import symphony.orchestrator as _orch_mod
 
     orch = _orch()
     issue = _issue("MT-TOTAL-LOOP", state="In Progress")
@@ -3579,7 +3578,7 @@ def test_worker_loop_stops_before_starting_past_total_turn_budget(monkeypatch, t
         _install_running_entry(orch, issue)
         _stub_workflow_state_returning(orch, cfg, monkeypatch)
         orch._workspace_manager = _StubWS()  # type: ignore[assignment]
-        monkeypatch.setattr(_orch_mod, "build_backend", lambda _init: _Backend())
+        monkeypatch.setattr(core_module, "build_backend", lambda _init: _Backend())
         monkeypatch.setattr(orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [issue])
         monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
         monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
@@ -3607,7 +3606,6 @@ async def _run_fake_same_state_worker(
     monkeypatch,
     tmp_path: Path,
 ) -> tuple[list[str], list[tuple[str, str]], list[tuple[str, str, str]]]:
-    import symphony.orchestrator as _orch_mod
 
     turns: list[str] = []
     moved: list[tuple[str, str]] = []
@@ -3654,7 +3652,7 @@ async def _run_fake_same_state_worker(
     _install_running_entry(orch, issue)
     _stub_workflow_state_returning(orch, cfg, monkeypatch)
     orch._workspace_manager = _StubWS()  # type: ignore[assignment]
-    monkeypatch.setattr(_orch_mod, "build_backend", lambda _init: _Backend())
+    monkeypatch.setattr(core_module, "build_backend", lambda _init: _Backend())
     monkeypatch.setattr(orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [issue])
     monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
     monkeypatch.setattr(orch, "_tracker_call_append_note", _append)

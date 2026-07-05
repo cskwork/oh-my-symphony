@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from symphony import orchestrator as orch_mod
+import symphony.orchestrator.core as core_mod
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator, RunningEntry
 from symphony.workflow import (
@@ -282,7 +282,7 @@ def _install_fake_backend(monkeypatch: pytest.MonkeyPatch) -> list[_FakeBackend]
         instances.append(backend)
         return backend
 
-    monkeypatch.setattr(orch_mod, "build_backend", _factory)
+    monkeypatch.setattr(core_mod, "build_backend", _factory)
     return instances
 
 

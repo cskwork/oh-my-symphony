@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-from symphony import orchestrator as orch_mod
+import symphony.orchestrator.core as core_mod
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator, RunningEntry
 from symphony.trackers.file import FileBoardTracker
@@ -375,7 +375,7 @@ def _install_backend_factory(monkeypatch: pytest.MonkeyPatch) -> list[_FakeBacke
         instances.append(b)
         return b
 
-    monkeypatch.setattr(orch_mod, "build_backend", _factory)
+    monkeypatch.setattr(core_mod, "build_backend", _factory)
     return instances
 
 
@@ -393,7 +393,7 @@ def _install_file_board_backend_factory(
         instances.append(b)
         return b
 
-    monkeypatch.setattr(orch_mod, "build_backend", _factory)
+    monkeypatch.setattr(core_mod, "build_backend", _factory)
     return instances
 
 

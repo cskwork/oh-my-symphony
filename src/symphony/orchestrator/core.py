@@ -44,6 +44,7 @@ from ..backends import (
     AgentBackend,
     BackendInit,
 )
+from ..backends import build_backend
 from ..utils.archive import select_archivable
 from ..backends.codex import linear_graphql_tool
 from ..errors import (
@@ -109,10 +110,13 @@ from .parsing import _parse_findings_rows, _parse_touched_files
 from .run_registry import RunRecord, RunRegistry, registry_path_for_workflow
 
 
-# Parent-package indirection. ``_pkg.build_backend`` (and the two other
-# entries below) re-resolve at call time so test monkeypatches on
-# ``symphony.orchestrator.<name>`` reach the orchestrator's call sites.
-# The package __init__ binds these names before importing this module.
+# Parent-package indirection for ``commit_workspace_on_done`` and
+# ``auto_merge_on_done_best_effort``: ``_pkg.<name>`` re-resolves at call
+# time so test monkeypatches on ``symphony.orchestrator.<name>`` reach the
+# orchestrator's call sites. The package __init__ binds these names before
+# importing this module. (``build_backend`` left this list — initiative D:
+# it is constructor-injectable and otherwise late-bound from this module's
+# global, so tests patch ``symphony.orchestrator.core.build_backend``.)
 assert __package__ is not None  # always imported as symphony.orchestrator.core
 _pkg = sys.modules[__package__]
 
@@ -215,8 +219,15 @@ class Orchestrator:
     def __init__(
         self,
         workflow_state: WorkflowState,
+        *,
+        build_backend: Callable[[BackendInit], AgentBackend] | None = None,
     ) -> None:
         self._workflow_state = workflow_state
+        # Initiative D — backend factory via constructor injection. None
+        # falls back to the module-level `build_backend`, looked up at call
+        # time in `_build_agent_backend` so tests may also monkeypatch
+        # `symphony.orchestrator.core.build_backend`.
+        self._build_backend_override = build_backend
         self._loop: asyncio.AbstractEventLoop | None = None
         # Single owner of live dispatch/slot state (initiative A). The
         # read-only properties below keep the many legacy read sites (and
@@ -332,6 +343,13 @@ class Orchestrator:
     @property
     def _turn_budget_exhausted(self) -> set[str]:
         return self._dispatch_state.turn_budget_exhausted
+
+    def _build_agent_backend(self, init: BackendInit) -> AgentBackend:
+        """Resolve the backend factory: injected > module global (patchable)."""
+        factory = self._build_backend_override
+        if factory is None:
+            factory = build_backend
+        return factory(init)
 
     # ------------------------------------------------------------------
     # supervised background tasks (initiative B)
@@ -2421,7 +2439,7 @@ class Orchestrator:
             if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
                 tools.append(linear_graphql_tool())
 
-            client = _pkg.build_backend(
+            client = self._build_agent_backend(
                 BackendInit(
                     cfg=cfg,
                     cwd=workspace.path,
@@ -2981,7 +2999,7 @@ class Orchestrator:
         tools: list[Any] = []
         if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
             tools.append(linear_graphql_tool())
-        new_client = _pkg.build_backend(
+        new_client = self._build_agent_backend(
             BackendInit(
                 cfg=cfg,
                 cwd=workspace_path,

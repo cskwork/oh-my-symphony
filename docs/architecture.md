@@ -125,9 +125,8 @@ modules.
 
 ### Monkeypatch indirection — `_pkg`
 
-Tests stub three names on the package itself:
+Tests stub two names on the package itself:
 
-- `symphony.orchestrator.build_backend`
 - `symphony.orchestrator.commit_workspace_on_done`
 - `symphony.orchestrator.auto_merge_on_done_best_effort`
 
@@ -137,14 +136,20 @@ Tests stub three names on the package itself:
 import sys
 _pkg = sys.modules[__package__]
 ...
-client = _pkg.build_backend(...)
 await _pkg.commit_workspace_on_done(...)
 await _pkg.auto_merge_on_done_best_effort(...)
 ```
 
+`build_backend` left this contract (architecture-improvement plan,
+initiative D): it is constructor-injectable on `Orchestrator`
+(`Orchestrator(state, build_backend=factory)`) and otherwise late-bound
+from `core`'s own module global, so tests patch
+`symphony.orchestrator.core.build_backend` — the consumer's reference.
+The package still re-exports `build_backend` for the public API surface.
+
 This requires a strict import order in `__init__.py`:
 
-1. Bind `build_backend`, `commit_workspace_on_done`, and
+1. Bind `commit_workspace_on_done` and
    `auto_merge_on_done_best_effort` on the package module **before**
    `from .core import Orchestrator`. `core` reads them through
    `_pkg.<name>` at call time, so the package attribute must already
@@ -154,7 +159,7 @@ This requires a strict import order in `__init__.py`:
    and `from .entries import …`.
 3. Import `core` last; `Orchestrator` is the lone public symbol from it.
 
-Reordering these steps (for example, importing `core` before the three
+Reordering these steps (for example, importing `core` before the
 collaborators are bound on the package) breaks the monkeypatch contract
 and the runtime path simultaneously.
 
