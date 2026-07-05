@@ -123,45 +123,23 @@ modules.
 | `core.py` | the `Orchestrator` class, tick loop, dispatch, health, pause/resume, Learn skip |
 | `__init__.py` | re-exports + monkeypatch-target bindings |
 
-### Monkeypatch indirection — `_pkg`
+### Monkeypatch indirection — `_pkg` (removed)
 
-Tests stub two names on the package itself:
+The former parent-package indirection is gone (architecture-improvement
+plan, initiative D). `core.py` imports its collaborators directly and
+calls them through its own module globals, so tests patch the
+consumer's reference:
 
-- `symphony.orchestrator.commit_workspace_on_done`
-- `symphony.orchestrator.auto_merge_on_done_best_effort`
+- `symphony.orchestrator.core.build_backend` — also
+  constructor-injectable: `Orchestrator(state, build_backend=factory)`
+- `symphony.orchestrator.core.commit_workspace_on_done`
+- `symphony.orchestrator.core.auto_merge_on_done_best_effort`
 
-`core.py` reaches them through the parent package module:
-
-```python
-import sys
-_pkg = sys.modules[__package__]
-...
-await _pkg.commit_workspace_on_done(...)
-await _pkg.auto_merge_on_done_best_effort(...)
-```
-
-`build_backend` left this contract (architecture-improvement plan,
-initiative D): it is constructor-injectable on `Orchestrator`
-(`Orchestrator(state, build_backend=factory)`) and otherwise late-bound
-from `core`'s own module global, so tests patch
-`symphony.orchestrator.core.build_backend` — the consumer's reference.
-The package still re-exports `build_backend` for the public API surface.
-
-This requires a strict import order in `__init__.py`:
-
-1. Bind `commit_workspace_on_done` and
-   `auto_merge_on_done_best_effort` on the package module **before**
-   `from .core import Orchestrator`. `core` reads them through
-   `_pkg.<name>` at call time, so the package attribute must already
-   exist when `core` is imported.
-2. Re-export the constants, parsing helpers, dataclasses, and pure
-   helpers next — `core` itself pulls them via `from .helpers import …`
-   and `from .entries import …`.
-3. Import `core` last; `Orchestrator` is the lone public symbol from it.
-
-Reordering these steps (for example, importing `core` before the
-collaborators are bound on the package) breaks the monkeypatch contract
-and the runtime path simultaneously.
+The package still re-exports all three names for the public API
+surface, but those bindings are no longer load-bearing for tests. The
+remaining import-order rule in `__init__.py` is only that constants,
+parsing helpers, dataclasses, and pure helpers import before `core`
+(which pulls them via `from .helpers import …` etc.).
 
 ## Invariants preserved bit-for-bit through the split
 
@@ -195,10 +173,12 @@ they are easy to regress and hard to spot in a diff:
 
 1. Place it in the most cohesive leaf module (not in `__init__.py`).
 2. Add it to the package `__init__.py` re-export list **and** `__all__`.
-3. If a test stubs it via `monkeypatch.setattr` against the package
-   dotted path, follow the `_pkg.<name>` / `_tui_pkg.<name>` indirection
-   pattern from the existing modules. Do not bind the name at the call
-   site's module level — patches will not reach you.
+3. If a test needs to stub it, prefer constructor injection or patch
+   the consumer module's reference (e.g.
+   `symphony.orchestrator.core.<name>`), per CPython's "where to patch"
+   guidance. The orchestrator's `_pkg` indirection is gone; only the TUI
+   still uses `_tui_pkg.<name>` (initiative D will convert it the same
+   way).
 4. Run the relevant focused tests plus the full pytest suite before publishing
    runtime changes. For documentation-only edits, run stale-string/static
    checks and any affected contract tests.

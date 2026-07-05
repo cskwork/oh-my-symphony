@@ -1542,7 +1542,6 @@ def _stub_workflow_state_returning(
     tests that exercise orchestrator paths (observed: TUI integration
     tests that drive a real worker exit path).
     """
-    import symphony.orchestrator as _orch_mod
 
     captured: list[dict] = []
     monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
@@ -1552,7 +1551,7 @@ def _stub_workflow_state_returning(
             {"path": path, "identifier": identifier, "title": title}
         )
 
-    monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture)
+    monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture)
     return captured
 
 
@@ -2354,7 +2353,6 @@ def test_auto_merge_failure_blocks_done_ticket_and_preserves_workspace(monkeypat
         _install_running_entry(orch, issue)
         _stub_workflow_state_returning(orch, cfg, monkeypatch)
 
-        import symphony.orchestrator as _orch_mod
         from symphony.utils.auto_merge import AutoMergeResult
 
         async def _merge_fails(**_kwargs):
@@ -2386,7 +2384,7 @@ def test_auto_merge_failure_blocks_done_ticket_and_preserves_workspace(monkeypat
             def path_for(self, ident):
                 return Path("/tmp/ws-fake")
 
-        monkeypatch.setattr(_orch_mod, "auto_merge_on_done_best_effort", _merge_fails)
+        monkeypatch.setattr(core_module, "auto_merge_on_done_best_effort", _merge_fails)
         monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update)
         monkeypatch.setattr(orch, "_tracker_call_append_note", _capture_note)
         orch._workspace_manager = _StubWS()  # type: ignore[assignment]
@@ -2882,7 +2880,6 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
             # Capture the call order of commit + remove.
             calls: list[str] = []
 
-            import symphony.orchestrator as _orch_mod
 
             async def _capture_commit(path, *, identifier, title, **_):
                 calls.append(f"commit:{identifier}")
@@ -2897,7 +2894,7 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
                 def path_for(self, ident):
                     return Path("/tmp/ws-rc")
 
-            monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
+            monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
             orch._workspace_manager = _StubWS()  # type: ignore[assignment]
 
             await orch._reconcile_running(cfg)
@@ -2961,7 +2958,6 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
                 orch, "_tracker_call_states_by_ids", lambda c, ids: [moved]
             )
 
-            import symphony.orchestrator as _orch_mod
 
             commit_calls: list[str] = []
             remove_calls: list[str] = []
@@ -2979,7 +2975,7 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
                 def path_for(self, ident):
                     return Path("/tmp/ws-off")
 
-            monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
+            monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
             orch._workspace_manager = _StubWS()  # type: ignore[assignment]
 
             await orch._reconcile_running(cfg_off)
@@ -3051,7 +3047,6 @@ def test_startup_terminal_cleanup_skips_done_workspace_when_branch_already_merge
 
     calls: list[str] = []
 
-    import symphony.orchestrator as _orch_mod
 
     async def _capture_commit(path, *, identifier, title, **_):
         calls.append(f"commit:{identifier}")
@@ -3070,8 +3065,8 @@ def test_startup_terminal_cleanup_skips_done_workspace_when_branch_already_merge
         async def remove(self, p):
             calls.append(f"remove:{Path(p).name}")
 
-    monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
-    monkeypatch.setattr(_orch_mod, "auto_merge_on_done_best_effort", _capture_merge)
+    monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
+    monkeypatch.setattr(core_module, "auto_merge_on_done_best_effort", _capture_merge)
     orch._workspace_manager = _StubWS()  # type: ignore[assignment]
 
     asyncio.run(orch._startup_terminal_cleanup(cfg))
@@ -3115,7 +3110,6 @@ def test_startup_terminal_cleanup_preserves_unmerged_done_workspace_without_repl
 
     calls: list[str] = []
 
-    import symphony.orchestrator as _orch_mod
 
     async def _capture_commit(path, *, identifier, title, **_):
         calls.append(f"commit:{identifier}")
@@ -3134,8 +3128,8 @@ def test_startup_terminal_cleanup_preserves_unmerged_done_workspace_without_repl
         async def remove(self, p):
             calls.append(f"remove:{Path(p).name}")
 
-    monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
-    monkeypatch.setattr(_orch_mod, "auto_merge_on_done_best_effort", _capture_merge)
+    monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
+    monkeypatch.setattr(core_module, "auto_merge_on_done_best_effort", _capture_merge)
 
     def _capture_update_state(_cfg, captured_issue, target_state):
         calls.append(f"update:{captured_issue.identifier}->{target_state}")

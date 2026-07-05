@@ -9,12 +9,11 @@ Concurrency model:
   `retry_attempts`. Workers run as tasks; tracker calls run in a thread
   executor; codex events arrive via async callbacks routed through a queue.
 
-Three names — ``build_backend``, ``commit_workspace_on_done``, and
-``auto_merge_on_done_best_effort`` — are looked up via the parent
-package (``_pkg.<name>``) at call time so tests that
-``monkeypatch.setattr("symphony.orchestrator.<name>", stub)`` see the
-patch reach this code path. A direct local import would bind the
-function at module load and ignore the patch.
+Collaborators — ``build_backend``, ``commit_workspace_on_done``, and
+``auto_merge_on_done_best_effort`` — are imported directly and called
+through this module's globals, so tests patch
+``symphony.orchestrator.core.<name>`` (the consumer's reference);
+``build_backend`` can also be constructor-injected.
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ import asyncio
 import json
 import os
 import re
-import sys
 import time
 import traceback
 from dataclasses import replace
@@ -68,8 +66,8 @@ from ..workflow import (
     WorkflowState,
     validate_for_dispatch,
 )
-from ..utils.auto_merge import AutoMergeResult
-from ..workspace import WorkspaceManager
+from ..utils.auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
+from ..workspace import WorkspaceManager, commit_workspace_on_done
 from .constants import (
     ARCHIVE_SWEEP_INTERVAL_SEC,
     AUTO_TRIAGE_NOTE,
@@ -110,16 +108,12 @@ from .parsing import _parse_findings_rows, _parse_touched_files
 from .run_registry import RunRecord, RunRegistry, registry_path_for_workflow
 
 
-# Parent-package indirection for ``commit_workspace_on_done`` and
-# ``auto_merge_on_done_best_effort``: ``_pkg.<name>`` re-resolves at call
-# time so test monkeypatches on ``symphony.orchestrator.<name>`` reach the
-# orchestrator's call sites. The package __init__ binds these names before
-# importing this module. (``build_backend`` left this list — initiative D:
-# it is constructor-injectable and otherwise late-bound from this module's
-# global, so tests patch ``symphony.orchestrator.core.build_backend``.)
-assert __package__ is not None  # always imported as symphony.orchestrator.core
-_pkg = sys.modules[__package__]
-
+# Initiative D — the former ``_pkg.<name>`` parent-package indirection is
+# gone. Collaborators (``build_backend``, ``commit_workspace_on_done``,
+# ``auto_merge_on_done_best_effort``) are imported directly and looked up
+# from this module's globals at call time, so tests patch
+# ``symphony.orchestrator.core.<name>`` — the consumer's reference.
+# ``build_backend`` is additionally constructor-injectable.
 
 log = get_logger()
 
@@ -1481,7 +1475,7 @@ class Orchestrator:
     ) -> bool:
         if not cfg.agent.auto_merge_on_done:
             return True
-        result = await _pkg.auto_merge_on_done_best_effort(
+        result = await auto_merge_on_done_best_effort(
             workflow_dir=cfg.workflow_path.parent,
             branch=f"symphony/{issue.identifier}",
             identifier=issue.identifier,
@@ -3865,7 +3859,7 @@ class Orchestrator:
                 # operator cleanup would `git worktree remove --force` and
                 # discard uncommitted work otherwise. Lenient — failures only
                 # warn; a missed snapshot must not block the queue.
-                await _pkg.commit_workspace_on_done(
+                await commit_workspace_on_done(
                     entry.workspace_path,
                     identifier=entry.issue.identifier,
                     title=entry.issue.title,
@@ -4493,7 +4487,7 @@ class Orchestrator:
                     # Snapshot before remove — `git worktree remove
                     # --force` would otherwise discard whatever the
                     # agent left uncommitted in the worktree.
-                    await _pkg.commit_workspace_on_done(
+                    await commit_workspace_on_done(
                         entry.workspace_path,
                         identifier=entry.issue.identifier,
                         title=entry.issue.title,
@@ -4569,7 +4563,7 @@ class Orchestrator:
             if self._workspace_manager is not None:
                 entry.workspace_cleanup_started = True
                 if cfg.agent.auto_commit_on_done:
-                    await _pkg.commit_workspace_on_done(
+                    await commit_workspace_on_done(
                         entry.workspace_path,
                         identifier=entry.issue.identifier,
                         title=entry.issue.title,
@@ -4718,7 +4712,7 @@ class Orchestrator:
                     # hold the last in-progress changes the agent never got
                     # to commit. Snapshot before remove so a force-prune
                     # doesn't lose them.
-                    await _pkg.commit_workspace_on_done(
+                    await commit_workspace_on_done(
                         path,
                         identifier=issue.identifier,
                         title=issue.title,

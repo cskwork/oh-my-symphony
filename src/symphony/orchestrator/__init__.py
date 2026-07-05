@@ -4,32 +4,29 @@ The package re-exports every name the rest of Symphony (and the test
 suite) consumes from ``symphony.orchestrator`` — the same dotted-path
 surface the flat ``orchestrator.py`` module used to expose.
 
-Two import-order rules matter here:
+One import-order rule matters here: constants, parsing helpers, the
+runtime dataclasses, and the pure module-level helpers all import
+before ``core`` so ``core`` itself imports them through
+``from .helpers import …`` etc.
 
-1. ``commit_workspace_on_done`` and ``auto_merge_on_done_best_effort``
-   are bound BEFORE ``core`` is imported. ``core`` accesses them through
-   ``_pkg.<name>`` at call time, so tests that
-   ``monkeypatch.setattr("symphony.orchestrator.X", stub)`` replace the
-   binding seen by the live state machine. (``build_backend`` left this
-   contract — initiative D: it is constructor-injectable on
-   ``Orchestrator`` and otherwise late-bound from ``core``'s own module
-   global, so tests patch ``symphony.orchestrator.core.build_backend``.
-   The re-export below stays for the public API surface only.)
-
-2. Constants, parsing helpers, the runtime dataclasses, and the
-   pure module-level helpers all import before ``core`` so ``core``
-   itself imports them through ``from .helpers import …`` etc.
+The former ``_pkg.<name>`` monkeypatch indirection is gone
+(initiative D): ``core`` imports ``build_backend``,
+``commit_workspace_on_done``, and ``auto_merge_on_done_best_effort``
+directly and calls them through its own module globals, so tests patch
+``symphony.orchestrator.core.<name>`` — the consumer's reference.
+``build_backend`` is additionally constructor-injectable on
+``Orchestrator``. The re-exports below stay for the public API surface.
 """
 
 from __future__ import annotations
 
-# Step 1 — bind the monkeypatch-target names on the package module so
-# `core._pkg.<name>` resolves before any test patch runs.
+# Re-exported for the public API surface (no longer a monkeypatch
+# contract; core imports these directly).
 from ..backends import build_backend
 from ..utils.auto_merge import auto_merge_on_done_best_effort
 from ..workspace import commit_workspace_on_done
 
-# Step 2 — re-export everything callers and the test suite reach for.
+# Re-export everything callers and the test suite reach for.
 from .constants import (
     AUTO_TRIAGE_NOTE,
     AUTO_TRIAGE_TARGET_STATE,
