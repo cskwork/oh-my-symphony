@@ -257,6 +257,64 @@ release decision.
 
 ---
 
+# 2026-07-05 - All-agent QA pass
+
+## Goal
+
+Check Symphony's supported agent backends across the factory, command/session
+contracts, doctor checks, lifecycle handling, and the current repo workflow.
+
+## Decision
+
+Use automated backend and orchestrator coverage as the primary proof for all
+supported `agent.kind` values: `codex`, `claude`, `gemini`, `agy`, `kiro`,
+`opencode`, and `pi`. The active repo workflow is configured for
+`agent.kind: claude`, so a live board dispatch from this checkout would only
+prove Claude unless the workflow is deliberately rewritten or separate smoke
+boards are created for each backend.
+
+Also repair the existing `docs/SMA-20/qa/smoke_harness.py` lint drift found by
+the repo-level `ruff` gate: one unused import and two f-string literals with no
+placeholders. This is a QA-script cleanup only; no runtime backend logic
+changed.
+
+- Rejected: claiming "all agents live tested" from the current board. The
+  workflow only selects Claude by default, and installed/authenticated CLIs do
+  not prove model-turn success by themselves.
+- Rejected: launching real Codex/Claude/OpenCode/Pi/Gemini/Kiro/AGY model
+  turns during this QA pass. That can spend tokens, depend on interactive auth,
+  and mutate tickets; it should be a separate explicit live-run matrix.
+- Rejected: ignoring `ruff` because the failure was in `docs/`. The configured
+  repo gate is `ruff check .`, so the QA result should not leave that known red.
+
+## Verification
+
+- Focused backend/doctor/orchestrator suite:
+  `python -m pytest tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_doctor.py tests/test_workflow_preflight_full.py tests/test_orchestrator_dispatch.py tests/test_orchestrator_phase_transition.py tests/test_agent_lifecycle_e2e.py -q`
+  passed: 453 tests.
+- Full suite: `python -m pytest -q` passed: 1151 tests, 2 skipped, 2 warnings.
+- Type check: `python -m pyright` passed: 0 errors, 0 warnings.
+- Initial lint gate: `python -m ruff check .` failed on
+  `docs/SMA-20/qa/smoke_harness.py` only; fixed the mechanical lint issues and
+  reran `python -m ruff check .`, which passed.
+- Current workflow doctor: `symphony doctor ./WORKFLOW.md` failed only because
+  configured port `9999` is occupied by the separate
+  `/Users/danny/Documents/PARA/Resource/jira-symphony/WORKFLOW.md` service.
+  The active Claude CLI, prompt files, hooks, workspace root, board root, and
+  viewer path passed.
+- Installed CLI inventory on this Mac: Codex `0.142.5`, Claude Code
+  `2.1.201`, Gemini `0.1.9`, OpenCode `1.17.13`, Pi `0.80.3`, AGY `1.0.16`;
+  Kiro was not on `PATH`. Pi auth file exists at `~/.pi/agent/auth.json`.
+- Safe service/API smoke used a temporary empty-board workflow at
+  `/private/tmp/symphony-all-agent-qa-kmJM25/WORKFLOW.md` with
+  `codex.command: python -m symphony.mock_codex` and port `19091`.
+  `symphony doctor` passed with one expected legacy viewer warning,
+  `/api/v1/state` returned health `ok` with zero running/retrying workers, and
+  `/` returned HTTP 200. The temporary service was stopped and port `19091` was
+  closed.
+
+---
+
 # 2026-07-05 - Product-ready app delivery gate
 
 ## Goal

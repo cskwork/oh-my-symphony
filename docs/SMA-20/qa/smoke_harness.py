@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from symphony import session_store  # noqa: E402
-from symphony.backends import BackendInit, build_backend  # noqa: E402
+from symphony.backends import BackendInit  # noqa: E402
 from symphony.backends.claude_code import ClaudeCodeBackend  # noqa: E402
 from symphony.backends.codex import CodexAppServerBackend  # noqa: E402
 from symphony.backends.gemini import GeminiBackend  # noqa: E402
@@ -129,7 +129,7 @@ print(f"target path: {target.relative_to(ROOT)}")
 record = session_store.write(target, agent_kind="pi", session_id="019e0f48-aaa")
 print(f"record.session_id: {record.session_id}")
 print(f"record.minted_at:  {record.minted_at}")
-print(f"file contents:")
+print("file contents:")
 print(target.read_text("utf-8"))
 
 # Idempotent rewrite must not litter .tmp-*.json residue.
@@ -142,7 +142,7 @@ assert leftover == [], f"atomic-write leaked tmp files: {leftover}"
 fresh = session_store.read(target)
 assert fresh is not None
 assert fresh.minted_at == record.minted_at, "minted_at should be sticky"
-print(f"minted_at sticky across rewrites: OK")
+print("minted_at sticky across rewrites: OK")
 
 
 # 2. cross-restart round trip --------------------------------------------
