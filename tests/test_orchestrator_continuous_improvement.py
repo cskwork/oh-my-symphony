@@ -8,6 +8,7 @@ isolation, plus the durable FileLease abstraction (fakes + a real tmpdir).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 from pathlib import Path
 
@@ -113,10 +114,9 @@ def _orch(**kwargs) -> Orchestrator:
     return Orchestrator(WorkflowState(Path("/tmp/no.md")), **kwargs)
 
 
-def _enabled_ci(**overrides) -> ContinuousImprovementConfig:
-    base = dict(enabled=True, interval_ms=60_000, max_turns=48)
-    base.update(overrides)
-    return ContinuousImprovementConfig(**base)
+def _enabled_ci(**overrides: object) -> ContinuousImprovementConfig:
+    base = ContinuousImprovementConfig(enabled=True, interval_ms=60_000, max_turns=48)
+    return dataclasses.replace(base, **overrides)
 
 
 class _FakeRunner:
