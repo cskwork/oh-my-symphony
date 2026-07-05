@@ -63,3 +63,18 @@ def test_pre_push_runs_whitespace_and_ci_parity_full_pytest() -> None:
         ("git", "diff", "--cached", "--check"),
         ("/tmp/ci/bin/python", "-m", "pytest", "-q"),
     ]
+
+
+def test_hook_subprocess_env_strips_git_local_vars(monkeypatch) -> None:
+    module = _load_module()
+    monkeypatch.setenv("GIT_DIR", "/tmp/parent/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/tmp/parent")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/tmp/parent/index")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/tmp/gitconfig")
+
+    env = module._subprocess_env()
+
+    assert "GIT_DIR" not in env
+    assert "GIT_WORK_TREE" not in env
+    assert "GIT_INDEX_FILE" not in env
+    assert env["GIT_CONFIG_GLOBAL"] == "/tmp/gitconfig"

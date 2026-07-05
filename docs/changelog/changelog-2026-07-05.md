@@ -684,3 +684,26 @@ placeholders. This script is release evidence, not runtime code.
   `ruff check .`; excluding evidence scripts would hide checked-in drift.
 - Rejected: bundling a broader docs cleanup. The failure is exactly three
   fixable lint findings, so the patch stays mechanical.
+
+---
+
+# 2026-07-05 - Pre-push Git environment cleanup
+
+## Goal
+
+Let the release pre-push hook run the full test suite from a Git hook without
+poisoning tests that create their own temporary repositories.
+
+## Decision
+
+Strip inherited Git-local environment variables (`GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE`, etc.) before `scripts/git_quality_gate.py` spawns its child
+commands. Git sets these for hooks, but the pytest suite intentionally runs
+nested `git init` repos; inherited parent Git state made those nested commands
+resolve branches and worktrees against the release repo instead of their temp
+repo.
+
+- Rejected: bypassing the pre-push hook for the release. The hook caught a real
+  environment bug in the gate itself.
+- Rejected: patching each failing test. The common failure was environment
+  leakage at the quality-gate boundary, not test-specific git setup.

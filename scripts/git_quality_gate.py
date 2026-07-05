@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -28,10 +29,19 @@ def _quote(argv: Sequence[str]) -> str:
     return " ".join(shlex.quote(part) for part in argv)
 
 
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in tuple(env):
+        if key == "GIT_CONFIG_GLOBAL" or not key.startswith("GIT_"):
+            continue
+        env.pop(key, None)
+    return env
+
+
 def _run(command: GateCommand, *, cwd: Path) -> None:
     print(f"\n==> {command.label}", file=sys.stderr)
     print(f"+ {_quote(command.argv)}", file=sys.stderr)
-    subprocess.run(command.argv, cwd=cwd, check=True)
+    subprocess.run(command.argv, cwd=cwd, check=True, env=_subprocess_env())
 
 
 def _git_output(root: Path, *args: str) -> str:
@@ -41,6 +51,7 @@ def _git_output(root: Path, *args: str) -> str:
         check=True,
         text=True,
         stdout=subprocess.PIPE,
+        env=_subprocess_env(),
     )
     return result.stdout.strip()
 

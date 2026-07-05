@@ -22,6 +22,9 @@ Post-v0.11.0 changes will be listed here.
   `Human Review` cards stuck in `/api/v1/state` as `running: 1`.
 - Checked-in SMA-20 QA smoke evidence now passes the repository `ruff check .`
   gate.
+- The local pre-push quality gate now strips Git hook environment variables
+  before running the test suite, so tests that create temporary repositories do
+  not inherit the parent repo's `GIT_DIR`.
 
 ### Added
 
