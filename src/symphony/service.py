@@ -17,6 +17,8 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +35,7 @@ from .workflow import (
 
 
 ProcessRunningPredicate = Callable[[int | None], bool]
+ServiceApiProbe = Callable[[str, int], bool]
 ServiceState = Literal["running", "stopped"]
 
 # Module-level runtime bool. Pyright narrows literal `sys.platform == "win32"`
@@ -69,6 +72,8 @@ class ServiceStatus:
     record: ServiceRecord | None
     requested_port: int | None = None
     recorded_port: int | None = None
+    pid_running: bool = False
+    api_reachable: bool = False
 
 
 def _resolved(path: str | Path) -> Path:
@@ -166,20 +171,52 @@ def load_record(workflow_path: str | Path) -> ServiceRecord | None:
         return None
 
 
+def is_symphony_api_reachable(host: str, port: int) -> bool:
+    """Return whether the recorded service port responds like Symphony."""
+    probe_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    url = f"http://{probe_host}:{port}/api/v1/state"
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=0.5) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read(4096).decode("utf-8"))
+    except (
+        OSError,
+        TimeoutError,
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ):
+        return False
+    return isinstance(payload, dict) and "health" in payload and "counts" in payload
+
+
 def port_owner_hint(
     workflow_path: str | Path,
     port: int,
     *,
     is_running: ProcessRunningPredicate | None = None,
+    is_api_reachable: ServiceApiProbe | None = None,
 ) -> str | None:
     record = load_record(workflow_path)
     if record is None or record.port != port:
         return None
     alive = is_running or is_process_running
-    if not alive(record.orchestrator_pid):
+    api_probe = is_api_reachable or is_symphony_api_reachable
+    pid_alive = alive(record.orchestrator_pid)
+    api_alive = False if pid_alive else api_probe(record.host, record.port)
+    if not pid_alive and not api_alive:
         return None
     pid = record.orchestrator_pid
     started = f", started {record.started_at}" if record.started_at else ""
+    if api_alive:
+        return (
+            f"recorded Symphony API responds on this workflow's port, but saved "
+            f"pid {pid} is stale{started}; check `symphony service status "
+            f"{record.workflow_path}`"
+        )
     return (
         f"owned by this workflow's service (pid {pid}{started}); "
         f"check `symphony service status {record.workflow_path}`"
@@ -264,12 +301,14 @@ def service_status(
     *,
     port: int | None = None,
     is_running: ProcessRunningPredicate | None = None,
+    is_api_reachable: ServiceApiProbe | None = None,
 ) -> ServiceStatus:
     """Report persisted service state for a workflow.
 
     The saved workflow record wins over the requested port: when the same
-    workflow has a live orchestrator PID, callers should treat it as already
-    running even if the operator asks for a different port.
+    workflow has a live orchestrator PID or a live recorded Symphony API,
+    callers should treat it as already running even if the operator asks for a
+    different port.
     """
     record = load_record(workflow_path)
     if record is None:
@@ -283,14 +322,19 @@ def service_status(
     if is_running is None:
         is_running = is_process_running
 
-    state: ServiceState = (
-        "running" if is_running(record.orchestrator_pid) else "stopped"
-    )
+    if is_api_reachable is None:
+        is_api_reachable = is_symphony_api_reachable
+
+    pid_running = is_running(record.orchestrator_pid)
+    api_reachable = False if pid_running else is_api_reachable(record.host, record.port)
+    state: ServiceState = "running" if pid_running or api_reachable else "stopped"
     return ServiceStatus(
         state=state,
         record=record,
         requested_port=port,
         recorded_port=record.port,
+        pid_running=pid_running,
+        api_reachable=api_reachable,
     )
 
 
@@ -819,11 +863,18 @@ def _status(args: argparse.Namespace) -> int:
 
     assert status.record is not None
     record = status.record
-    print(
-        f"running workflow={record.workflow_path} "
-        f"pid={record.orchestrator_pid} port={record.port} "
-        f"url=http://{record.host}:{record.port}/"
-    )
+    if status.pid_running:
+        print(
+            f"running workflow={record.workflow_path} "
+            f"pid={record.orchestrator_pid} port={record.port} "
+            f"url=http://{record.host}:{record.port}/"
+        )
+    else:
+        print(
+            f"running workflow={record.workflow_path} "
+            f"stale pid={record.orchestrator_pid} port={record.port} "
+            f"url=http://{record.host}:{record.port}/ (api alive)"
+        )
     if record.viewer_pid is not None and record.viewer_port is not None:
         print(
             f"viewer pid={record.viewer_pid} port={record.viewer_port} "

@@ -88,12 +88,35 @@ def test_stale_record_is_reported_stopped(tmp_path: Path) -> None:
     workflow = _workflow(tmp_path)
     save_record(_record(workflow, pid=1234))
 
-    status = service_status(workflow, port=9999, is_running=lambda pid: False)
+    status = service_status(
+        workflow,
+        port=9999,
+        is_running=lambda pid: False,
+        is_api_reachable=lambda host, port: False,
+    )
 
     assert status.state == "stopped"
     assert status.record is not None
     assert status.requested_port == 9999
     assert status.recorded_port == 9999
+
+
+def test_stale_pid_with_live_api_is_reported_running(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, port=9999))
+
+    status = service_status(
+        workflow,
+        port=9999,
+        is_running=lambda pid: False,
+        is_api_reachable=lambda host, port: (host, port) == ("127.0.0.1", 9999),
+    )
+
+    assert status.state == "running"
+    assert status.pid_running is False
+    assert status.api_reachable is True
+    assert status.record is not None
+    assert status.record.orchestrator_pid == 1234
 
 
 def test_service_status_uses_current_process_checker(tmp_path: Path, monkeypatch) -> None:
@@ -175,6 +198,27 @@ def test_service_status_cli_reports_stopped(tmp_path: Path, capsys) -> None:
     assert "stopped" in out
 
 
+def test_service_status_cli_reports_live_api_with_stale_pid(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, port=9999))
+    monkeypatch.setattr(service_module, "is_process_running", lambda pid: False)
+    monkeypatch.setattr(
+        service_module,
+        "is_symphony_api_reachable",
+        lambda host, port: (host, port) == ("127.0.0.1", 9999),
+    )
+
+    rc = service_main(["status", str(workflow)])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "running" in out
+    assert "stale pid=1234" in out
+    assert "api alive" in out
+
+
 def test_top_level_cli_routes_service_status(tmp_path: Path, capsys) -> None:
     workflow = _workflow(tmp_path)
 
@@ -235,6 +279,11 @@ def test_force_stop_terminates_active_backend_processes_from_registry(
         service_module,
         "is_process_running",
         lambda pid: pid in live_pids,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "is_symphony_api_reachable",
+        lambda host, port: False,
     )
 
     def _stop_pid(pid, *, force=False):  # noqa: ANN001, ANN002
@@ -392,6 +441,11 @@ def test_start_cleans_live_viewer_from_stale_record_before_doctor(
         service_module,
         "is_process_running",
         lambda pid: pid in live_pids,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "is_symphony_api_reachable",
+        lambda host, port: False,
     )
 
     def _stop_pid(pid, *args, **kwargs):  # noqa: ANN001

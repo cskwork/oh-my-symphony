@@ -160,3 +160,35 @@ The production-readiness guidance belongs in the Symphony skill used by agents
 when registering board issues, not in the built-in worker prompt templates.
 The prompt-template edits were reverted so existing workflows keep their current
 stage prompt contract unless an operator explicitly updates a workflow prompt.
+
+---
+
+# 2026-07-05 - Service status stale-PID API probe
+
+## RCA
+
+`symphony service status` trusted only the saved `orchestrator_pid` in
+`.symphony/run/*.json`. In a real `jira-symphony` run, the saved PID was stale
+while the recorded port still served a healthy Symphony API. Result:
+`service status` reported `stopped`, but `curl /api/v1/state` showed a live
+orchestrator dispatching work.
+
+## Decision
+
+When the saved PID is not alive, probe the recorded
+`http://<host>:<port>/api/v1/state` endpoint. If it responds like Symphony,
+report the service as running with `stale pid=... (api alive)` and have doctor's
+port failure explain that the recorded API is still alive but the saved PID is
+stale.
+
+Rejected alternatives:
+- Keep PID-only status and rely on `lsof`: accurate for processes, but it loses
+  workflow context and confused the operator.
+- Treat any occupied port as this workflow's service: unsafe, because the port
+  may belong to another process.
+- Kill by port from `service status`: too destructive for a status command.
+
+## Verification
+
+- Added regression tests for `service_status`, CLI status output, and doctor
+  port-owner hints when PID is stale but the Symphony API responds.

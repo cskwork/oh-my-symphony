@@ -7,6 +7,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from symphony import service as service_module
 from symphony.service import ServiceRecord, save_record
 from symphony.cli.doctor import (
     check_after_create_hook,
@@ -312,6 +313,55 @@ def test_port_fail_names_this_workflow_service_when_record_matches(
         assert "owned by this workflow's service" in result.message
         assert "symphony service status" in result.message
         assert "pid 4242" in result.message
+    finally:
+        sock.close()
+
+
+def test_port_fail_names_stale_record_when_api_still_responds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    bound_port = sock.getsockname()[1]
+    try:
+        cfg = _build_cfg(
+            tmp_path,
+            f"""
+            tracker: {{ kind: file, board_root: ./kanban }}
+            agent: {{ kind: codex }}
+            codex: {{ command: codex app-server }}
+            server: {{ port: {bound_port} }}
+            """,
+        )
+        save_record(
+            ServiceRecord(
+                workflow_path=cfg.workflow_path,
+                workflow_dir=cfg.workflow_path.parent,
+                host="127.0.0.1",
+                port=bound_port,
+                viewer_port=None,
+                orchestrator_pid=4242,
+                viewer_pid=None,
+                log_path=tmp_path / "log" / "symphony.log",
+                viewer_log_path=None,
+                started_at="2026-07-03T01:00:00Z",
+                orchestrator_command=["symphony", str(cfg.workflow_path)],
+                viewer_command=[],
+            )
+        )
+        monkeypatch.setattr(
+            service_module,
+            "is_symphony_api_reachable",
+            lambda host, port: (host, port) == ("127.0.0.1", bound_port),
+        )
+
+        result = check_port(cfg, is_running=lambda pid: False)
+
+        assert result.status == "fail"
+        assert "saved pid 4242 is stale" in result.message
+        assert "API responds" in result.message
+        assert "symphony service status" in result.message
     finally:
         sock.close()
 
