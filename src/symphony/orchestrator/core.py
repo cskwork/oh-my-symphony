@@ -4236,13 +4236,10 @@ class Orchestrator:
                 # Use last_progress_timestamp (real model/lifecycle activity)
                 # rather than last_codex_timestamp (any byte from the backend),
                 # so claude API tool_result echoes / stream keepalive don't
-                # keep resetting the stall clock. Falls back to last_codex_*
-                # then started_at when no progress has been recorded yet.
-                seen = (
-                    entry.last_progress_timestamp
-                    or entry.last_codex_timestamp
-                    or entry.started_at
-                )
+                # keep resetting the stall clock. Until real progress exists,
+                # measure from started_at; backend keepalives are UI activity,
+                # not proof that the turn is advancing.
+                seen = entry.last_progress_timestamp or entry.started_at
                 elapsed_ms = (now - seen).total_seconds() * 1000
                 if elapsed_ms > stall_timeout_ms:
                     log.warning(

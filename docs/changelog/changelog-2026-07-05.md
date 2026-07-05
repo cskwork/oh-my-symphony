@@ -375,3 +375,46 @@ Rejected alternatives:
 
 - Added a regression test proving two active-state turns invoke `before_run`
   twice, so workspace invariants are rechecked before the continuation turn.
+
+---
+
+# 2026-07-05 - First-progress stall clock
+
+## RCA
+
+The live `jira-symphony` TASK-021 OpenCode worker stayed `In Progress` for more
+than 30 minutes with zero token totals, an empty last message, and repeated
+`other_message` events. Symphony updated `last_codex_timestamp` for UI
+freshness, but no `last_progress_timestamp` existed yet. `_reconcile_running`
+fell back from missing progress to fresh codex activity, so the no-progress
+stall timer never measured from worker start.
+
+## Decision
+
+Before any real model/lifecycle/token progress is recorded, measure the stall
+window from `started_at`. After real progress exists, keep measuring from
+`last_progress_timestamp`. `last_codex_timestamp` remains useful for UI
+freshness but must not extend the worker no-progress deadline.
+
+Rejected alternatives:
+- Treat all OpenCode `other_message` events as progress. Empty stream events
+  are liveness noise, not proof the agent is advancing the ticket.
+- Remove `last_codex_timestamp`. Operators still need to see backend activity
+  recency separate from actual stall progress.
+- Increase the stall timeout. That would only hide the same failure for longer
+  and would not help a worker that never produces tokens or lifecycle progress.
+
+## Verification
+
+- Red before fix:
+  `PYTHONPATH=src python -m pytest tests/test_orchestrator_dispatch.py::test_reconcile_stalls_from_start_when_only_codex_noise_seen -q`
+  failed because `cancelled_at` stayed `None`.
+- Green after fix:
+  `PYTHONPATH=src python -m pytest tests/test_orchestrator_dispatch.py::test_reconcile_stalls_from_start_when_only_codex_noise_seen tests/test_orchestrator_dispatch.py::test_reconcile_stalls_on_progress_timestamp_not_codex_timestamp tests/test_orchestrator_dispatch.py::test_on_codex_event_user_role_other_message_does_not_advance_progress tests/test_orchestrator_dispatch.py::test_codex_other_message_with_input_only_token_growth_does_not_advance_progress tests/test_orchestrator_dispatch.py::test_on_codex_event_extracts_nested_item_preview_without_stall_progress -q`
+  passed: 5 tests.
+- Focused runtime regression suite:
+  `PYTHONPATH=src python -m pytest tests/test_orchestrator_phase_transition.py tests/test_agent_lifecycle_e2e.py tests/test_orchestrator_dispatch.py::test_todo_with_blocked_terminal_blocker_remains_blocked tests/test_orchestrator_dispatch.py::test_issue_attention_reports_failed_terminal_dependency tests/test_orchestrator_dispatch.py::test_reconcile_stalls_from_start_when_only_codex_noise_seen tests/test_orchestrator_dispatch.py::test_reconcile_stalls_on_progress_timestamp_not_codex_timestamp -q`
+  passed: 40 tests.
+- Full suite:
+  `PYTHONPATH=src python -m pytest -q`
+  passed: 1119 tests, 2 skipped, 2 warnings.

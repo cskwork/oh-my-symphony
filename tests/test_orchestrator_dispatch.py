@@ -942,6 +942,47 @@ def test_reconcile_stalls_on_progress_timestamp_not_codex_timestamp():
     asyncio.run(_run())
 
 
+def test_reconcile_stalls_from_start_when_only_codex_noise_seen():
+    """Fresh backend noise must not defer the first-progress stall timeout."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            now = datetime.now(timezone.utc)
+            entry = RunningEntry(
+                issue=issue,
+                started_at=now - timedelta(minutes=10),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+                last_codex_timestamp=now - timedelta(seconds=1),
+                last_progress_timestamp=None,
+            )
+            orch._running[issue.id] = entry
+
+            await orch._reconcile_running(cfg)
+
+            assert (
+                orch._running[issue.id].cancelled_at is not None
+            ), "stall must trigger from started_at until real progress exists"
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
 def test_on_codex_event_user_role_other_message_does_not_advance_progress():
     """Tool_result echoes from claude_code (kind='user') must NOT count as progress.
 
