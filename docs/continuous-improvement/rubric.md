@@ -7,6 +7,30 @@ See `docs/architecture.md` ("Continuous improvement heartbeat") for the
 runtime surfaces and `docs/continuous-improvement/ticket-template.md` for the
 ticket body format.
 
+## Default configuration
+
+```yaml
+continuous_improvement:
+  enabled: false
+  interval_ms: 1800000   # minimum 60000
+  max_turns: 48          # 0 = unlimited
+  ticket_prefix: CI
+  max_tickets_per_run: 5
+  require_idle_board: true
+```
+
+- `enabled` defaults to `false`.
+- `interval_ms` defaults to `1800000` (30 minutes). It accepts only
+  positive integers, with a lower bound of `60000` ms (1 minute); values
+  below the floor, non-integers, and booleans are rejected.
+- `max_turns` defaults to `48` (24 hours at the default interval). `0`
+  means unlimited.
+- `ticket_prefix` defaults to `CI` and must be identifier-safe (used as
+  the tracker's ticket-ID prefix, e.g. `CI-1`).
+- `max_tickets_per_run` defaults to `5`.
+- `require_idle_board` defaults to `true` (see "Idle-board requirement"
+  below).
+
 ## Result semantics
 
 Every rubric item resolves to exactly one of these states:
