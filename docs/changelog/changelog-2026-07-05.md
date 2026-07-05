@@ -1316,3 +1316,35 @@ handles continuation can still opt in with `agy.resume_across_turns: true`.
 - Static checks:
   `python -m ruff check ...` over the touched source/tests passed;
   `python -m pyright ...` over the touched source passed.
+
+---
+
+## Reconcile test terminal grace
+
+## Goal
+
+Keep the pre-push full pytest gate from hanging when reconcile tests exercise
+terminal-state cleanup.
+
+## Decision
+
+Update `test_reconcile_isolates_per_issue_failures` to model an expired
+terminal grace period before expecting worker cancellation. Production
+reconcile intentionally waits briefly after first seeing a terminal state so a
+worker can exit through its natural completion path; the old test treated the
+first terminal observation as immediately cancellable, then awaited a parked
+worker that was correctly still running.
+
+The shared test drain helper now fails fast if a parked worker was not
+cancelled, instead of waiting for the worker's long sleep.
+
+- Rejected: removing the production terminal grace. It protects real workers
+  from losing completion artifacts during a state-transition race.
+- Rejected: bypassing the pre-push hook. The hook surfaced a legitimate
+  regression in the test harness.
+
+## Verification
+
+- Reproduced hang:
+  `.git/symphony-quality/ci-dev-venv/bin/python -m pytest tests/test_orchestrator_reconcile.py::test_reconcile_isolates_per_issue_failures -vv -o faulthandler_timeout=20`
+  hung in the event loop before the fix.
