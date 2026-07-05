@@ -67,6 +67,14 @@ bad slices:
 - App-delivery work starts with discovery: target customer, core
   workflows, must-have functionality, data/auth/deployment assumptions, and a
   final merged-app release verification ticket.
+- Human Review history gate: every ticket that reaches Human Review must have
+  its final card/wiki/evidence record committed and pushed, with the remote SHA
+  recorded. If commit/push cannot be proven, the ticket belongs in Blocked, not
+  Human Review.
+- Final integration loop: after implementation tickets are committed, pushed,
+  and merged, the release-verification ticket runs full functionality QA on the
+  merged target. Any defect becomes a new Kanban bug ticket with repro evidence
+  and `blocked_by`; the release ticket loops until integration passes.
 - One contract owner: a ticket owns one behavior/API/data contract, not a
   grab bag.
 - Small enough for one worker: rough limit <=5 files and <=500 net lines for a

@@ -1,4 +1,77 @@
-# 2026-07-05 - v0.10.0 release decision
+# 2026-07-05 - Delivery reliability gates
+
+## Human Review history gate
+
+## Goal
+
+Ensure Symphony board agents do not leave final Human Review handoffs as
+uncommitted or unpushed local state.
+
+## Decision
+
+Add a Learn-stage Final History Gate to both file and Linear prompt flavors.
+Before a worker exposes a card as `Human Review`, it must commit the final
+ticket/wiki/learn evidence record from the host repo, push the target branch
+when it has a remote/upstream, verify the remote tip with `git ls-remote`, and
+record the local/remote SHA evidence in the card. If commit, push, or remote
+verification fails, the worker must set the ticket to `Blocked` with `##
+History Failure` instead of leaving a dirty Human Review card.
+
+The gate stages exact paths only and explicitly rejects `git add -A`; broad
+staging caused the `jira-symphony` host checkout to accumulate destructive
+source/test/QA deletions unrelated to the Human Review handoff.
+
+- Rejected: relying on Verify's merge commit. Verify runs before Learn, while
+  Learn writes the final wiki and Human Review card text.
+- Rejected: committing every dirty host file. The board handoff must preserve
+  history without sweeping unrelated or destructive workspace changes.
+- Rejected: recording Human Review only in the card. A board state that is not
+  committed and pushed is not durable project history.
+
+## Verification
+
+- `rtk pytest tests/test_workflow_pipeline_prompt.py::test_learn_stage_writes_wiki_and_human_review_handoff -q`
+  passed: 2 tests.
+- `jira-symphony` pushed prior verified TASK-001..TASK-010 history to
+  `origin/main` (`bdb21a4`) and then pushed the scoped Human Review board-state
+  commit (`6180964`). Remote read-back reported `6180964` for `refs/heads/main`.
+
+---
+
+## Full integration defect loop
+
+## Goal
+
+Ensure a board can prove that all committed, pushed, and merged task work still
+functions as one product before delivery is considered complete.
+
+## Decision
+
+Release/integration and app-delivery verification tickets now have an explicit
+Full Integration Gate. They must run against the committed target branch, check
+local/remote SHA alignment when an upstream exists, execute clean
+install/build/start/readiness/customer-flow QA, and review
+console/network/server failures. Any defect found during this proof becomes a
+new Kanban bug ticket with repro evidence, expected behavior, fix boundary, and
+verification commands. The release ticket records those IDs in `blocked_by`,
+moves to `Blocked`, and loops until the merged target passes.
+
+- Rejected: treating per-ticket unit tests as enough. They do not prove the
+  merged app starts or that customer workflows compose correctly.
+- Rejected: letting a final release ticket only write a defect list. Defects
+  must be registered back into the board so agents can resolve them and rerun
+  the release proof.
+- Rejected: testing a worker branch for final QA. The delivery claim is about
+  the committed/pushed target branch that users will run.
+
+## Verification
+
+- `rtk pytest tests/test_workflow_pipeline_prompt.py::test_verify_stage_demands_review_qa_and_merge_evidence tests/test_workflow_pipeline_prompt.py::test_learn_stage_writes_wiki_and_human_review_handoff tests/test_workflow_pipeline_prompt.py::test_operator_skill_routes_ticket_registration_by_work_type -q`
+  passed: 5 tests.
+
+---
+
+## v0.10.0 release decision
 
 ## Goal
 

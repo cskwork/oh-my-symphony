@@ -111,6 +111,10 @@ the current feature branch. It records install/build/start output, readiness
 checks, browser/API customer-flow proof, console/network/server errors, and a
 market-ready gap list. A startup failure such as no listening port or
 `curl 000` blocks delivery.
+If defects appear, `VERIFY-1` runs a defect-registration loop: create new
+Kanban bug tickets with repro evidence, expected behavior, fix boundary, and
+verification commands; add them as blockers; rerun merged-target verification
+after those blockers complete.
 
 ### CLI tool
 ```

@@ -49,6 +49,11 @@ VERIFY_RULES = (
     "fail on module-script/CORS boot errors",
     "DOM shims are smoke only, never final Verify authority",
     "## Environment Block",
+    "Full integration gate",
+    "committed target branch",
+    "register new Kanban/board bug tickets",
+    "blocked_by",
+    "rerun from scratch",
     "## QA Evidence",
     "## AC Scorecard",
     "Evidence cells must cite files under `docs/DEMO-1/` as `qa/...` or `work/...`",
@@ -62,6 +67,12 @@ LEARN_RULES = (
     "llm-wiki",
     "INDEX.md",
     "## Wiki Updates",
+    "Final History Gate",
+    "do not use `git add -A`",
+    "git commit",
+    "git push",
+    "git ls-remote",
+    "set state to `Blocked`",
     "## Human Review",
     "Set state to `Human Review`",
     "Operator skip",
@@ -252,6 +263,9 @@ def test_operator_skill_routes_ticket_registration_by_work_type() -> None:
     assert "Do not force every task through" in skill
     assert "product-delivery shape" in skill
     assert "App-delivery work starts with discovery" in skill
+    assert "Human Review history gate" in skill
+    assert "committed and pushed" in skill
+    assert "Final integration loop" in skill
     assert "Work type | First ticket owns | Final proof owns" in delegation
     assert "Bugfix | Reproduction, suspected area, failing test/log" in delegation
     assert "Do not register product-discovery tickets for a narrow bugfix" in delegation
@@ -260,6 +274,8 @@ def test_operator_skill_routes_ticket_registration_by_work_type() -> None:
     assert "Behavior contract + acceptance matrix" in delegation
     assert "Product readiness brief + release matrix" in delegation
     assert "Release verification on merged target" in delegation
+    assert "register new Kanban bug tickets" in delegation
+    assert "loop until the merged target passes" in delegation
     assert "curl 000" in delegation
     assert "Route before slicing" in decomposition
     assert "Bugfix**: reproduction -> minimal fix -> regression verification" in decomposition
@@ -267,6 +283,7 @@ def test_operator_skill_routes_ticket_registration_by_work_type() -> None:
     assert "Do not use the app-delivery pattern for every prompt" in decomposition
     assert "If this is app delivery, is the product defined?" in decomposition
     assert "Merged-target release verification" in decomposition
+    assert "defect-registration loop" in decomposition
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

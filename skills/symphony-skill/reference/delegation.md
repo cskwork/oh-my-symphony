@@ -64,6 +64,10 @@ context only carries the orchestration overhead, not all sub-implementations.
    Build tickets consume that brief. A final release-verification ticket is
    blocked by every Build ticket and proves the merged target branch runs as a
    coherent product.
+   That release ticket is a loop: after prerequisite work is committed, pushed,
+   and merged, it runs full functionality QA on the merged target. If QA finds
+   defects, register new Kanban bug tickets with repro evidence, add them as
+   blockers, and loop until the merged target passes.
 
 3. **Register** each as a Symphony ticket with a rich description (this
    description is the only context the worker gets, plus the WORKFLOW.md
@@ -166,6 +170,10 @@ flows in a browser or API client, records console/network/server failures, and
 states whether the app is market-ready or which customer-critical gaps remain.
 If the app cannot start (`curl 000`, no listening port, failed build, missing
 env, broken seed data), the ticket blocks delivery instead of moving to Learn.
+When this proof finds defects, register new Kanban bug tickets with
+reproduction steps, logs, expected behavior, fix boundary, and verification
+commands; add them to the release ticket's `blocked_by` and loop until the
+merged target passes.
 
 For a bug:
 
