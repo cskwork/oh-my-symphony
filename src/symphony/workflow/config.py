@@ -405,9 +405,10 @@ class ContinuousImprovementConfig:
     """Default-off heartbeat that periodically runs product-readiness checks.
 
     Missing `continuous_improvement:` in WORKFLOW.md means disabled with all
-    defaults below. Only `enabled`, `interval_ms`, and `max_turns` are
-    settable through the mutation API (`set_continuous_improvement_settings`);
-    the remaining fields are parse-only from WORKFLOW.md.
+    defaults below. Only `enabled`, `interval_ms`, `max_turns`, and
+    `agent_kind` are settable through the mutation API
+    (`set_continuous_improvement_settings`); the remaining fields are
+    parse-only from WORKFLOW.md.
     """
 
     enabled: bool = False
@@ -418,6 +419,11 @@ class ContinuousImprovementConfig:
     ticket_prefix: str = DEFAULT_CI_TICKET_PREFIX
     max_tickets_per_run: int = DEFAULT_CI_MAX_TICKETS_PER_RUN
     require_idle_board: bool = True
+    # Agent backend that will run the tickets this heartbeat creates,
+    # stamped per-ticket via the existing per-ticket agent_kind override.
+    # "" (default) inherits whatever `agent.kind` the workflow is already
+    # configured with.
+    agent_kind: str = ""
 
 
 @dataclass(frozen=True)

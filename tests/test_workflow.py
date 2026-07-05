@@ -997,6 +997,61 @@ def test_continuous_improvement_defaults_disabled(tmp_path):
     assert cfg.continuous_improvement.ticket_prefix == "CI"
     assert cfg.continuous_improvement.max_tickets_per_run == 5
     assert cfg.continuous_improvement.require_idle_board is True
+    assert cfg.continuous_improvement.agent_kind == ""
+
+
+def test_continuous_improvement_agent_kind_accepted_and_normalized(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x, api_key: xx }
+            continuous_improvement:
+              agent_kind: "  Claude  "
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.continuous_improvement.agent_kind == "claude"
+
+
+@pytest.mark.parametrize("raw_value", ["\"nope\"", "\"Bogus\""])
+def test_continuous_improvement_agent_kind_rejects_unknown(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ agent_kind: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError, match="continuous_improvement.agent_kind"):
+        build_service_config(load_workflow(path))
+
+
+@pytest.mark.parametrize("raw_value", ["1", "true"])
+def test_continuous_improvement_agent_kind_rejects_non_string(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ agent_kind: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError, match="continuous_improvement.agent_kind"):
+        build_service_config(load_workflow(path))
 
 
 def test_continuous_improvement_reads_configured_values(tmp_path):

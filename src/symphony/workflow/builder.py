@@ -792,6 +792,27 @@ def _validated_strict_int(
     return value
 
 
+def _validated_ci_agent_kind(value: Any) -> str:
+    """"" (inherit workflow default agent) or a member of SUPPORTED_AGENT_KINDS.
+
+    Mirrors `webapi._check_agent_kind`'s normalize-then-validate shape.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ConfigValidationError(
+            "continuous_improvement.agent_kind must be a string", value=value
+        )
+    kind = value.strip().lower()
+    if kind and kind not in SUPPORTED_AGENT_KINDS:
+        raise ConfigValidationError(
+            "continuous_improvement.agent_kind must be \"\" or one of "
+            f"{sorted(SUPPORTED_AGENT_KINDS)}",
+            value=kind,
+        )
+    return kind
+
+
 def _validated_ci_ticket_prefix(value: Any) -> str:
     if value is None:
         return DEFAULT_CI_TICKET_PREFIX
@@ -841,6 +862,7 @@ def _build_continuous_improvement_config(raw: Any) -> ContinuousImprovementConfi
         True,
         name="continuous_improvement.require_idle_board",
     )
+    agent_kind = _validated_ci_agent_kind(ci_raw.get("agent_kind"))
 
     return ContinuousImprovementConfig(
         enabled=enabled,
@@ -849,4 +871,5 @@ def _build_continuous_improvement_config(raw: Any) -> ContinuousImprovementConfi
         ticket_prefix=ticket_prefix,
         max_tickets_per_run=max_tickets_per_run,
         require_idle_board=require_idle_board,
+        agent_kind=agent_kind,
     )

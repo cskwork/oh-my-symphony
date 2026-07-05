@@ -271,6 +271,27 @@ def test_set_continuous_improvement_settings_rejects_invalid_max_turns(
         set_continuous_improvement_settings(workflow, max_turns=-1)
 
 
+def test_set_continuous_improvement_settings_agent_kind_roundtrip(
+    workflow: Path,
+) -> None:
+    set_continuous_improvement_settings(workflow, agent_kind="Claude")
+    text = workflow.read_text(encoding="utf-8")
+    assert "agent_kind: claude" in text
+
+    # Explicit "" clears back to inherit-workflow-default.
+    set_continuous_improvement_settings(workflow, agent_kind="")
+    text = workflow.read_text(encoding="utf-8")
+    assert "agent_kind: ''" in text or "agent_kind:" in text
+    assert "agent_kind: claude" not in text
+
+
+def test_set_continuous_improvement_settings_rejects_unknown_agent_kind(
+    workflow: Path,
+) -> None:
+    with pytest.raises(WorkflowMutationError):
+        set_continuous_improvement_settings(workflow, agent_kind="bogus")
+
+
 def test_malformed_yaml_raises_mutation_error(tmp_path: Path) -> None:
     path = tmp_path / "WORKFLOW.md"
     path.write_text("---\ntracker: [unclosed\n---\nbody\n", encoding="utf-8")

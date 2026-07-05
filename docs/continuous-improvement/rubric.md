@@ -17,6 +17,7 @@ continuous_improvement:
   ticket_prefix: CI
   max_tickets_per_run: 5
   require_idle_board: true
+  agent_kind: ""         # "" = workflow default agent
 ```
 
 - `enabled` defaults to `false`.
@@ -30,6 +31,10 @@ continuous_improvement:
 - `max_tickets_per_run` defaults to `5`.
 - `require_idle_board` defaults to `true` (see "Idle-board requirement"
   below).
+- `agent_kind` defaults to `""`, which inherits the workflow's `agent.kind`;
+  otherwise it must be one of the supported agent kinds (agy, codex, claude,
+  gemini, kiro, opencode, pi) and selects which backend runs the tickets this
+  heartbeat creates.
 
 ## Result semantics
 
