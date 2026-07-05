@@ -590,17 +590,18 @@ ticket-template.md` (ticket body fields + `CI Fingerprint` hash rule), and
 a placeholder `docs/continuous-improvement/latest.md` with
 `<!-- ci:auto:* -->` markers so the future report writer can rewrite
 machine-owned sections while preserving operator notes. Added a
-"Continuous improvement heartbeat (planned)" subsection to
-`docs/architecture.md` mapping config, web API endpoints, scheduler,
-runner module, report writer, and registrar to their planned homes.
+"Continuous improvement heartbeat" subsection to `docs/architecture.md`
+mapping config, web API endpoints, scheduler, runner module, report
+writer, and registrar.
 
 - Rejected: default-on. The heartbeat runs real commands against the
   integrated branch on a schedule; an operator must opt in explicitly, per
   the plan's non-goals.
 - Rejected: browser-editable command lists. Letting the web UI configure
   arbitrary check commands turns a read-only inspector into a remote code
-  execution surface; only `enabled` / `interval_ms` / `max_turns` are
-  browser-editable, everything else is trusted `WORKFLOW.md` config.
+  execution surface; only `enabled` / `interval_ms` / `max_turns` /
+  `agent_kind` are browser-editable, everything else is trusted
+  `WORKFLOW.md` config.
 - Rejected: one omnibus ticket per run. Findings are fingerprinted and
   registered as individual tickets (capped by `max_tickets_per_run`) so
   normal workers can pick up and close them independently, matching the
@@ -624,3 +625,71 @@ runner module, report writer, and registrar to their planned homes.
 - Step 4: orchestrator scheduler skeleton + lease.
 - Step 5+: runner, report writer, registrar implementation against the
   rubric and ticket template defined here.
+
+## Continuous improvement heartbeat — runtime delivery
+
+## Goal
+
+Finish the default-off continuous-improvement heartbeat so an operator can
+enable safe periodic baseline verification, inspect status from the web UI,
+and receive bounded Kanban tickets for product-readiness failures.
+
+## Decision
+
+Deliver the heartbeat as a conservative inspector: the scheduler runs outside
+normal worker slots, uses a durable lease and turn budget, proves the baseline
+with read-only Git commands, executes only fixed argv checks (`pytest`,
+`ruff`, `pyright`) with subprocess timeouts through `safe_proc_wait`, writes
+machine-owned report sections, and creates file-board CI tickets only through
+`FileBoardTracker.create_with_next_identifier`.
+
+The web surface edits only `enabled`, `interval_ms`, `max_turns`, and
+`agent_kind`. The registrar stamps `agent_kind` on created CI tickets when
+configured, while `""` inherits the workflow default. Runner result status
+uses the rubric vocabulary (`passed`, `failed`, `not_proven`) so the report,
+web status, and scheduler status describe the same outcome.
+
+- Rejected: preserving the placeholder runner seam. The scheduler already
+  fires in production when enabled; a placeholder would turn the feature into
+  a scheduled failure instead of a useful inspector.
+- Rejected: treating every runner completion as `succeeded`. The operator
+  needs to distinguish a clean run from `failed` checks and `not_proven`
+  baseline proof.
+- Rejected: running checks on any current branch when
+  `agent.auto_merge_target_branch` is configured. A host-branch mismatch
+  creates a temporary detached worktree for the target; unresolved targets
+  are `not_proven`. The heartbeat must not silently QA a worker branch.
+- Rejected: direct ticket Markdown writes. Reusing the tracker creation path
+  keeps identifier allocation, locks, and per-ticket `agent.kind` formatting
+  consistent with normal board operations.
+- Rejected: including arbitrary browser-editable command lists. Fixed commands
+  keep the web settings card from becoming a remote command-execution surface.
+
+## Verification
+
+- Fresh-context adversarial review found target-branch proof, cancellation,
+  fingerprint, and `not_proven` UI gaps; all four were fixed before final
+  verification.
+- `python -m pytest tests/test_shell.py tests/test_continuous_improvement.py -q`
+  passed: 26 tests.
+- `python -m pytest tests/test_continuous_improvement.py -q` passed: 14 tests.
+- `python -m pytest tests/test_orchestrator_continuous_improvement.py -q`
+  passed: 19 tests.
+- `python -m pytest tests/test_webapi.py
+  tests/test_orchestrator_continuous_improvement.py
+  tests/test_web_static_contract.py -q` passed: 46 tests.
+- Exact throwaway-repo E2E is codified in
+  `tests/test_continuous_improvement.py`: current branch `feature`, configured target
+  `dev`, failing real `python -m pytest -q`, generated `CI-1.md`, wrote report
+  evidence, preserved host branch, removed temporary worktree.
+- `python -m pytest tests/test_workflow.py -q` passed: 90 tests.
+- `python -m ruff check src tests` passed.
+- `python -m pyright` passed: 0 errors.
+- `python -m pytest -q` passed: 1233 passed, 2 skipped, 2 warnings.
+
+## Remaining risk
+
+- Browser and DB probes intentionally report `not_available` until an explicit
+  safe configuration exists.
+- Non-file trackers return `unsupported_tracker` until their safe creation
+  contracts are implemented.

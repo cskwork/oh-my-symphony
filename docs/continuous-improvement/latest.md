@@ -1,8 +1,8 @@
 # Continuous improvement — latest run
 
 This file is rewritten by the continuous-improvement report writer
-(`src/symphony/continuous_improvement.py`, planned) after every heartbeat
-run. Only the sections marked with `<!-- ci:auto:* -->` markers are
+(`src/symphony/continuous_improvement.py`) after every heartbeat run. Only
+the sections marked with `<!-- ci:auto:* -->` markers are
 machine-owned and will be overwritten verbatim on the next run. Everything
 outside those markers — including this introduction — is preserved across
 rewrites, so operators can annotate the report in place.
@@ -35,6 +35,12 @@ operator opts in from the web settings card or `WORKFLOW.md`.
 | --- | --- | --- |
 | (none yet) | — | — |
 <!-- ci:auto:checks:end -->
+
+## Evidence
+
+<!-- ci:auto:evidence:start -->
+(none yet)
+<!-- ci:auto:evidence:end -->
 
 ## Tickets created this run
 

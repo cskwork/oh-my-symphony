@@ -56,18 +56,21 @@ what it tested must not manufacture findings about it.
 
 ## Baseline proof (always runs first)
 
-Read-only Git commands only — the heartbeat never runs `git checkout`,
-`git switch`, `git reset`, `git stash`, or any command that mutates the
-working tree or HEAD in the host worktree. It proves:
+The heartbeat never runs `git checkout`, `git switch`, `git reset`,
+`git stash`, or any command that mutates the working tree or HEAD in the
+host worktree. When `agent.auto_merge_target_branch` is configured and the
+host checkout is on another branch, the heartbeat creates a temporary
+detached worktree for the target branch, runs checks there, and removes it
+before finishing. It proves:
 
 - current branch name
 - current commit SHA
 - worktree dirty status (`git status --porcelain`)
 - upstream alignment, when an upstream is configured (ahead/behind counts)
 
-If the worktree is dirty, the target branch cannot be resolved, or the
-upstream is configured but unreachable, the baseline proof is `not_proven`
-and the run ends there.
+If the checked baseline is dirty, the target branch cannot be resolved, the
+temporary worktree cannot be created, or the upstream is configured but
+unreachable, the baseline proof is `not_proven` and the run ends there.
 
 ## Default checks
 
@@ -100,9 +103,10 @@ touch files under `src/` or `tests/`.
 - The feature ships disabled (`continuous_improvement.enabled: false`).
   Enabling it is an explicit operator action from the web settings card or
   `WORKFLOW.md`.
-- Only `enabled`, `interval_ms`, and `max_turns` are browser-editable. The
-  check list, ticket template, environment variables, and file paths are
-  trusted workflow configuration, not remotely configurable.
+- Only `enabled`, `interval_ms`, `max_turns`, and `agent_kind` are
+  browser-editable. The check list, ticket template, environment variables,
+  and file paths are trusted workflow configuration, not remotely
+  configurable.
 - Every check runs as a predefined `argv` array with `shell=False` — no
   shell string interpolation, no user-supplied command text.
 - Every subprocess has an explicit timeout. A timeout is recorded as

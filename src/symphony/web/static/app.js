@@ -66,6 +66,9 @@
     getPrompt: (stateName) => apiRequest(`/workflow/prompts/${encodeURIComponent(stateName)}`),
     putPrompt: (stateName, content) => apiRequest(`/workflow/prompts/${encodeURIComponent(stateName)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
     putBranchPolicy: (payload) => apiRequest('/workflow/branch-policy', { method: 'PUT', body: JSON.stringify(payload) }),
+    putContinuousImprovement: (payload) => apiRequest('/workflow/continuous-improvement', { method: 'PUT', body: JSON.stringify(payload) }),
+    getContinuousImprovementStatus: () => apiRequest('/continuous-improvement/status'),
+    resetContinuousImprovementTurns: () => apiRequest('/workflow/continuous-improvement/reset-turns', { method: 'POST' }),
     getBranches: () => apiRequest('/git/branches'),
     getStats: (days) => apiRequest(`/stats?days=${encodeURIComponent(days)}`),
     pause: (id) => apiRequest(`/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
@@ -1654,6 +1657,100 @@
     ]);
   }
 
+  function ciStatusView(ci, status) {
+    if (!ci || !ci.enabled) return { label: 'Disabled', className: 'muted' };
+    if (status && status.in_flight) return { label: 'Running', className: 'active' };
+    const reason = status && status.skipped_reason;
+    if (reason === 'board_busy') return { label: 'Board busy', className: 'waiting' };
+    if (reason === 'lease_held') return { label: 'Lease held', className: 'waiting' };
+    if (reason === 'max_turns_reached') return { label: 'Turn budget exhausted', className: 'failed' };
+    if (status && status.last_result === 'failed') return { label: 'Failed', className: 'failed' };
+    if (status && status.last_result === 'not_proven') return { label: 'Not proven', className: 'failed' };
+    if (status && (status.last_result === 'passed' || status.last_result === 'succeeded')) return { label: 'Completed', className: 'ok' };
+    return { label: 'Waiting', className: 'waiting' };
+  }
+
+  function ciAgentOptions(wf, current) {
+    const kinds = (state.board && state.board.board.agent_kinds) || wf.agent_kinds || [];
+    const defaultLabel = `Workflow default (${(wf.agent && wf.agent.kind) || 'default'})`;
+    const options = [el('option', { value: '', selected: !current }, defaultLabel)];
+    for (const kind of kinds) options.push(el('option', { value: kind, selected: kind === current }, kind));
+    return options;
+  }
+
+  function buildContinuousImprovementCard(wf, ciStatus) {
+    const ci = wf.continuous_improvement || {};
+    const status = ciStatus || {};
+    const statusView = ciStatusView(ci, status);
+    const enabledInput = el('input', { id: 'ci-enabled-toggle', type: 'checkbox', checked: Boolean(ci.enabled) });
+    const intervalInput = el('input', { id: 'ci-interval-input', class: 'input', type: 'number', min: '60000', step: '60000', value: ci.interval_ms || 1800000 });
+    const maxTurnsInput = el('input', { id: 'ci-max-turns-input', class: 'input', type: 'number', min: '0', step: '1', value: ci.max_turns == null ? 48 : ci.max_turns });
+    const agentSelect = el('select', { id: 'ci-agent-kind-select', class: 'select' }, ciAgentOptions(wf, ci.agent_kind || ''));
+    const resetButton = el('button', {
+      id: 'ci-reset-turns',
+      class: 'btn btn-ghost',
+      onClick: async (e) => {
+        e.target.disabled = true;
+        try {
+          const result = await api.resetContinuousImprovementTurns();
+          showToast('Heartbeat turn counter reset', 'success');
+          renderRoute();
+          return result;
+        } catch (err) {
+          showToast(err.message, 'error');
+          return null;
+        } finally {
+          e.target.disabled = false;
+        }
+      },
+    }, 'Reset turns');
+    const saveButton = el('button', {
+      class: 'btn btn-primary',
+      onClick: async (e) => {
+        e.target.disabled = true;
+        try {
+          const payload = {
+            enabled: enabledInput.checked,
+            interval_ms: Number(intervalInput.value),
+            max_turns: Number(maxTurnsInput.value),
+            agent_kind: agentSelect.value,
+          };
+          const result = await api.putContinuousImprovement(payload);
+          state.workflow = { ...wf, continuous_improvement: result.continuous_improvement };
+          showToast('Continuous improvement saved', 'success');
+          renderRoute();
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          e.target.disabled = false;
+        }
+      },
+    }, 'Save');
+    return el('div', { class: 'card-panel ci-card' }, [
+      el('div', { class: 'ci-card-header' }, [
+        el('h3', null, 'Continuous improvement'),
+        el('span', { class: `ci-status-pill ${statusView.className}` }, statusView.label),
+      ]),
+      fieldRow([
+        field('Enabled', el('label', { class: 'switch' }, [enabledInput, el('span', { class: 'switch-slider' })])),
+        field('Interval (ms)', intervalInput),
+      ]),
+      fieldRow([
+        field('Max turns', maxTurnsInput),
+        field('Ticket agent', agentSelect),
+      ]),
+      el('div', { class: 'ci-status-grid' }, [
+        kv('Turns used', `${status.turns_used == null ? 0 : status.turns_used} / ${ci.max_turns === 0 ? 'unlimited' : ci.max_turns}`),
+        kv('Phase', status.current_phase || '—'),
+        kv('Last result', status.last_result || '—'),
+        kv('Skipped reason', status.skipped_reason || '—'),
+        kv('Tickets created', String(status.tickets_created || 0)),
+        kv('Next due', status.next_due_at || '—'),
+      ]),
+      el('div', { class: 'ci-actions' }, [saveButton, resetButton]),
+    ]);
+  }
+
   function buildBoardInfoCard(wf) {
     return el('div', { class: 'card-panel' }, [
       el('h3', null, 'Board info'),
@@ -1697,10 +1794,12 @@
         api.getBranches(),
         state.board ? Promise.resolve(state.board) : api.getBoard(),
       ]);
+      const ciStatus = await api.getContinuousImprovementStatus();
       state.workflow = wf;
       state.branches = branchesResp.branches;
       if (!state.board) state.board = board;
       clearNode(body);
+      body.appendChild(buildContinuousImprovementCard(wf, ciStatus));
       body.appendChild(buildBranchPolicyCard(wf));
       body.appendChild(buildBoardInfoCard(wf));
       body.appendChild(buildRefreshCard());

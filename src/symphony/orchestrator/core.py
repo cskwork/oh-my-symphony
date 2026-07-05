@@ -124,6 +124,8 @@ from .run_registry import RunRecord, RunRegistry, registry_path_for_workflow
 
 log = get_logger()
 
+DEFAULT_IMPROVEMENT_RUN_TIMEOUT_S = 3600.0
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FAILED_BLOCKER_TERMINAL_STATES = {
@@ -348,6 +350,7 @@ class Orchestrator:
         self._improvement_runner = improvement_runner or default_improvement_runner
         self._improvement_lease = improvement_lease
         self._improvement_task: asyncio.Task[None] | None = None
+        self._improvement_run_timeout_s: float = DEFAULT_IMPROVEMENT_RUN_TIMEOUT_S
         self._last_improvement_monotonic: float | None = None
         self._next_improvement_due_monotonic: float | None = None
         self._improvement_turns_used: int = 0
@@ -2001,6 +2004,7 @@ class Orchestrator:
         lease = self._improvement_lease or FileLease(lease_path_for(workflow_dir))
         if not lease.acquire():
             # Another orchestrator holds the heartbeat; postpone silently.
+            self._next_improvement_due_monotonic = time.monotonic()
             self._improvement_status.update(
                 in_flight=False, current_phase=None, skipped_reason="lease_held"
             )
@@ -2008,11 +2012,15 @@ class Orchestrator:
 
         consumed = False
         try:
-            result = await self._improvement_runner(
-                cfg, workflow_dir, self._report_improvement_phase
+            result = await asyncio.wait_for(
+                self._improvement_runner(
+                    cfg, workflow_dir, self._report_improvement_phase
+                ),
+                timeout=self._improvement_run_timeout_s,
             )
             self._improvement_status.update(
-                last_result="succeeded",
+                last_result=result.status,
+                skipped_reason=result.skipped_reason,
                 tickets_created=result.tickets_created,
                 last_verified_branch=result.verified_branch,
                 last_verified_sha=result.verified_sha,
@@ -2020,6 +2028,20 @@ class Orchestrator:
             consumed = True
         except asyncio.CancelledError:
             raise
+        except asyncio.TimeoutError:
+            self._improvement_status.update(
+                last_result="failed",
+                last_error=(
+                    "continuous improvement runner timed out after "
+                    f"{self._improvement_run_timeout_s:g}s"
+                ),
+            )
+            log.error(
+                "continuous_improvement_run_failed",
+                error="runner timed out",
+                error_type="TimeoutError",
+            )
+            consumed = True
         except Exception as exc:  # noqa: BLE001 — runner failure must not kill the loop
             self._improvement_status.update(
                 last_result="failed", last_error=str(exc)
@@ -2059,6 +2081,15 @@ class Orchestrator:
         turn counter, in-flight flag, and the next-due wall-clock estimate.
         """
         status = dict(self._improvement_status)
+        cfg = self.workflow_state.current()
+        if cfg is not None:
+            ci = cfg.continuous_improvement
+            status.update(
+                enabled=ci.enabled,
+                interval_ms=ci.interval_ms,
+                max_turns=ci.max_turns,
+                agent_kind=ci.agent_kind,
+            )
         status["turns_used"] = self._improvement_turns_used
         status["in_flight"] = (
             self._improvement_task is not None and not self._improvement_task.done()

@@ -57,9 +57,9 @@ through the manual bundle handoff.
 - First implementation supports automatic issue registration for the file
   tracker. Other trackers may report `unsupported_tracker` until a safe create
   and update contract exists.
-- The first web surface exposes only `enabled`, `interval_ms`, and `max_turns`.
-  Command lists, templates, environment variables, and paths are not
-  browser-editable.
+- The first web surface exposes only `enabled`, `interval_ms`, `max_turns`,
+  and `agent_kind`. Command lists, templates, environment variables, and
+  paths are not browser-editable.
 - The heartbeat turn counter is in-process runtime state. An orchestrator
   restart resets it; no cross-restart persistence is required.
 - `superloop` is treated as the requested continuous-loop behavior pattern, not
@@ -246,15 +246,15 @@ Docs:
 
 **Steps:**
 
-- [ ] Define the baseline verification rubric and pass/fail/not-available/
+- [x] Define the baseline verification rubric and pass/fail/not-available/
   not-proven semantics.
-- [ ] Define the ticket body template and fingerprint rule.
-- [ ] Define the no-code-edit invariant.
-- [ ] Define default-off behavior and command safety rules.
-- [ ] Define the cross-process lease requirement.
-- [ ] Define the tracker support matrix.
-- [ ] Verify with `git diff --check`.
-- [ ] Commit `docs: define continuous improvement heartbeat`.
+- [x] Define the ticket body template and fingerprint rule.
+- [x] Define the no-code-edit invariant.
+- [x] Define default-off behavior and command safety rules.
+- [x] Define the cross-process lease requirement.
+- [x] Define the tracker support matrix.
+- [x] Verify with `git diff --check`.
+- [x] Commit `docs: define continuous improvement heartbeat`.
 
 ### 2. Config Model, Parser, and Workflow Mutation
 
@@ -267,21 +267,21 @@ Docs:
 
 **Steps:**
 
-- [ ] Add failing tests for default disabled config and default interval.
-- [ ] Add failing tests for strict boolean validation.
-- [ ] Add failing tests for interval validation.
-- [ ] Add failing tests for `max_turns` validation (default 48, `0` means
+- [x] Add failing tests for default disabled config and default interval.
+- [x] Add failing tests for strict boolean validation.
+- [x] Add failing tests for interval validation.
+- [x] Add failing tests for `max_turns` validation (default 48, `0` means
   unlimited, rejects booleans/strings/negatives).
-- [ ] Add failing tests proving workflow mutation preserves comments/order.
-- [ ] Add `ContinuousImprovementConfig`.
-- [ ] Add strict parsing helpers for booleans and interval values.
-- [ ] Add `ServiceConfig.continuous_improvement`.
-- [ ] Add failing tests for `agent_kind` validation (default `""` inherit,
+- [x] Add failing tests proving workflow mutation preserves comments/order.
+- [x] Add `ContinuousImprovementConfig`.
+- [x] Add strict parsing helpers for booleans and interval values.
+- [x] Add `ServiceConfig.continuous_improvement`.
+- [x] Add failing tests for `agent_kind` validation (default `""` inherit,
   accepts SUPPORTED_AGENT_KINDS members, rejects unknown/non-string).
-- [ ] Add `set_continuous_improvement_settings(...)` covering `enabled`,
+- [x] Add `set_continuous_improvement_settings(...)` covering `enabled`,
   `interval_ms`, `max_turns`, and `agent_kind`.
-- [ ] Verify with `python -m pytest tests/test_workflow.py -q`.
-- [ ] Commit `feat: add continuous improvement workflow config`.
+- [x] Verify with `python -m pytest tests/test_workflow.py -q`.
+- [x] Commit `feat: add continuous improvement workflow config`.
 
 ### 3. Web API and Settings UI
 
@@ -296,25 +296,25 @@ Docs:
 
 **Steps:**
 
-- [ ] Add failing API tests for `GET /api/v1/workflow` including the config.
-- [ ] Add failing API tests for
+- [x] Add failing API tests for `GET /api/v1/workflow` including the config.
+- [x] Add failing API tests for
   `PUT /api/v1/workflow/continuous-improvement` including `max_turns` and
   `agent_kind` (validated against `SUPPORTED_AGENT_KINDS`, `""` allowed).
-- [ ] Add failing API tests for
+- [x] Add failing API tests for
   `POST /api/v1/workflow/continuous-improvement/reset-turns`.
-- [ ] Add failing validation tests for malformed JSON, wrong schema, Host guard,
+- [x] Add failing validation tests for malformed JSON, wrong schema, Host guard,
   and content-type guard.
-- [ ] Add static UI contract tests for the toggle, interval field, max-turns
+- [x] Add static UI contract tests for the toggle, interval field, max-turns
   field, reset-turns action, save action, and status labels.
-- [ ] Add the workflow payload field and strict PUT handler.
-- [ ] Add the reset-turns POST handler delegating to the orchestrator counter.
-- [ ] Reload workflow state after mutation.
-- [ ] Add a settings card exposing enable/disable, interval, max turns, and
+- [x] Add the workflow payload field and strict PUT handler.
+- [x] Add the reset-turns POST handler delegating to the orchestrator counter.
+- [x] Reload workflow state after mutation.
+- [x] Add a settings card exposing enable/disable, interval, max turns, and
   an agent-kind dropdown (default = workflow agent), plus a reset-turns
   action with the turns-used counter.
-- [ ] Add read-only status rendering.
-- [ ] Verify with `python -m pytest tests/test_webapi.py -q`.
-- [ ] Verify with `python -m pytest tests/test_web_static_contract.py -q`.
+- [x] Add read-only status rendering.
+- [x] Verify with `python -m pytest tests/test_webapi.py -q`.
+- [x] Verify with `python -m pytest tests/test_web_static_contract.py -q`.
 - [ ] Commit `feat: expose continuous improvement settings`.
 
 ### 4. Heartbeat Scheduler Skeleton
@@ -327,28 +327,28 @@ Docs:
 
 **Steps:**
 
-- [ ] Add failing tests proving disabled config schedules no task.
-- [ ] Add failing tests proving enabled-but-not-due schedules no task.
-- [ ] Add failing tests proving a due heartbeat schedules exactly one task.
-- [ ] Add failing tests proving a second tick while in flight does not schedule
+- [x] Add failing tests proving disabled config schedules no task.
+- [x] Add failing tests proving enabled-but-not-due schedules no task.
+- [x] Add failing tests proving a due heartbeat schedules exactly one task.
+- [x] Add failing tests proving a second tick while in flight does not schedule
   another task.
-- [ ] Add failing tests proving runner exceptions update status and do not kill
+- [x] Add failing tests proving runner exceptions update status and do not kill
   the tick loop.
-- [ ] Add failing tests proving `require_idle_board` postpones while workers are
+- [x] Add failing tests proving `require_idle_board` postpones while workers are
   running or retrying.
-- [ ] Add failing tests proving the turn budget: each completed run increments
+- [x] Add failing tests proving the turn budget: each completed run increments
   `turns_used`; once `turns_used >= max_turns` (non-zero) no further run is
   scheduled and `skipped_reason` is `max_turns_reached`; `max_turns: 0` never
   exhausts; resetting the counter resumes scheduling.
-- [ ] Add scheduler fields: `_improvement_task`,
+- [x] Add scheduler fields: `_improvement_task`,
   `_last_improvement_monotonic`, `_next_improvement_due_monotonic`,
   `_improvement_turns_used`, and `_improvement_status`.
-- [ ] Add `_maybe_schedule_continuous_improvement(config_snapshot)`.
-- [ ] Add `reset_continuous_improvement_turns()` for the web API.
-- [ ] Run work in a bounded background task with subprocess timeouts.
-- [ ] Add a fakeable durable lease abstraction.
-- [ ] Verify with the focused orchestrator tests.
-- [ ] Commit `feat: schedule continuous improvement heartbeat`.
+- [x] Add `_maybe_schedule_continuous_improvement(config_snapshot)`.
+- [x] Add `reset_continuous_improvement_turns()` for the web API.
+- [x] Run work in a bounded background task with subprocess timeouts.
+- [x] Add a fakeable durable lease abstraction.
+- [x] Verify with the focused orchestrator tests.
+- [x] Commit `feat: schedule continuous improvement heartbeat`.
 
 ### 5. Check Runner and Baseline Verification
 
@@ -360,19 +360,19 @@ Docs:
 
 **Steps:**
 
-- [ ] Add failing tests for baseline branch/SHA/dirty-status capture.
-- [ ] Add failing tests for safe command execution with `shell=False`.
-- [ ] Add failing tests for timeout handling.
-- [ ] Add failing tests for output cap and redaction.
-- [ ] Add failing tests for result normalization.
-- [ ] Add failing tests for `passed`, `failed`, `not_available`, and
+- [x] Add failing tests for baseline branch/SHA/dirty-status capture.
+- [x] Add failing tests for safe command execution with `shell=False`.
+- [x] Add failing tests for timeout handling.
+- [x] Add failing tests for output cap and redaction.
+- [x] Add failing tests for result normalization.
+- [x] Add failing tests for `passed`, `failed`, `not_available`, and
   `not_proven`.
-- [ ] Implement baseline source proof without changing the host worktree.
-- [ ] Implement predefined check registry.
-- [ ] Implement command runner with argv arrays, timeout, output caps, and
+- [x] Implement baseline source proof without changing the host worktree.
+- [x] Implement predefined check registry.
+- [x] Implement command runner with argv arrays, timeout, output caps, and
   redaction.
-- [ ] Implement browser and DB `not_available` handling.
-- [ ] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
+- [x] Implement browser and DB `not_available` handling.
+- [x] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
 - [ ] Commit `feat: add continuous improvement check runner`.
 
 ### 6. Docs Report Writer
@@ -385,13 +385,13 @@ Docs:
 
 **Steps:**
 
-- [ ] Add failing tests for deterministic report rendering.
-- [ ] Add failing tests that only machine-owned report sections are rewritten.
-- [ ] Add failing tests that architecture drift becomes a finding instead of a
+- [x] Add failing tests for deterministic report rendering.
+- [x] Add failing tests that only machine-owned report sections are rewritten.
+- [x] Add failing tests that architecture drift becomes a finding instead of a
   broad prose rewrite.
-- [ ] Render last branch/SHA, commands, outcomes, skipped checks, and ticket
+- [x] Render last branch/SHA, commands, outcomes, skipped checks, and ticket
   registration summary.
-- [ ] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
+- [x] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
 - [ ] Commit `feat: write continuous improvement reports`.
 
 ### 7. Kanban Registrar and De-Duplication
@@ -405,19 +405,19 @@ Docs:
 
 **Steps:**
 
-- [ ] Add failing tests for fingerprint stability.
-- [ ] Add failing tests for duplicate finding suppression.
-- [ ] Add failing tests for max tickets per run.
-- [ ] Add failing tests for unsupported tracker behavior.
-- [ ] Add failing tests that ticket creation uses the normal tracker path.
-- [ ] Implement `IssueFinding` normalization and fingerprinting.
-- [ ] Search active tickets for existing fingerprints.
-- [ ] Create one ticket per unique finding, capped by config, stamping the
+- [x] Add failing tests for fingerprint stability.
+- [x] Add failing tests for duplicate finding suppression.
+- [x] Add failing tests for max tickets per run.
+- [x] Add failing tests for unsupported tracker behavior.
+- [x] Add failing tests that ticket creation uses the normal tracker path.
+- [x] Implement `IssueFinding` normalization and fingerprinting.
+- [x] Search active tickets for existing fingerprints.
+- [x] Create one ticket per unique finding, capped by config, stamping the
   configured `agent_kind` on each created ticket when set.
-- [ ] Append or skip when a duplicate active ticket exists.
-- [ ] Report unsupported trackers as status, not a crash.
-- [ ] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
-- [ ] Verify with `python -m pytest tests/test_webapi.py -q`.
+- [x] Append or skip when a duplicate active ticket exists.
+- [x] Report unsupported trackers as status, not a crash.
+- [x] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
+- [x] Verify with `python -m pytest tests/test_webapi.py -q`.
 - [ ] Commit `feat: register heartbeat findings as kanban tickets`.
 
 ### 8. Final Integration and Full Verification
@@ -430,20 +430,20 @@ Docs:
 
 **Steps:**
 
-- [ ] Re-read the whole plan and requirements from this document.
-- [ ] Confirm default config does not schedule the heartbeat.
-- [ ] Confirm enabling through web persists to `WORKFLOW.md`.
-- [ ] Confirm a due heartbeat runs once.
-- [ ] Confirm failures become normal Kanban tickets.
-- [ ] Confirm duplicate failures do not create repeated tickets.
-- [ ] Confirm tick loop survives runner errors.
-- [ ] Confirm the heartbeat stops after `max_turns` runs and resumes after
+- [x] Re-read the whole plan and requirements from this document.
+- [x] Confirm default config does not schedule the heartbeat.
+- [x] Confirm enabling through web persists to `WORKFLOW.md`.
+- [x] Confirm a due heartbeat runs once.
+- [x] Confirm failures become normal Kanban tickets.
+- [x] Confirm duplicate failures do not create repeated tickets.
+- [x] Confirm tick loop survives runner errors.
+- [x] Confirm the heartbeat stops after `max_turns` runs and resumes after
   reset-turns.
-- [ ] Confirm architecture docs describe the new config, web API, scheduler,
+- [x] Confirm architecture docs describe the new config, web API, scheduler,
   runner, report writer, and registrar.
-- [ ] Run `python -m pytest -q`.
-- [ ] Run `python -m ruff check src tests`.
-- [ ] Run `python -m pyright`.
+- [x] Run `python -m pytest -q`.
+- [x] Run `python -m ruff check src tests`.
+- [x] Run `python -m pyright`.
 - [ ] Commit `docs: record continuous improvement heartbeat delivery proof`.
 
 ## Edge Cases

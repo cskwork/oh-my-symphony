@@ -141,6 +141,24 @@ def test_safe_proc_wait_short_circuits_when_returncode_set() -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX waitpid semantics")
+def test_safe_proc_wait_falls_back_when_asyncio_watcher_reaped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When waitpid reports ECHILD, asyncio may still know the return code."""
+
+    def already_reaped(_pid: int, _flags: int) -> tuple[int, int]:
+        raise ChildProcessError
+
+    monkeypatch.setattr(_shell.os, "waitpid", already_reaped)
+    fake = _FakeWindowsProcess(wait_result=3)
+
+    rc = asyncio.run(safe_proc_wait(fake, timeout=1.0))
+
+    assert rc == 3
+    assert fake.wait_calls == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX waitpid semantics")
 def test_safe_proc_wait_timeout_returns_none() -> None:
     """Long-running child past the timeout returns None instead of blocking."""
     popen = _subprocess.Popen(

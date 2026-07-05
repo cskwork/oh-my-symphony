@@ -1099,6 +1099,42 @@ a { color: inherit; }
 .kv-label { color: var(--text-muted); }
 .kv-value { font-family: var(--font-mono); font-size: 12px; text-align: right; word-break: break-all; }
 
+.ci-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.ci-card-header h3 { margin: 0; }
+
+.ci-status-pill {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ci-status-pill.active { background: #eff6ff; color: #1d4ed8; }
+.ci-status-pill.waiting { background: #fffbeb; color: #92400e; }
+.ci-status-pill.ok { background: var(--success-bg); color: var(--success); }
+.ci-status-pill.failed { background: var(--danger-bg); color: var(--danger); }
+
+.ci-status-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.ci-actions { display: flex; gap: 8px; margin-top: 14px; }
+
 /* ---------------------------------------------------------------------- */
 /* Responsive                                                               */
 /* ---------------------------------------------------------------------- */

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import textwrap
 import time
 from pathlib import Path
 
@@ -155,6 +156,22 @@ class _FakeLease:
         self.released += 1
 
 
+class _FlippingLease:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.released = 0
+
+    def acquire(self) -> bool:
+        self.calls += 1
+        return self.calls > 1
+
+    def refresh(self) -> None:  # pragma: no cover - unused in scheduler tests
+        pass
+
+    def release(self) -> None:
+        self.released += 1
+
+
 async def _drain_improvement(orch: Orchestrator) -> None:
     task = orch._improvement_task
     if task is not None:
@@ -177,6 +194,43 @@ async def test_disabled_config_schedules_nothing() -> None:
     status = orch.continuous_improvement_status()
     assert status["enabled"] is False
     assert status["in_flight"] is False
+
+
+def test_status_merges_current_config_before_first_tick(tmp_path: Path) -> None:
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text(
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./kanban
+            agent:
+              kind: codex
+            continuous_improvement:
+              enabled: true
+              interval_ms: 60000
+              max_turns: 2
+              agent_kind: claude
+            ---
+
+            Prompt.
+            """
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "kanban").mkdir()
+    state = WorkflowState(workflow)
+    cfg, err = state.reload()
+    assert err is None and cfg is not None
+    orch = Orchestrator(state)
+
+    status = orch.continuous_improvement_status()
+
+    assert status["enabled"] is True
+    assert status["interval_ms"] == 60_000
+    assert status["max_turns"] == 2
+    assert status["agent_kind"] == "claude"
 
 
 @pytest.mark.asyncio
@@ -214,7 +268,7 @@ async def test_due_heartbeat_schedules_one_run() -> None:
     assert lease.acquired == 1
     assert lease.released == 1
     status = orch.continuous_improvement_status()
-    assert status["last_result"] == "succeeded"
+    assert status["last_result"] == "passed"
     assert status["tickets_created"] == 3
     assert status["turns_used"] == 1
     assert status["in_flight"] is False
@@ -417,6 +471,60 @@ async def test_lease_held_postpones_without_consuming_turn() -> None:
     assert orch.continuous_improvement_status()["skipped_reason"] == "lease_held"
 
 
+@pytest.mark.asyncio
+async def test_lease_held_retries_next_tick_without_full_interval() -> None:
+    runner = _FakeRunner()
+    lease = _FlippingLease()
+    orch = _orch(improvement_runner=runner, improvement_lease=lease)
+    cfg = _make_config(ci=_enabled_ci())
+
+    orch._maybe_schedule_continuous_improvement(cfg)
+    orch._next_improvement_due_monotonic = time.monotonic() - 1
+    orch._maybe_schedule_continuous_improvement(cfg)
+    await _drain_improvement(orch)
+
+    assert runner.calls == 0
+    assert orch._improvement_turns_used == 0
+    assert orch.continuous_improvement_status()["skipped_reason"] == "lease_held"
+
+    orch._maybe_schedule_continuous_improvement(cfg)
+    await _drain_improvement(orch)
+
+    assert runner.calls == 1
+    assert lease.calls == 2
+    assert lease.released == 1
+    assert orch.continuous_improvement_status()["skipped_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_runner_timeout_releases_lease_and_clears_in_flight() -> None:
+    started = asyncio.Event()
+
+    class _HungRunner:
+        async def __call__(self, cfg, workflow_dir, report_phase):
+            started.set()
+            await asyncio.Event().wait()
+            return ImprovementRunResult()
+
+    lease = _FakeLease()
+    orch = _orch(improvement_runner=_HungRunner(), improvement_lease=lease)
+    orch._improvement_run_timeout_s = 0.01
+    cfg = _make_config(ci=_enabled_ci())
+
+    orch._maybe_schedule_continuous_improvement(cfg)
+    orch._next_improvement_due_monotonic = time.monotonic() - 1
+    orch._maybe_schedule_continuous_improvement(cfg)
+    await started.wait()
+    await _drain_improvement(orch)
+
+    status = orch.continuous_improvement_status()
+    assert status["last_result"] == "failed"
+    assert "timed out" in status["last_error"]
+    assert status["in_flight"] is False
+    assert status["turns_used"] == 1
+    assert lease.released == 1
+
+
 # --------------------------------------------------------------------------
 # durable FileLease (real tmpdir)
 # --------------------------------------------------------------------------
@@ -444,6 +552,38 @@ def test_file_lease_steals_stale(tmp_path: Path) -> None:
     # Advance past the TTL; the crashed holder never released.
     clock["t"] += 200.0
     assert other.acquire() is True  # stolen
+
+
+def test_stale_holder_release_does_not_unlink_new_holder(tmp_path: Path) -> None:
+    path = lease_path_for(tmp_path)
+    clock = {"t": 1000.0}
+    stale = FileLease(path, ttl_seconds=100.0, now=lambda: clock["t"])
+    assert stale.acquire() is True
+    clock["t"] += 200.0
+    fresh = FileLease(path, ttl_seconds=100.0, now=lambda: clock["t"])
+    assert fresh.acquire() is True
+
+    stale.release()
+
+    assert path.exists()
+    blocked = FileLease(path, ttl_seconds=100.0, now=lambda: clock["t"])
+    assert blocked.acquire() is False
+    fresh.release()
+
+
+def test_file_lease_stale_steal_allows_one_winner(tmp_path: Path) -> None:
+    path = lease_path_for(tmp_path)
+    clock = {"t": 1000.0}
+    holder = FileLease(path, ttl_seconds=100.0, now=lambda: clock["t"])
+    assert holder.acquire() is True
+    clock["t"] += 200.0
+
+    first = FileLease(path, ttl_seconds=100.0, now=lambda: clock["t"])
+    assert first.acquire() is True
+
+    second = FileLease(path, ttl_seconds=100.0, now=lambda: clock["t"])
+    assert second.acquire() is False
+    first.release()
 
 
 def test_file_lease_is_a_lease() -> None:
