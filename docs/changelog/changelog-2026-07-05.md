@@ -418,3 +418,39 @@ Rejected alternatives:
 - Full suite:
   `PYTHONPATH=src python -m pytest -q`
   passed: 1119 tests, 2 skipped, 2 warnings.
+
+---
+
+# 2026-07-05 - Continuous improvement heartbeat plan
+
+## Goal
+
+Plan a default-off web setting that periodically verifies the integrated
+baseline, records deterministic evidence, and registers discovered
+production-readiness defects as normal Symphony Kanban tickets.
+
+## Decision
+
+Save the GPT Pro review as a staged implementation plan:
+`docs/plans/2026-07-05-continuous-improvement-heartbeat.md`.
+
+The plan treats the heartbeat as an opt-in workflow-level inspector, not a
+hidden coding agent. It verifies the merged baseline against a rubric, writes
+machine-owned report output, and registers findings through tracker APIs so the
+normal Symphony workflow owns remediation.
+
+- Rejected: a default-on loop. Running checks and writing tickets without
+  explicit operator opt-in is too risky.
+- Rejected: browser-editable command lists. The first web surface should expose
+  only `enabled` and `interval_ms`; command execution must stay predefined or in
+  trusted workflow config.
+- Rejected: direct code edits by the heartbeat. Defects must become scoped
+  Kanban tickets that go through the normal Symphony run.
+- Rejected: direct Markdown ticket writes. The registrar must reuse existing
+  file-tracker creation/mutation paths and de-duplicate by fingerprint.
+
+## Verification
+
+- Confirmed the plan file exists.
+- Scanned the plan for placeholder terms that would make it non-actionable.
+- Ran `git diff --check`.
