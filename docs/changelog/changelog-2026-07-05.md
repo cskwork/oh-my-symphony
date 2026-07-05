@@ -746,3 +746,573 @@ attempt dispatch normally.
   passed; `python -m pyright src/symphony/orchestrator/core.py` passed;
   `git diff --check -- src/symphony/orchestrator/core.py tests/test_orchestrator_dispatch.py docs/changelog/changelog-2026-07-05.md`
   passed.
+
+---
+
+## Blocked ticket RCA self-healing
+
+## Goal
+
+Let Symphony investigate and resolve Blocked tickets without pretending the
+blocked dependency is resolved or requiring manual state edits.
+
+## Decision
+
+Blocked must remain a failed terminal state for dependency safety, but it is
+now actionable. On a poll tick, after normal active-ticket dispatch, the
+orchestrator scans terminal `Blocked` cards when worker slots remain. If a
+source ticket has no existing `## Blocked RCA` marker, Symphony creates one
+`RCA-*` ticket in an active lane using the source ticket's valid agent or the
+workflow default. The RCA worker must fix and verify the real root cause before
+moving the source back to the configured reopen target (`Todo` by default).
+
+Keep the `recover-blocked` API route and web action for compatibility, but make
+it use the same RCA-ticket path and reject duplicates. Add
+`agent.auto_recover_blocked` (default `true`) so sensitive workflows can opt out
+of automatic RCA creation. For file boards, strip the stale `## Blocked RCA`
+marker when the source is restored to an active state, so a later independent
+block can receive a fresh RCA.
+
+- Rejected: treating `Blocked` as a successful dependency terminal. That would
+  let downstream tickets run against a failed prerequisite.
+- Rejected: silently auto-reopening every Blocked card on each idle tick. The
+  RCA worker must prove the root cause before the source re-enters `Todo`.
+- Rejected: moving the original Blocked ticket directly back to `In Progress`.
+  The live smoke showed that this starts normal worker execution before the RCA
+  is resolved, which makes the blocked state meaningless and can let dependent
+  tickets proceed on unproven work.
+- Rejected: creating an RCA ticket that is blocked by the source ticket. The RCA
+  ticket must be runnable so the default or chosen valid agent can resolve the
+  root cause; the source remains Blocked until that ticket proves the fix.
+- Rejected: opening RCA tickets without a duplicate marker. A failed terminal
+  state can persist for many ticks; automatic recovery must be idempotent.
+
+## Verification
+
+- Focused recovery regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_recover_blocked_issue_opens_rca_ticket_and_keeps_source_blocked tests/test_webapi.py::test_recover_blocked_route_calls_orchestrator tests/test_server_routes.py::test_recover_blocked_route_returns_recovery_payload -q`
+  red before fix: 3 failures against the direct-reopen implementation.
+- Focused auto-RCA regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_tick_auto_opens_blocked_rca_ticket_once tests/test_orchestrator_dispatch.py::test_tick_auto_recovery_skips_existing_blocked_rca_note tests/test_orchestrator_dispatch.py::test_tick_auto_recovery_respects_disabled_config tests/test_orchestrator_dispatch.py::test_recover_blocked_issue_rejects_duplicate_rca tests/test_tracker_file.py::test_g5_strip_conflict_budget_and_blocked_rca_sections_on_active_restore tests/test_workflow.py::test_build_service_config_defaults_auto_recover_blocked_on tests/test_workflow.py::test_build_service_config_reads_auto_recover_blocked -q`
+  red before fix: missing auto-RCA sweep and stale `## Blocked RCA` cleanup;
+  green after fix: 7 passed.
+
+---
+
+## Multi-stage max-turns preflight guard
+
+## Goal
+
+Prevent generated/default Symphony harnesses from creating workflows that are
+guaranteed to block after the first successful stage transition.
+
+## Decision
+
+Treat `agent.max_turns` as a full worker-attempt budget, not a per-stage
+budget. A workflow with multiple active states needs at least one turn per
+active state in the common staged path. `validate_for_dispatch` now rejects
+workflows where `agent.max_turns` is lower than the configured active-state
+count, and `symphony doctor` reports the same check as `agent.max_turns`.
+
+This catches the bad harness shape `active_states: [Todo, In Progress, Verify,
+Learn]` with `max_turns: 1`: the first turn can move `Todo -> In Progress`,
+but Symphony then hits the attempt ceiling and blocks the ticket before Verify
+or Learn can run.
+
+- Rejected: leaving this as operator knowledge. The failure spends real agent
+  turns and produces misleading `Blocked` cards.
+- Rejected: changing `max_turns` semantics to per-stage. Existing dispatch
+  budgeting, retry, and no-stage-change behavior already rely on it being an
+  attempt-level ceiling.
+- Rejected: a doctor-only warning. Service startup also needs to refuse the
+  impossible workflow, not just report it in optional preflight output.
+
+## Verification
+
+- Red before fix:
+  `python -m pytest tests/test_workflow_preflight_full.py::test_multi_stage_workflow_rejects_too_low_max_turns tests/test_doctor.py::test_stage_turn_budget_fails_for_multi_stage_one_turn_workflow -q`
+  failed because the guard/check did not exist.
+- Focused green:
+  same command passed: 2 tests.
+- Surrounding startup/preflight regression:
+  `python -m pytest tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py -q`
+  passed: 63 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Static checks:
+  `python -m ruff check src/symphony/workflow/preflight.py src/symphony/cli/doctor.py tests/test_workflow_preflight_full.py tests/test_doctor.py`
+  passed; `python -m pyright src/symphony/workflow/preflight.py src/symphony/cli/doctor.py`
+  passed.
+
+---
+
+## File-board delimiter recovery
+
+## Goal
+
+Keep a real agent from losing a live file-board ticket when it preserves the
+ticket body and `state:` line but accidentally drops the YAML `---`
+delimiters.
+
+## Decision
+
+Extend the file tracker's parser with a narrow delimiterless recovery path. A
+Markdown file without frontmatter delimiters is treated as a ticket only when
+the first line is a canonical YAML ticket key and the parsed prefix includes
+`state`. For that recovered ticket, the tracker fills missing `id`,
+`identifier`, and `title` from the filename, so the next state update rewrites
+the file back to valid serialized YAML.
+
+This fixes the real Gemini E2E failure where the ticket became:
+`state: Verify` followed by Markdown evidence. Without recovery, the tracker
+could no longer find `E2E-GEMINI`, so the worker parked the issue with
+`issue_state_refresh_failed`.
+
+- Rejected: accepting any Markdown file that contains `state:` somewhere in
+  the body. That would turn notes into tickets.
+- Rejected: papering over the refresh error in the orchestrator. The root cause
+  is parser resilience for a known file-board corruption shape.
+- Rejected: silently moving the issue without restoring canonical YAML. The
+  board file must be repaired on the next tracker write so future tools see the
+  normal format.
+
+## Verification
+
+- Focused regression:
+  `python -m pytest tests/test_tracker_file.py::test_parse_ticket_file_recovers_missing_yaml_delimiters tests/test_tracker_file.py::test_file_tracker_update_state_restores_yaml_for_recovered_ticket tests/test_workflow_preflight_full.py::test_shipped_workflow_example_passes_dispatch_preflight tests/test_workflow_preflight_full.py::test_readme_quickstart_workflow_passes_dispatch_preflight -q`
+  passed: 5 tests.
+- Surrounding tracker/preflight regression:
+  `python -m pytest tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py -q`
+  passed: 105 tests.
+- Static checks:
+  `python -m ruff check src/symphony/trackers/file.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py README.md README.ko.md examples/WORKFLOW.smoke.md`
+  passed; `python -m pyright src/symphony/trackers/file.py` passed.
+
+---
+
+## Shipped workflow budget examples
+
+## Goal
+
+Keep the new multi-stage `max_turns` preflight guard from rejecting the
+quickstart workflows shipped in the README and smoke example.
+
+## Decision
+
+Raise the README quickstart and `examples/WORKFLOW.smoke.md` from
+`max_turns: 3` to `max_turns: 4`, matching the default active-state path
+`Todo -> In Progress -> Verify -> Learn`. Add regression tests that extract the
+README quickstart workflow snippets and run the smoke example through
+`validate_for_dispatch`.
+
+- Rejected: exempting examples from the guard. They are the first workflows a
+  new operator copies, so they must obey the same startup contract.
+- Rejected: lowering the example active-state count. The docs should continue
+  to demonstrate the default multi-stage flow.
+
+## Verification
+
+- README/example dispatch-preflight checks are included in:
+  `python -m pytest tests/test_workflow_preflight_full.py -q`
+  passed as part of the 105-test tracker/preflight regression above.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py -q`
+  passed: 390 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Backend/lifecycle regression:
+  `python -m pytest tests/test_agent_lifecycle_e2e.py tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_claude_cache_tokens.py -q`
+  passed: 239 tests.
+
+---
+
+## Source-scoped blocked RCA identifiers
+
+## Goal
+
+Prevent newly-created blocked-RCA tickets from inheriting stale runtime flags
+from unrelated historical RCA tickets.
+
+## Decision
+
+Allocate file-board RCA tickets with a source-scoped prefix:
+`RCA-<SOURCE-ID>-N` instead of the global `RCA-N`. The live Jira board exposed
+the issue after the first auto-RCA sweep: a new `RCA-1` for `TASK-015`
+inherited an old persisted pause flag from a previous `RCA-1` run. The source
+ticket stayed safe, but the new RCA worker was born paused even though this was
+a fresh recovery ticket.
+
+Source-scoped IDs keep the operator-readable relationship while avoiding
+collisions with prior generic RCA history. Existing operator pauses remain
+sticky for the same issue id.
+
+- Rejected: clearing all paused flags when creating any RCA. That would break
+  the intentional pause contract for real tickets.
+- Rejected: changing run-registry keys globally. Registry identity needs a
+  larger compatibility design; the RCA allocator can avoid the collision
+  without widening the change.
+- Rejected: keeping global `RCA-N` and adding more duplicate-note checks. The
+  collision happened below the tracker layer, in persisted runtime flags.
+
+## Verification
+
+- Focused allocator regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_blocked_rca_create_uses_source_scoped_file_identifier tests/test_orchestrator_dispatch.py::test_tick_auto_opens_blocked_rca_ticket_once tests/test_orchestrator_dispatch.py::test_recover_blocked_issue_opens_rca_ticket_and_keeps_source_blocked -q`
+  passed: 3 tests.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py -q`
+  passed: 391 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Backend/lifecycle regression:
+  `python -m pytest tests/test_agent_lifecycle_e2e.py tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_claude_cache_tokens.py -q`
+  passed: 239 tests.
+- Static checks:
+  `python -m ruff check ...` over the touched source/tests passed;
+  `python -m pyright ...` over the touched source passed.
+
+---
+
+## Transient connection errors retry without operator pause
+
+## Goal
+
+Keep transient coding-agent network failures from parking a ticket in a
+paused retry state that requires operator intervention before the agent gets a
+normal retry.
+
+## Decision
+
+Classify `connection error`, `network error`, `connection reset`, and
+`connection timed out` as retryable worker errors. The real Pi E2E failed on
+the first turn with `turn_failed: Connection error.; stderr:` and Symphony
+scheduled a retry, but the retry was marked paused for operator inspection.
+The Pi CLI succeeded on a direct retry and then passed the full disposable
+ticket lifecycle, so this class belongs with rate-limit/temporary-service
+failures rather than hard backend crashes.
+
+- Rejected: always pausing every worker `turn_error`. That is correct for hard
+  crashes but wrong for transient provider/network failures that a retry can
+  resolve.
+- Rejected: hiding the retry. The retry row still records the cleaned error
+  and attempt count; it just does not set the paused flag.
+- Rejected: treating all stderr-bearing failures as retryable. Unknown backend
+  crashes still pause with a visible reason.
+
+## Verification
+
+- Focused retry regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_worker_exit_connection_error_retries_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_retryable_rate_limit_schedules_retry_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_hard_failure_with_visible_reason -q`
+  passed: 3 tests.
+- Pi direct CLI check:
+  `printf 'Return exactly pi-ok.\n' | timeout 120 pi --mode json -p ""`
+  produced a valid JSON stream ending in `agent_end`.
+- Pi real-agent E2E:
+  `env SYMPHONY_E2E_AGENTS=pi SYMPHONY_E2E_TURN_TIMEOUT_MS=480000 SYMPHONY_E2E_AGENT_TIMEOUT_S=900 /opt/anaconda3/bin/python /private/tmp/symphony-real-agent-e2e-yIeicD/run_e2e.py`
+  passed in 130.3 seconds with ticket `E2E-PI` ending in `Done`.
+- AGY real-agent E2E retry after increasing only the outer harness wall-clock:
+  `env SYMPHONY_E2E_AGENTS=agy SYMPHONY_E2E_TURN_TIMEOUT_MS=600000 SYMPHONY_E2E_AGENT_TIMEOUT_S=1500 SYMPHONY_E2E_BASE_PORT=19520 /opt/anaconda3/bin/python /private/tmp/symphony-real-agent-e2e-yIeicD/run_e2e.py`
+  passed in 198.4 seconds with ticket `E2E-AGY` ending in `Done`.
+- OpenCode real-agent E2E, per operator request instead of rerunning all seven:
+  `env SYMPHONY_E2E_AGENTS=opencode SYMPHONY_E2E_TURN_TIMEOUT_MS=600000 SYMPHONY_E2E_AGENT_TIMEOUT_S=900 SYMPHONY_E2E_BASE_PORT=19720 /opt/anaconda3/bin/python /private/tmp/symphony-real-agent-e2e-yIeicD/run_e2e.py`
+  passed in 178.4 seconds with ticket `E2E-OPENCODE` ending in `Done`.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py tests/test_workflow_pipeline_prompt.py tests/test_orchestrator_contracts.py tests/test_agent_lifecycle_e2e.py -q`
+  passed: 474 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Backend/lifecycle regression:
+  `python -m pytest tests/test_agent_lifecycle_e2e.py tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_claude_cache_tokens.py -q`
+  passed: 240 tests.
+- Static checks:
+  `python -m ruff check ...` over the touched source/tests passed;
+  `python -m pyright ...` over the touched source passed.
+
+---
+
+## Legacy Human Review normalization
+
+## Goal
+
+Let existing boards continue after the Human Review policy change without
+hand-editing every older completion handoff.
+
+## Decision
+
+Add a file-board poll-tick sweep that runs before candidate fetch. If a
+terminal `Human Review` card is a legacy completion handoff, Symphony appends
+`## Human Review Normalized` and moves it to `Done` so downstream dependencies
+can proceed. The sweep is intentionally narrow: it only applies to file boards,
+skips blocked-RCA tickets, skips explicit intervention/failure markers, and
+requires completion evidence such as `Confirm Done`, `## As-Is -> To-Be
+Report`, or `## Unblock Note`.
+
+This preserves the new policy for future work while unfreezing historical
+boards where `Human Review` meant "normal success awaiting confirmation".
+
+- Rejected: treating every `Human Review` dependency as resolved. That would
+  hide real critical/manual intervention.
+- Rejected: requiring the operator to manually move every old handoff to
+  `Done`. The orchestrator already has the full terminal card body and can
+  make the narrow compatibility decision.
+- Rejected: normalizing blocked-RCA `Human Review` cards. RCA source tickets
+  still reopen only after a resolved RCA with no intervention marker.
+
+## Verification
+
+- Focused legacy-normalization regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_tick_normalizes_legacy_human_review_confirm_done_before_candidates tests/test_orchestrator_dispatch.py::test_tick_normalizes_legacy_human_review_unblock_note_after_merge_failure tests/test_orchestrator_dispatch.py::test_tick_keeps_intervention_human_review_blocked tests/test_orchestrator_dispatch.py::test_tick_keeps_blocked_rca_at_human_review_blocked tests/test_orchestrator_dispatch.py::test_todo_with_human_review_blocker_remains_blocked tests/test_orchestrator_dispatch.py::test_tick_does_not_reopen_blocked_source_at_human_review -q`
+  passed: 6 tests.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py tests/test_workflow_pipeline_prompt.py tests/test_orchestrator_contracts.py tests/test_agent_lifecycle_e2e.py -q`
+  passed: 474 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Backend/lifecycle regression:
+  `python -m pytest tests/test_agent_lifecycle_e2e.py tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_claude_cache_tokens.py -q`
+  passed: 240 tests.
+- Static checks:
+  `python -m ruff check ...` over the touched source/tests passed;
+  `python -m pyright ...` over the touched source passed.
+
+---
+
+## Human Review intervention-only policy
+
+## Goal
+
+Stop treating `Human Review` as the normal success path. Normal successful
+Learn work should close as `Done`; `Human Review` should mean a real
+critical/manual intervention or explicit operator review remains.
+
+## Decision
+
+Change the default file and Linear prompts so Learn appends `## Wiki Updates`
+and `## As-Is -> To-Be Report`, runs the Final History Gate, and sets `Done`
+for normal success. The `## Human Review` branch remains available only when
+the ticket records a manual decision, credential, external system, approval, or
+critical intervention that the agent cannot resolve locally.
+
+Update the Learn contract validator to accept either the final report or an
+intervention handoff, and update blocker dependency handling so `Human Review`
+does not satisfy `blocked_by` or blocked-RCA resolution. RCA tickets now reopen
+their blocked source only when the RCA reaches a successful terminal state such
+as `Done` and neither card records operator intervention.
+
+- Rejected: keeping `Learn -> Human Review -> Done` as the default. That made
+  every successful ticket look manually blocked and caused RCA tickets parked
+  in Human Review to reopen blocked sources too early.
+- Rejected: removing `Human Review` entirely. The board still needs a terminal
+  intervention state for real manual decisions and explicit operator review.
+- Rejected: treating any terminal state as dependency success. `Blocked`,
+  `Archive`, `Duplicate`, `Cancelled`, and `Human Review` are not proof that a
+  dependency was resolved.
+
+## Verification
+
+- Focused prompt/contract/lifecycle checks:
+  `python -m pytest tests/test_orchestrator_contracts.py::test_learn_contract_requires_completion_record_or_human_review tests/test_orchestrator_contracts.py::test_learn_contract_passes_with_completion_record tests/test_orchestrator_contracts.py::test_learn_contract_passes_with_intervention_handoff tests/test_workflow_pipeline_prompt.py::test_learn_stage_writes_wiki_and_done_or_intervention_handoff tests/test_workflow_pipeline_prompt.py::test_base_prompt_declares_four_stage_pipeline_and_skip_learn tests/test_workflow_pipeline_prompt.py::test_pipeline_demo_ticket_is_a_complete_worked_example tests/test_agent_lifecycle_e2e.py::test_full_todo_to_done_pipeline_rebuilds_backend_per_phase tests/test_agent_lifecycle_e2e.py::test_lifecycle_stops_each_intermediate_backend_exactly_once tests/test_agent_lifecycle_e2e.py::test_file_board_e2e_auto_triage_dispatches_and_reaches_done -q`
+  passed: 11 tests.
+- Focused RCA blocker checks:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_todo_with_human_review_blocker_remains_blocked tests/test_orchestrator_dispatch.py::test_tick_reopens_blocked_source_after_resolved_rca tests/test_orchestrator_dispatch.py::test_tick_does_not_reopen_blocked_source_at_human_review tests/test_orchestrator_dispatch.py::test_tick_does_not_reopen_blocked_source_after_failed_rca tests/test_orchestrator_dispatch.py::test_tick_does_not_reopen_source_when_rca_needs_operator_intervention tests/test_orchestrator_dispatch.py::test_tick_does_not_reopen_source_with_recorded_operator_action -q`
+  passed: 6 tests.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py tests/test_workflow_pipeline_prompt.py tests/test_orchestrator_contracts.py tests/test_agent_lifecycle_e2e.py -q`
+  passed: 474 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Backend/lifecycle regression:
+  `python -m pytest tests/test_agent_lifecycle_e2e.py tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_claude_cache_tokens.py -q`
+  passed: 240 tests.
+- Static checks:
+  `python -m ruff check ...` over the touched source/tests passed;
+  `python -m pyright ...` over the touched source passed.
+
+---
+
+## Blocked RCA source reopen enforcement
+
+## Goal
+
+Make the orchestrator, not only the RCA worker prompt, responsible for moving
+a source ticket out of `Blocked` once its RCA ticket is resolved.
+
+## Decision
+
+Add a poll-tick sweep for resolved blocked-RCA tickets. When a Symphony-created
+RCA card reaches a successful terminal state such as `Done`, and neither the
+RCA nor the source records operator intervention, the orchestrator finds the
+structured source ticket, appends `## Blocked RCA Resolved`, and moves the
+source back to the configured Todo lane. RCA cards that end in failure or
+intervention terminals such as `Blocked`, `Cancelled`, `Archive`, or
+`Human Review` do not reopen the source.
+
+This fixes the live `127.0.0.1:9999` Jira Symphony board behavior where
+RCA handoff state lived only in the worker prompt. The prompt was correct, but
+the control plane did not enforce the handoff. After the Human Review policy
+above, that enforcement deliberately excludes `Human Review`; only a resolved
+RCA with no intervention marker can reopen the source.
+
+- Rejected: rely only on the RCA worker to edit the source ticket. That is the
+  fragile path that failed on the live board.
+- Rejected: reopen the source when the RCA is still `Blocked` or in
+  `Human Review`. That would hide a real unresolved blocker or manual
+  intervention requirement.
+- Rejected: send the source straight to Done. The source must continue through
+  the configured Todo/In Progress/Verify/Learn workflow after unblocking.
+
+## Verification
+
+- Focused RCA handoff regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_tick_reopens_blocked_source_after_resolved_rca tests/test_orchestrator_dispatch.py::test_tick_does_not_reopen_blocked_source_after_failed_rca -q`
+  passed: 2 tests.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py -q`
+  passed: 398 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+
+---
+
+## Terminal cleanup grace clock
+
+## Goal
+
+Prevent a terminal ticket from holding a worker slot indefinitely when the
+backend keeps emitting activity after the board already moved terminal.
+
+## Decision
+
+Track `RunningEntry.terminal_seen_at` and measure terminal cleanup grace from
+the first reconcile tick that observes the terminal tracker state. Previously
+the cleanup grace was measured from `last_codex_timestamp`; a chatty backend
+could keep that fresh forever, so a card in `Human Review` or `Done` stayed in
+the live `running` map and blocked later work.
+
+This was visible on the live `127.0.0.1:9999` board after `RCA-1` reached
+`Human Review`: `/api/v1/state` still showed it running and reconciliation
+kept logging `reconcile_skip_active_worker`.
+
+- Rejected: lower the global stall timeout. That targets active work, not
+  terminal cleanup after a tracker state change.
+- Rejected: cancel immediately on any terminal observation. A short grace
+  window still protects workers that are already exiting cleanly.
+- Rejected: use latest backend progress as the terminal grace clock. That is
+  the behavior that let keepalives starve cleanup.
+
+## Verification
+
+- Focused terminal cleanup regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_reconcile_terminate_terminal_commits_before_remove tests/test_orchestrator_dispatch.py::test_reconcile_terminate_terminal_skips_commit_when_auto_off tests/test_orchestrator_dispatch.py::test_reconcile_terminal_cleanup_uses_terminal_seen_not_event_age -q`
+  passed: 3 tests.
+
+---
+
+## AGY state-dir doctor guard
+
+## Goal
+
+Catch managed-sandbox AGY failures before a ticket enters the worker loop.
+
+## Decision
+
+Add an AGY-specific doctor check for
+`~/.gemini/antigravity-cli` writability. The real AGY E2E failed inside the
+managed Codex sandbox with `operation not permitted` while AGY tried to create
+`brain/`, `conversations/`, and `cache/` files under that directory. Rerunning
+the same E2E outside the sandbox passed, proving the failure was an operator
+environment constraint, not a Symphony stage-transition bug.
+
+The guard is intentionally a preflight failure for `agent.kind: agy` only.
+Symphony should not dispatch AGY when the CLI cannot write its own state; it
+should tell the operator to run outside the sandbox or grant the necessary
+home-directory write access.
+
+- Rejected: redirecting `HOME` to a workspace-local directory. AGY auth did
+  not survive simple home redirection and attempted a fresh OAuth flow.
+- Rejected: copying OAuth credentials into ticket workspaces. That would be a
+  security regression.
+- Rejected: treating AGY empty output as success. The board must still move
+  through real states and evidence.
+
+## Verification
+
+- Focused doctor regression:
+  `python -m pytest tests/test_doctor.py::test_agy_state_dir_skipped_for_non_agy tests/test_doctor.py::test_agy_state_dir_passes_when_home_state_is_writable tests/test_doctor.py::test_agy_state_dir_fails_when_state_is_not_writable tests/test_doctor.py::test_run_checks_returns_one_result_per_check -q`
+  passed: 4 tests.
+- AGY real-agent E2E:
+  sandboxed run failed with AGY `operation not permitted` under
+  `~/.gemini/antigravity-cli`; unsandboxed rerun
+  `env SYMPHONY_E2E_AGENTS=agy SYMPHONY_E2E_TURN_TIMEOUT_MS=480000 /opt/anaconda3/bin/python /private/tmp/symphony-real-agent-e2e-yIeicD/run_e2e.py`
+  passed in 494.9 seconds with ticket `E2E-AGY` ending in `Done`.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py -q`
+  passed: 396 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Backend/lifecycle regression:
+  `python -m pytest tests/test_agent_lifecycle_e2e.py tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_claude_cache_tokens.py -q`
+  passed: 240 tests.
+- Static checks:
+  `python -m ruff check ...` over the touched source/tests passed;
+  `python -m pyright ...` over the touched source passed.
+
+---
+
+## Idle paused RCA resume
+
+## Goal
+
+Let an operator resume a blocked-RCA worker that was born idle-paused from a
+persisted runtime flag, even when no running worker exists yet.
+
+## Decision
+
+Extend resumable issue resolution to include `_paused_issue_ids`, not only
+running workers and retry-held workers. The live Jira board exposed this after
+a newly-created `RCA-1` inherited an old pause flag: `/api/v1/RCA-1/resume`
+returned `issue_not_resumable`, so the operator had no API path to release the
+idle-paused RCA.
+
+The source ticket still stays Blocked until the RCA resolves; this change only
+restores the control-plane path needed to start an intentionally paused issue.
+
+- Rejected: auto-clearing pause flags during dispatch eligibility. That would
+  ignore real operator pauses.
+- Rejected: making the HTTP route accept any identifier. Resume should still
+  be constrained to known paused/running/retry-held issues.
+- Rejected: moving source tickets back to Todo directly. The RCA ticket must
+  resolve the blocker first.
+
+## Verification
+
+- Focused resume regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_find_resumable_issue_id_resolves_idle_paused_file_identifier tests/test_server_routes.py::test_resume_route_releases_idle_paused_file_issue tests/test_server_routes.py::test_resume_route_releases_paused_retry_worker -q`
+  passed: 3 tests.
+- Live board proof:
+  `POST /api/v1/RCA-1/resume` returned `changed: true`; subsequent
+  `/api/v1/state` showed `RCA-1` running and `paused: false`.
+
+---
+
+## AGY fresh-turn default
+
+## Goal
+
+Keep AGY workers from losing staged Symphony prompts after the first state
+transition.
+
+## Decision
+
+Change AGY's default `resume_across_turns` to `false`. The real AGY E2E
+advanced `Todo -> In Progress` on turn 1, then continuation turns with
+`agy --print - --continue` returned no actionable state change and eventually
+blocked on the no-stage-change watchdog. Starting fresh per turn keeps the
+current stage prompt authoritative. Workflows that know their local AGY CLI
+handles continuation can still opt in with `agy.resume_across_turns: true`.
+
+- Rejected: raising no-stage-change budgets. That would hide a prompt-delivery
+  failure and slow down blocker detection.
+- Rejected: disabling AGY continuation support entirely. The explicit opt-in
+  remains useful for operators whose AGY build handles `--continue` correctly.
+- Rejected: treating empty AGY continuation output as success. The board must
+  move stages or surface a real blocker.
+
+## Verification
+
+- Focused AGY regression:
+  `python -m pytest tests/test_backends.py::test_agy_workflow_config_defaults_and_antigravity_alias tests/test_backends.py::test_agy_plain_text_stdout_is_completed_and_appends_permissions tests/test_backends.py::test_agy_continuation_adds_continue_without_duplicate_permissions tests/test_backends.py::test_agy_default_continuation_starts_fresh_turn -q`
+  passed: 4 tests.
+- Broader affected regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py tests/test_webapi.py tests/test_server_routes.py tests/test_workflow.py tests/test_tracker_file.py tests/test_workflow_preflight_full.py tests/test_doctor.py tests/test_cli_run_startup.py tests/test_web_static_contract.py -q`
+  passed: 393 tests, 2 existing aiohttp `NotAppKeyWarning` warnings.
+- Backend/lifecycle regression:
+  `python -m pytest tests/test_agent_lifecycle_e2e.py tests/test_backend_contract.py tests/test_backends.py tests/test_backends_edges.py tests/test_backends_lifecycle.py tests/test_codex_approvals.py tests/test_claude_cache_tokens.py -q`
+  passed: 240 tests.
+- Static checks:
+  `python -m ruff check ...` over the touched source/tests passed;
+  `python -m pyright ...` over the touched source passed.
