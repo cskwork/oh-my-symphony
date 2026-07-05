@@ -712,6 +712,9 @@ worker crashes on the existing auto-pause path so unclear failures still stop
 for operator inspection. OpenCode `exit -15` is also treated as retryable
 because the live Jira board showed OpenCode throttling can surface with no
 stderr and only that SIGTERM-shaped exit code.
+If an older run already persisted that OpenCode auto-pause with a retry
+attempt, startup now clears only the pause fields and lets the saved retry
+attempt dispatch normally.
 
 - Rejected: unpausing every `turn_error`. That would hide real backend crashes
   and keep restarting tickets that need operator action.
@@ -720,6 +723,8 @@ stderr and only that SIGTERM-shaped exit code.
 - Rejected: clearing existing operator pauses. A manually paused ticket still
   remains held; this change only avoids creating a new auto-pause for
   retryable errors.
+- Rejected: treating all `exit -15` rows as OpenCode throttling. Persisted
+  pause text must identify OpenCode before Symphony releases a legacy pause.
 
 ## Verification
 
@@ -731,5 +736,13 @@ stderr and only that SIGTERM-shaped exit code.
 - Surrounding pause/retry regression check:
   `python -m pytest tests/test_orchestrator_dispatch.py::test_worker_exit_preserves_pause_flag_for_held_ticket tests/test_orchestrator_dispatch.py::test_worker_exit_retryable_rate_limit_schedules_retry_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_opencode_sigterm_schedules_retry_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_hard_failure_with_visible_reason tests/test_orchestrator_dispatch.py::test_eligible_refuses_paused_ticket_for_dispatch_and_retry tests/test_orchestrator_dispatch.py::test_retry_timer_reparks_paused_ticket_without_dispatching tests/test_orchestrator_dispatch.py::test_resume_worker_releases_held_retry_immediately tests/test_orchestrator_dispatch.py::test_snapshot_retry_row_includes_paused_flag -q`
   plus `test_retryable_persisted_pause_restarts_as_retry` passed: 9 tests.
+- Persisted pause compatibility:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_retryable_persisted_pause_restarts_as_retry tests/test_orchestrator_dispatch.py::test_non_opencode_persisted_sigterm_pause_stays_paused -q`
+  passed: 2 tests.
 - Full dispatch regression:
-  `python -m pytest tests/test_orchestrator_dispatch.py -q` passed: 132 tests.
+  `python -m pytest tests/test_orchestrator_dispatch.py -q` passed: 133 tests.
+- Static checks:
+  `python -m ruff check src/symphony/orchestrator/core.py tests/test_orchestrator_dispatch.py`
+  passed; `python -m pyright src/symphony/orchestrator/core.py` passed;
+  `git diff --check -- src/symphony/orchestrator/core.py tests/test_orchestrator_dispatch.py docs/changelog/changelog-2026-07-05.md`
+  passed.
