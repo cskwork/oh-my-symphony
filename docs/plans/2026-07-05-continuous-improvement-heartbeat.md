@@ -85,14 +85,15 @@ continuous_improvement:
   enabled: false
   interval_ms: 1800000
   max_turns: 48
+  agent_kind: ""
   ticket_prefix: CI
   max_tickets_per_run: 5
   require_idle_board: true
 ```
 
-Only `enabled`, `interval_ms`, and `max_turns` are editable in the first web
-UI. The other fields are trusted workflow configuration parsed from
-`WORKFLOW.md`.
+Only `enabled`, `interval_ms`, `max_turns`, and `agent_kind` are editable in
+the first web UI. The other fields are trusted workflow configuration parsed
+from `WORKFLOW.md`.
 
 Parsing rules:
 
@@ -106,6 +107,11 @@ Parsing rules:
   and defaults to `48` (24 hours at the default 30-minute interval). `0` means
   unlimited turns.
 - `ticket_prefix` is identifier-safe and defaults to `CI`.
+- `agent_kind` selects which agent backend handles the CI tickets the
+  heartbeat creates (the registrar stamps it on each created ticket, reusing
+  the existing per-ticket `agent_kind` override). Accepts only `""` (inherit
+  the workflow default agent) or a member of `SUPPORTED_AGENT_KINDS` (agy,
+  codex, claude, gemini, kiro, opencode, pi). Defaults to `""`.
 
 ## Turn Budget
 
@@ -177,6 +183,7 @@ Expose read-only heartbeat status through `/api/v1/state` or
 - `interval_ms`
 - `max_turns`
 - `turns_used`
+- `agent_kind`
 - `in_flight`
 - `current_phase`
 - `last_started_at`
@@ -269,8 +276,10 @@ Docs:
 - [ ] Add `ContinuousImprovementConfig`.
 - [ ] Add strict parsing helpers for booleans and interval values.
 - [ ] Add `ServiceConfig.continuous_improvement`.
+- [ ] Add failing tests for `agent_kind` validation (default `""` inherit,
+  accepts SUPPORTED_AGENT_KINDS members, rejects unknown/non-string).
 - [ ] Add `set_continuous_improvement_settings(...)` covering `enabled`,
-  `interval_ms`, and `max_turns`.
+  `interval_ms`, `max_turns`, and `agent_kind`.
 - [ ] Verify with `python -m pytest tests/test_workflow.py -q`.
 - [ ] Commit `feat: add continuous improvement workflow config`.
 
@@ -289,7 +298,8 @@ Docs:
 
 - [ ] Add failing API tests for `GET /api/v1/workflow` including the config.
 - [ ] Add failing API tests for
-  `PUT /api/v1/workflow/continuous-improvement` including `max_turns`.
+  `PUT /api/v1/workflow/continuous-improvement` including `max_turns` and
+  `agent_kind` (validated against `SUPPORTED_AGENT_KINDS`, `""` allowed).
 - [ ] Add failing API tests for
   `POST /api/v1/workflow/continuous-improvement/reset-turns`.
 - [ ] Add failing validation tests for malformed JSON, wrong schema, Host guard,
@@ -299,8 +309,9 @@ Docs:
 - [ ] Add the workflow payload field and strict PUT handler.
 - [ ] Add the reset-turns POST handler delegating to the orchestrator counter.
 - [ ] Reload workflow state after mutation.
-- [ ] Add a settings card exposing enable/disable, interval, and max turns,
-  plus a reset-turns action with the turns-used counter.
+- [ ] Add a settings card exposing enable/disable, interval, max turns, and
+  an agent-kind dropdown (default = workflow agent), plus a reset-turns
+  action with the turns-used counter.
 - [ ] Add read-only status rendering.
 - [ ] Verify with `python -m pytest tests/test_webapi.py -q`.
 - [ ] Verify with `python -m pytest tests/test_web_static_contract.py -q`.
@@ -401,7 +412,8 @@ Docs:
 - [ ] Add failing tests that ticket creation uses the normal tracker path.
 - [ ] Implement `IssueFinding` normalization and fingerprinting.
 - [ ] Search active tickets for existing fingerprints.
-- [ ] Create one ticket per unique finding, capped by config.
+- [ ] Create one ticket per unique finding, capped by config, stamping the
+  configured `agent_kind` on each created ticket when set.
 - [ ] Append or skip when a duplicate active ticket exists.
 - [ ] Report unsupported trackers as status, not a crash.
 - [ ] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
