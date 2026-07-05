@@ -10,31 +10,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shlex
-import time
-import uuid
-from collections import deque
 from typing import Any, Iterable
 
-from .._shell import resolve_bash, safe_proc_wait, terminate_process_tree
-from ..errors import PortExit, ResponseError, TurnFailed, TurnTimeout
-from ..logging import get_logger
-from ..workspace import validate_agent_cwd
 from . import (
     EVENT_OTHER_MESSAGE,
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
-    EVENT_TURN_FAILED,
     BackendInit,
-    BaseAgentBackend,
     TurnResult,
 )
+from .per_turn import PerTurnCliBackend
 
 
-log = get_logger()
-
-MAX_LINE_BYTES = 10 * 1024 * 1024
 HEARTBEAT_INTERVAL_S = 30.0
 TOKEN_KEYS = {
     "cached",
@@ -61,163 +49,75 @@ TOKEN_KEYS = {
 }
 
 
-def _utc_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-class OpenCodeBackend(BaseAgentBackend):
+class OpenCodeBackend(PerTurnCliBackend):
     """One subprocess per turn; parses OpenCode raw JSON events."""
+
+    def __init__(self, init: BackendInit) -> None:
+        cfg = init.cfg.opencode
+        super().__init__(
+            init, agent_name="opencode", turn_timeout_ms=cfg.turn_timeout_ms
+        )
+        self._opencode = cfg
+        self._opencode_session_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # per-turn hooks
+    # ------------------------------------------------------------------
 
     def is_progress_event(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "opencode_heartbeat"
-
-    def __init__(self, init: BackendInit) -> None:
-        validate_agent_cwd(init.cwd, init.workspace_root)
-        self._opencode = init.cfg.opencode
-        self._cwd = init.cwd
-        self._on_event = init.on_event
-        self._session_id: str | None = None
-        self._opencode_session_id: str | None = None
-        self._closed = False
-        self._active_proc: asyncio.subprocess.Process | None = None
-        self._latest_usage: dict[str, int] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-        }
-        self._stderr_tail: deque[str] = deque(maxlen=20)
-
-    async def start(self) -> None:
-        return None
-
-    async def stop(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        proc = self._active_proc
-        if proc is not None and proc.returncode is None:
-            await terminate_process_tree(proc)
 
     @property
     def session_id(self) -> str | None:
         return self._opencode_session_id or self._session_id
 
-    @property
-    def pid(self) -> int | None:
-        return self._active_proc.pid if self._active_proc is not None else None
-
-    @property
-    def latest_usage(self) -> dict[str, int]:
-        return dict(self._latest_usage)
-
-    @property
-    def latest_rate_limits(self) -> dict[str, Any] | None:
+    def _stdin_payload(self, prompt: str) -> str | None:
+        del prompt  # travels in the command line
         return None
 
-    async def initialize(self) -> dict[str, Any]:
-        return {"agent": "opencode"}
+    def _command_for_turn(self, *, prompt: str, is_continuation: bool) -> str:
+        cmd = self._opencode.command
+        if (
+            is_continuation
+            and self._opencode.resume_across_turns
+            and self._opencode_session_id
+        ):
+            cmd = f"{cmd} --session {shlex.quote(self._opencode_session_id)}"
+        return f"{cmd} {shlex.quote(prompt)}"
 
-    async def start_session(
-        self, *, initial_prompt: str, issue_title: str | None
-    ) -> str:
-        del initial_prompt, issue_title
-        self._session_id = str(uuid.uuid4())
-        await self._emit(
-            EVENT_SESSION_STARTED,
-            {"session_id": self._session_id, "thread_id": self._session_id},
+    def _start_watchers(
+        self, proc: asyncio.subprocess.Process
+    ) -> list["asyncio.Task[None]"]:
+        return [asyncio.create_task(self._emit_heartbeats(proc))]
+
+    async def _complete_turn(self, stdout_text: str, rc: int) -> TurnResult:
+        events = self._decode_events(stdout_text)
+        response = self._response_from_events(events) if events else stdout_text
+        new_sid = self._session_id_from_events(events)
+        if new_sid and new_sid != self._opencode_session_id:
+            self._opencode_session_id = new_sid
+            await self._emit(
+                EVENT_SESSION_STARTED,
+                {"session_id": new_sid, "thread_id": new_sid},
+            )
+        self._update_usage_from_events(events)
+        # `message` key feeds _preview_from_payload -> current_turn_message so a
+        # productive turn resets the G2 empty-loop counter (opencode delivers
+        # text only at turn end).
+        payload = {
+            "message": response,
+            "result": response,
+            "response": response,
+            "session_id": self.session_id,
+            "events": events,
+            "exit_code": rc,
+        }
+        await self._emit(EVENT_TURN_COMPLETED, payload)
+        return TurnResult(
+            status=EVENT_TURN_COMPLETED,
+            turn_id=self.session_id,
+            last_message=response[:400],
         )
-        return self._session_id
-
-    async def run_turn(self, *, prompt: str, is_continuation: bool) -> TurnResult:
-        if self._closed:
-            raise ResponseError("backend is closed")
-
-        command = self._command_for_turn(prompt=prompt, is_continuation=is_continuation)
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                resolve_bash(),
-                "-lc",
-                command,
-                cwd=str(self._cwd),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy(),
-                limit=MAX_LINE_BYTES,
-                start_new_session=os.name == "posix",
-            )
-        except FileNotFoundError as exc:
-            raise PortExit("bash not available", error=str(exc)) from exc
-
-        if self._closed:
-            await self._reap(proc)
-            raise ResponseError("backend closed during spawn")
-        self._active_proc = proc
-        heartbeat_task = asyncio.create_task(self._emit_heartbeats(proc))
-        try:
-            timeout_s = self._opencode.turn_timeout_ms / 1000.0
-            assert proc.stdout is not None and proc.stderr is not None
-            stdout_task = asyncio.create_task(proc.stdout.read())
-            stderr_task = asyncio.create_task(proc.stderr.read())
-            try:
-                stdout, stderr, safe_rc = await asyncio.wait_for(
-                    asyncio.gather(stdout_task, stderr_task, safe_proc_wait(proc)),
-                    timeout=timeout_s,
-                )
-            except asyncio.TimeoutError as exc:
-                stdout_task.cancel()
-                stderr_task.cancel()
-                await self._reap(proc)
-                await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
-                raise TurnTimeout("opencode turn timed out") from exc
-
-            rc = safe_rc if safe_rc is not None else (proc.returncode or 0)
-            self._capture_stderr(stderr or b"")
-            if rc != 0:
-                err_msg = self._stderr_blob()
-                payload = {
-                    "reason": f"opencode exit {rc}"
-                    + (f"; stderr: {err_msg}" if err_msg else ""),
-                    "stderr_tail": list(self._stderr_tail),
-                    "stderr": err_msg,
-                }
-                await self._emit(EVENT_TURN_FAILED, payload)
-                raise TurnFailed(err_msg or f"opencode failed with exit {rc}")
-
-            result_text = (stdout or b"").decode("utf-8", errors="replace").strip()
-            events = self._decode_events(result_text)
-            response = self._response_from_events(events) if events else result_text
-            new_sid = self._session_id_from_events(events)
-            if new_sid and new_sid != self._opencode_session_id:
-                self._opencode_session_id = new_sid
-                await self._emit(
-                    EVENT_SESSION_STARTED,
-                    {"session_id": new_sid, "thread_id": new_sid},
-                )
-            self._update_usage_from_events(events)
-            # `message` key feeds _preview_from_payload -> current_turn_message so a
-            # productive turn resets the G2 empty-loop counter (opencode delivers
-            # text only at turn end).
-            payload = {
-                "message": response,
-                "result": response,
-                "response": response,
-                "session_id": self.session_id,
-                "events": events,
-                "exit_code": rc,
-            }
-            await self._emit(EVENT_TURN_COMPLETED, payload)
-            return TurnResult(
-                status=EVENT_TURN_COMPLETED,
-                turn_id=self.session_id,
-                last_message=response[:400],
-            )
-        except asyncio.CancelledError:
-            await self._reap(proc)
-            raise
-        finally:
-            heartbeat_task.cancel()
-            self._active_proc = None
 
     async def _emit_heartbeats(self, proc: asyncio.subprocess.Process) -> None:
         # OpenCode emits no JSON until the per-turn subprocess exits; liveness
@@ -231,15 +131,9 @@ class OpenCodeBackend(BaseAgentBackend):
                 {"type": "opencode_heartbeat", "pid": proc.pid},
             )
 
-    def _command_for_turn(self, *, prompt: str, is_continuation: bool) -> str:
-        cmd = self._opencode.command
-        if (
-            is_continuation
-            and self._opencode.resume_across_turns
-            and self._opencode_session_id
-        ):
-            cmd = f"{cmd} --session {shlex.quote(self._opencode_session_id)}"
-        return f"{cmd} {shlex.quote(prompt)}"
+    # ------------------------------------------------------------------
+    # JSON event decoding
+    # ------------------------------------------------------------------
 
     def _decode_events(self, text: str) -> list[dict[str, Any]]:
         if not text:
@@ -346,36 +240,6 @@ class OpenCodeBackend(BaseAgentBackend):
         self._latest_usage["input_tokens"] += input_tokens
         self._latest_usage["output_tokens"] += output_tokens
         self._latest_usage["total_tokens"] += total_tokens
-
-    def _capture_stderr(self, stderr: bytes) -> None:
-        text = stderr.decode("utf-8", errors="replace")
-        for line in text.splitlines():
-            if line:
-                self._stderr_tail.append(line)
-
-    def _stderr_blob(self) -> str:
-        if not self._stderr_tail:
-            return ""
-        joined = " | ".join(self._stderr_tail)
-        return joined if len(joined) <= 400 else joined[-400:]
-
-    async def _reap(self, proc: asyncio.subprocess.Process) -> None:
-        await terminate_process_tree(proc)
-
-    async def _emit(self, event: str, payload: dict[str, Any]) -> None:
-        try:
-            await self._on_event(
-                {
-                    "event": event,
-                    "timestamp": _utc_iso(),
-                    "payload": payload if isinstance(payload, dict) else {"data": payload},
-                    "usage": dict(self._latest_usage),
-                    "rate_limits": None,
-                    "agent_pid": self.pid,
-                }
-            )
-        except Exception as exc:
-            log.warning("event_callback_failed", error=str(exc))
 
 
 def _extract_session_id(event: dict[str, Any]) -> str | None:

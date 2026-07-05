@@ -30,7 +30,6 @@ from typing import Any
 import pytest
 
 import symphony.backends.claude_code as claude_module
-import symphony.backends.opencode as opencode_module
 import symphony.backends.per_turn as per_turn_module
 import symphony.backends.pi as pi_module
 from symphony.backends import (
@@ -206,7 +205,7 @@ class TestKiroBackendContract(PerTurnBackendContract):
 
 class TestOpenCodeBackendContract(PerTurnBackendContract):
     kind = "opencode"
-    module = opencode_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [

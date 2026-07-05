@@ -850,7 +850,7 @@ async def test_opencode_same_state_continuation_uses_reported_session_id(
     second_prompt = "second prompt"
     commands = _install_subprocess_double(
         monkeypatch,
-        opencode_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_blob=(
@@ -901,7 +901,7 @@ async def test_opencode_plain_stdout_is_valid_result_until_json_schema_stabilize
     cwd.mkdir()
     commands = _install_subprocess_double(
         monkeypatch,
-        opencode_module,
+        per_turn_module,
         [
             _FakeSubprocess(stdout_blob=b"plain answer"),
             _FakeSubprocess(stdout_blob=b"still plain"),
@@ -936,7 +936,7 @@ async def test_opencode_turn_completed_payload_carries_message_for_preview(
 
     _install_subprocess_double(
         monkeypatch,
-        opencode_module,
+        per_turn_module,
         [_FakeSubprocess(stdout_blob=b"plain answer")],
     )
     backend = OpenCodeBackend(
@@ -974,7 +974,7 @@ async def test_opencode_extracts_text_from_jsonl_part_frames(
         b'"text":"Learn summary: schema drift resolved."}}\n'
     )
     _install_subprocess_double(
-        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+        monkeypatch, per_turn_module, [_FakeSubprocess(stdout_blob=stdout)]
     )
     backend = OpenCodeBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=record)
@@ -1004,7 +1004,7 @@ async def test_opencode_extracts_usage_from_jsonl_step_finish_part_tokens(
         b'"cache":{"write":0,"read":12224}}}}\n'
     )
     _install_subprocess_double(
-        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+        monkeypatch, per_turn_module, [_FakeSubprocess(stdout_blob=stdout)]
     )
     backend = OpenCodeBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
@@ -1035,7 +1035,7 @@ async def test_opencode_preserves_step_finish_cache_and_reasoning_token_shape(
         b'"cache":{"write":256,"read":880}}}}\n'
     )
     _install_subprocess_double(
-        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+        monkeypatch, per_turn_module, [_FakeSubprocess(stdout_blob=stdout)]
     )
     backend = OpenCodeBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
@@ -1066,7 +1066,7 @@ async def test_opencode_does_not_double_count_explicit_and_nested_cache_tokens(
         b'"cache_input_tokens":10,"cache":{"read":10}}}}\n'
     )
     _install_subprocess_double(
-        monkeypatch, opencode_module, [_FakeSubprocess(stdout_blob=stdout)]
+        monkeypatch, per_turn_module, [_FakeSubprocess(stdout_blob=stdout)]
     )
     backend = OpenCodeBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
@@ -1106,11 +1106,11 @@ async def test_opencode_emits_heartbeats_while_turn_subprocess_runs(
         return 0
 
     monkeypatch.setattr(
-        opencode_module.asyncio,
+        per_turn_module.asyncio,
         "create_subprocess_exec",
         fake_create_subprocess_exec,
     )
-    monkeypatch.setattr(opencode_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(per_turn_module, "safe_proc_wait", fake_safe_proc_wait)
     monkeypatch.setattr(opencode_module, "HEARTBEAT_INTERVAL_S", 0.03)
     backend = OpenCodeBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=record)
@@ -1155,12 +1155,12 @@ async def test_opencode_run_turn_cancellation_terminates_active_subprocess(
         return -15
 
     monkeypatch.setattr(
-        opencode_module.asyncio,
+        per_turn_module.asyncio,
         "create_subprocess_exec",
         fake_create_subprocess_exec,
     )
-    monkeypatch.setattr(opencode_module, "safe_proc_wait", fake_safe_proc_wait)
-    monkeypatch.setattr(opencode_module, "terminate_process_tree", fake_terminate_process_tree)
+    monkeypatch.setattr(per_turn_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(per_turn_module, "terminate_process_tree", fake_terminate_process_tree)
     backend = OpenCodeBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
