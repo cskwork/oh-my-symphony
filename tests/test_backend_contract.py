@@ -32,8 +32,8 @@ import pytest
 import symphony.backends.claude_code as claude_module
 import symphony.backends.gemini as gemini_module
 import symphony.backends.opencode as opencode_module
+import symphony.backends.per_turn as per_turn_module
 import symphony.backends.pi as pi_module
-import symphony.backends.plain_cli as plain_cli_module
 from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
@@ -191,7 +191,7 @@ class TestGeminiBackendContract(PerTurnBackendContract):
 
 class TestAgyBackendContract(PerTurnBackendContract):
     kind = "agy"
-    module = plain_cli_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [_FakeSubprocess(stdout_blob=b"done")]
@@ -199,7 +199,7 @@ class TestAgyBackendContract(PerTurnBackendContract):
 
 class TestKiroBackendContract(PerTurnBackendContract):
     kind = "kiro"
-    module = plain_cli_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [_FakeSubprocess(stdout_blob=b"done")]

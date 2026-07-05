@@ -23,7 +23,7 @@ import symphony.backends.claude_code as claude_module
 import symphony.backends.gemini as gemini_module
 import symphony.backends.opencode as opencode_module
 import symphony.backends.pi as pi_module
-import symphony.backends.plain_cli as plain_cli_module
+import symphony.backends.per_turn as per_turn_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
     EVENT_TURN_COMPLETED,
@@ -1348,7 +1348,7 @@ async def test_agy_plain_text_stdout_is_completed_and_appends_permissions(
     )
     sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
     proc = _FakeSubprocess(stdout_blob=b"agy result\n")
-    commands = _install_subprocess_double(monkeypatch, plain_cli_module, [proc])
+    commands = _install_subprocess_double(monkeypatch, per_turn_module, [proc])
 
     result = await backend.run_turn(prompt="first", is_continuation=False)
 
@@ -1382,7 +1382,7 @@ async def test_agy_continuation_adds_continue_without_duplicate_permissions(
     await backend.start_session(initial_prompt="hi", issue_title="Fix login")
     commands = _install_subprocess_double(
         monkeypatch,
-        plain_cli_module,
+        per_turn_module,
         [
             _FakeSubprocess(stdout_blob=b"one\n"),
             _FakeSubprocess(stdout_blob=b"two\n"),
@@ -1410,7 +1410,7 @@ async def test_kiro_plain_text_stdout_is_completed_with_stdin_prompt(
     )
     sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
     proc = _FakeSubprocess(stdout_blob=b"kiro result\n")
-    commands = _install_subprocess_double(monkeypatch, plain_cli_module, [proc])
+    commands = _install_subprocess_double(monkeypatch, per_turn_module, [proc])
 
     result = await backend.run_turn(prompt="first", is_continuation=False)
 
@@ -1437,7 +1437,7 @@ async def test_kiro_continuation_adds_resume_when_enabled(
     await backend.start_session(initial_prompt="hi", issue_title="Fix login")
     commands = _install_subprocess_double(
         monkeypatch,
-        plain_cli_module,
+        per_turn_module,
         [
             _FakeSubprocess(stdout_blob=b"one\n"),
             _FakeSubprocess(stdout_blob=b"two\n"),

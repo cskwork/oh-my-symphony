@@ -20,13 +20,14 @@ class KiroBackend(PlainCliBackend):
             continuation_flag="--resume",
         )
 
-    def _command_for_turn(self, *, is_continuation: bool) -> str:
+    def _command_for_turn(self, *, prompt: str, is_continuation: bool) -> str:
         """Keep Kiro options before the positional chat input.
 
         `kiro-cli chat` accepts the rendered prompt as `[INPUT]`. The default
         command uses `"$(cat)"` as that positional argument, so continuation
         flags must be inserted before it instead of appended after it.
         """
+        del prompt  # travels via stdin ($(cat) in the command)
         command = self._command
         if not (
             is_continuation
