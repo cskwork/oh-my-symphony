@@ -22,7 +22,7 @@ those helpers ripples both places at once.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,6 +32,7 @@ import pytest
 from symphony import orchestrator as orch_mod
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator, RunningEntry
+from symphony.trackers.file import FileBoardTracker
 from symphony.workflow import (
     AgentConfig,
     ClaudeConfig,
@@ -97,11 +98,24 @@ class _FakeWorkspace:
 class _FakeWorkspaceManager:
     def __init__(self, path: Path) -> None:
         self._path = path
+        self.root = path.parent
         self.after_run_paths: list[Path] = []
 
     def path_for(self, identifier: str) -> Path:
         del identifier
         return self._path
+
+    def update_hooks(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        return None
+
+    def update_reuse_policy(self, reuse_policy: str) -> None:
+        del reuse_policy
+        return None
+
+    def update_hook_env(self, hook_env: dict[str, str]) -> None:
+        del hook_env
+        return None
 
     async def create_or_reuse(self, identifier: str) -> _FakeWorkspace:
         del identifier
@@ -114,6 +128,66 @@ class _FakeWorkspaceManager:
     async def after_run_best_effort(self, path: Path) -> None:
         self.after_run_paths.append(path)
         return None
+
+
+class _FileBoardLifecycleBackend:
+    """Fake backend that drives a real Markdown board through active states."""
+
+    transitions = {
+        "In Progress": "Verify",
+        "Verify": "Learn",
+        "Learn": "Human Review",
+    }
+
+    def __init__(self, cfg: ServiceConfig, cwd: Path, init_id: int) -> None:
+        self.cfg = cfg
+        self.cwd = cwd
+        self.init_id = init_id
+        self.identifier = ""
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.operated_states: list[str] = []
+
+    async def start(self) -> None:
+        self.calls.append(("start", {}))
+
+    async def initialize(self) -> None:
+        self.calls.append(("initialize", {}))
+
+    async def start_session(self, *, initial_prompt: str, issue_title: str) -> None:
+        self.identifier = issue_title.split(":", 1)[0]
+        self.calls.append(
+            ("start_session", {"initial_prompt": initial_prompt, "issue_title": issue_title})
+        )
+
+    async def run_turn(self, *, prompt: str, is_continuation: bool) -> None:
+        self.calls.append(("run_turn", {"prompt": prompt, "is_continuation": is_continuation}))
+        tracker = FileBoardTracker(self.cfg.tracker)
+        try:
+            issue = tracker.fetch_issue_full_by_id(self.identifier)
+            assert issue is not None
+            next_state = self.transitions[issue.state]
+            self._write_contract_artifacts(issue.identifier)
+            tracker.append_note(
+                issue,
+                "Agent Board E2E",
+                f"Backend {self.init_id} moved `{issue.state}` to `{next_state}`.",
+            )
+            tracker.update_state(issue, next_state)
+            self.operated_states.append(issue.state)
+        finally:
+            tracker.close()
+
+    async def stop(self) -> None:
+        self.calls.append(("stop", {}))
+
+    def _write_contract_artifacts(self, identifier: str) -> None:
+        work_dir = self.cwd / "docs" / identifier / "work"
+        qa_dir = self.cwd / "docs" / identifier / "qa"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        qa_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "notes.md").write_text("real file-board e2e notes\n", encoding="utf-8")
+        (qa_dir / "version.log").write_text("pytest: simulated pass\n", encoding="utf-8")
+        (qa_dir / "security.md").write_text("security audit: pass\n", encoding="utf-8")
 
 
 def _make_lifecycle_config(*, max_turns: int = 12) -> ServiceConfig:
@@ -186,6 +260,29 @@ def _make_lifecycle_config(*, max_turns: int = 12) -> ServiceConfig:
         tui=TuiConfig(language="en", visible_lanes=5),
         prompts=PromptConfig(base_template=base_template, stage_templates=stage_templates),
         prompt_template="LEGACY {{ issue.state }}",
+    )
+
+
+def _make_file_board_lifecycle_config(
+    tmp_path: Path, *, board_root: Path, workspace_path: Path
+) -> ServiceConfig:
+    cfg = _make_lifecycle_config(max_turns=12)
+    workflow_path = tmp_path / "WORKFLOW.md"
+    workflow_path.write_text("---\ntracker: {kind: file}\n---\n", encoding="utf-8")
+    return replace(
+        cfg,
+        workflow_path=workflow_path,
+        workspace_root=workspace_path.parent,
+        tracker=replace(cfg.tracker, board_root=board_root, archive_after_days=0),
+        agent=replace(
+            cfg.agent,
+            max_concurrent_agents=1,
+            max_concurrent_agents_by_state={
+                "in progress": 1,
+                "verify": 1,
+                "learn": 1,
+            },
+        ),
     )
 
 
@@ -275,6 +372,24 @@ def _install_backend_factory(monkeypatch: pytest.MonkeyPatch) -> list[_FakeBacke
     def _factory(init: Any) -> _FakeBackend:
         b = _FakeBackend(init_id=len(instances))
         b.calls.append(("factory", {"agent_kind": init.cfg.agent.kind}))
+        instances.append(b)
+        return b
+
+    monkeypatch.setattr(orch_mod, "build_backend", _factory)
+    return instances
+
+
+def _install_file_board_backend_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[_FileBoardLifecycleBackend]:
+    instances: list[_FileBoardLifecycleBackend] = []
+
+    def _factory(init: Any) -> _FileBoardLifecycleBackend:
+        b = _FileBoardLifecycleBackend(
+            cfg=init.cfg,
+            cwd=init.cwd,
+            init_id=len(instances),
+        )
         instances.append(b)
         return b
 
@@ -504,3 +619,91 @@ def test_lifecycle_done_callback_uses_registered_running_id(
     assert issue.id not in o._running
     # And the worker should have exited cleanly (no retry pending).
     assert issue.id not in o._retry
+
+
+def test_file_board_e2e_auto_triage_dispatches_and_reaches_human_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real Markdown board files move through the automated Kanban lifecycle.
+
+    This guards the operator-facing flow: a Todo card is triaged by the
+    orchestrator, dispatched from the file board, advanced by a worker through
+    Verify and Learn, then released from the running slot at Human Review.
+    """
+
+    board_root = tmp_path / "kanban"
+    workspace_path = tmp_path / "workspace" / "LIFE-1"
+    cfg = _make_file_board_lifecycle_config(
+        tmp_path,
+        board_root=board_root,
+        workspace_path=workspace_path,
+    )
+    tracker = FileBoardTracker(cfg.tracker)
+    tracker.create(
+        identifier="LIFE-1",
+        title="file-board lifecycle fixture",
+        state="Todo",
+        priority=1,
+        labels=["e2e", "kanban"],
+        description=(
+            "## Request\n"
+            "Exercise the real file-board Kanban lifecycle.\n"
+            "\n"
+            "## Acceptance Criteria\n"
+            "- The card reaches Human Review through automated dispatch.\n"
+            "\n"
+            f"{_CONTRACT_CLEAN_BODY}"
+        ),
+        agent_kind="codex",
+    )
+    tracker.close()
+
+    o = _orch(workspace_path)
+    monkeypatch.setattr(o._workflow_state, "reload", lambda: (cfg, None))
+    instances = _install_file_board_backend_factory(monkeypatch)
+
+    async def _run_board() -> None:
+        await o._on_tick()
+        triaged_tracker = FileBoardTracker(cfg.tracker)
+        try:
+            triaged = triaged_tracker.fetch_issue_full_by_id("LIFE-1")
+        finally:
+            triaged_tracker.close()
+        assert triaged is not None
+        assert triaged.state == "In Progress"
+        assert "## Triage" in (triaged.description or "")
+        assert not o._running
+
+        await o._on_tick()
+        worker_tasks = [
+            entry.worker_task for entry in o._running.values() if entry.worker_task is not None
+        ]
+        assert worker_tasks, "second tick should dispatch the triaged file-board card"
+        await asyncio.wait_for(asyncio.gather(*worker_tasks), timeout=5)
+        await asyncio.sleep(0)
+        await o._on_tick()
+
+    asyncio.run(_run_board())
+
+    final_tracker = FileBoardTracker(cfg.tracker)
+    try:
+        final = final_tracker.fetch_issue_full_by_id("LIFE-1")
+    finally:
+        final_tracker.close()
+    assert final is not None
+    assert final.state == "Human Review"
+    assert "## Agent Board E2E" in (final.description or "")
+    assert [state for b in instances for state in b.operated_states] == [
+        "In Progress",
+        "Verify",
+        "Learn",
+    ]
+    assert all(
+        call[1]["is_continuation"] is False
+        for b in instances
+        for call in b.calls
+        if call[0] == "run_turn"
+    )
+    assert not o._running
+    assert not o._retry
+    assert not o._claimed

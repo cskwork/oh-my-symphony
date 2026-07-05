@@ -1,5 +1,39 @@
 # 2026-07-05 - Delivery reliability gates
 
+## File-board lifecycle E2E guard
+
+## Goal
+
+Prove the operator-facing Symphony Kanban automation with real Markdown board
+files, not only mocked state refreshes or prompt-string assertions.
+
+## Decision
+
+Add a file-board E2E regression in `tests/test_agent_lifecycle_e2e.py`. The
+test creates a real `kanban/LIFE-1.md` card, lets `_on_tick()` auto-triage it
+from `Todo` to `In Progress`, dispatches a fake backend through the normal
+worker path, mutates the card through `Verify` and `Learn` with the real
+`FileBoardTracker`, satisfies the stage-contract artefact checks under
+`docs/LIFE-1/`, and asserts the card reaches `Human Review` with no running,
+retry, or claimed worker slot left behind.
+
+- Rejected: relying on the existing lifecycle E2E alone. It fakes
+  `_refresh_issue_state`, so it cannot catch file-board write-back or tracker
+  parsing regressions.
+- Rejected: an API-only smoke test. `/api/v1/state` proves visibility, not
+  that the Markdown board can be mutated through the full worker lifecycle.
+- Rejected: launching a real CLI agent in unit CI. The durable regression here
+  is Symphony's board/runtime contract; backend CLI auth and model quality stay
+  in manual/live board QA.
+
+## Verification
+
+- `pytest tests/test_agent_lifecycle_e2e.py::test_file_board_e2e_auto_triage_dispatches_and_reaches_human_review -q`
+  passed: 1 test.
+- `rtk pytest tests/test_agent_lifecycle_e2e.py -q` passed: 5 tests.
+
+---
+
 ## Human Review history gate
 
 ## Goal
