@@ -41,6 +41,7 @@ class _StubOrchestrator:
     retry_ids: dict[str, str] = field(default_factory=dict)
     paused_ids: set[str] = field(default_factory=set)
     refresh_calls: int = 0
+    recover_calls: list[dict[str, str | None]] = field(default_factory=list)
 
     def snapshot(self) -> dict[str, Any]:
         return self.snapshot_payload
@@ -57,7 +58,11 @@ class _StubOrchestrator:
         return self.running_ids.get(identifier)
 
     def find_resumable_issue_id(self, identifier: str) -> str | None:
-        return self.running_ids.get(identifier) or self.retry_ids.get(identifier)
+        return (
+            self.running_ids.get(identifier)
+            or self.retry_ids.get(identifier)
+            or (identifier if identifier in self.paused_ids else None)
+        )
 
     def is_paused(self, issue_id: str) -> bool:
         return issue_id in self.paused_ids
@@ -72,6 +77,31 @@ class _StubOrchestrator:
             self.paused_ids.discard(issue_id)
             return True
         return False
+
+    async def recover_blocked_issue(
+        self,
+        identifier: str,
+        *,
+        target_state: str | None = None,
+        agent_kind: str | None = None,
+    ) -> tuple[bool, str, dict[str, str]]:
+        self.recover_calls.append(
+            {
+                "identifier": identifier,
+                "target_state": target_state,
+                "agent_kind": agent_kind,
+            }
+        )
+        rca_state = target_state or "In Progress"
+        agent = agent_kind or "codex"
+        return True, f"RCA-1 opened to unblock {identifier}", {
+            "original_state": "Blocked",
+            "target_state": "Todo",
+            "source_reopen_state": "Todo",
+            "rca_identifier": "RCA-1",
+            "rca_state": rca_state,
+            "agent_kind": agent,
+        }
 
 
 def _make_app_with_stub() -> tuple[Any, _StubOrchestrator]:
@@ -249,6 +279,27 @@ async def test_resume_route_releases_paused_retry_worker() -> None:
         await client.close()
 
 
+async def test_resume_route_releases_idle_paused_file_issue() -> None:
+    app, orch = _make_app_with_stub()
+    orch.running_ids = {}
+    orch.retry_ids = {}
+    orch.paused_ids.add("RCA-1")
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        resp = await client.post("/api/v1/RCA-1/resume")
+        assert resp.status == 200
+        payload = await resp.json()
+        assert payload["issue_identifier"] == "RCA-1"
+        assert payload["issue_id"] == "RCA-1"
+        assert payload["paused"] is False
+        assert payload["changed"] is True
+        assert "RCA-1" not in orch.paused_ids
+    finally:
+        await client.close()
+
+
 async def test_resume_route_returns_404_for_unknown_identifier(
     client: TestClient,
 ) -> None:
@@ -256,6 +307,24 @@ async def test_resume_route_returns_404_for_unknown_identifier(
     assert resp.status == 404
     payload = await resp.json()
     assert payload["error"]["code"] == "issue_not_resumable"
+
+
+async def test_recover_blocked_route_returns_recovery_payload(
+    client: TestClient,
+) -> None:
+    resp = await client.post(
+        "/api/v1/MT-1/recover-blocked",
+        json={"target_state": "In Progress", "agent_kind": "codex"},
+    )
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload["issue_identifier"] == "MT-1"
+    assert payload["rca_created"] is True
+    assert payload["target_state"] == "Todo"
+    assert payload["source_reopen_state"] == "Todo"
+    assert payload["rca_identifier"] == "RCA-1"
+    assert payload["rca_state"] == "In Progress"
+    assert payload["agent_kind"] == "codex"
 
 
 async def test_debug_tasks_route_returns_list(client: TestClient) -> None:

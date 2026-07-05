@@ -23,6 +23,7 @@ from ..notifications import NotificationsConfig
 from .coercion import _normalize_state_key
 from .constants import (
     DEFAULT_AGY_COMMAND,
+    DEFAULT_AUTO_RECOVER_BLOCKED,
     DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
     DEFAULT_BACKEND_READ_TIMEOUT_MS,
     DEFAULT_BACKEND_STALL_TIMEOUT_MS,
@@ -118,6 +119,10 @@ class AgentConfig:
     # File-board optimization: actionable Todo tickets can be routed to
     # In Progress without spending a model turn on one-line triage.
     auto_triage_actionable_todo: bool = True
+    # Self-healing path for failed terminal blockers. When a ticket lands in
+    # Blocked, the orchestrator opens one RCA ticket that can fix/prove the
+    # root cause before the source returns to the active workflow.
+    auto_recover_blocked: bool = DEFAULT_AUTO_RECOVER_BLOCKED
     # Render first-turn prompts with state-relevant ticket context instead
     # of the whole accumulating Markdown body. Workflows can opt out when a
     # custom ticket format needs full raw history in every worker prompt.
@@ -242,7 +247,7 @@ class AgyConfig:
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
-    resume_across_turns: bool = True
+    resume_across_turns: bool = False
 
 
 def _default_agy_config() -> AgyConfig:
@@ -251,7 +256,7 @@ def _default_agy_config() -> AgyConfig:
         turn_timeout_ms=DEFAULT_BACKEND_TURN_TIMEOUT_MS,
         read_timeout_ms=DEFAULT_BACKEND_READ_TIMEOUT_MS,
         stall_timeout_ms=DEFAULT_BACKEND_STALL_TIMEOUT_MS,
-        resume_across_turns=True,
+        resume_across_turns=False,
     )
 
 

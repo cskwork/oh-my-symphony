@@ -74,6 +74,7 @@
     pause: (id) => apiRequest(`/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
     resume: (id) => apiRequest(`/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
     skipLearn: (id) => apiRequest(`/${encodeURIComponent(id)}/skip-learn`, { method: 'POST' }),
+    recoverBlocked: (id) => apiRequest(`/issues/${encodeURIComponent(id)}/recover-blocked`, { method: 'POST' }),
     refresh: () => apiRequest('/refresh', { method: 'POST' }),
   };
 
@@ -331,6 +332,10 @@
 
   function isLearnState(name) {
     return String(name || '').trim().toLowerCase() === 'learn';
+  }
+
+  function isBlockedState(name) {
+    return String(name || '').trim().toLowerCase() === 'blocked';
   }
 
   // ------------------------------------------------------------------
@@ -1009,6 +1014,15 @@
         },
       }, 'Skip Learn'));
     }
+    if (!readOnly && isBlockedState(issue.state) && !liveEntry) {
+      card.appendChild(el('button', {
+        class: 'btn btn-ghost btn-sm card-action',
+        onClick: async (e) => {
+          e.stopPropagation();
+          await runControlAction(api.recoverBlocked, issue.identifier, 'RCA queued');
+        },
+      }, 'Open RCA'));
+    }
     if (liveEntry) card.appendChild(buildLiveRow(liveEntry));
     return card;
   }
@@ -1193,6 +1207,14 @@
           await runControlAction(api.skipLearn, detail.identifier, 'Skipped Learn');
         },
       }, 'Skip Learn'));
+    }
+    if (!detail.live && isBlockedState(detail.state)) {
+      container.appendChild(el('button', {
+        class: 'btn btn-ghost',
+        onClick: async () => {
+          await runControlAction(api.recoverBlocked, detail.identifier, 'RCA queued');
+        },
+      }, 'Open RCA'));
     }
     if (detail.live) container.appendChild(buildLiveSection(detail));
     container.appendChild(buildRunHistorySection(detail));

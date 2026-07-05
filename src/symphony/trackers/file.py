@@ -117,6 +117,9 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     if not lines or lines[0].strip() != _FRONT_MATTER_DELIM:
+        healed = _parse_front_matter_prefix_without_delimiters(path, lines)
+        if healed is not None:
+            return healed
         return {}, text.rstrip()
     try:
         end = next(i for i in range(1, len(lines)) if lines[i].strip() == _FRONT_MATTER_DELIM)
@@ -144,6 +147,55 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
     else:
         front = parsed
     body = "\n".join(lines[end + 1 :]).strip()
+    return front, body
+
+
+def _parse_front_matter_prefix_without_delimiters(
+    path: Path, lines: list[str]
+) -> tuple[dict[str, Any], str] | None:
+    """Recover tickets where an agent dropped only the YAML delimiters."""
+    if not lines:
+        return None
+    first_key = _YAML_TOP_LEVEL_KEY.match(lines[0])
+    if first_key is None or first_key.group("key") not in _CANONICAL_FRONT_MATTER_KEYS:
+        return None
+
+    yaml_lines: list[str] = []
+    body_start = 0
+    for index, line in enumerate(lines):
+        if not line.strip():
+            body_start = index + 1
+            break
+        if _MARKDOWN_SECTION_START.match(line):
+            body_start = index
+            break
+        key_match = _YAML_TOP_LEVEL_KEY.match(line)
+        if (
+            key_match is not None
+            and key_match.group("key") not in _CANONICAL_FRONT_MATTER_KEYS
+        ):
+            return None
+        if not _looks_like_front_matter_line(line):
+            body_start = index
+            break
+        yaml_lines.append(line)
+        body_start = index + 1
+    if not yaml_lines:
+        return None
+
+    try:
+        parsed = yaml.safe_load("\n".join(yaml_lines))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(parsed, dict) or not parsed.get("state"):
+        return None
+
+    front = dict(parsed)
+    identifier = str(front.get("id") or front.get("identifier") or path.stem)
+    front.setdefault("id", identifier)
+    front.setdefault("identifier", identifier)
+    front.setdefault("title", identifier)
+    body = "\n".join(lines[body_start:]).strip()
     return front, body
 
 
@@ -384,14 +436,13 @@ def serialize_ticket(front: dict[str, Any], body: str) -> str:
 
 
 _WARNING_HEADING_RE = re.compile(
-    r"^##\s+(?:Conflict|Budget\s+Exceeded)\s*$",
+    r"^##\s+(?:Conflict|Budget\s+Exceeded|Blocked\s+RCA)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 
 def _strip_warning_blocks(body: str) -> str:
-    """G5 — remove orchestrator-authored `## Conflict` / `## Budget Exceeded`
-    sections from a ticket body.
+    """G5 — remove orchestrator-authored warning sections from a ticket body.
 
     A section runs from its `##` heading up to (but not including) the next
     `##` heading or end-of-body. Operator-authored bodies that happen to
@@ -619,11 +670,10 @@ class FileBoardTracker:
         """TrackerClient protocol mutation hook.
 
         G5 — when the target_state is one of the configured active states,
-        strip any orchestrator-authored `## Conflict` / `## Budget Exceeded`
-        sections so board UIs do not keep showing warnings that no longer
-        apply. Operator-authored body content with the same headings is
-        preserved because the strip is gated on transition direction and
-        only fires on transition into an active state.
+        strip orchestrator-authored warning sections so board UIs do not keep
+        showing warnings that no longer apply. Operator-authored body content
+        with the same headings is preserved because the strip is gated on
+        transition direction and only fires on transition into an active state.
         """
         if target_state.lower() in self._active:
             self._strip_orchestrator_warning_sections(issue.identifier)

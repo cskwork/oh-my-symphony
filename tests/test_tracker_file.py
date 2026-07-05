@@ -228,6 +228,65 @@ def test_parse_ticket_file_auto_heals_misindented_updated_at(tmp_path):
     assert path.read_text(encoding="utf-8") == original_text
 
 
+def test_parse_ticket_file_recovers_missing_yaml_delimiters(tmp_path):
+    original_text = textwrap.dedent(
+        """\
+        state: Verify
+
+        ## QA Evidence
+
+        Gemini dropped the ticket delimiters.
+        """
+    )
+    path = _write(tmp_path, "E2E-GEMINI.md", original_text)
+
+    front, body = parse_ticket_file(path)
+    issue = issue_from_file(path)
+
+    assert front["id"] == "E2E-GEMINI"
+    assert front["identifier"] == "E2E-GEMINI"
+    assert front["title"] == "E2E-GEMINI"
+    assert front["state"] == "Verify"
+    assert body.startswith("## QA Evidence")
+    assert issue is not None
+    assert issue.identifier == "E2E-GEMINI"
+    assert issue.state == "Verify"
+    assert path.read_text(encoding="utf-8") == original_text
+
+
+def test_file_tracker_update_state_restores_yaml_for_recovered_ticket(tmp_path):
+    root = tmp_path / "board"
+    path = _write(
+        root,
+        "E2E-GEMINI.md",
+        textwrap.dedent(
+            """\
+            state: Verify
+
+            ## QA Evidence
+
+            Gemini dropped the ticket delimiters.
+            """
+        ),
+    )
+    fbt = FileBoardTracker(
+        _tracker(root, active=("Todo", "In Progress", "Verify", "Learn"))
+    )
+    issue = issue_from_file(path)
+    assert issue is not None
+
+    fbt.update_state(issue, "Learn")
+
+    after = path.read_text(encoding="utf-8")
+    front, body = parse_ticket_file(path)
+    assert after.startswith("---\n")
+    assert front["id"] == "E2E-GEMINI"
+    assert front["identifier"] == "E2E-GEMINI"
+    assert front["title"] == "E2E-GEMINI"
+    assert front["state"] == "Learn"
+    assert "## QA Evidence" in body
+
+
 def test_fetch_candidate_filters_by_active(tmp_path):
     root = tmp_path / "board"
     _write(root, "A.md", "---\nid: A\ntitle: a\nstate: Todo\n---\n")
@@ -501,10 +560,10 @@ def test_create_with_next_identifier_is_unique_under_concurrent_calls(tmp_path):
     assert files == set(identifiers)
 
 
-def test_g5_strip_conflict_and_budget_sections_on_active_restore(tmp_path):
+def test_g5_strip_conflict_budget_and_blocked_rca_sections_on_active_restore(tmp_path):
     """G5 — When the operator moves a ticket back into an active state,
-    orchestrator-authored `## Conflict` / `## Budget Exceeded` sections
-    must be stripped so board UIs don't keep showing stale warnings.
+    orchestrator-authored warning sections must be stripped so board UIs
+    don't keep showing stale warnings.
     """
     root = tmp_path / "board"
     fbt = FileBoardTracker(
@@ -520,10 +579,13 @@ def test_g5_strip_conflict_and_budget_sections_on_active_restore(tmp_path):
     fbt.append_note(issue, "Conflict", "MT-1 touched files overlap with MT-2.")
     issue = issue_from_file(fbt.find_path("MT-1"))
     fbt.append_note(issue, "Budget Exceeded", "tokens budget exceeded …")
+    issue = issue_from_file(fbt.find_path("MT-1"))
+    fbt.append_note(issue, "Blocked RCA", "RCA ticket `RCA-1` opened.")
     before_path = fbt.find_path("MT-1")
     before_body = before_path.read_text()
     assert "## Conflict" in before_body
     assert "## Budget Exceeded" in before_body
+    assert "## Blocked RCA" in before_body
 
     # Restore via update_state into an active state.
     issue = issue_from_file(before_path)
@@ -535,6 +597,9 @@ def test_g5_strip_conflict_and_budget_sections_on_active_restore(tmp_path):
     )
     assert "## Budget Exceeded" not in after_body, (
         "## Budget Exceeded section must be stripped on transition into active state"
+    )
+    assert "## Blocked RCA" not in after_body, (
+        "## Blocked RCA section must be stripped on transition into active state"
     )
     assert "Original body." in after_body, (
         "operator-authored body must survive the strip"

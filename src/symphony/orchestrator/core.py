@@ -135,6 +135,7 @@ _FAILED_BLOCKER_TERMINAL_STATES = {
     "cancelled",
     "canceled",
     "duplicate",
+    "human review",
 }
 _RETRYABLE_WORKER_ERROR_MARKERS = (
     "429",
@@ -145,6 +146,10 @@ _RETRYABLE_WORKER_ERROR_MARKERS = (
     "temporarily overloaded",
     "overloaded",
     "service unavailable",
+    "connection error",
+    "network error",
+    "connection reset",
+    "connection timed out",
     "try again later",
 )
 
@@ -283,6 +288,189 @@ def _blocker_dependency_is_resolved(
     return state in _successful_blocker_terminal_states(cfg)
 
 
+def _blocked_rca_work_state(cfg: ServiceConfig) -> str:
+    for state in cfg.tracker.active_states:
+        if normalize_state(state) == "in progress":
+            return state
+    return cfg.tracker.active_states[0] if cfg.tracker.active_states else "Todo"
+
+
+def _blocked_source_reopen_state(cfg: ServiceConfig) -> str:
+    for state in cfg.tracker.active_states:
+        if normalize_state(state) == "todo":
+            return state
+    return cfg.tracker.active_states[0] if cfg.tracker.active_states else "Todo"
+
+
+def _blocked_rca_labels(issue: Issue) -> list[str]:
+    labels: list[str] = []
+    for label in ("blocked-rca", f"source-{issue.identifier.lower()}"):
+        normalized = re.sub(r"[^a-z0-9_.-]+", "-", label.lower()).strip("-")
+        if normalized and normalized not in labels:
+            labels.append(normalized)
+    for label in issue.labels:
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _blocked_rca_identifier_prefix(issue: Issue) -> str:
+    source = re.sub(r"[^A-Za-z0-9]+", "-", issue.identifier).strip("-")
+    return f"RCA-{source or 'SOURCE'}"
+
+
+_BLOCKED_RCA_HEADING_RE = re.compile(
+    r"^##\s+Blocked\s+RCA\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_BLOCKED_RCA_RESOLVED_HEADING_RE = re.compile(
+    r"^##\s+Blocked\s+RCA\s+Resolved\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_BLOCKED_RCA_SOURCE_IDENTIFIER_RE = re.compile(
+    r"^-\s*Identifier:\s*`(?P<identifier>[^`]+)`\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_BLOCKED_RCA_TITLE_RE = re.compile(
+    r"^RCA\s+unblock\s+(?P<identifier>[^:]+):",
+    re.IGNORECASE,
+)
+_BLOCKED_RCA_OPERATOR_BLOCKER_RE = re.compile(
+    r"^##\s+(RCA\s+Blocker|Operator\s+Action|Intervention\s+Required)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_HUMAN_REVIEW_INTERVENTION_RE = re.compile(
+    r"^(##\s+(Operator\s+Action|Intervention\s+Required|History\s+Failure|"
+    r"Merge\s+Missing)|###\s+Intervention\s+Required)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_HUMAN_REVIEW_DO_NOT_CONFIRM_RE = re.compile(
+    r"^\s*`?Do\s+not\s+confirm\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_HUMAN_REVIEW_CONFIRM_DONE_RE = re.compile(
+    r"^\s*`?Confirm\s+Done`?\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_HUMAN_REVIEW_COMPLETION_RE = re.compile(
+    r"^##\s+(As-Is\s*->\s*To-Be\s+Report|Unblock\s+Note)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_HUMAN_REVIEW_MERGE_FAILURE_RE = re.compile(
+    r"^##\s+Merge\s+Failure\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _blocked_rca_already_requested(issue: Issue) -> bool:
+    return bool(_BLOCKED_RCA_HEADING_RE.search(issue.description or ""))
+
+
+def _is_blocked_rca_ticket(issue: Issue) -> bool:
+    return any(label.lower() == "blocked-rca" for label in issue.labels)
+
+
+def _looks_like_blocked_rca_ticket(issue: Issue) -> bool:
+    if _is_blocked_rca_ticket(issue):
+        return True
+    return bool(_BLOCKED_RCA_TITLE_RE.match(issue.title or ""))
+
+
+def _blocked_rca_source_identifier(issue: Issue) -> str | None:
+    description = issue.description or ""
+    match = _BLOCKED_RCA_SOURCE_IDENTIFIER_RE.search(description)
+    if match is not None:
+        return match.group("identifier").strip()
+    match = _BLOCKED_RCA_TITLE_RE.match(issue.title or "")
+    if match is not None:
+        return match.group("identifier").strip()
+    for label in issue.labels:
+        normalized = label.lower()
+        if normalized.startswith("source-"):
+            return label[len("source-") :].strip()
+    return None
+
+
+def _blocked_rca_resolution_already_recorded(issue: Issue) -> bool:
+    return bool(_BLOCKED_RCA_RESOLVED_HEADING_RE.search(issue.description or ""))
+
+
+def _blocked_rca_requires_operator_intervention(issue: Issue) -> bool:
+    return bool(_BLOCKED_RCA_OPERATOR_BLOCKER_RE.search(issue.description or ""))
+
+
+def _human_review_done_state(cfg: ServiceConfig) -> str | None:
+    for state in cfg.tracker.terminal_states:
+        if normalize_state(state).strip() == "done":
+            return state
+    return None
+
+
+def _human_review_requires_operator_intervention(issue: Issue) -> bool:
+    body = issue.description or ""
+    return bool(
+        _blocked_rca_requires_operator_intervention(issue)
+        or _HUMAN_REVIEW_INTERVENTION_RE.search(body)
+        or _HUMAN_REVIEW_DO_NOT_CONFIRM_RE.search(body)
+    )
+
+
+def _legacy_human_review_is_done(issue: Issue) -> bool:
+    if normalize_state(issue.state).strip() != "human review":
+        return False
+    if _looks_like_blocked_rca_ticket(issue):
+        return False
+    body = issue.description or ""
+    if not body or _human_review_requires_operator_intervention(issue):
+        return False
+    if _HUMAN_REVIEW_MERGE_FAILURE_RE.search(body) and not re.search(
+        r"^##\s+Unblock\s+Note\s*$",
+        body,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        return False
+    return bool(
+        _HUMAN_REVIEW_CONFIRM_DONE_RE.search(body)
+        or _HUMAN_REVIEW_COMPLETION_RE.search(body)
+    )
+
+
+def _blocked_rca_description(
+    issue: Issue,
+    *,
+    reopen_state: str,
+) -> str:
+    return (
+        "## Goal\n\n"
+        f"Resolve the root cause keeping `{issue.identifier}` in `Blocked`.\n\n"
+        "## Source Ticket\n\n"
+        f"- Identifier: `{issue.identifier}`\n"
+        f"- Title: {issue.title}\n"
+        f"- Current state: `{issue.state}`\n"
+        f"- Reopen target after proven RCA: `{reopen_state}`\n\n"
+        "## Required Sequence\n\n"
+        f"1. Read the source ticket `{issue.identifier}` first, including the latest "
+        "`## Blocker`, `## Budget Exceeded`, `## QA Failure`, "
+        "`## Review Findings`, or `## Blocked RCA` sections.\n"
+        "2. Identify the real root cause with evidence. Do not treat the "
+        "Blocked state itself as the problem.\n"
+        "3. If the root cause is safe for an agent to resolve, fix it and "
+        "verify the fix with concrete commands or artifacts.\n"
+        f"4. Only after the RCA is resolved and verified, append `## RCA Resolution` "
+        f"to `{issue.identifier}` and move that source ticket to `{reopen_state}`.\n"
+        "5. Do not skip the source ticket's normal workflow. Once it is back "
+        "in Todo, it must pass through the configured Todo/In Progress/Verify/"
+        "Learn review path like any other ticket.\n"
+        "6. If the root cause requires credentials, host worktree cleanup, "
+        "destructive operations, or external approval, leave the source ticket "
+        "Blocked and append `## RCA Blocker` with exact operator action.\n\n"
+        "## Done Evidence\n\n"
+        "- Root cause category and evidence.\n"
+        "- Fix or operator action taken.\n"
+        f"- Final state decision for `{issue.identifier}`.\n"
+    )
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -313,6 +501,7 @@ class Orchestrator:
         # can't wedge it; None = never swept, so the first tick sweeps once.
         self._last_archive_sweep_monotonic: float | None = None
         self._lease_blocked: dict[str, str] = {}
+        self._blocked_rca_source_ids: set[str] = set()
         # Tickets whose worker-exit handler is mid-flight. `_on_worker_exit`
         # adds the id on entry and clears it in a `finally`, so from the moment
         # a worker leaves `_running` until its terminal-state persist (or retry
@@ -895,6 +1084,7 @@ class Orchestrator:
         self._pause_events.clear()
         self._turn_budget_exhausted.clear()
         self._lease_blocked.clear()
+        self._blocked_rca_source_ids.clear()
         if self._run_registry is not None:
             self._run_registry.close()
             self._run_registry = None
@@ -1087,6 +1277,23 @@ class Orchestrator:
 
     def issue_attention(self, issue: Issue) -> dict[str, str | None] | None:
         if self._issue_is_terminal(issue):
+            if normalize_state(issue.state) == "blocked":
+                if (
+                    _blocked_rca_already_requested(issue)
+                    or issue.id in self._blocked_rca_source_ids
+                ):
+                    return _attention_signal(
+                        "blocked_recovery_pending",
+                        "RCA pending",
+                        "RCA ticket already opened; source stays Blocked until RCA resolves",
+                        "info",
+                    )
+                return _attention_signal(
+                    "blocked_recovery_available",
+                    "Blocked RCA",
+                    "RCA ticket will open automatically before this issue returns to an active lane",
+                    "warning",
+                )
             return None
         entry = self._running.get(issue.id)
         if entry is not None:
@@ -1328,13 +1535,15 @@ class Orchestrator:
         return None
 
     def find_resumable_issue_id(self, identifier: str) -> str | None:
-        """Resolve an identifier for resume across running and held retries."""
+        """Resolve an identifier for resume across running, retry, or idle pause."""
         issue_id = self.find_running_issue_id(identifier)
         if issue_id is not None:
             return issue_id
         for issue_id, retry in self._retry.items():
             if retry.identifier == identifier:
                 return issue_id
+        if identifier in self._paused_issue_ids:
+            return identifier
         return None
 
     async def skip_learn(self, identifier: str) -> tuple[bool, str]:
@@ -1709,6 +1918,8 @@ class Orchestrator:
             await self._notify_observers()
             return
 
+        await self._auto_normalize_legacy_human_review_done(cfg)
+
         # Fetch candidates.
         try:
             candidates = await self._fetch_candidates(cfg)
@@ -1722,6 +1933,9 @@ class Orchestrator:
             await self._notify_observers()
             return
         self._consecutive_candidate_fetch_failures = 0
+
+        for issue in candidates:
+            self._blocked_rca_source_ids.discard(issue.id)
 
         for issue in self._sort_with_wait_age_bump(candidates, cfg):
             if await self._auto_triage_todo_if_actionable(issue, cfg):
@@ -1749,6 +1963,10 @@ class Orchestrator:
                 attempt=persisted_attempt,
                 attempt_kind="retry" if persisted_attempt is not None else None,
             )
+
+        await self._auto_reopen_sources_from_resolved_rcas(cfg)
+        if self._available_slots(cfg) > 0:
+            await self._auto_recover_blocked_sources(cfg)
 
         now_monotonic = time.monotonic()
         if (
@@ -1835,6 +2053,68 @@ class Orchestrator:
                     error=str(exc),
                 )
 
+    async def _auto_normalize_legacy_human_review_done(
+        self, cfg: ServiceConfig
+    ) -> int:
+        """Move legacy completion handoffs out of Human Review.
+
+        Current prompts reserve Human Review for real manual intervention.
+        Older file boards used it as the normal "Confirm Done" lane, which
+        freezes dependencies once Human Review becomes intervention-only.
+        """
+        if cfg.tracker.kind != "file":
+            return 0
+        done_state = _human_review_done_state(cfg)
+        if done_state is None:
+            return 0
+        try:
+            terminal_issues = await asyncio.to_thread(
+                self._tracker_call_terminal_issues, cfg
+            )
+        except Exception as exc:
+            log.warning("human_review_normalize_fetch_failed", error=str(exc))
+            return 0
+        moved = 0
+        for issue in terminal_issues:
+            if not _legacy_human_review_is_done(issue):
+                continue
+            note_body = (
+                "Moved this legacy `Human Review` card to `Done` because the "
+                "current workflow reserves `Human Review` for critical/manual "
+                "intervention, and this card contains completion evidence with "
+                "no intervention marker."
+            )
+            try:
+                await asyncio.to_thread(
+                    self._tracker_call_append_note,
+                    cfg,
+                    issue,
+                    "Human Review Normalized",
+                    note_body,
+                )
+                await asyncio.to_thread(
+                    self._tracker_call_update_state,
+                    cfg,
+                    issue,
+                    done_state,
+                )
+            except Exception as exc:
+                log.warning(
+                    "human_review_normalize_failed",
+                    identifier=issue.identifier,
+                    error=str(exc),
+                )
+                self._record_tracker_error(issue.id, exc)
+                continue
+            self._clear_tracker_error(issue.id)
+            moved += 1
+            log.info(
+                "human_review_normalized_done",
+                identifier=issue.identifier,
+                target=done_state,
+            )
+        return moved
+
     def _tracker_call_update_state(
         self, cfg: ServiceConfig, issue: Issue, target_state: str
     ) -> None:
@@ -1872,6 +2152,53 @@ class Orchestrator:
         finally:
             client.close()
 
+    @staticmethod
+    def _tracker_call_set_agent_kind(
+        cfg: ServiceConfig, identifier: str, agent_kind: str
+    ) -> bool:
+        client = build_tracker_client(cfg)
+        try:
+            update_fields = getattr(client, "update_fields", None)
+            if update_fields is None:
+                return False
+            update_fields(identifier, agent_kind=agent_kind)
+            return True
+        finally:
+            client.close()
+
+    @staticmethod
+    def _tracker_call_create_blocked_rca_issue(
+        cfg: ServiceConfig,
+        issue: Issue,
+        rca_state: str,
+        reopen_state: str,
+        agent_kind: str,
+    ) -> str | None:
+        client = build_tracker_client(cfg)
+        try:
+            create_with_next_identifier = getattr(
+                client, "create_with_next_identifier", None
+            )
+            if not callable(create_with_next_identifier):
+                return None
+            created = create_with_next_identifier(
+                _blocked_rca_identifier_prefix(issue),
+                title=f"RCA unblock {issue.identifier}: {issue.title}",
+                state=rca_state,
+                priority=issue.priority,
+                labels=_blocked_rca_labels(issue),
+                description=_blocked_rca_description(
+                    issue,
+                    reopen_state=reopen_state,
+                ),
+                agent_kind=agent_kind,
+            )
+            if not isinstance(created, tuple) or not created:
+                raise SymphonyError("tracker returned invalid created-ticket payload")
+            return str(created[0])
+        finally:
+            client.close()
+
     # ------------------------------------------------------------------
     # candidate selection (§8.2)
     # ------------------------------------------------------------------
@@ -1879,6 +2206,344 @@ class Orchestrator:
     def _should_dispatch(self, issue: Issue, cfg: ServiceConfig) -> bool:
         """§8.2 — eligibility for the poll-tick dispatch path."""
         return self._eligible(issue, cfg, owning_retry=False)
+
+    async def recover_blocked_issue(
+        self,
+        identifier: str,
+        *,
+        target_state: str | None = None,
+        agent_kind: str | None = None,
+    ) -> tuple[bool, str, dict[str, str]]:
+        """Open an RCA ticket for a Blocked issue without reopening it first."""
+        cfg = self._workflow_state.current()
+        if cfg is None:
+            cfg, err = self._workflow_state.reload()
+            if cfg is None:
+                return False, f"workflow config unavailable: {err}", {}
+
+        if self.find_running_issue_id(identifier) is not None:
+            return False, f"{identifier} has a running worker; wait or pause first", {}
+
+        issue = await asyncio.to_thread(
+            self._tracker_call_fetch_issue_full_by_id, cfg, identifier
+        )
+        if issue is None:
+            return False, f"unknown issue {identifier}", {}
+        if normalize_state(issue.state) != "blocked":
+            return (
+                False,
+                f"only Blocked tickets can be recovered (state={issue.state})",
+                {},
+            )
+        if self.find_running_issue_id(identifier) is not None:
+            return False, f"{identifier} started running; retry after it stops", {}
+
+        return await self._open_blocked_rca_for_issue(
+            cfg,
+            issue,
+            target_state=target_state,
+            agent_kind=agent_kind,
+            manual=True,
+        )
+
+    async def _open_blocked_rca_for_issue(
+        self,
+        cfg: ServiceConfig,
+        issue: Issue,
+        *,
+        target_state: str | None = None,
+        agent_kind: str | None = None,
+        manual: bool = False,
+    ) -> tuple[bool, str, dict[str, str]]:
+        if _is_blocked_rca_ticket(issue):
+            return False, f"{issue.identifier} is already an RCA ticket", {}
+        if (
+            _blocked_rca_already_requested(issue)
+            or issue.id in self._blocked_rca_source_ids
+        ):
+            return (
+                False,
+                f"blocked RCA already opened for {issue.identifier}",
+                {},
+            )
+
+        reopen_state = _blocked_source_reopen_state(cfg)
+        rca_state = _blocked_rca_work_state(cfg)
+        if target_state is not None:
+            active_by_key = {
+                normalize_state(state): state for state in cfg.tracker.active_states
+            }
+            requested_rca_state = active_by_key.get(normalize_state(target_state))
+            if requested_rca_state is None:
+                return (
+                    False,
+                    f"target_state must be one of active states: {list(cfg.tracker.active_states)}",
+                    {},
+                )
+            rca_state = requested_rca_state
+
+        requested_agent = (agent_kind or issue.agent_kind or cfg.agent.kind).strip().lower()
+        if requested_agent not in SUPPORTED_AGENT_KINDS:
+            requested_agent = cfg.agent.kind
+
+        rca_identifier = await asyncio.to_thread(
+            self._tracker_call_create_blocked_rca_issue,
+            cfg,
+            issue,
+            rca_state,
+            reopen_state,
+            requested_agent,
+        )
+        if rca_identifier is None:
+            return (
+                False,
+                "blocked RCA creation requires a tracker that can create tickets",
+                {},
+            )
+
+        body = (
+            f"RCA ticket `{rca_identifier}` opened in `{rca_state}` for "
+            f"`{requested_agent}` worker dispatch.\n\n"
+            f"This source ticket remains `{issue.state}`. The RCA worker must "
+            "resolve and verify the root cause before moving this ticket back "
+            f"to `{reopen_state}`. After that reopen, the source ticket still "
+            "must pass the normal configured workflow. If the root cause cannot "
+            "be resolved safely by an agent, the RCA worker should leave this "
+            "ticket Blocked with exact operator action."
+        )
+        if not manual:
+            body = "Opened automatically by the orchestrator.\n\n" + body
+        await asyncio.to_thread(
+            self._tracker_call_append_note,
+            cfg,
+            issue,
+            "Blocked RCA",
+            body,
+        )
+        self._blocked_rca_source_ids.add(issue.id)
+        self._record_stats_transition(rca_identifier, "", rca_state)
+        self.request_refresh()
+        return (
+            True,
+            f"{rca_identifier} opened to unblock {issue.identifier}; "
+            f"{issue.identifier} remains {issue.state}",
+            {
+                "original_state": issue.state,
+                "target_state": reopen_state,
+                "source_reopen_state": reopen_state,
+                "rca_identifier": rca_identifier,
+                "rca_state": rca_state,
+                "agent_kind": requested_agent,
+            },
+        )
+
+    async def _auto_recover_blocked_sources(self, cfg: ServiceConfig) -> int:
+        if not cfg.agent.auto_recover_blocked:
+            return 0
+        slots = self._available_slots(cfg)
+        if slots <= 0:
+            return 0
+        try:
+            terminal_issues = await asyncio.to_thread(
+                self._tracker_call_terminal_issues, cfg
+            )
+        except Exception as exc:
+            log.warning("blocked_rca_fetch_failed", error=str(exc))
+            return 0
+
+        opened = 0
+        for issue in _sort_for_dispatch_fifo(terminal_issues, cfg):
+            if opened >= slots:
+                break
+            if normalize_state(issue.state) != "blocked":
+                self._blocked_rca_source_ids.discard(issue.id)
+                continue
+            if _is_blocked_rca_ticket(issue):
+                continue
+            if issue.id in self._blocked_rca_source_ids:
+                continue
+
+            full_issue = issue
+            if full_issue.description is None:
+                fetched = await asyncio.to_thread(
+                    self._tracker_call_fetch_issue_full_by_id,
+                    cfg,
+                    issue.id or issue.identifier,
+                )
+                if fetched is not None:
+                    full_issue = fetched
+            if _blocked_rca_already_requested(full_issue):
+                self._blocked_rca_source_ids.add(issue.id)
+                continue
+
+            try:
+                changed, message, _details = await self._open_blocked_rca_for_issue(
+                    cfg,
+                    full_issue,
+                    manual=False,
+                )
+            except Exception as exc:
+                log.warning(
+                    "blocked_rca_auto_failed",
+                    identifier=issue.identifier,
+                    error=str(exc),
+                )
+                self._record_tracker_error(issue.id, exc)
+                continue
+            if changed:
+                self._clear_tracker_error(issue.id)
+                opened += 1
+                log.info(
+                    "blocked_rca_auto_opened",
+                    identifier=issue.identifier,
+                    detail=message,
+                )
+            else:
+                log.info(
+                    "blocked_rca_auto_skipped",
+                    identifier=issue.identifier,
+                    reason=message,
+                )
+        return opened
+
+    async def _resolved_blocked_rca_issue(
+        self, cfg: ServiceConfig, issue: Issue
+    ) -> Issue | None:
+        if not _looks_like_blocked_rca_ticket(issue):
+            return None
+        if not _blocker_dependency_is_resolved(issue.state, cfg):
+            return None
+        if _is_blocked_rca_ticket(issue) and issue.description is not None:
+            return issue
+        fetched = await asyncio.to_thread(
+            self._tracker_call_fetch_issue_full_by_id,
+            cfg,
+            issue.id or issue.identifier,
+        )
+        if fetched is None or not _looks_like_blocked_rca_ticket(fetched):
+            return None
+        return fetched
+
+    async def _source_issue_for_blocked_rca(
+        self,
+        cfg: ServiceConfig,
+        rca_issue: Issue,
+        terminal_by_identifier: dict[str, Issue],
+    ) -> Issue | None:
+        source_identifier = _blocked_rca_source_identifier(rca_issue)
+        if not source_identifier:
+            log.warning(
+                "blocked_rca_resolution_missing_source",
+                identifier=rca_issue.identifier,
+            )
+            return None
+        source_issue = terminal_by_identifier.get(source_identifier.casefold())
+        if source_issue is not None and source_issue.description is not None:
+            return source_issue
+        fetched_source = await asyncio.to_thread(
+            self._tracker_call_fetch_issue_full_by_id,
+            cfg,
+            source_identifier,
+        )
+        if fetched_source is None:
+            log.warning(
+                "blocked_rca_resolution_source_missing",
+                rca_identifier=rca_issue.identifier,
+                source_identifier=source_identifier,
+            )
+        return fetched_source
+
+    async def _reopen_source_for_resolved_rca(
+        self, cfg: ServiceConfig, rca_issue: Issue, source_issue: Issue
+    ) -> bool:
+        if normalize_state(source_issue.state) != "blocked":
+            self._blocked_rca_source_ids.discard(source_issue.id)
+            return False
+        if _is_blocked_rca_ticket(source_issue):
+            return False
+        if (
+            _blocked_rca_requires_operator_intervention(rca_issue)
+            or _blocked_rca_requires_operator_intervention(source_issue)
+        ):
+            log.info(
+                "blocked_rca_source_kept_blocked",
+                rca_identifier=rca_issue.identifier,
+                source_identifier=source_issue.identifier,
+                reason="operator_intervention_required",
+            )
+            return False
+        target_state = _blocked_source_reopen_state(cfg)
+        body = (
+            f"RCA ticket `{rca_issue.identifier}` reached `{rca_issue.state}`. "
+            f"Symphony is moving `{source_issue.identifier}` back to "
+            f"`{target_state}` so it can continue through the configured workflow."
+        )
+        try:
+            if not _blocked_rca_resolution_already_recorded(source_issue):
+                await asyncio.to_thread(
+                    self._tracker_call_append_note,
+                    cfg,
+                    source_issue,
+                    "Blocked RCA Resolved",
+                    body,
+                )
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                source_issue,
+                target_state,
+            )
+        except Exception as exc:
+            log.warning(
+                "blocked_rca_resolution_reopen_failed",
+                rca_identifier=rca_issue.identifier,
+                source_identifier=source_issue.identifier,
+                error=str(exc),
+            )
+            self._record_tracker_error(source_issue.id, exc)
+            return False
+        self._blocked_rca_source_ids.discard(source_issue.id)
+        self._clear_tracker_error(source_issue.id)
+        log.info(
+            "blocked_rca_source_reopened",
+            rca_identifier=rca_issue.identifier,
+            source_identifier=source_issue.identifier,
+            target_state=target_state,
+        )
+        return True
+
+    async def _auto_reopen_sources_from_resolved_rcas(
+        self, cfg: ServiceConfig
+    ) -> int:
+        if not cfg.agent.auto_recover_blocked:
+            return 0
+        try:
+            terminal_issues = await asyncio.to_thread(
+                self._tracker_call_terminal_issues, cfg
+            )
+        except Exception as exc:
+            log.warning("blocked_rca_resolution_fetch_failed", error=str(exc))
+            return 0
+        terminal_by_identifier = {
+            issue.identifier.casefold(): issue
+            for issue in terminal_issues
+            if issue.identifier
+        }
+        reopened = 0
+        for issue in _sort_for_dispatch_fifo(terminal_issues, cfg):
+            rca_issue = await self._resolved_blocked_rca_issue(cfg, issue)
+            if rca_issue is None:
+                continue
+            source_issue = await self._source_issue_for_blocked_rca(
+                cfg, rca_issue, terminal_by_identifier
+            )
+            if source_issue is None:
+                continue
+            if await self._reopen_source_for_resolved_rca(
+                cfg, rca_issue, source_issue
+            ):
+                reopened += 1
+        return reopened
 
     async def _auto_triage_todo_if_actionable(
         self, issue: Issue, cfg: ServiceConfig
@@ -2980,6 +3645,10 @@ class Orchestrator:
                                         max_attempts=cfg.agent.max_attempts,
                                     )
                                     break
+                            running_entry = self._running.get(running_issue_id)
+                            if running_entry is not None:
+                                running_entry.consecutive_empty_turns = 0
+                                running_entry.hit_empty_response_loop = False
                             client, first_prompt = await self._rebuild_backend_for_phase(
                                 issue=issue,
                                 running_issue_id=running_issue_id,
@@ -3044,6 +3713,19 @@ class Orchestrator:
                             outcome = "phase_transition_error"
                             error = str(exc)
                             return
+
+                    running_entry = self._running.get(running_issue_id)
+                    if (
+                        running_entry is not None
+                        and running_entry.hit_empty_response_loop
+                    ):
+                        await self._escalate_empty_response_loop(
+                            cfg=cfg,
+                            entry=running_entry,
+                            issue_id=running_issue_id,
+                            cancel_worker=False,
+                        )
+                        break
 
                     is_continuation = turn_number > 1 and not is_phase_transition
                     if is_continuation:
@@ -3454,6 +4136,68 @@ class Orchestrator:
             self._record_tracker_error(issue_id, persist_exc)
             return False
 
+    async def _escalate_empty_response_loop(
+        self,
+        *,
+        cfg: ServiceConfig | None,
+        entry: RunningEntry,
+        issue_id: str,
+        cancel_worker: bool,
+    ) -> None:
+        log.warning(
+            "empty_response_loop",
+            issue_id=issue_id,
+            identifier=entry.issue.identifier,
+            consecutive_empty_turns=entry.consecutive_empty_turns,
+            threshold=EMPTY_TURN_LOOP_THRESHOLD,
+        )
+        debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
+        debug.last_error = (
+            f"empty_response_loop after "
+            f"{entry.consecutive_empty_turns} consecutive empty turns"
+        )
+        if cfg is not None:
+            await self._persist_budget_exhausted_state(
+                cfg=cfg,
+                entry=entry,
+                issue_id=issue_id,
+                target_state=cfg.agent.budget_exhausted_state,
+                budget_kind="empty_response_loop",
+            )
+        # G2 — auto-pause the ticket so dispatch + retry both refuse to
+        # restart it even when `budget_exhausted_state` is unset (the
+        # persist branch above is a no-op then). The pause survives worker
+        # exit via `_paused_issue_ids` and is the same gate the operator's
+        # manual pause uses, so resume_worker() lifts it.
+        if issue_id not in self._paused_issue_ids:
+            pause_reason = (
+                f"empty_response_loop: {entry.consecutive_empty_turns} "
+                f"consecutive empty turns "
+                f"(threshold {EMPTY_TURN_LOOP_THRESHOLD}); resume via "
+                "resume_worker after inspecting the ticket"
+            )
+            self._paused_issue_ids.add(issue_id)
+            self._pause_reasons[issue_id] = pause_reason
+            self._set_issue_flags(
+                issue_id,
+                paused=True,
+                pause_reason=pause_reason,
+            )
+            pause_event = self._pause_events.get(issue_id)
+            if pause_event is None:
+                pause_event = asyncio.Event()
+                self._pause_events[issue_id] = pause_event
+            pause_event.clear()
+            log.info(
+                "empty_response_loop_auto_paused",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+            )
+        entry.hit_empty_response_loop = False
+        if cancel_worker and entry.worker_task is not None:
+            entry.worker_task.cancel()
+        entry.cancelled_at = datetime.now(timezone.utc)
+
     async def _persist_no_stage_change_handoff(
         self,
         *,
@@ -3738,6 +4482,7 @@ class Orchestrator:
             # and persists via the existing budget-exhausted plumbing.
             if entry.current_turn_message.strip():
                 entry.consecutive_empty_turns = 0
+                entry.hit_empty_response_loop = False
             else:
                 entry.consecutive_empty_turns += 1
             entry.current_turn_message = ""
@@ -3745,61 +4490,23 @@ class Orchestrator:
                 entry.consecutive_empty_turns >= EMPTY_TURN_LOOP_THRESHOLD
                 and entry.cancelled_at is None
             ):
-                log.warning(
-                    "empty_response_loop",
-                    issue_id=issue_id,
-                    identifier=entry.issue.identifier,
-                    consecutive_empty_turns=entry.consecutive_empty_turns,
-                    threshold=EMPTY_TURN_LOOP_THRESHOLD,
-                )
-                debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
-                debug.last_error = (
-                    f"empty_response_loop after "
-                    f"{entry.consecutive_empty_turns} consecutive empty turns"
-                )
-                if cfg is not None:
-                    await self._persist_budget_exhausted_state(
+                if entry.state_at_turn_start:
+                    entry.hit_empty_response_loop = True
+                    log.warning(
+                        "empty_response_loop_pending",
+                        issue_id=issue_id,
+                        identifier=entry.issue.identifier,
+                        consecutive_empty_turns=entry.consecutive_empty_turns,
+                        threshold=EMPTY_TURN_LOOP_THRESHOLD,
+                        state_at_turn_start=entry.state_at_turn_start,
+                    )
+                else:
+                    await self._escalate_empty_response_loop(
                         cfg=cfg,
                         entry=entry,
                         issue_id=issue_id,
-                        target_state=cfg.agent.budget_exhausted_state,
-                        budget_kind="empty_response_loop",
+                        cancel_worker=True,
                     )
-                # G2 — auto-pause the ticket so dispatch + retry both refuse to
-                # restart it even when `budget_exhausted_state` is unset (the
-                # persist branch above is a no-op then). The pause survives
-                # worker exit via `_paused_issue_ids` and is the same gate the
-                # operator's manual pause uses, so the operator's existing
-                # resume_worker() path lifts it. Without this, an unconfigured
-                # budget_exhausted_state lets the loop re-dispatch immediately
-                # on the next tick (verified live on olive-clone 2026-05-20).
-                if issue_id not in self._paused_issue_ids:
-                    pause_reason = (
-                        f"empty_response_loop: {entry.consecutive_empty_turns} "
-                        f"consecutive empty turns "
-                        f"(threshold {EMPTY_TURN_LOOP_THRESHOLD}); resume via "
-                        "resume_worker after inspecting the ticket"
-                    )
-                    self._paused_issue_ids.add(issue_id)
-                    self._pause_reasons[issue_id] = pause_reason
-                    self._set_issue_flags(
-                        issue_id,
-                        paused=True,
-                        pause_reason=pause_reason,
-                    )
-                    pause_event = self._pause_events.get(issue_id)
-                    if pause_event is None:
-                        pause_event = asyncio.Event()
-                        self._pause_events[issue_id] = pause_event
-                    pause_event.clear()
-                    log.info(
-                        "empty_response_loop_auto_paused",
-                        issue_id=issue_id,
-                        identifier=entry.issue.identifier,
-                    )
-                if entry.worker_task is not None:
-                    entry.worker_task.cancel()
-                entry.cancelled_at = datetime.now(timezone.utc)
         if ev_name == EVENT_TURN_FAILED:
             reason = payload.get("reason") if isinstance(payload, dict) else None
             stderr_tail = payload.get("stderr_tail") if isinstance(payload, dict) else None
@@ -4730,6 +5437,8 @@ class Orchestrator:
     ) -> None:
         state = normalize_state(issue.state)
         if state in terminal:
+            if entry.terminal_seen_at is None:
+                entry.terminal_seen_at = now
             entry.issue = Issue(
                 id=issue.id,
                 identifier=issue.identifier or entry.issue.identifier,
@@ -4744,18 +5453,6 @@ class Orchestrator:
                 created_at=entry.issue.created_at,
                 updated_at=entry.issue.updated_at,
             )
-            last_seen = entry.last_codex_timestamp
-            age = (now - last_seen).total_seconds() if last_seen else None
-            if age is not None and age < recent_grace_s:
-                # Active worker — let it exit on its own.
-                log.info(
-                    "reconcile_skip_active_worker",
-                    issue_id=issue.id,
-                    identifier=issue.identifier,
-                    state=issue.state,
-                    last_event_age_s=round(age, 1),
-                )
-                return
             if entry.exit_started_at is not None:
                 log.info(
                     "reconcile_skip_exiting_worker",
@@ -4765,12 +5462,34 @@ class Orchestrator:
                     exit_started_at=entry.exit_started_at.isoformat(),
                 )
                 return
+            last_seen = entry.last_codex_timestamp
+            last_event_age = (now - last_seen).total_seconds() if last_seen else None
+            terminal_age = (now - entry.terminal_seen_at).total_seconds()
+            if terminal_age < recent_grace_s:
+                log.info(
+                    "reconcile_skip_active_worker",
+                    issue_id=issue.id,
+                    identifier=issue.identifier,
+                    state=issue.state,
+                    last_event_age_s=(
+                        round(last_event_age, 1)
+                        if last_event_age is not None
+                        else None
+                    ),
+                    terminal_age_s=round(terminal_age, 1),
+                )
+                return
             log.info(
                 "reconcile_terminate_terminal",
                 issue_id=issue.id,
                 identifier=issue.identifier,
                 state=issue.state,
-                last_event_age_s=round(age, 1) if age is not None else None,
+                last_event_age_s=(
+                    round(last_event_age, 1)
+                    if last_event_age is not None
+                    else None
+                ),
+                terminal_age_s=round(terminal_age, 1),
             )
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
@@ -4811,6 +5530,7 @@ class Orchestrator:
                     # no after_done hook, just reap the workspace.
                     await self._workspace_manager.remove(entry.workspace_path)
         elif state in active:
+            entry.terminal_seen_at = None
             # Update in-memory issue snapshot.
             entry.issue = Issue(
                 id=issue.id,
@@ -4827,6 +5547,7 @@ class Orchestrator:
                 updated_at=entry.issue.updated_at,
             )
         else:
+            entry.terminal_seen_at = None
             entry.issue = Issue(
                 id=issue.id,
                 identifier=issue.identifier or entry.issue.identifier,

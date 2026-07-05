@@ -57,6 +57,7 @@ from .constants import (
     DEFAULT_AGY_COMMAND,
     DEFAULT_AGENT_KIND,
     DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
+    DEFAULT_AUTO_RECOVER_BLOCKED,
     DEFAULT_BACKEND_READ_TIMEOUT_MS,
     DEFAULT_BACKEND_STALL_TIMEOUT_MS,
     DEFAULT_BACKEND_TURN_TIMEOUT_MS,
@@ -352,6 +353,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         auto_triage_actionable_todo=bool(
             agent_raw.get("auto_triage_actionable_todo", True)
         ),
+        auto_recover_blocked=bool(
+            agent_raw.get("auto_recover_blocked", DEFAULT_AUTO_RECOVER_BLOCKED)
+        ),
         compact_issue_context=bool(
             agent_raw.get("compact_issue_context", True)
         ),
@@ -465,7 +469,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         stall_timeout_ms=_validated_positive_or_default(
             agy_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="agy.stall_timeout_ms"
         ),
-        resume_across_turns=bool(agy_raw.get("resume_across_turns", True)),
+        resume_across_turns=bool(agy_raw.get("resume_across_turns", False)),
     )
 
     kiro_raw = cfg.get("kiro") or {}

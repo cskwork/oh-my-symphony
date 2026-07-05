@@ -60,6 +60,7 @@ class _StubOrchestrator:
         self.refresh_calls = 0
         self.run_history_error: str | None = None
         self.reset_ci_calls = 0
+        self.recover_calls: list[dict[str, str | None]] = []
         self.ci_status: dict[str, Any] = {
             "enabled": True,
             "interval_ms": 60_000,
@@ -165,6 +166,31 @@ class _StubOrchestrator:
 
     def resume_worker(self, _issue_id: str) -> bool:
         return True
+
+    async def recover_blocked_issue(
+        self,
+        identifier: str,
+        *,
+        target_state: str | None = None,
+        agent_kind: str | None = None,
+    ) -> tuple[bool, str, dict[str, str]]:
+        self.recover_calls.append(
+            {
+                "identifier": identifier,
+                "target_state": target_state,
+                "agent_kind": agent_kind,
+            }
+        )
+        rca_state = target_state or "Doing"
+        agent = agent_kind or "claude"
+        return True, f"RCA-1 opened to unblock {identifier}", {
+            "original_state": "Blocked",
+            "target_state": "Todo",
+            "source_reopen_state": "Todo",
+            "rca_identifier": "RCA-1",
+            "rca_state": rca_state,
+            "agent_kind": agent,
+        }
 
     def continuous_improvement_status(self) -> dict[str, Any]:
         return dict(self.ci_status)
@@ -348,6 +374,31 @@ async def test_patch_unknown_issue_404_and_empty_400(client: TestClient) -> None
         await client.patch("/api/v1/issues/GHOST-1", json={"title": "x"})
     ).status == 404
     assert (await client.patch("/api/v1/issues/SEED-1", json={})).status == 400
+
+
+async def test_recover_blocked_route_calls_orchestrator(client: TestClient) -> None:
+    resp = await client.post(
+        "/api/v1/issues/SEED-1/recover-blocked",
+        json={"target_state": "Doing", "agent_kind": "codex"},
+    )
+
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload["identifier"] == "SEED-1"
+    assert payload["rca_created"] is True
+    assert payload["target_state"] == "Todo"
+    assert payload["source_reopen_state"] == "Todo"
+    assert payload["rca_identifier"] == "RCA-1"
+    assert payload["rca_state"] == "Doing"
+    assert payload["agent_kind"] == "codex"
+    stub = client.stub  # type: ignore[attr-defined]
+    assert stub.recover_calls == [
+        {
+            "identifier": "SEED-1",
+            "target_state": "Doing",
+            "agent_kind": "codex",
+        }
+    ]
 
 
 async def test_delete_issue_and_running_guard(client: TestClient) -> None:

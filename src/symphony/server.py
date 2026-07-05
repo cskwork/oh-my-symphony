@@ -8,6 +8,7 @@ endpoints below predate the web app and remain for scripts and the TUI:
     GET  /api/v1/<identifier>    — issue debug detail
     POST /api/v1/refresh         — trigger immediate poll/reconcile
     POST /api/v1/<id>/pause|resume
+    POST /api/v1/<id>/recover-blocked
     POST /api/v1/<id>/skip-learn
 """
 
@@ -88,7 +89,7 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
             return _error_response(
                 404,
                 "issue_not_resumable",
-                f"no running or retry-held worker for {identifier}",
+                f"no running, retry-held, or idle paused worker for {identifier}",
             )
         changed = orchestrator.resume_worker(issue_id)
         return web.json_response(
@@ -111,6 +112,43 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
                 "issue_identifier": identifier,
                 "skipped": True,
                 "message": message,
+            }
+        )
+
+    async def handle_recover_blocked(request: web.Request) -> web.Response:
+        identifier = request.match_info.get("identifier", "")
+        try:
+            body = await request.json() if request.body_exists else {}
+        except json.JSONDecodeError:
+            return _error_response(400, "invalid_json", "request body is not JSON")
+        if body and not isinstance(body, dict):
+            return _error_response(400, "invalid_body", "request body must be an object")
+        target_state = (
+            body.get("rca_state", body.get("target_state"))
+            if isinstance(body, dict)
+            else None
+        )
+        agent_kind = body.get("agent_kind") if isinstance(body, dict) else None
+        if target_state is not None and not isinstance(target_state, str):
+            return _error_response(
+                400, "invalid_body", "rca_state must be a string"
+            )
+        if agent_kind is not None and not isinstance(agent_kind, str):
+            return _error_response(400, "invalid_body", "agent_kind must be a string")
+        changed, message, details = await orchestrator.recover_blocked_issue(
+            identifier,
+            target_state=target_state,
+            agent_kind=agent_kind,
+        )
+        if not changed:
+            status = 404 if message.startswith("unknown issue") else 409
+            return _error_response(status, "blocked_recovery_rejected", message)
+        return web.json_response(
+            {
+                "issue_identifier": identifier,
+                "rca_created": True,
+                "message": message,
+                **details,
             }
         )
 
@@ -153,6 +191,7 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
     register_web_routes(app, orchestrator)
     app.router.add_post("/api/v1/{identifier}/pause", handle_pause)
     app.router.add_post("/api/v1/{identifier}/resume", handle_resume)
+    app.router.add_post("/api/v1/{identifier}/recover-blocked", handle_recover_blocked)
     app.router.add_post("/api/v1/{identifier}/skip-learn", handle_skip_learn)
     app.router.add_get("/api/v1/{identifier}", handle_issue)
 

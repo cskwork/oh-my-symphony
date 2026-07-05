@@ -595,6 +595,30 @@ def _register_issue_routes(
         orchestrator.request_refresh()
         return web.json_response({"identifier": identifier, "updated": sorted(fields)})
 
+    async def handle_issue_recover_blocked(request: web.Request) -> web.Response:
+        identifier = _check_identifier(request.match_info["identifier"])
+        body = await _read_json(request)
+        raw_target = body.get("rca_state", body.get("target_state"))
+        if raw_target is not None and not isinstance(raw_target, str):
+            raise WorkflowMutationError("rca_state must be a string")
+        agent_kind = _check_agent_kind(body.get("agent_kind")) if "agent_kind" in body else None
+        changed, message, details = await orchestrator.recover_blocked_issue(
+            identifier,
+            target_state=raw_target,
+            agent_kind=agent_kind,
+        )
+        if not changed:
+            status = 404 if message.startswith("unknown issue") else 409
+            return _json_error(status, "blocked_recovery_rejected", message)
+        return web.json_response(
+            {
+                "identifier": identifier,
+                "rca_created": True,
+                "message": message,
+                **details,
+            }
+        )
+
     async def handle_issue_delete(request: web.Request) -> web.Response:
         identifier = _check_identifier(request.match_info["identifier"])
         tracker = ctx.file_tracker()
@@ -626,6 +650,10 @@ def _register_issue_routes(
     app.router.add_post("/api/v1/issues", _wrap(handle_issue_create))
     app.router.add_get("/api/v1/issues/{identifier}", _wrap(handle_issue_detail))
     app.router.add_patch("/api/v1/issues/{identifier}", _wrap(handle_issue_patch))
+    app.router.add_post(
+        "/api/v1/issues/{identifier}/recover-blocked",
+        _wrap(handle_issue_recover_blocked),
+    )
     app.router.add_delete("/api/v1/issues/{identifier}", _wrap(handle_issue_delete))
     app.router.add_post(
         "/api/v1/issues/{identifier}/skip-learn", _wrap(handle_issue_skip_learn)
