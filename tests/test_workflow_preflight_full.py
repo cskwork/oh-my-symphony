@@ -15,6 +15,7 @@ build_service_config defaults. This file extends coverage to:
 
 from __future__ import annotations
 
+import re
 import textwrap
 from dataclasses import replace
 from pathlib import Path
@@ -35,11 +36,24 @@ from symphony.workflow import (
     validate_for_dispatch,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _write(tmp_path: Path, body: str) -> Path:
     path = tmp_path / "WORKFLOW.md"
     path.write_text(textwrap.dedent(body), encoding="utf-8")
     return path
+
+
+def _extract_readme_quickstart_workflow(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    match = re.search(
+        r"cat > WORKFLOW\.md <<'YAML'\n(?P<workflow>---\n.*?\n)YAML",
+        text,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group("workflow")
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +134,45 @@ def test_file_tracker_with_board_root_passes_preflight(tmp_path: Path) -> None:
     )
     cfg = build_service_config(load_workflow(path))
     # Should not raise — file tracker has all required fields.
+    validate_for_dispatch(cfg)
+
+
+def test_multi_stage_workflow_rejects_too_low_max_turns(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """\
+        ---
+        tracker:
+          kind: file
+          board_root: ./tickets
+          active_states: [Todo, In Progress, Verify, Learn]
+          terminal_states: [Done, Blocked]
+        agent:
+          max_turns: 1
+        ---
+        body
+        """,
+    )
+    cfg = build_service_config(load_workflow(path))
+
+    with pytest.raises(ConfigValidationError, match="agent.max_turns=1"):
+        validate_for_dispatch(cfg)
+
+
+def test_shipped_workflow_example_passes_dispatch_preflight() -> None:
+    cfg = build_service_config(load_workflow(_REPO_ROOT / "examples/WORKFLOW.smoke.md"))
+
+    validate_for_dispatch(cfg)
+
+
+@pytest.mark.parametrize("relative_path", ["README.md", "README.ko.md"])
+def test_readme_quickstart_workflow_passes_dispatch_preflight(
+    tmp_path: Path, relative_path: str
+) -> None:
+    workflow_text = _extract_readme_quickstart_workflow(_REPO_ROOT / relative_path)
+    path = _write(tmp_path, workflow_text)
+    cfg = build_service_config(load_workflow(path))
+
     validate_for_dispatch(cfg)
 
 

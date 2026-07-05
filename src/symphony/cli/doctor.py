@@ -43,6 +43,7 @@ from ..workflow import (
     load_workflow,
     resolve_workflow_path,
 )
+from ..workflow.preflight import stage_turn_budget_error
 
 
 Status = Literal["pass", "warn", "fail"]
@@ -331,6 +332,33 @@ def _kiro_whoami() -> CheckResult:
     return CheckResult(name, "fail", f"`kiro-cli whoami` returned {completed.returncode}{suffix}")
 
 
+def check_agy_state_dir(cfg: ServiceConfig) -> CheckResult:
+    """Catch AGY sandbox/home write failures before the first worker turn."""
+    name = "agent.kind=agy.state"
+    if cfg.agent.kind != "agy":
+        return CheckResult(name, "pass", "not agy (skipped)")
+
+    state_dir = Path.home() / ".gemini" / "antigravity-cli"
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return CheckResult(name, "fail", f"cannot create {state_dir}: {exc}")
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=state_dir,
+            prefix=".symphony-doctor-",
+            delete=True,
+        ):
+            pass
+    except OSError as exc:
+        return CheckResult(
+            name,
+            "fail",
+            f"{state_dir} is not writable; AGY requires writable CLI state: {exc}",
+        )
+    return CheckResult(name, "pass", f"{state_dir} is writable")
+
+
 def check_after_create_hook(cfg: ServiceConfig) -> CheckResult:
     hook = cfg.hooks.after_create or ""
     if not hook.strip():
@@ -491,13 +519,27 @@ def check_shell() -> CheckResult:
     return CheckResult("shell.bash", "pass", bash)
 
 
+def check_stage_turn_budget(cfg: ServiceConfig) -> CheckResult:
+    error = stage_turn_budget_error(cfg)
+    if error is not None:
+        return CheckResult("agent.max_turns", "fail", error)
+    active_count = len([state for state in cfg.tracker.active_states if state])
+    return CheckResult(
+        "agent.max_turns",
+        "pass",
+        f"{cfg.agent.max_turns} turn budget covers {active_count} active states",
+    )
+
+
 def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]:
     return [
         check_port(cfg, host=host),
         check_shell(),
+        check_stage_turn_budget(cfg),
         check_agent_cli(cfg),
         check_pi_auth(cfg),
         check_gemini_auth(cfg),
+        check_agy_state_dir(cfg),
         check_kiro_auth(cfg),
         check_prompts(cfg),
         check_after_create_hook(cfg),
