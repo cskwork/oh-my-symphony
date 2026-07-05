@@ -606,3 +606,23 @@ and `reconcile_skip_active_worker` repeated indefinitely.
   `95061` remained alive.
 - Regression test added:
   `tests/test_orchestrator_dispatch.py::test_reconcile_terminal_grace_expires_despite_recent_heartbeat`.
+
+---
+
+# 2026-07-05 - Release lint gate cleanup
+
+## Goal
+
+Keep the `v0.11.0` release gate green on the checked-in tree, not only on the
+dirty operator checkout.
+
+## Decision
+
+Apply the mechanical `ruff` fixes in `docs/SMA-20/qa/smoke_harness.py`: remove
+the unused `build_backend` import and drop two `f` prefixes from strings with no
+placeholders. This script is release evidence, not runtime code.
+
+- Rejected: skipping `docs/` in the release lint gate. The configured gate is
+  `ruff check .`; excluding evidence scripts would hide checked-in drift.
+- Rejected: bundling a broader docs cleanup. The failure is exactly three
+  fixable lint findings, so the patch stays mechanical.

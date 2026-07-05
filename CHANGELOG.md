@@ -10,7 +10,30 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Post-v0.10.1 changes will be listed here.
+Post-v0.11.0 changes will be listed here.
+
+## [0.11.0] - 2026-07-05 - OpenCode terminal cleanup
+
+### Fixed
+
+- Terminal reconciliation now bounds the natural-exit grace window by the first
+  poll tick that observes a running card in a terminal lane. OpenCode liveness
+  heartbeats can no longer refresh the 60 second grace window forever and leave
+  `Human Review` cards stuck in `/api/v1/state` as `running: 1`.
+- Checked-in SMA-20 QA smoke evidence now passes the repository `ruff check .`
+  gate.
+
+### Added
+
+- Regression coverage for terminal-state cleanup with recent backend
+  heartbeats:
+  `tests/test_orchestrator_dispatch.py::test_reconcile_terminal_grace_expires_despite_recent_heartbeat`.
+
+### Verified
+
+- Real OpenCode file-board E2E on `dev` reached `Human Review`, logged
+  `reconcile_terminate_terminal` at `terminal_state_age_s=61.1`, and drained
+  `/api/v1/state` to `running: 0`, `retrying: 0`.
 
 ## [0.10.1] - 2026-07-05 - Prompt compaction default-on
 
@@ -914,7 +937,8 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.11.0
 [0.10.1]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.10.1
 [0.10.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.10.0
 [0.9.3]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.9.3
