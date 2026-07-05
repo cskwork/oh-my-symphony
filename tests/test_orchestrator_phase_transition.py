@@ -92,6 +92,7 @@ class _FakeWorkspaceManager:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        self.before_run_paths: list[Path] = []
         self.after_run_paths: list[Path] = []
 
     def path_for(self, identifier: str) -> Path:
@@ -103,7 +104,7 @@ class _FakeWorkspaceManager:
         return _FakeWorkspace(self._path)
 
     async def before_run(self, path: Path) -> None:
-        del path
+        self.before_run_paths.append(path)
         return None
 
     async def after_run_best_effort(self, path: Path) -> None:
@@ -380,6 +381,24 @@ def test_phase_transition_rebuilds_backend_with_fresh_first_prompt(
     # And the prompt sent on that run_turn equals the freshly rendered
     # first-turn prompt (not a build_continuation_prompt body).
     assert second_run[0][1]["prompt"] == first_prompts[1]
+
+
+def test_before_run_hook_reasserts_workspace_invariants_before_each_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=5)
+    issue = _make_issue(state="In Progress")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    fake_ws = o._workspace_manager
+    assert isinstance(fake_ws, _FakeWorkspaceManager)
+    assert fake_ws.before_run_paths == [tmp_path, tmp_path]
+    assert fake_ws.after_run_paths == [tmp_path, tmp_path]
 
 
 @pytest.mark.parametrize("agent_kind", ["claude", "gemini", "pi"])

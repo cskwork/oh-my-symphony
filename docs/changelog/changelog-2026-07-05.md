@@ -342,3 +342,36 @@ Rejected alternatives:
 
 - Added regression tests for `service_status`, CLI status output, and doctor
   port-owner hints when PID is stale but the Symphony API responds.
+
+---
+
+# 2026-07-05 - Re-run before_run at worker turn boundaries
+
+## RCA
+
+`before_run` ran once at worker startup, but long multi-turn tickets can mutate
+workspace invariants between turns. In the live `jira-symphony` TASK-021 run,
+an in-worktree merge replaced the required `kanban/` host-board symlink with a
+real tracked directory. The worker moved the branch-local card to `Verify`,
+while Symphony kept refreshing the host tracker as `In Progress` and launched a
+continuation turn against stale board state.
+
+## Decision
+
+Run the configured `before_run` hook again before every continuation or phase
+turn. This lets workflow-level guards reassert board symlinks, refresh remotes,
+or fail fast before another backend turn spends tokens on a broken workspace.
+
+Rejected alternatives:
+- Only change the `jira-symphony` hook. The orchestration contract says
+  `before_run` protects a turn; core must honor that across continuations.
+- Sync branch-local `kanban/` files back to the host automatically. That would
+  blur the tracker/source boundary and risk overwriting host-owned review
+  history.
+- Stop workers when a workspace link breaks. Failing `before_run` already gives
+  a precise blocker without killing a healthy workspace preemptively.
+
+## Verification
+
+- Added a regression test proving two active-state turns invoke `before_run`
+  twice, so workspace invariants are rechecked before the continuation turn.

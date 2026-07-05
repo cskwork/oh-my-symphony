@@ -2691,6 +2691,13 @@ class Orchestrator:
                         max_turns=cfg.agent.max_turns,
                         is_continuation=is_continuation,
                     )
+                    if turn_number > 1:
+                        try:
+                            await self._workspace_manager.before_run(workspace.path)
+                        except Exception as exc:
+                            outcome = "before_run_error"
+                            error = str(exc)
+                            return
                     after_run_pending = True
                     try:
                         await client.run_turn(prompt=prompt, is_continuation=is_continuation)
