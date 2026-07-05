@@ -25,7 +25,7 @@ import re
 import time
 import traceback
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Coroutine
 
@@ -51,6 +51,13 @@ from ..errors import (
     TurnInputRequired,
     TurnTimeout,
     TurnCancelled,
+)
+from ..continuous_improvement import (
+    FileLease,
+    ImprovementRunner,
+    Lease,
+    default_improvement_runner,
+    lease_path_for,
 )
 from ..issue import Issue, normalize_state
 from ..logging import get_logger
@@ -154,6 +161,30 @@ def _update_state_turn_counter(debug: _IssueDebug, state: str) -> int:
     return debug.state_turn_count
 
 
+def _initial_improvement_status() -> dict[str, Any]:
+    """Runtime half of the heartbeat status. Config-derived fields
+    (enabled/interval_ms/max_turns/agent_kind) are refreshed each tick from
+    the live snapshot; here we seed neutral defaults so the web API can read
+    a status even before the first tick.
+    """
+    return {
+        "enabled": False,
+        "interval_ms": 0,
+        "max_turns": 0,
+        "agent_kind": "",
+        "in_flight": False,
+        "current_phase": None,
+        "last_started_at": None,
+        "last_finished_at": None,
+        "last_result": None,
+        "last_error": None,
+        "tickets_created": 0,
+        "skipped_reason": None,
+        "last_verified_branch": None,
+        "last_verified_sha": None,
+    }
+
+
 def _run_record_payload(record: RunRecord) -> dict[str, Any]:
     return {
         "run_id": record.run_id,
@@ -215,6 +246,8 @@ class Orchestrator:
         workflow_state: WorkflowState,
         *,
         build_backend: Callable[[BackendInit], AgentBackend] | None = None,
+        improvement_runner: ImprovementRunner | None = None,
+        improvement_lease: Lease | None = None,
     ) -> None:
         self._workflow_state = workflow_state
         # Initiative D — backend factory via constructor injection. None
@@ -307,6 +340,18 @@ class Orchestrator:
         # be garbage-collected mid-flight and its exception vanishes with
         # it. `_spawn_supervised` is the only sanctioned way to fire one.
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Continuous-improvement heartbeat (plan §4). Default-off, config
+        # re-read per tick from the workflow snapshot. Its own asyncio task
+        # — never a worker slot. Due-math uses the monotonic clock so a
+        # wall-clock jump can't wedge it. Runner + lease are injectable so
+        # tests never spawn real subprocesses or touch a shared lockfile.
+        self._improvement_runner = improvement_runner or default_improvement_runner
+        self._improvement_lease = improvement_lease
+        self._improvement_task: asyncio.Task[None] | None = None
+        self._last_improvement_monotonic: float | None = None
+        self._next_improvement_due_monotonic: float | None = None
+        self._improvement_turns_used: int = 0
+        self._improvement_status: dict[str, Any] = _initial_improvement_status()
 
     # ------------------------------------------------------------------
     # dispatch-state views (initiative A). Read-only aliases so the many
@@ -1656,6 +1701,10 @@ class Orchestrator:
             self._last_archive_sweep_monotonic = now_monotonic
             await self._archive_sweep(cfg)
 
+        # Continuous-improvement heartbeat (plan §4). Cheap, non-blocking:
+        # evaluates due-math + guards and, at most, fires one background task.
+        self._maybe_schedule_continuous_improvement(cfg)
+
         await self._notify_observers()
 
     def _sort_with_wait_age_bump(
@@ -1878,6 +1927,151 @@ class Orchestrator:
         # (single owner of slot math) — see its docstring for the OLV-005
         # double-start war story.
         return self._dispatch_state.available_slots(cfg.agent.max_concurrent_agents)
+
+    # ------------------------------------------------------------------
+    # continuous-improvement heartbeat (plan §4)
+    # ------------------------------------------------------------------
+
+    def _maybe_schedule_continuous_improvement(self, cfg: ServiceConfig) -> None:
+        """Fire at most one heartbeat run when due. Called every tick.
+
+        Non-blocking: the actual work runs in a supervised background task,
+        never a worker slot. Config is read from the live snapshot each call
+        so web-side toggles take effect without a restart.
+        """
+        ci = cfg.continuous_improvement
+        # Cache config-derived fields even while disabled so the web-API
+        # status reflects the current snapshot.
+        self._improvement_status.update(
+            enabled=ci.enabled,
+            interval_ms=ci.interval_ms,
+            max_turns=ci.max_turns,
+            agent_kind=ci.agent_kind,
+        )
+        if not ci.enabled:
+            return
+        # One run at a time: a second tick while in flight is a no-op.
+        if self._improvement_task is not None and not self._improvement_task.done():
+            return
+
+        now = time.monotonic()
+        interval_s = max(ci.interval_ms, 0) / 1000.0
+        if self._next_improvement_due_monotonic is None:
+            # First observation while enabled: arm the next-due one interval
+            # out so a fresh start doesn't fire immediately.
+            self._next_improvement_due_monotonic = now + interval_s
+            return
+        if now < self._next_improvement_due_monotonic:
+            return
+
+        # Due. Turn budget (0 == unlimited).
+        if ci.max_turns and self._improvement_turns_used >= ci.max_turns:
+            self._improvement_status["skipped_reason"] = "max_turns_reached"
+            return
+        # Idle-board guard: postpone (don't consume the turn), re-check next
+        # tick. Any live worker or retry-pending ticket counts as busy.
+        if ci.require_idle_board and (self._running or self._retry):
+            self._improvement_status["skipped_reason"] = "board_busy"
+            return
+
+        self._improvement_status["skipped_reason"] = None
+        self._last_improvement_monotonic = now
+        self._next_improvement_due_monotonic = now + interval_s
+        self._improvement_status.update(
+            in_flight=True,
+            current_phase="starting",
+            last_started_at=_utc_iso_z(),
+            last_result=None,
+            last_error=None,
+        )
+        self._improvement_task = self._spawn_supervised(
+            self._run_continuous_improvement(cfg),
+            name="symphony-continuous-improvement",
+        )
+        self._improvement_task.add_done_callback(self._on_improvement_task_done)
+
+    async def _run_continuous_improvement(self, cfg: ServiceConfig) -> None:
+        """Acquire the cross-process lease, delegate to the runner, record.
+
+        A run consumes a turn when it *completes* (success or failure). A
+        lease-held postpone returns early and consumes nothing. Runner
+        exceptions are caught here so the tick loop is never affected.
+        """
+        workflow_dir = cfg.workflow_path.parent
+        lease = self._improvement_lease or FileLease(lease_path_for(workflow_dir))
+        if not lease.acquire():
+            # Another orchestrator holds the heartbeat; postpone silently.
+            self._improvement_status.update(
+                in_flight=False, current_phase=None, skipped_reason="lease_held"
+            )
+            return
+
+        consumed = False
+        try:
+            result = await self._improvement_runner(
+                cfg, workflow_dir, self._report_improvement_phase
+            )
+            self._improvement_status.update(
+                last_result="succeeded",
+                tickets_created=result.tickets_created,
+                last_verified_branch=result.verified_branch,
+                last_verified_sha=result.verified_sha,
+            )
+            consumed = True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — runner failure must not kill the loop
+            self._improvement_status.update(
+                last_result="failed", last_error=str(exc)
+            )
+            log.error(
+                "continuous_improvement_run_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            consumed = True
+        finally:
+            lease.release()
+            if consumed:
+                # Reset-in-flight semantics: a reset zeroes the counter mid-run;
+                # this in-flight run still counts its own increment on finish.
+                self._improvement_turns_used += 1
+                self._improvement_status["last_finished_at"] = _utc_iso_z()
+            self._improvement_status.update(in_flight=False, current_phase=None)
+
+    def _report_improvement_phase(self, phase: str) -> None:
+        self._improvement_status["current_phase"] = phase
+
+    def _on_improvement_task_done(self, task: asyncio.Task[None]) -> None:
+        # Identity check: only clear the ref if it still points at this task,
+        # so a task launched after this one is never dropped.
+        if self._improvement_task is task:
+            self._improvement_task = None
+
+    def reset_continuous_improvement_turns(self) -> None:
+        """Web-API hook: zero the turn counter, clear a max_turns skip."""
+        self._improvement_turns_used = 0
+        if self._improvement_status.get("skipped_reason") == "max_turns_reached":
+            self._improvement_status["skipped_reason"] = None
+
+    def continuous_improvement_status(self) -> dict[str, Any]:
+        """Web-API status snapshot. Merges cached config fields, the live
+        turn counter, in-flight flag, and the next-due wall-clock estimate.
+        """
+        status = dict(self._improvement_status)
+        status["turns_used"] = self._improvement_turns_used
+        status["in_flight"] = (
+            self._improvement_task is not None and not self._improvement_task.done()
+        )
+        status["next_due_at"] = self._improvement_next_due_iso()
+        return status
+
+    def _improvement_next_due_iso(self) -> str | None:
+        due = self._next_improvement_due_monotonic
+        if due is None:
+            return None
+        delta = max(due - time.monotonic(), 0.0)
+        return _to_iso(datetime.now(timezone.utc) + timedelta(seconds=delta))
 
     # ------------------------------------------------------------------
     # C1 — system-level conflict pre-check
