@@ -1,5 +1,48 @@
 # 2026-07-05 - Delivery reliability gates
 
+## Failed-dependency blocker gate
+
+## Goal
+
+Prevent downstream Symphony tickets from starting when an upstream dependency
+ended in a failed terminal state such as `Blocked`.
+
+## Decision
+
+Change orchestrator dependency resolution from "any terminal blocker is
+resolved" to "only successful terminal blockers are resolved." `Done`, `Human
+Review`, and custom non-failure terminal names such as `Closed` can still
+release downstream work. `Blocked`, `Cancelled`/`Canceled`, `Duplicate`, and
+archive-style states keep the downstream ticket ineligible and show the
+operator-visible `Blocked dependency` attention signal.
+
+The live Jira board exposed the defect: `TASK-013` started while it had
+`blocked_by: TASK-012` and `TASK-012` was `Blocked`. The root cause was
+`Orchestrator._eligible()` and `issue_attention()` treating all
+`tracker.terminal_states` as successful dependency completion.
+
+- Rejected: removing `Blocked` from `terminal_states`. Blocked cards must stay
+  terminal for worker cleanup, TUI grouping, and budget/merge-failure parking.
+- Rejected: requiring only literal `Done`. The current four-stage workflow uses
+  `Human Review` as the agent-complete handoff, and some integrations use
+  successful custom terminal names.
+- Rejected: fixing only dispatch eligibility. The same predicate drives
+  operator attention; a blocked dependency must be visible as well as skipped.
+
+## Verification
+
+- Red before fix:
+  `pytest tests/test_orchestrator_dispatch.py::test_todo_with_blocked_terminal_blocker_remains_blocked tests/test_orchestrator_dispatch.py::test_issue_attention_reports_failed_terminal_dependency -q`
+  failed: 2 tests.
+- Green after fix:
+  `pytest tests/test_orchestrator_dispatch.py::test_todo_with_blocked_terminal_blocker_remains_blocked tests/test_orchestrator_dispatch.py::test_issue_attention_reports_failed_terminal_dependency -q`
+  passed: 2 tests.
+- Surrounding blocker/retry checks:
+  `rtk pytest tests/test_orchestrator_dispatch.py::test_todo_with_non_terminal_blocker_blocked tests/test_orchestrator_dispatch.py::test_todo_with_done_blocker_eligible tests/test_orchestrator_dispatch.py::test_todo_with_blocked_terminal_blocker_remains_blocked tests/test_orchestrator_dispatch.py::test_active_state_issue_with_unresolved_blocker_is_ineligible tests/test_orchestrator_dispatch.py::test_retry_timer_waits_for_unresolved_blocker_then_recovers tests/test_orchestrator_dispatch.py::test_issue_attention_reports_unresolved_dependency tests/test_orchestrator_dispatch.py::test_issue_attention_reports_failed_terminal_dependency -q`
+  passed: 7 tests.
+
+---
+
 ## File-board lifecycle E2E guard
 
 ## Goal

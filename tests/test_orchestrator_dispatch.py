@@ -290,12 +290,21 @@ def test_todo_with_non_terminal_blocker_blocked():
     assert orch._should_dispatch(issue, cfg) is False
 
 
-def test_todo_with_terminal_blocker_eligible():
+def test_todo_with_done_blocker_eligible():
     cfg = _make_config()
     orch = _orch()
     blocker = BlockerRef(id="z", identifier="MT-9", state="Done")
     issue = _issue("MT-1", state="Todo", blocked_by=(blocker,))
     assert orch._should_dispatch(issue, cfg) is True
+
+
+def test_todo_with_blocked_terminal_blocker_remains_blocked():
+    cfg = _make_config(terminal_states=("Done", "Cancelled", "Blocked"))
+    orch = _orch()
+    blocker = BlockerRef(id="z", identifier="MT-9", state="Blocked")
+    issue = _issue("MT-1", state="Todo", blocked_by=(blocker,))
+
+    assert orch._should_dispatch(issue, cfg) is False
 
 
 def test_active_state_issue_with_unresolved_blocker_is_ineligible():
@@ -3328,6 +3337,22 @@ def test_issue_attention_reports_tracker_error():
 def test_issue_attention_reports_unresolved_dependency():
     orch = _orch()
     blocker = BlockerRef(id="TASK-999", identifier="TASK-999", state=None)
+    issue = _issue("MT-BLOCKED", state="In Progress", blocked_by=(blocker,))
+
+    attention = orch.issue_attention(issue)
+
+    assert attention is not None
+    assert attention["kind"] == "blocked_dependency"
+    assert attention["label"] == "Blocked dependency"
+    assert attention["severity"] == "warning"
+    assert attention["message"] == "waiting on unresolved dependency: TASK-999"
+
+
+def test_issue_attention_reports_failed_terminal_dependency(monkeypatch: pytest.MonkeyPatch):
+    orch = _orch()
+    cfg = _make_config(terminal_states=("Done", "Blocked"))
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+    blocker = BlockerRef(id="TASK-999", identifier="TASK-999", state="Blocked")
     issue = _issue("MT-BLOCKED", state="In Progress", blocked_by=(blocker,))
 
     attention = orch.issue_attention(issue)

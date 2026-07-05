@@ -61,6 +61,7 @@ from ..stats import StatsStore, stats_store_for
 from ..trackers import build_tracker_client
 from ..utils.wiki_sweep import sweep as _wiki_sweep_run
 from ..workflow import (
+    DEFAULT_TERMINAL_STATES,
     ServiceConfig,
     SUPPORTED_AGENT_KINDS,
     WorkflowState,
@@ -117,6 +118,14 @@ log = get_logger()
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_FAILED_BLOCKER_TERMINAL_STATES = {
+    "archive",
+    "archived",
+    "blocked",
+    "cancelled",
+    "canceled",
+    "duplicate",
+}
 
 
 def _clean_board_error_message(message: str) -> str:
@@ -176,6 +185,27 @@ def _attention_signal(
         "severity": severity,
         "due_at": due_at,
     }
+
+
+def _successful_blocker_terminal_states(cfg: ServiceConfig | None) -> set[str]:
+    if cfg is None:
+        terminal_states = DEFAULT_TERMINAL_STATES
+        archive_state = "Archive"
+    else:
+        terminal_states = cfg.tracker.terminal_states
+        archive_state = cfg.tracker.archive_state
+    failed = set(_FAILED_BLOCKER_TERMINAL_STATES)
+    failed.add(normalize_state(archive_state).strip())
+    return {normalize_state(s).strip() for s in terminal_states} - failed
+
+
+def _blocker_dependency_is_resolved(
+    blocker_state: str | None, cfg: ServiceConfig | None
+) -> bool:
+    state = normalize_state(blocker_state).strip()
+    if not state:
+        return False
+    return state in _successful_blocker_terminal_states(cfg)
 
 
 class Orchestrator:
@@ -883,12 +913,8 @@ class Orchestrator:
             )
         if issue.blocked_by:
             cfg = self._workflow_state.current()
-            if cfg is not None:
-                terminal = {normalize_state(s) for s in cfg.tracker.terminal_states}
-            else:
-                terminal = {"done", "cancelled", "canceled", "blocked", "archive"}
             for blocker in issue.blocked_by:
-                if blocker.state and normalize_state(blocker.state) in terminal:
+                if _blocker_dependency_is_resolved(blocker.state, cfg):
                     continue
                 identifier = blocker.identifier or blocker.id or "unknown"
                 return _attention_signal(
@@ -1722,7 +1748,7 @@ class Orchestrator:
         # if an upstream dependency regresses or is unknown.
         if issue.blocked_by:
             for blocker in issue.blocked_by:
-                if not blocker.state or normalize_state(blocker.state) not in terminal:
+                if not _blocker_dependency_is_resolved(blocker.state, cfg):
                     return False
         return True
 
