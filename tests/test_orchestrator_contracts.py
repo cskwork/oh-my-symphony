@@ -440,7 +440,7 @@ def test_verify_scorecard_fail_row_warns_without_rewind(tmp_path: Path) -> None:
     assert "[contract-warn]" in result.warning_note
 
 
-def test_learn_contract_requires_human_review_and_wiki_updates() -> None:
+def test_learn_contract_requires_completion_record_or_human_review() -> None:
     result = evaluate_contract(
         producing_state="Learn",
         ticket_body="## Wiki Updates\n- docs/llm-wiki/foo.md\n",
@@ -448,10 +448,27 @@ def test_learn_contract_requires_human_review_and_wiki_updates() -> None:
     )
 
     assert result.passed is False
-    assert "## Human Review" in result.missing
+    assert "one of `## As-Is -> To-Be Report` or `## Human Review`" in result.missing
 
 
-def test_learn_contract_passes_with_required_sections() -> None:
+def test_learn_contract_passes_with_completion_record() -> None:
+    result = evaluate_contract(
+        producing_state="Learn",
+        ticket_body="""
+## Wiki Updates
+- docs/llm-wiki/foo.md
+
+## As-Is -> To-Be Report
+### Goal
+- ship the fix
+""",
+        identifier="SMA-1",
+    )
+
+    assert result.passed is True
+
+
+def test_learn_contract_passes_with_intervention_handoff() -> None:
     result = evaluate_contract(
         producing_state="Learn",
         ticket_body="""

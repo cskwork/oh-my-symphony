@@ -23,6 +23,7 @@ from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.error import YAMLError
 
 from ..errors import SymphonyError
+from .constants import DEFAULT_CI_MIN_INTERVAL_MS, SUPPORTED_AGENT_KINDS
 
 _STATE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _/-]{0,39}$")
 _MAX_COLUMNS = 100
@@ -408,4 +409,71 @@ def set_branch_policy(
         agent["feature_base_branch"] = feature_base_branch.strip()
     if auto_merge_target_branch is not None:
         agent["auto_merge_target_branch"] = auto_merge_target_branch.strip()
+    _write_workflow_atomic(workflow_path, data, body)
+
+
+# ---------------------------------------------------------------------------
+# continuous improvement heartbeat
+# ---------------------------------------------------------------------------
+
+
+def set_continuous_improvement_settings(
+    workflow_path: Path,
+    *,
+    enabled: bool | None = None,
+    interval_ms: int | None = None,
+    max_turns: int | None = None,
+    agent_kind: str | None = None,
+) -> None:
+    """Update the settable subset of `continuous_improvement:` in WORKFLOW.md.
+
+    Only `enabled`, `interval_ms`, `max_turns`, and `agent_kind` are writable
+    here — the remaining fields (`ticket_prefix`, `max_tickets_per_run`,
+    `require_idle_board`) are parse-only and must be hand-edited. Omitted
+    keyword arguments leave the existing value untouched; `agent_kind=""`
+    explicitly clears back to inheriting the workflow's default agent.
+    """
+    if enabled is not None and not isinstance(enabled, bool):
+        raise WorkflowMutationError("continuous_improvement.enabled must be a boolean")
+    if interval_ms is not None:
+        if isinstance(interval_ms, bool) or not isinstance(interval_ms, int):
+            raise WorkflowMutationError(
+                "continuous_improvement.interval_ms must be an integer"
+            )
+        if interval_ms < DEFAULT_CI_MIN_INTERVAL_MS:
+            raise WorkflowMutationError(
+                f"continuous_improvement.interval_ms must be >= {DEFAULT_CI_MIN_INTERVAL_MS}"
+            )
+    if max_turns is not None:
+        if isinstance(max_turns, bool) or not isinstance(max_turns, int):
+            raise WorkflowMutationError(
+                "continuous_improvement.max_turns must be an integer"
+            )
+        if max_turns < 0:
+            raise WorkflowMutationError(
+                "continuous_improvement.max_turns must be >= 0"
+            )
+    normalized_agent_kind: str | None = None
+    if agent_kind is not None:
+        if not isinstance(agent_kind, str):
+            raise WorkflowMutationError(
+                "continuous_improvement.agent_kind must be a string"
+            )
+        normalized_agent_kind = agent_kind.strip().lower()
+        if normalized_agent_kind and normalized_agent_kind not in SUPPORTED_AGENT_KINDS:
+            raise WorkflowMutationError(
+                f"unknown continuous_improvement.agent_kind {normalized_agent_kind!r}; "
+                f"supported: {sorted(SUPPORTED_AGENT_KINDS)}"
+            )
+
+    data, body = _load_frontmatter(workflow_path)
+    ci = _ensure_map(data, "continuous_improvement")
+    if enabled is not None:
+        ci["enabled"] = enabled
+    if interval_ms is not None:
+        ci["interval_ms"] = interval_ms
+    if max_turns is not None:
+        ci["max_turns"] = max_turns
+    if normalized_agent_kind is not None:
+        ci["agent_kind"] = normalized_agent_kind
     _write_workflow_atomic(workflow_path, data, body)

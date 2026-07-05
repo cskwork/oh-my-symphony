@@ -22,9 +22,9 @@ This ticket depends on:
 Honour the gate matching `{{ issue.state }}`. One stage = one transition; never jump ahead. The ticket should read like a short delivery record for the next person who opens the board, not like a raw transcript.
 
 ```
-  Todo  ->  In Progress  ->  Verify  ->  Learn  ->  Human Review  ->  Done
+  Todo  ->  In Progress  ->  Verify  ->  Learn  ->  Done
                  ^              |          |
-                 |              |          +-> operator may skip Learn to Human Review
+                 |              |          +-> critical/manual intervention -> Human Review
                  +--------------+------------- Verify/Learn defects rewind here
 ```
 
@@ -32,7 +32,7 @@ Honour the gate matching `{{ issue.state }}`. One stage = one transition; never 
 - `docs/{{ issue.identifier }}/` is this ticket's evidence root. Use `reproduce/`, `work/`, and `qa/` inside it; overflow details go to `details.md` in the relevant folder.
 - Ticket file: `kanban/{{ issue.identifier }}.md`. Transition = edit the YAML front matter `state:` field; narrative = append body sections.
 - Verify is never skipped. Trivial non-runtime work may shorten QA evidence, but the ticket still goes through Verify.
-- Learn is lightweight wiki write-back. Only the operator may skip it with the TUI/web skip action; agents do not self-skip by jumping to Human Review.
+- Learn is lightweight wiki write-back plus the final delivery record. Agents set `Done` for normal success; use `Human Review` only for a real critical/manual intervention that cannot be resolved locally.
 {% if token_budget %}
 - Token budget: keep this turn under {{ token_budget }} completion tokens (stage EMA: {{ token_ema }}). Cut narration, never evidence.
 {% endif %}
@@ -46,7 +46,7 @@ Each lane answers one human question:
 | Todo | Is this ready to work? | Ready reason, missing input, or blocker. |
 | In Progress | What are we changing and how will we prove it? | Goal, before state, after target, plan, tests, implementation notes, self-critique. |
 | Verify | Did it really work and is it safe to merge? | Review result, real commands, acceptance scorecard, not-covered risk, merge proof. |
-| Learn | What should the next ticket remember? | Durable wiki update plus a concise Human Review handoff. |
+| Learn | What should the next ticket remember? | Durable wiki update plus a final report, or a Human Review handoff only for critical/manual intervention. |
 | Done | What changed from As-Is to To-Be? | Final report with evidence, reasoning, residual risk, and rerun path. |
 
 Evidence should be readable without reopening the whole transcript:
@@ -111,8 +111,8 @@ Keep sections compact. Overflow goes to `docs/{{ issue.identifier }}/<stage>/det
 | `## Learnings` | 3-4 bullets | extended rationale |
 | `## Wiki Updates` | <= 4 lines | wiki files are source of truth |
 | `## Learn Skipped` | 1 line, orchestrator only | n/a |
-| `## Human Review` | <= 18 lines: changed, why, evidence, risk, checklist, decision | full evidence dump under docs |
 | `## As-Is -> To-Be Report` | <= 20 lines: goal, as-is, to-be, reasoning, evidence, residual risk | full evidence dump under docs |
+| `## Human Review` | <= 18 lines: critical/manual blocker, changed, evidence, risk, checklist, decision | full evidence dump under docs |
 
 Style rules:
 
@@ -123,7 +123,8 @@ Style rules:
 
 ## Hard rules
 
-- Never skip Verify. Never mark `Done` without `## QA Evidence`, `## Merge Status`, and explicit human confirmation from Human Review.
+- Never skip Verify. Never mark `Done` without `## QA Evidence`, `## Merge Status`, `## Wiki Updates`, and `## As-Is -> To-Be Report`.
+- Use `Human Review` only for real critical/manual intervention, not as the normal completion path.
 - Never silence failing tests, hide errors, or add fake success paths. Fix the root cause or move the ticket to `Blocked`.
 - Touch only what the ticket requires. No drive-by refactors.
 - Record non-trivial decisions in `docs/changelog/changelog-YYYY-MM-DD.md` (append; do not overwrite).

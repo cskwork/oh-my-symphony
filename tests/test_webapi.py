@@ -59,6 +59,26 @@ class _StubOrchestrator:
         self.running_identifiers: dict[str, str] = {}
         self.refresh_calls = 0
         self.run_history_error: str | None = None
+        self.reset_ci_calls = 0
+        self.recover_calls: list[dict[str, str | None]] = []
+        self.ci_status: dict[str, Any] = {
+            "enabled": True,
+            "interval_ms": 60_000,
+            "max_turns": 4,
+            "turns_used": 2,
+            "agent_kind": "codex",
+            "in_flight": False,
+            "current_phase": None,
+            "last_started_at": "2026-07-05T00:00:00Z",
+            "last_finished_at": "2026-07-05T00:01:00Z",
+            "next_due_at": "2026-07-05T00:31:00Z",
+            "last_result": "failed",
+            "last_error": "ruff failed",
+            "tickets_created": 1,
+            "skipped_reason": None,
+            "last_verified_branch": "dev",
+            "last_verified_sha": "abc123",
+        }
 
     @property
     def workflow_state(self) -> WorkflowState:
@@ -146,6 +166,39 @@ class _StubOrchestrator:
 
     def resume_worker(self, _issue_id: str) -> bool:
         return True
+
+    async def recover_blocked_issue(
+        self,
+        identifier: str,
+        *,
+        target_state: str | None = None,
+        agent_kind: str | None = None,
+    ) -> tuple[bool, str, dict[str, str]]:
+        self.recover_calls.append(
+            {
+                "identifier": identifier,
+                "target_state": target_state,
+                "agent_kind": agent_kind,
+            }
+        )
+        rca_state = target_state or "Doing"
+        agent = agent_kind or "claude"
+        return True, f"RCA-1 opened to unblock {identifier}", {
+            "original_state": "Blocked",
+            "target_state": "Todo",
+            "source_reopen_state": "Todo",
+            "rca_identifier": "RCA-1",
+            "rca_state": rca_state,
+            "agent_kind": agent,
+        }
+
+    def continuous_improvement_status(self) -> dict[str, Any]:
+        return dict(self.ci_status)
+
+    def reset_continuous_improvement_turns(self) -> None:
+        self.reset_ci_calls += 1
+        self.ci_status["turns_used"] = 0
+        self.ci_status["skipped_reason"] = None
 
 
 @pytest.fixture()
@@ -323,6 +376,31 @@ async def test_patch_unknown_issue_404_and_empty_400(client: TestClient) -> None
     assert (await client.patch("/api/v1/issues/SEED-1", json={})).status == 400
 
 
+async def test_recover_blocked_route_calls_orchestrator(client: TestClient) -> None:
+    resp = await client.post(
+        "/api/v1/issues/SEED-1/recover-blocked",
+        json={"target_state": "Doing", "agent_kind": "codex"},
+    )
+
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload["identifier"] == "SEED-1"
+    assert payload["rca_created"] is True
+    assert payload["target_state"] == "Todo"
+    assert payload["source_reopen_state"] == "Todo"
+    assert payload["rca_identifier"] == "RCA-1"
+    assert payload["rca_state"] == "Doing"
+    assert payload["agent_kind"] == "codex"
+    stub = client.stub  # type: ignore[attr-defined]
+    assert stub.recover_calls == [
+        {
+            "identifier": "SEED-1",
+            "target_state": "Doing",
+            "agent_kind": "codex",
+        }
+    ]
+
+
 async def test_delete_issue_and_running_guard(client: TestClient) -> None:
     stub = client.stub  # type: ignore[attr-defined]
     stub.running_identifiers["SEED-1"] = "iss-1"
@@ -431,6 +509,120 @@ async def test_branch_policy_put_validates_and_persists(
     assert resp.status == 200
     text = (board_dir / "WORKFLOW.md").read_text(encoding="utf-8")
     assert "feature_base_branch: dev" in text
+
+
+async def test_workflow_get_includes_continuous_improvement(
+    client: TestClient,
+) -> None:
+    resp = await client.get("/api/v1/workflow")
+
+    assert resp.status == 200
+    payload = await resp.json()
+    ci = payload["continuous_improvement"]
+    assert ci == {
+        "enabled": False,
+        "interval_ms": 1_800_000,
+        "max_turns": 48,
+        "agent_kind": "",
+        "ticket_prefix": "CI",
+        "max_tickets_per_run": 5,
+        "require_idle_board": True,
+    }
+    assert "codex" in payload["agent_kinds"]
+    assert "claude" in payload["agent_kinds"]
+
+
+async def test_continuous_improvement_put_validates_and_persists(
+    client: TestClient, board_dir: Path
+) -> None:
+    bad_payloads = [
+        {},
+        {"enabled": "true"},
+        {"interval_ms": 59_999},
+        {"max_turns": -1},
+        {"agent_kind": "unknown"},
+        {"enabled": True, "unexpected": True},
+    ]
+    for body in bad_payloads:
+        resp = await client.put(
+            "/api/v1/workflow/continuous-improvement", json=body
+        )
+        assert resp.status == 400, body
+
+    resp = await client.put(
+        "/api/v1/workflow/continuous-improvement",
+        json={
+            "enabled": True,
+            "interval_ms": 120_000,
+            "max_turns": 3,
+            "agent_kind": "opencode",
+        },
+    )
+
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload["updated"] == [
+        "agent_kind",
+        "enabled",
+        "interval_ms",
+        "max_turns",
+    ]
+    assert payload["continuous_improvement"]["enabled"] is True
+    assert payload["continuous_improvement"]["interval_ms"] == 120_000
+    assert payload["continuous_improvement"]["max_turns"] == 3
+    assert payload["continuous_improvement"]["agent_kind"] == "opencode"
+    text = (board_dir / "WORKFLOW.md").read_text(encoding="utf-8")
+    assert "continuous_improvement:" in text
+    assert "enabled: true" in text
+    assert "interval_ms: 120000" in text
+    assert "max_turns: 3" in text
+    assert "agent_kind: opencode" in text
+
+
+async def test_continuous_improvement_put_guards_json_contract(
+    client: TestClient,
+) -> None:
+    resp = await client.put(
+        "/api/v1/workflow/continuous-improvement",
+        data="{",
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status == 400
+
+    resp = await client.put(
+        "/api/v1/workflow/continuous-improvement",
+        data='{"enabled":true}',
+        headers={"Content-Type": "text/plain"},
+    )
+    assert resp.status == 415
+
+    resp = await client.put(
+        "/api/v1/workflow/continuous-improvement",
+        json={"enabled": True},
+        headers={"Host": "evil.example:9993"},
+    )
+    assert resp.status == 403
+
+
+async def test_continuous_improvement_status_and_reset(
+    client: TestClient,
+) -> None:
+    status_resp = await client.get("/api/v1/continuous-improvement/status")
+    assert status_resp.status == 200
+    status = await status_resp.json()
+    assert status["turns_used"] == 2
+    assert status["last_result"] == "failed"
+    assert status["last_verified_branch"] == "dev"
+
+    reset_resp = await client.post(
+        "/api/v1/workflow/continuous-improvement/reset-turns"
+    )
+
+    assert reset_resp.status == 200
+    payload = await reset_resp.json()
+    assert payload["status"]["turns_used"] == 0
+    stub = client.stub  # type: ignore[attr-defined]
+    assert stub.reset_ci_calls == 1
 
 
 # ---------------------------------------------------------------------------

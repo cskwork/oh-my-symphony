@@ -41,6 +41,7 @@ from .workflow.mutate import (
     apply_states_update,
     read_prompt,
     set_branch_policy,
+    set_continuous_improvement_settings,
     write_prompt,
 )
 
@@ -55,6 +56,7 @@ _MAX_BODY = 128_000
 _MAX_LABELS = 20
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 _LOOPBACK_BINDS = {"", "localhost", "127.0.0.1", "::1", "[::1]"}
+_CI_EDITABLE_KEYS = {"enabled", "interval_ms", "max_turns", "agent_kind"}
 
 
 def _json_error(status: int, code: str, message: str) -> web.Response:
@@ -228,6 +230,38 @@ def _columns_payload(cfg: ServiceConfig) -> list[dict[str, Any]]:
     return out
 
 
+def _continuous_improvement_payload(cfg: ServiceConfig) -> dict[str, Any]:
+    ci = cfg.continuous_improvement
+    return {
+        "enabled": ci.enabled,
+        "interval_ms": ci.interval_ms,
+        "max_turns": ci.max_turns,
+        "agent_kind": ci.agent_kind,
+        "ticket_prefix": ci.ticket_prefix,
+        "max_tickets_per_run": ci.max_tickets_per_run,
+        "require_idle_board": ci.require_idle_board,
+    }
+
+
+def _workflow_payload(cfg: ServiceConfig) -> dict[str, Any]:
+    return {
+        "workflow_path": str(cfg.workflow_path),
+        "columns": _columns_payload(cfg),
+        "agent": {
+            "kind": cfg.agent.kind,
+            "max_concurrent_agents": cfg.agent.max_concurrent_agents,
+            "max_turns": cfg.agent.max_turns,
+            "max_attempts": cfg.agent.max_attempts,
+            "feature_base_branch": cfg.agent.feature_base_branch,
+            "auto_merge_target_branch": cfg.agent.auto_merge_target_branch,
+            "auto_merge_on_done": cfg.agent.auto_merge_on_done,
+        },
+        "agent_kinds": sorted(SUPPORTED_AGENT_KINDS),
+        "continuous_improvement": _continuous_improvement_payload(cfg),
+        "polling_interval_ms": cfg.poll_interval_ms,
+    }
+
+
 def _live_by_identifier(orchestrator: Orchestrator) -> dict[str, dict[str, Any]]:
     snapshot = orchestrator.snapshot()
     live: dict[str, dict[str, Any]] = {}
@@ -324,6 +358,37 @@ def _check_agent_kind(raw: Any) -> str:
             f"unknown agent_kind {kind!r}; supported: {sorted(SUPPORTED_AGENT_KINDS)}"
         )
     return kind
+
+
+def _parse_ci_settings(body: dict[str, Any]) -> dict[str, Any]:
+    unknown = sorted(set(body) - _CI_EDITABLE_KEYS)
+    if unknown:
+        raise WorkflowMutationError(
+            f"unknown continuous_improvement field(s): {', '.join(unknown)}"
+        )
+    updates: dict[str, Any] = {}
+    if "enabled" in body:
+        value = body["enabled"]
+        if not isinstance(value, bool):
+            raise WorkflowMutationError("enabled must be a boolean")
+        updates["enabled"] = value
+    if "interval_ms" in body:
+        value = body["interval_ms"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise WorkflowMutationError("interval_ms must be an integer")
+        updates["interval_ms"] = value
+    if "max_turns" in body:
+        value = body["max_turns"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise WorkflowMutationError("max_turns must be an integer")
+        updates["max_turns"] = value
+    if "agent_kind" in body:
+        updates["agent_kind"] = _check_agent_kind(body["agent_kind"])
+    if not updates:
+        raise WorkflowMutationError(
+            "body must set enabled, interval_ms, max_turns, and/or agent_kind"
+        )
+    return updates
 
 
 def _check_state(cfg: ServiceConfig, raw: Any) -> str:
@@ -530,6 +595,30 @@ def _register_issue_routes(
         orchestrator.request_refresh()
         return web.json_response({"identifier": identifier, "updated": sorted(fields)})
 
+    async def handle_issue_recover_blocked(request: web.Request) -> web.Response:
+        identifier = _check_identifier(request.match_info["identifier"])
+        body = await _read_json(request)
+        raw_target = body.get("rca_state", body.get("target_state"))
+        if raw_target is not None and not isinstance(raw_target, str):
+            raise WorkflowMutationError("rca_state must be a string")
+        agent_kind = _check_agent_kind(body.get("agent_kind")) if "agent_kind" in body else None
+        changed, message, details = await orchestrator.recover_blocked_issue(
+            identifier,
+            target_state=raw_target,
+            agent_kind=agent_kind,
+        )
+        if not changed:
+            status = 404 if message.startswith("unknown issue") else 409
+            return _json_error(status, "blocked_recovery_rejected", message)
+        return web.json_response(
+            {
+                "identifier": identifier,
+                "rca_created": True,
+                "message": message,
+                **details,
+            }
+        )
+
     async def handle_issue_delete(request: web.Request) -> web.Response:
         identifier = _check_identifier(request.match_info["identifier"])
         tracker = ctx.file_tracker()
@@ -561,6 +650,10 @@ def _register_issue_routes(
     app.router.add_post("/api/v1/issues", _wrap(handle_issue_create))
     app.router.add_get("/api/v1/issues/{identifier}", _wrap(handle_issue_detail))
     app.router.add_patch("/api/v1/issues/{identifier}", _wrap(handle_issue_patch))
+    app.router.add_post(
+        "/api/v1/issues/{identifier}/recover-blocked",
+        _wrap(handle_issue_recover_blocked),
+    )
     app.router.add_delete("/api/v1/issues/{identifier}", _wrap(handle_issue_delete))
     app.router.add_post(
         "/api/v1/issues/{identifier}/skip-learn", _wrap(handle_issue_skip_learn)
@@ -577,22 +670,7 @@ def _register_workflow_routes(
 ) -> None:
     async def handle_workflow_get(_request: web.Request) -> web.Response:
         cfg = ctx.config()
-        return web.json_response(
-            {
-                "workflow_path": str(cfg.workflow_path),
-                "columns": _columns_payload(cfg),
-                "agent": {
-                    "kind": cfg.agent.kind,
-                    "max_concurrent_agents": cfg.agent.max_concurrent_agents,
-                    "max_turns": cfg.agent.max_turns,
-                    "max_attempts": cfg.agent.max_attempts,
-                    "feature_base_branch": cfg.agent.feature_base_branch,
-                    "auto_merge_target_branch": cfg.agent.auto_merge_target_branch,
-                    "auto_merge_on_done": cfg.agent.auto_merge_on_done,
-                },
-                "polling_interval_ms": cfg.poll_interval_ms,
-            }
-        )
+        return web.json_response(_workflow_payload(cfg))
 
     async def handle_states_put(request: web.Request) -> web.Response:
         body = await _read_json(request)
@@ -695,6 +773,46 @@ def _register_workflow_routes(
         orchestrator.workflow_state.reload()
         return web.json_response({"updated": sorted(updates)})
 
+    async def handle_continuous_improvement_put(
+        request: web.Request,
+    ) -> web.Response:
+        body = await _read_json(request)
+        updates = _parse_ci_settings(body)
+        cfg = ctx.config()
+        await asyncio.to_thread(
+            set_continuous_improvement_settings,
+            cfg.workflow_path,
+            enabled=updates.get("enabled"),
+            interval_ms=updates.get("interval_ms"),
+            max_turns=updates.get("max_turns"),
+            agent_kind=updates.get("agent_kind"),
+        )
+        new_cfg, err = orchestrator.workflow_state.reload()
+        if new_cfg is None:
+            raise WorkflowMutationError(f"workflow not loaded: {err}")
+        orchestrator.request_refresh()
+        return web.json_response(
+            {
+                "updated": sorted(updates),
+                "continuous_improvement": _continuous_improvement_payload(new_cfg),
+            }
+        )
+
+    async def handle_continuous_improvement_reset(
+        request: web.Request,
+    ) -> web.Response:
+        if request.body_exists:
+            await _read_json(request)
+        orchestrator.reset_continuous_improvement_turns()
+        return web.json_response(
+            {"status": orchestrator.continuous_improvement_status()}
+        )
+
+    async def handle_continuous_improvement_status(
+        _request: web.Request,
+    ) -> web.Response:
+        return web.json_response(orchestrator.continuous_improvement_status())
+
     async def handle_git_branches(_request: web.Request) -> web.Response:
         import subprocess
 
@@ -720,6 +838,18 @@ def _register_workflow_routes(
     app.router.add_get("/api/v1/workflow/prompts/{state}", _wrap(handle_prompt_get))
     app.router.add_put("/api/v1/workflow/prompts/{state}", _wrap(handle_prompt_put))
     app.router.add_put("/api/v1/workflow/branch-policy", _wrap(handle_branch_policy_put))
+    app.router.add_put(
+        "/api/v1/workflow/continuous-improvement",
+        _wrap(handle_continuous_improvement_put),
+    )
+    app.router.add_post(
+        "/api/v1/workflow/continuous-improvement/reset-turns",
+        _wrap(handle_continuous_improvement_reset),
+    )
+    app.router.add_get(
+        "/api/v1/continuous-improvement/status",
+        _wrap(handle_continuous_improvement_status),
+    )
     app.router.add_get("/api/v1/git/branches", _wrap(handle_git_branches))
 
 

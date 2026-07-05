@@ -129,9 +129,13 @@ class _RecordingWorkspaceManager:
 
 async def _drain(task: asyncio.Task[None]) -> None:
     try:
-        await task
+        await asyncio.wait_for(task, timeout=1)
     except asyncio.CancelledError:
         pass
+    except TimeoutError as exc:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise AssertionError("expected parked worker task to be cancelled") from exc
 
 
 async def test_reconcile_drift_state_cleans_workspace(monkeypatch) -> None:
@@ -163,8 +167,13 @@ async def test_reconcile_isolates_per_issue_failures(monkeypatch) -> None:
     second = _issue("MT-2", "In Progress")
     task_one = asyncio.create_task(_parked())
     task_two = asyncio.create_task(_parked())
-    orch._running[first.id] = _entry(first, task_one, Path("/tmp/ws/MT-1"))
-    orch._running[second.id] = _entry(second, task_two, Path("/tmp/ws/MT-2"))
+    first_entry = _entry(first, task_one, Path("/tmp/ws/MT-1"))
+    second_entry = _entry(second, task_two, Path("/tmp/ws/MT-2"))
+    # Terminal cleanup now has a grace period; this test covers the expired path.
+    first_entry.terminal_seen_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    second_entry.terminal_seen_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    orch._running[first.id] = first_entry
+    orch._running[second.id] = second_entry
     manager = _RecordingWorkspaceManager(fail_first_remove=True)
     orch._workspace_manager = manager  # type: ignore[assignment]
 

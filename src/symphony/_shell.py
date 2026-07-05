@@ -128,6 +128,17 @@ async def safe_proc_wait(proc: Any, *, timeout: float | None = None) -> int | No
     if pid is None:
         return None
 
+    async def _asyncio_returncode_fallback() -> int | None:
+        if proc.returncode is not None:
+            return proc.returncode
+        wait = getattr(proc, "wait", None)
+        if wait is None:
+            return None
+        try:
+            return await asyncio.wait_for(wait(), timeout=0.05)
+        except asyncio.TimeoutError:
+            return proc.returncode
+
     def _blocking_wait() -> int | None:
         try:
             _, status = os.waitpid(pid, 0)
@@ -146,11 +157,17 @@ async def safe_proc_wait(proc: Any, *, timeout: float | None = None) -> int | No
         return None
 
     if timeout is None:
-        return await asyncio.to_thread(_blocking_wait)
+        rc = await asyncio.to_thread(_blocking_wait)
+        if rc is not None:
+            return rc
+        return await _asyncio_returncode_fallback()
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_blocking_wait), timeout=timeout)
+        rc = await asyncio.wait_for(asyncio.to_thread(_blocking_wait), timeout=timeout)
     except asyncio.TimeoutError:
         return None
+    if rc is not None:
+        return rc
+    return await _asyncio_returncode_fallback()
 
 
 def _signal_process_group(pid: int, sig: int) -> bool:

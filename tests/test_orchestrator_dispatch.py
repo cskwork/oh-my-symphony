@@ -309,6 +309,200 @@ def test_todo_with_blocked_terminal_blocker_remains_blocked():
     assert orch._should_dispatch(issue, cfg) is False
 
 
+def test_todo_with_human_review_blocker_remains_blocked():
+    cfg = _make_config(terminal_states=("Human Review", "Done", "Blocked"))
+    orch = _orch()
+    blocker = BlockerRef(id="z", identifier="MT-9", state="Human Review")
+    issue = _issue("MT-1", state="Todo", blocked_by=(blocker,))
+
+    assert orch._should_dispatch(issue, cfg) is False
+
+
+def test_tick_normalizes_legacy_human_review_confirm_done_before_candidates(
+    monkeypatch,
+):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo",),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    legacy = _issue(
+        "MT-LEGACY",
+        state="Human Review",
+        description=(
+            "## Human Review\n\n"
+            "### Evidence\n"
+            "- checks passed.\n\n"
+            "### Decision Needed\n"
+            "Confirm Done\n"
+        ),
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+    notes: list[tuple[str, str, str]] = []
+    fetch_seen: list[list[tuple[str, str]]] = []
+
+    async def _fetch_candidates(_cfg):
+        fetch_seen.append(list(moved))
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [legacy])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_append_note",
+        lambda _cfg, _issue, heading, body: notes.append(
+            (_issue.identifier, heading, body)
+        ),
+    )
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert fetch_seen == [[("MT-LEGACY", "Done")]]
+    assert notes == [("MT-LEGACY", "Human Review Normalized", notes[0][2])]
+    assert "current workflow reserves `Human Review`" in notes[0][2]
+    assert moved == [("MT-LEGACY", "Done")]
+
+
+def test_tick_normalizes_legacy_human_review_unblock_note_after_merge_failure(
+    monkeypatch,
+):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo",),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    legacy = _issue(
+        "MT-LEGACY",
+        state="Human Review",
+        description=(
+            "## Merge Failure\n\n"
+            "Host worktree drift blocked the original merge.\n\n"
+            "## Unblock Note\n\n"
+            "Follow-up ticket integrated this work on remote main.\n"
+        ),
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [legacy])
+    monkeypatch.setattr(orch, "_tracker_call_append_note", lambda *_args: None)
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert moved == [("MT-LEGACY", "Done")]
+
+
+def test_tick_keeps_intervention_human_review_blocked(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo",),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    intervention = _issue(
+        "MT-INTERVENTION",
+        state="Human Review",
+        description=(
+            "## Human Review\n\n"
+            "### Intervention Required\n"
+            "Provision the real development database.\n\n"
+            "### Decision Needed\n"
+            "Confirm Done\n"
+        ),
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(
+        orch, "_tracker_call_terminal_issues", lambda _cfg: [intervention]
+    )
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert moved == []
+
+
+def test_tick_keeps_blocked_rca_at_human_review_blocked(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo",),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    source = _issue("MT-BLOCKED", state="Blocked")
+    rca = replace(
+        _issue(
+            "RCA-1",
+            state="Human Review",
+            description=(
+                core_module._blocked_rca_description(source, reopen_state="Todo")
+                + "\n\n### Decision Needed\nConfirm Done\n"
+            ),
+            labels=("blocked-rca", "source-mt-blocked"),
+        ),
+        title="RCA unblock MT-BLOCKED: MT-BLOCKED title",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert moved == []
+
+
 def test_active_state_issue_with_unresolved_blocker_is_ineligible():
     cfg = _make_config(active_states=("Todo", "In Progress", "Verify"))
     orch = _orch()
@@ -569,6 +763,98 @@ def test_persisted_issue_flags_block_dispatch_after_restart(tmp_path):
     assert exhausted.id in restarted._turn_budget_exhausted
     assert restarted._should_dispatch(paused, cfg) is False
     assert restarted._should_dispatch(exhausted, cfg) is False
+
+
+def test_retryable_persisted_pause_restarts_as_retry(tmp_path, monkeypatch):
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+        active_states=("Todo",),
+    )
+    state_db = tmp_path / ".symphony" / "state.db"
+    issue = _issue("MT-LEGACY-RETRY", state="Todo")
+    registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+    registry.set_issue_flags(
+        issue.id,
+        retry_attempt=1,
+        paused=True,
+        pause_reason=(
+            "worker error: turn_error: turn_failed: opencode failed with "
+            "exit -15; paused for operator inspection"
+        ),
+    )
+    registry.close()
+    restarted = _orch()
+
+    dispatched: list[tuple[str, int | None, str | None]] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(captured_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append((captured_issue.id, attempt, attempt_kind))
+
+    async def _run() -> None:
+        restarted._loop = asyncio.get_running_loop()
+        monkeypatch.setattr(restarted._workflow_state, "reload", lambda: (cfg, None))
+        monkeypatch.setattr(restarted._workflow_state, "current", lambda: cfg)
+        monkeypatch.setattr(restarted, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(restarted, "_archive_sweep", _archive)
+        monkeypatch.setattr(restarted, "_dispatch", _dispatch)
+
+        restarted._ensure_run_registry(cfg)
+
+        assert restarted.is_paused(issue.id) is False
+        assert issue.id not in restarted._pause_reasons
+        flags = restarted._run_registry.get_issue_flags(issue.id)  # type: ignore[union-attr]
+        assert flags is not None
+        assert flags.retry_attempt == 1
+        assert flags.paused is False
+        assert flags.pause_reason is None
+
+        await restarted._on_tick()
+
+    asyncio.run(_run())
+
+    assert dispatched == [(issue.id, 1, "retry")]
+
+
+def test_non_opencode_persisted_sigterm_pause_stays_paused(tmp_path):
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+        active_states=("Todo",),
+    )
+    state_db = tmp_path / ".symphony" / "state.db"
+    issue = _issue("MT-LEGACY-SIGTERM", state="Todo")
+    pause_reason = (
+        "worker error: turn_error: turn_failed: claude failed with "
+        "exit -15; paused for operator inspection"
+    )
+    registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+    registry.set_issue_flags(
+        issue.id,
+        retry_attempt=1,
+        paused=True,
+        pause_reason=pause_reason,
+    )
+    registry.close()
+    restarted = _orch()
+
+    restarted._ensure_run_registry(cfg)
+
+    assert restarted.is_paused(issue.id) is True
+    assert restarted._pause_reasons[issue.id] == pause_reason
+    assert restarted._should_dispatch(issue, cfg) is False
+    assert restarted._run_registry is not None
+    flags = restarted._run_registry.get_issue_flags(issue.id)
+    assert flags is not None
+    assert flags.retry_attempt == 1
+    assert flags.paused is True
+    assert flags.pause_reason == pause_reason
 
 
 def test_persisted_retry_attempt_drives_next_dispatch_and_cap(tmp_path, monkeypatch):
@@ -2566,15 +2852,16 @@ def test_worker_exit_preserves_pause_flag_for_held_ticket():
     asyncio.run(_run())
 
 
-def test_worker_exit_error_auto_pauses_with_visible_reason(tmp_path):
+def test_worker_exit_retryable_rate_limit_schedules_retry_without_pause(tmp_path):
     registry = RunRegistry(tmp_path / ".symphony" / "state.db")
     orch = _orch()
-    issue = _issue("MT-ERROR-PAUSE", state="In Progress")
+    issue = _issue("MT-RATE-LIMIT", state="In Progress")
 
     async def _run() -> None:
         orch._loop = asyncio.get_running_loop()
         orch._run_registry = registry
-        _install_running_entry(orch, issue)
+        entry = _install_running_entry(orch, issue)
+        entry.agent_kind = "opencode"
 
         try:
             await orch._on_worker_exit(
@@ -2588,17 +2875,116 @@ def test_worker_exit_error_auto_pauses_with_visible_reason(tmp_path):
 
             flags = registry.get_issue_flags(issue.id)
             assert flags is not None
-            assert flags.paused is True
-            assert flags.pause_reason is not None
-            assert "turn_error" in flags.pause_reason
-            assert "429 The service may be temporarily overloaded" in flags.pause_reason
-            assert "backend-internal" in flags.pause_reason
-            assert "\x1b" not in flags.pause_reason
+            assert flags.retry_attempt == 1
+            assert flags.paused is False
+            assert flags.pause_reason is None
+            assert orch.is_paused(issue.id) is False
             retry = orch._retry[issue.id]
             assert retry.error is not None
             assert "429 The service may be temporarily overloaded" in retry.error
             assert "backend-internal" in retry.error
             assert "\x1b" not in retry.error
+            assert retry.kind == "retry"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_worker_exit_connection_error_retries_without_pause(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-CONNECTION-RETRY", state="Todo")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        entry = _install_running_entry(orch, issue)
+        entry.agent_kind = "pi"
+
+        try:
+            await orch._on_worker_exit(
+                issue.id,
+                reason="turn_error",
+                error="turn_failed: Connection error.; stderr:",
+            )
+
+            flags = registry.get_issue_flags(issue.id)
+            assert flags is not None
+            assert flags.retry_attempt == 1
+            assert flags.paused is False
+            assert flags.pause_reason is None
+            assert orch.is_paused(issue.id) is False
+            retry = orch._retry[issue.id]
+            assert retry.error == "turn_error: turn_failed: Connection error.; stderr:"
+            assert retry.kind == "retry"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_worker_exit_opencode_sigterm_schedules_retry_without_pause(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-OPENCODE-TERM", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        entry = _install_running_entry(orch, issue)
+        entry.agent_kind = "opencode"
+
+        try:
+            await orch._on_worker_exit(
+                issue.id,
+                reason="turn_error",
+                error="turn_failed: opencode failed with exit -15",
+            )
+
+            flags = registry.get_issue_flags(issue.id)
+            assert flags is not None
+            assert flags.retry_attempt == 1
+            assert flags.paused is False
+            assert flags.pause_reason is None
+            assert orch.is_paused(issue.id) is False
+            retry = orch._retry[issue.id]
+            assert retry.error == "turn_error: turn_failed: opencode failed with exit -15"
+            assert retry.kind == "retry"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_worker_exit_error_auto_pauses_hard_failure_with_visible_reason(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-ERROR-PAUSE", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        _install_running_entry(orch, issue)
+
+        try:
+            await orch._on_worker_exit(
+                issue.id,
+                reason="turn_error",
+                error="backend crashed before reading prompt; stderr: \x1b[31mboom\x1b[0m",
+            )
+
+            flags = registry.get_issue_flags(issue.id)
+            assert flags is not None
+            assert flags.paused is True
+            assert flags.pause_reason is not None
+            assert "turn_error" in flags.pause_reason
+            assert "backend crashed before reading prompt" in flags.pause_reason
+            assert "boom" in flags.pause_reason
+            assert "\x1b" not in flags.pause_reason
 
             attention = orch.issue_attention(issue)
             assert attention is not None
@@ -2777,6 +3163,16 @@ def test_resume_worker_releases_held_retry_immediately(monkeypatch):
     asyncio.run(_run())
 
 
+def test_find_resumable_issue_id_resolves_idle_paused_file_identifier():
+    orch = _orch()
+    orch._paused_issue_ids.add("RCA-1")
+    orch._pause_reasons["RCA-1"] = "operator pause"
+
+    assert orch.find_resumable_issue_id("RCA-1") == "RCA-1"
+    assert orch.resume_worker("RCA-1") is True
+    assert orch.is_paused("RCA-1") is False
+
+
 def test_reconcile_part_b_skips_paused_worker_on_terminal_state(monkeypatch):
     """Reconcile must not cancel a paused worker when its state moves terminal."""
     cfg = _make_config(max_concurrent=1)
@@ -2859,6 +3255,7 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
             )
             # Backdate last activity so the 10s grace window is exhausted.
             entry.last_codex_timestamp = datetime.now(timezone.utc).replace(year=2000)
+            entry.terminal_seen_at = datetime.now(timezone.utc).replace(year=2000)
             orch._running[issue.id] = entry
 
             # Tracker reports the ticket has moved to a terminal state.
@@ -2982,11 +3379,11 @@ def test_reconcile_terminal_grace_expires_despite_recent_heartbeat(monkeypatch):
 
             assert calls == []
             assert worker_task.cancelled() is False
-            assert entry.terminal_state_seen_at is not None
+            assert entry.terminal_seen_at is not None
 
             # Simulate OpenCode's periodic liveness event after the terminal
             # state has already had its one bounded natural-exit window.
-            entry.terminal_state_seen_at = datetime.now(timezone.utc) - timedelta(
+            entry.terminal_seen_at = datetime.now(timezone.utc) - timedelta(
                 seconds=61
             )
             entry.last_codex_timestamp = datetime.now(timezone.utc)
@@ -3031,6 +3428,7 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
                 workspace_path=Path("/tmp/ws-off"),
             )
             entry.last_codex_timestamp = datetime.now(timezone.utc).replace(year=2000)
+            entry.terminal_seen_at = datetime.now(timezone.utc).replace(year=2000)
             orch._running[issue.id] = entry
 
             moved = Issue(
@@ -3072,6 +3470,62 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
 
             assert commit_calls == [], "auto_commit_on_done=False must skip commit"
             assert remove_calls == [str(Path("/tmp/ws-off"))], "remove must still happen"
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_reconcile_terminal_cleanup_uses_terminal_seen_not_event_age(monkeypatch):
+    cfg = _replace_agent_field(
+        _make_config(max_concurrent=1),
+        auto_commit_on_done=False,
+        auto_merge_on_done=False,
+    )
+    orch = _orch()
+    issue = _issue("MT-TERM-ACTIVE", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp/ws-term-active"),
+            )
+            entry.last_codex_timestamp = datetime.now(timezone.utc)
+            entry.terminal_seen_at = datetime.now(timezone.utc).replace(year=2000)
+            orch._running[issue.id] = entry
+            moved = replace(issue, state="Done")
+            monkeypatch.setattr(
+                orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [moved]
+            )
+            removed: list[str] = []
+
+            class _StubWS:
+                async def remove(self, path):
+                    removed.append(str(path))
+
+                async def after_done_best_effort(self, path, *, identifier, title):
+                    return True
+
+            orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+            await orch._reconcile_running(cfg)
+
+            assert removed == [str(Path("/tmp/ws-term-active"))]
+            assert entry.workspace_cleanup_started is True
         finally:
             worker_task.cancel()
             try:
@@ -3541,6 +3995,549 @@ def test_issue_attention_omits_terminal_issue():
     assert orch.issue_attention(issue) is None
 
 
+def test_issue_attention_reports_blocked_terminal_recovery():
+    orch = _orch()
+    issue = _issue("MT-BLOCKED", state="Blocked")
+    orch._workflow_state._config = _make_config(terminal_states=("Done", "Blocked"))
+
+    attention = orch.issue_attention(issue)
+
+    assert attention is not None
+    assert attention["kind"] == "blocked_recovery_available"
+    assert attention["label"] == "Blocked RCA"
+    assert attention["severity"] == "warning"
+
+
+def test_tick_auto_opens_blocked_rca_ticket_once(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Done", "Blocked"),
+    )
+    issue = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description="## Blocker\n\nMerge gate failed.",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    created: list[str] = []
+    notes: list[tuple[str, str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    def _terminal_issues(_cfg):
+        return [issue]
+
+    def _create(_cfg, _issue, rca_state, reopen_state, agent_kind):
+        created.append(_issue.identifier)
+        assert rca_state == "In Progress"
+        assert reopen_state == "Todo"
+        assert agent_kind == "codex"
+        return "RCA-1"
+
+    def _append(_cfg, _issue, heading, body):
+        notes.append((_issue.identifier, heading, body))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", _terminal_issues)
+    monkeypatch.setattr(orch, "_tracker_call_create_blocked_rca_issue", _create)
+    monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
+
+    asyncio.run(orch._on_tick())
+    asyncio.run(orch._on_tick())
+
+    assert created == ["MT-BLOCKED"]
+    assert notes == [("MT-BLOCKED", "Blocked RCA", notes[0][2])]
+    assert "RCA ticket `RCA-1` opened" in notes[0][2]
+
+
+def test_tick_auto_recovery_skips_existing_blocked_rca_note(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Done", "Blocked"),
+    )
+    issue = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description="## Blocked RCA\n\nRCA ticket `RCA-1` opened.",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    created: list[str] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [issue])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_create_blocked_rca_issue",
+        lambda _cfg, _issue, _rca_state, _reopen_state, _agent_kind: created.append(
+            _issue.identifier
+        )
+        or "RCA-2",
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert created == []
+
+
+def test_tick_auto_recovery_respects_disabled_config(monkeypatch):
+    cfg = replace(
+        _make_config(
+            tracker_kind="file",
+            active_states=("Todo", "In Progress"),
+            terminal_states=("Done", "Blocked"),
+        ),
+        agent=replace(
+            _make_config().agent,
+            auto_recover_blocked=False,
+        ),
+    )
+    issue = _issue("MT-BLOCKED", state="Blocked")
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    created: list[str] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [issue])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_create_blocked_rca_issue",
+        lambda _cfg, _issue, _rca_state, _reopen_state, _agent_kind: created.append(
+            _issue.identifier
+        )
+        or "RCA-1",
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert created == []
+
+
+def test_tick_reopens_blocked_source_after_resolved_rca(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    source = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description="## Blocked RCA\n\nRCA ticket `RCA-1` opened.",
+    )
+    rca = replace(
+        _issue(
+            "RCA-1",
+            state="Done",
+            description=core_module._blocked_rca_description(
+                source,
+                reopen_state="Todo",
+            ),
+            labels=("blocked-rca", "source-mt-blocked"),
+        ),
+        title="RCA unblock MT-BLOCKED: MT-BLOCKED title",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    notes: list[tuple[str, str, str]] = []
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    def _append(_cfg, _issue, heading, body):
+        notes.append((_issue.identifier, heading, body))
+
+    def _move(_cfg, _issue, target):
+        moved.append((_issue.identifier, target))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
+    monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
+
+    asyncio.run(orch._on_tick())
+
+    assert notes == [("MT-BLOCKED", "Blocked RCA Resolved", notes[0][2])]
+    assert "RCA ticket `RCA-1` reached `Done`" in notes[0][2]
+    assert moved == [("MT-BLOCKED", "Todo")]
+
+
+def test_tick_does_not_reopen_blocked_source_at_human_review(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    source = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description="## Blocked RCA\n\nRCA ticket `RCA-1` opened.",
+    )
+    rca = replace(
+        _issue(
+            "RCA-1",
+            state="Human Review",
+            description=core_module._blocked_rca_description(
+                source,
+                reopen_state="Todo",
+            ),
+            labels=("blocked-rca", "source-mt-blocked"),
+        ),
+        title="RCA unblock MT-BLOCKED: MT-BLOCKED title",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert moved == []
+
+
+def test_tick_does_not_reopen_blocked_source_after_failed_rca(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    source = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description="## Blocked RCA\n\nRCA ticket `RCA-1` opened.",
+    )
+    rca = replace(
+        _issue(
+            "RCA-1",
+            state="Blocked",
+            description=core_module._blocked_rca_description(
+                source,
+                reopen_state="Todo",
+            ),
+            labels=("blocked-rca", "source-mt-blocked"),
+        ),
+        title="RCA unblock MT-BLOCKED: MT-BLOCKED title",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert moved == []
+
+
+def test_tick_does_not_reopen_source_when_rca_needs_operator_intervention(
+    monkeypatch,
+):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    source = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description="## Blocked RCA\n\nRCA ticket `RCA-1` opened.",
+    )
+    rca_body = (
+        core_module._blocked_rca_description(source, reopen_state="Todo")
+        + "\n\n## RCA Blocker\n\nRequires access to the real development DB."
+    )
+    rca = replace(
+        _issue(
+            "RCA-1",
+            state="Done",
+            description=rca_body,
+            labels=("blocked-rca", "source-mt-blocked"),
+        ),
+        title="RCA unblock MT-BLOCKED: MT-BLOCKED title",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert moved == []
+
+
+def test_tick_does_not_reopen_source_with_recorded_operator_action(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    source = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description=(
+            "## Blocked RCA\n\nRCA ticket `RCA-1` opened.\n\n"
+            "## Operator Action\n\nProvision DATABASE_URL."
+        ),
+    )
+    rca = replace(
+        _issue(
+            "RCA-1",
+            state="Done",
+            description=core_module._blocked_rca_description(
+                source,
+                reopen_state="Todo",
+            ),
+            labels=("blocked-rca", "source-mt-blocked"),
+        ),
+        title="RCA unblock MT-BLOCKED: MT-BLOCKED title",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch_candidates(_cfg):
+        return []
+
+    async def _archive(_cfg):
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_update_state",
+        lambda _cfg, _issue, target: moved.append((_issue.identifier, target)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert moved == []
+
+
+def test_blocked_rca_create_uses_source_scoped_file_identifier(tmp_path):
+    board_root = tmp_path / "board"
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Done", "Blocked"),
+    )
+    cfg = replace(cfg, tracker=replace(cfg.tracker, board_root=board_root))
+    issue = _issue("MT-BLOCKED", state="Blocked")
+
+    first = Orchestrator._tracker_call_create_blocked_rca_issue(
+        cfg,
+        issue,
+        "In Progress",
+        "Todo",
+        "codex",
+    )
+    second = Orchestrator._tracker_call_create_blocked_rca_issue(
+        cfg,
+        issue,
+        "In Progress",
+        "Todo",
+        "codex",
+    )
+
+    assert first == "RCA-MT-BLOCKED-1"
+    assert second == "RCA-MT-BLOCKED-2"
+
+
+def test_recover_blocked_issue_opens_rca_ticket_and_keeps_source_blocked(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Done", "Blocked"),
+    )
+    issue = replace(_issue("MT-BLOCKED", state="Blocked"), agent_kind="bogus")
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+    fetched: list[str] = []
+    notes: list[tuple[str, str, str]] = []
+    moved: list[tuple[str, str]] = []
+    created: list[dict[str, str]] = []
+
+    def _fetch(_cfg, identifier):
+        fetched.append(identifier)
+        return issue
+
+    def _append(_cfg, _issue, heading, body):
+        notes.append((_issue.identifier, heading, body))
+
+    def _move(_cfg, _issue, target):
+        moved.append((_issue.identifier, target))
+
+    def _create(_cfg, _issue, rca_state, reopen_state, agent_kind):
+        created.append(
+            {
+                "source": _issue.identifier,
+                "rca_state": rca_state,
+                "reopen_state": reopen_state,
+                "agent_kind": agent_kind,
+            }
+        )
+        return "RCA-1"
+
+    monkeypatch.setattr(orch, "_tracker_call_fetch_issue_full_by_id", _fetch)
+    monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
+    monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
+    monkeypatch.setattr(orch, "_tracker_call_create_blocked_rca_issue", _create)
+
+    changed, message, details = asyncio.run(
+        orch.recover_blocked_issue("MT-BLOCKED", target_state="In Progress")
+    )
+
+    assert changed is True
+    assert message == "RCA-1 opened to unblock MT-BLOCKED; MT-BLOCKED remains Blocked"
+    assert details == {
+        "original_state": "Blocked",
+        "target_state": "Todo",
+        "source_reopen_state": "Todo",
+        "rca_identifier": "RCA-1",
+        "rca_state": "In Progress",
+        "agent_kind": "codex",
+    }
+    assert fetched == ["MT-BLOCKED"]
+    assert created == [
+        {
+            "source": "MT-BLOCKED",
+            "rca_state": "In Progress",
+            "reopen_state": "Todo",
+            "agent_kind": "codex",
+        }
+    ]
+    assert notes == [("MT-BLOCKED", "Blocked RCA", notes[0][2])]
+    assert "RCA ticket `RCA-1` opened" in notes[0][2]
+    assert "the source ticket still must pass the normal configured workflow" in notes[0][2]
+    assert moved == []
+
+
+def test_blocked_rca_prompt_reopens_source_to_todo_then_full_workflow():
+    issue = _issue("MT-BLOCKED", state="Blocked")
+
+    description = core_module._blocked_rca_description(issue, reopen_state="Todo")
+
+    assert "move that source ticket to `Todo`" in description
+    assert "Do not skip the source ticket's normal workflow" in description
+    assert "it must pass through the configured Todo/In Progress/Verify/Learn" in description
+
+
+def test_recover_blocked_issue_rejects_non_blocked_ticket(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Done", "Blocked"),
+    )
+    issue = _issue("MT-DONE", state="Done")
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_fetch_issue_full_by_id",
+        lambda _cfg, _identifier: issue,
+    )
+
+    changed, message, details = asyncio.run(orch.recover_blocked_issue("MT-DONE"))
+
+    assert changed is False
+    assert message == "only Blocked tickets can be recovered (state=Done)"
+    assert details == {}
+
+
+def test_recover_blocked_issue_rejects_duplicate_rca(monkeypatch):
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+        terminal_states=("Done", "Blocked"),
+    )
+    issue = _issue(
+        "MT-BLOCKED",
+        state="Blocked",
+        description="## Blocked RCA\n\nRCA ticket `RCA-1` opened.",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+    monkeypatch.setattr(
+        orch,
+        "_tracker_call_fetch_issue_full_by_id",
+        lambda _cfg, _identifier: issue,
+    )
+
+    changed, message, details = asyncio.run(orch.recover_blocked_issue("MT-BLOCKED"))
+
+    assert changed is False
+    assert message == "blocked RCA already opened for MT-BLOCKED"
+    assert details == {}
+
+
 def test_turn_budget_exhaustion_survives_next_tick_claim_prune(monkeypatch):
     """A budget-exhausted active ticket must not redispatch next poll.
 
@@ -3649,6 +4646,12 @@ def test_worker_loop_stops_before_starting_past_total_turn_budget(monkeypatch, t
             return None
 
         async def after_run_best_effort(self, path):
+            return None
+
+        async def after_done_best_effort(self, path, *, identifier, title):
+            return True
+
+        async def remove_best_effort(self, path):
             return None
 
     def _move(_cfg, captured_issue, target_state):
@@ -4286,6 +5289,120 @@ def test_g2_empty_response_loop_escalates_after_three_consecutive_turns(monkeypa
                 pass
 
     asyncio.run(_run())
+
+
+def test_g2_empty_response_loop_does_not_block_phase_transitions(
+    monkeypatch, tmp_path
+):
+    """G2 — empty preview text is only a loop when the card stays put.
+
+    Several real CLIs edit files successfully but return no assistant preview
+    in their machine output. If the ticket advanced after the turn, the empty
+    counter must clear instead of blocking before the next stage can start.
+    """
+
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("Alpha", "Beta", "Gamma", "Delta"),
+        terminal_states=("Done", "Blocked"),
+    )
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_turns=10,
+            max_total_turns=10,
+            budget_exhausted_state="Blocked",
+            auto_commit_on_done=False,
+            auto_merge_on_done=False,
+        ),
+    )
+    orch = _orch()
+    issue = _issue("MT-EMPTY-ADVANCE", state="Alpha")
+    turns: list[str] = []
+    moved: list[str] = []
+    notes: list[str] = []
+    refreshed_states = iter(["Beta", "Gamma", "Delta", "Done"])
+
+    class _Backend:
+        async def start(self):
+            return None
+
+        async def initialize(self):
+            return None
+
+        async def start_session(self, *, initial_prompt, issue_title):
+            return "thread-1"
+
+        async def run_turn(self, *, prompt, is_continuation):
+            turns.append(prompt)
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100},
+            }
+            await orch._on_codex_event(issue.id, empty_event)
+
+        async def stop(self):
+            return None
+
+    class _Workspace:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+    class _StubWS:
+        async def create_or_reuse(self, identifier):
+            return _Workspace(tmp_path)
+
+        async def before_run(self, path):
+            return None
+
+        async def after_run_best_effort(self, path):
+            return None
+
+        async def after_done_best_effort(self, path, *, identifier, title):
+            return True
+
+        async def remove_best_effort(self, path):
+            return None
+
+        async def remove(self, path):
+            return None
+
+    async def _refresh_state(_cfg, _issue_id):
+        return replace(issue, state=next(refreshed_states, "Done"))
+
+    def _move(_cfg, _issue, target_state):
+        moved.append(target_state)
+
+    def _append(_cfg, _issue, heading, body):
+        notes.append(heading)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+        monkeypatch.setattr(core_module, "build_backend", lambda _init: _Backend())
+        monkeypatch.setattr(orch, "_refresh_issue_state", _refresh_state)
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
+        monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
+
+        try:
+            await orch._run_agent_attempt(issue, attempt=None, cfg=cfg)
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+    assert len(turns) == 4
+    assert moved == []
+    assert notes == []
+    assert not orch.is_paused(issue.id)
+    debug = orch._issue_debug.get(issue.id)
+    assert debug is None or "empty_response_loop" not in (debug.last_error or "")
 
 
 def test_g3_wait_age_bumps_starved_recovered_ticket_ahead_of_fifo(monkeypatch):

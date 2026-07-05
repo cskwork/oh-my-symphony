@@ -118,7 +118,7 @@ def _make_cfg(kind: str, *, workspace_root: Path) -> ServiceConfig:
             turn_timeout_ms=60_000,
             read_timeout_ms=5_000,
             stall_timeout_ms=30_000,
-            resume_across_turns=True,
+            resume_across_turns=False,
         ),
         kiro=KiroConfig(
             command='kiro-cli chat --no-interactive --trust-all-tools "$(cat)"',
@@ -1398,6 +1398,35 @@ async def test_agy_continuation_adds_continue_without_duplicate_permissions(
 
 
 @pytest.mark.asyncio
+async def test_agy_default_continuation_starts_fresh_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("agy", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = AgyBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend.start_session(initial_prompt="hi", issue_title="Fix login")
+    commands = _install_subprocess_double(
+        monkeypatch,
+        per_turn_module,
+        [
+            _FakeSubprocess(stdout_blob=b"one\n"),
+            _FakeSubprocess(stdout_blob=b"two\n"),
+        ],
+    )
+
+    await backend.run_turn(prompt="first", is_continuation=False)
+    await backend.run_turn(prompt="second", is_continuation=True)
+
+    assert commands == [
+        "agy --print - --dangerously-skip-permissions",
+        "agy --print - --dangerously-skip-permissions",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_kiro_plain_text_stdout_is_completed_with_stdin_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2266,7 +2295,7 @@ prompt body
     cfg = build_service_config(wf)
     assert cfg.agent.kind == "agy"
     assert cfg.agy.command == "agy --print -"
-    assert cfg.agy.resume_across_turns is True
+    assert cfg.agy.resume_across_turns is False
 
     alias_text = """---
 tracker: {kind: file, board_root: ./board}

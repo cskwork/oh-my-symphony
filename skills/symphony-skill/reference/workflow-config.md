@@ -312,8 +312,8 @@ tracker:
     Todo: "Triage: decide if actionable"
     "In Progress": "Plan, implement, and self-critique"
     Verify: "Review, QA, and merge proof"
-    Learn: "Write back docs, then Human Review"
-    "Human Review": "Human confirms before Done"
+    Learn: "Write back docs; Done unless intervention"
+    "Human Review": "Manual intervention or explicit review before Done"
 ```
 
 Keys are matched case-insensitively. Empty strings and non-string

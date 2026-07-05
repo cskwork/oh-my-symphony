@@ -17,11 +17,24 @@ def test_web_board_defaults_to_active_lanes_with_terminal_group() -> None:
     assert "function buildTerminalSectionEl(groups, live, readOnly)" in js
     assert "function buildAttentionBadge(attention)" in js
     assert "getRuns: ({ issue, limit } = {})" in js
+    assert "putContinuousImprovement: (payload)" in js
+    assert "getContinuousImprovementStatus: ()" in js
+    assert "resetContinuousImprovementTurns: ()" in js
     assert "function buildRunHistorySection(detail)" in js
     assert "api.getRuns({ issue: identifier, limit: 10 })" in js
     assert "Run history" in js
     assert "Default agent" in js
     assert "(wf.agent && wf.agent.kind) ||" in js
+    assert "function buildContinuousImprovementCard(wf, ciStatus)" in js
+    assert "Continuous improvement" in js
+    assert "ci-enabled-toggle" in js
+    assert "ci-interval-input" in js
+    assert "ci-max-turns-input" in js
+    assert "ci-agent-kind-select" in js
+    assert "ci-reset-turns" in js
+    assert "max_turns_reached" in js
+    assert "not_proven" in js
+    assert "Not proven" in js
     assert "function buildMobileLaneTabs(columns)" in js
     assert "function isMobileBoardViewport()" in js
     assert "Review and parked" in js
@@ -33,5 +46,7 @@ def test_web_board_defaults_to_active_lanes_with_terminal_group() -> None:
     assert ".drawer-attention" in css
     assert ".drawer-run-history" in css
     assert ".run-history-row" in css
+    assert ".ci-status-grid" in css
+    assert ".ci-status-pill" in css
     assert ".mobile-lane-tabs" in css
     assert ".mobile-lane-tab.active" in css

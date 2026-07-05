@@ -9,10 +9,10 @@ tracker:
   state_descriptions:
     Todo: "Triage; route to In Progress"
     "In Progress": "Implement; transition to Verify"
-    Verify: "Check the result; transition to Learn or Human Review"
-    Learn: "Capture reusable knowledge; transition to Human Review"
-    "Human Review": "Human confirms before Done"
-    Done: "Human-confirmed complete"
+    Verify: "Check the result; transition to Learn"
+    Learn: "Capture reusable knowledge; transition to Done unless intervention"
+    "Human Review": "Manual intervention or explicit review before Done"
+    Done: "Verified complete"
 
 polling:
   interval_ms: 5000
@@ -58,7 +58,7 @@ hooks:
 agent:
   kind: claude
   max_concurrent_agents: 1
-  max_turns: 3
+  max_turns: 4
   max_total_turns: 6
   max_concurrent_agents_by_state:
     Todo: 1
@@ -94,7 +94,6 @@ Rules:
 - Stay inside the workspace cwd. Do not touch parent directories.
 - The host board is linked into the workspace as `./kanban_smoke/`. When
   work is done, rewrite `./kanban_smoke/{{ issue.identifier }}.md` to set
-  `state: Human Review` and append a `## Human Review` section summarizing what
-  you did. A human confirms the card to Done.
+  `state: Done` and append a concise `## As-Is -> To-Be Report`.
 - Keep responses short. One or two short turns is enough.
 - No emojis.

@@ -11,6 +11,7 @@ from symphony import service as service_module
 from symphony.service import ServiceRecord, save_record
 from symphony.cli.doctor import (
     check_after_create_hook,
+    check_agy_state_dir,
     check_agent_cli,
     check_board_viewer,
     check_gemini_auth,
@@ -18,6 +19,7 @@ from symphony.cli.doctor import (
     check_pi_auth,
     check_port,
     check_prompts,
+    check_stage_turn_budget,
     check_tracker,
     check_workspace_root,
     format_results,
@@ -493,9 +495,9 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
         """,
     )
     results = run_checks(cfg)
-    # port + shell + agent + pi_auth + gemini_auth + kiro_auth + prompts
-    # + after_create + workspace + tracker + viewer = 11
-    assert len(results) == 11
+    # port + shell + max_turns + agent + pi_auth + gemini_auth + agy_state + kiro_auth
+    # + prompts + after_create + workspace + tracker + viewer = 13
+    assert len(results) == 13
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",
@@ -543,6 +545,20 @@ def test_kiro_auth_skipped_for_non_kiro(tmp_path: Path) -> None:
         """,
     )
     result = check_kiro_auth(cfg)
+    assert result.status == "pass"
+    assert "skipped" in result.message
+
+
+def test_agy_state_dir_skipped_for_non_agy(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    result = check_agy_state_dir(cfg)
     assert result.status == "pass"
     assert "skipped" in result.message
 
@@ -717,6 +733,76 @@ def test_kiro_auth_accepts_api_key_env(tmp_path: Path, monkeypatch) -> None:
     result = check_kiro_auth(cfg)
     assert result.status == "pass"
     assert "KIRO_API_KEY" in result.message
+
+
+def test_agy_state_dir_passes_when_home_state_is_writable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _isolate_home(monkeypatch, tmp_path)
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: agy }
+        agy: { command: agy --print - }
+        """,
+    )
+
+    result = check_agy_state_dir(cfg)
+
+    assert result.status == "pass"
+    assert ".gemini" in result.message
+
+
+def test_agy_state_dir_fails_when_state_is_not_writable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _isolate_home(monkeypatch, tmp_path)
+
+    def fail_temp_file(*args, **kwargs):
+        raise OSError("operation not permitted")
+
+    monkeypatch.setattr(
+        "symphony.cli.doctor.tempfile.NamedTemporaryFile",
+        fail_temp_file,
+    )
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: agy }
+        agy: { command: agy --print - }
+        """,
+    )
+
+    result = check_agy_state_dir(cfg)
+
+    assert result.status == "fail"
+    assert "not writable" in result.message
+    assert "operation not permitted" in result.message
+
+
+def test_stage_turn_budget_fails_for_multi_stage_one_turn_workflow(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker:
+          kind: file
+          board_root: ./kanban
+          active_states: [Todo, In Progress, Verify, Learn]
+          terminal_states: [Done, Blocked]
+        agent:
+          kind: codex
+          max_turns: 1
+        codex: { command: codex app-server }
+        """,
+    )
+
+    result = check_stage_turn_budget(cfg)
+
+    assert result.status == "fail"
+    assert "agent.max_turns=1" in result.message
+    assert "4 active states" in result.message
 
 
 def test_format_results_includes_all_statuses() -> None:

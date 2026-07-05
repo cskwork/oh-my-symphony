@@ -2,15 +2,15 @@
 
 ## Introduction
 
-Symphony's production pipeline intentionally stops at `Human Review` after
-Learn. Agents must not mark a ticket `Done`; a human confirms that final state
-after checking QA evidence, browser proof, wiki updates, and merge status.
+Symphony's production pipeline normally closes successful work in `Done` from
+Learn after Verify evidence, wiki updates, final report, and history proof are
+recorded. `Human Review` is now reserved for real critical/manual intervention
+or explicit operator review; it is not the normal completion path.
 
 The current service web board does not expose a `Confirm Done` action on Human
 Review cards, even though the standalone board viewer and TUI already have this
-concept. The result is a bad operator state: the run did the right thing by
-asking for human confirmation, but the board used during a service run does not
-provide the matching control.
+concept. That remains necessary for intervention cards: once the human resolves
+the manual decision, the board needs a narrow, auditable confirmation control.
 
 RERUN-204 also exposed a contract-sensitive evidence issue: Verify table cells
 can point to files that exist on disk but still fail the contract when cited in
@@ -21,7 +21,7 @@ issues affect the final run handoff.
 
 | Term | Definition |
 |---|---|
-| Human Review | Terminal holding state where agents hand work to the operator. |
+| Human Review | Terminal intervention state for manual decisions, external credentials, critical approval, or explicit operator review. |
 | Confirm Done | Explicit operator action that moves a Human Review ticket to `Done`. |
 | Service web board | The SPA served by the running Symphony service from `src/symphony/web/static`. |
 | Standalone board viewer | The separate `tools/board-viewer` app. It already has a Human Review confirm path. |
@@ -33,8 +33,8 @@ issues affect the final run handoff.
 ### Requirement 1: Service Board Confirm Action
 
 **User story:** As an operator, I want the service web board to show a
-`Confirm Done` button on Human Review cards, so that a valid agent handoff can
-be completed without editing Markdown by hand.
+`Confirm Done` button on Human Review cards, so that a resolved intervention
+handoff can be completed without editing Markdown by hand.
 
 **Acceptance criteria:**
 
@@ -52,8 +52,8 @@ service web board SHALL NOT show a mutating confirm control.
 ### Requirement 2: Explicit Confirm API
 
 **User story:** As an operator, I want confirmation to use a narrow API, so
-that `Done` records mean "a human confirmed this Human Review handoff" rather
-than "some generic state patch moved the card".
+that `Done` records from Human Review mean "a human resolved this intervention
+handoff" rather than "some generic state patch moved the card".
 
 **Acceptance criteria:**
 
@@ -92,8 +92,8 @@ test SHALL fail.
 ### Requirement 4: Run-Handoff Regression Proof
 
 **User story:** As a maintainer, I want tests that exercise the real service
-board path, so that the next live Symphony run cannot end in Human Review with
-no visible confirmation action.
+board path, so that intervention cards in Human Review still have a visible
+confirmation action.
 
 **Acceptance criteria:**
 
@@ -113,10 +113,9 @@ the production pipeline.
 
 **Acceptance criteria:**
 
-5.1 The Learn prompt SHALL continue to say that agents set `Human Review`, not
-`Done`.
-5.2 The Done prompt SHALL continue to require human confirmation before Done
-handling.
+5.1 The Learn prompt SHALL say agents set `Done` for normal successful work.
+5.2 The Learn prompt SHALL say agents set `Human Review` only for real
+critical/manual intervention or explicit operator review.
 5.3 The standalone board viewer and TUI confirm behaviors SHALL remain
 compatible with the service board.
 5.4 Generic issue editing SHALL remain backward-compatible unless a separate
@@ -137,7 +136,8 @@ breaking-change spec explicitly removes direct state edits.
 
 ## Out of Scope
 
-- Letting agents mark tickets Done.
+- Letting agents bypass Verify, merge evidence, wiki updates, history proof, or
+  the final As-Is -> To-Be report before Done.
 - Replacing Markdown tickets as the human source of truth.
 - Rebuilding the web board framework.
 - Changing active or terminal workflow states.

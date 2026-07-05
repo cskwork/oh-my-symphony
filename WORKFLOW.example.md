@@ -16,9 +16,9 @@ tracker:
     Todo: "Triage; route to In Progress"
     "In Progress": "Plan + TDD implementation + self-critique"
     Verify: "Review + QA + Merge Gate"
-    Learn: "Wiki write-back; S to skip"
-    "Human Review": "Human confirms agent work before Done"
-    Done: "Human-confirmed complete"
+    Learn: "Wiki write-back; Done unless intervention"
+    "Human Review": "Manual intervention or explicit review before Done"
+    Done: "Verified complete"
     Archive: "Auto-archived after 30 days idle"
 
 polling:

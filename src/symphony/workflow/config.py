@@ -23,10 +23,15 @@ from ..notifications import NotificationsConfig
 from .coercion import _normalize_state_key
 from .constants import (
     DEFAULT_AGY_COMMAND,
+    DEFAULT_AUTO_RECOVER_BLOCKED,
     DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
     DEFAULT_BACKEND_READ_TIMEOUT_MS,
     DEFAULT_BACKEND_STALL_TIMEOUT_MS,
     DEFAULT_BACKEND_TURN_TIMEOUT_MS,
+    DEFAULT_CI_INTERVAL_MS,
+    DEFAULT_CI_MAX_TICKETS_PER_RUN,
+    DEFAULT_CI_MAX_TURNS,
+    DEFAULT_CI_TICKET_PREFIX,
     DEFAULT_CODEX_MODEL,
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_KIRO_COMMAND,
@@ -114,6 +119,10 @@ class AgentConfig:
     # File-board optimization: actionable Todo tickets can be routed to
     # In Progress without spending a model turn on one-line triage.
     auto_triage_actionable_todo: bool = True
+    # Self-healing path for failed terminal blockers. When a ticket lands in
+    # Blocked, the orchestrator opens one RCA ticket that can fix/prove the
+    # root cause before the source returns to the active workflow.
+    auto_recover_blocked: bool = DEFAULT_AUTO_RECOVER_BLOCKED
     # Render first-turn prompts with state-relevant ticket context instead
     # of the whole accumulating Markdown body. Workflows can opt out when a
     # custom ticket format needs full raw history in every worker prompt.
@@ -238,7 +247,7 @@ class AgyConfig:
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
-    resume_across_turns: bool = True
+    resume_across_turns: bool = False
 
 
 def _default_agy_config() -> AgyConfig:
@@ -247,7 +256,7 @@ def _default_agy_config() -> AgyConfig:
         turn_timeout_ms=DEFAULT_BACKEND_TURN_TIMEOUT_MS,
         read_timeout_ms=DEFAULT_BACKEND_READ_TIMEOUT_MS,
         stall_timeout_ms=DEFAULT_BACKEND_STALL_TIMEOUT_MS,
-        resume_across_turns=True,
+        resume_across_turns=False,
     )
 
 
@@ -397,6 +406,32 @@ class PromptConfig:
 
 
 @dataclass(frozen=True)
+class ContinuousImprovementConfig:
+    """Default-off heartbeat that periodically runs product-readiness checks.
+
+    Missing `continuous_improvement:` in WORKFLOW.md means disabled with all
+    defaults below. Only `enabled`, `interval_ms`, `max_turns`, and
+    `agent_kind` are settable through the mutation API
+    (`set_continuous_improvement_settings`); the remaining fields are
+    parse-only from WORKFLOW.md.
+    """
+
+    enabled: bool = False
+    # Minimum enforced by the parser is DEFAULT_CI_MIN_INTERVAL_MS (1 minute).
+    interval_ms: int = DEFAULT_CI_INTERVAL_MS
+    # 0 means unlimited.
+    max_turns: int = DEFAULT_CI_MAX_TURNS
+    ticket_prefix: str = DEFAULT_CI_TICKET_PREFIX
+    max_tickets_per_run: int = DEFAULT_CI_MAX_TICKETS_PER_RUN
+    require_idle_board: bool = True
+    # Agent backend that will run the tickets this heartbeat creates,
+    # stamped per-ticket via the existing per-ticket agent_kind override.
+    # "" (default) inherits whatever `agent.kind` the workflow is already
+    # configured with.
+    agent_kind: str = ""
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     workflow_path: Path
     poll_interval_ms: int
@@ -418,6 +453,9 @@ class ServiceConfig:
     prompts: PromptConfig = field(default_factory=PromptConfig)
     wiki: WikiConfig = field(default_factory=WikiConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    continuous_improvement: ContinuousImprovementConfig = field(
+        default_factory=ContinuousImprovementConfig
+    )
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
     workspace_reuse_policy: str = DEFAULT_WORKSPACE_REUSE_POLICY

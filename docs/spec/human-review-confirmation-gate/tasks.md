@@ -56,7 +56,9 @@
 ## Implementation Notes
 
 - Keep this as an additive API change.
-- Do not let agents mark Done.
+- Let agents mark Done only through the Learn prompt's normal successful
+  completion path.
+- Do not let agents treat Human Review as the normal success path.
 - Do not change workflow states.
 - Do not touch the pre-existing modified `tests/test_orchestrator_dispatch.py`
   unless the operator explicitly assigns that separate work.

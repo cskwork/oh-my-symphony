@@ -1,8 +1,8 @@
-"""End-to-end Symphony agent lifecycle: Todo -> Human Review golden path.
+"""End-to-end Symphony agent lifecycle: Todo -> Done golden path.
 
 Existing tests cover *one* phase transition at a time. This file walks an
 issue through the full canonical 4-active-state pipeline
-(Todo -> In Progress -> Verify -> Learn -> Human Review) and
+(Todo -> In Progress -> Verify -> Learn -> Done) and
 asserts the *expected outputs at each phase boundary*:
 
 1. A fresh backend is built per phase (state changes => session rebuild).
@@ -11,7 +11,7 @@ asserts the *expected outputs at each phase boundary*:
 4. `run_turn` on the freshly built backend carries `is_continuation=False`.
 5. Session ids are distinct across all 4 active phases.
 6. `WorkspaceManager.after_run_best_effort` fires once per phase.
-7. On the final Human Review refresh the worker exits cleanly, the running slot
+7. On the final Done refresh the worker exits cleanly, the running slot
    is released, and no retry entry survives.
 
 The test deliberately uses the same `_FakeBackend` + `_FakeWorkspaceManager`
@@ -136,7 +136,7 @@ class _FileBoardLifecycleBackend:
     transitions = {
         "In Progress": "Verify",
         "Verify": "Learn",
-        "Learn": "Human Review",
+        "Learn": "Done",
     }
 
     def __init__(self, cfg: ServiceConfig, cwd: Path, init_id: int) -> None:
@@ -327,8 +327,8 @@ _CONTRACT_CLEAN_BODY = (
     "## Wiki Updates\n"
     "- docs/llm-wiki/lifecycle.md\n"
     "\n"
-    "## Human Review\n"
-    "ready for operator confirmation\n"
+    "## As-Is -> To-Be Report\n"
+    "ready for Done\n"
 )
 
 
@@ -452,8 +452,8 @@ def test_full_todo_to_done_pipeline_rebuilds_backend_per_phase(
     _seed_running(o, issue, tmp_path)
     instances = _install_backend_factory(monkeypatch)
     # After the first run_turn (Todo), the scripted refresh walks through
-    # every remaining canonical state and then exits at Human Review.
-    _install_state_walk(monkeypatch, ["In Progress", "Verify", "Learn", "Human Review"])
+    # every remaining canonical state and then exits at Done.
+    _install_state_walk(monkeypatch, ["In Progress", "Verify", "Learn", "Done"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
@@ -531,7 +531,7 @@ def test_lifecycle_stops_each_intermediate_backend_exactly_once(
     o = _orch(tmp_path)
     _seed_running(o, issue, tmp_path)
     instances = _install_backend_factory(monkeypatch)
-    _install_state_walk(monkeypatch, ["In Progress", "Verify", "Learn", "Human Review"])
+    _install_state_walk(monkeypatch, ["In Progress", "Verify", "Learn", "Done"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
 
@@ -621,14 +621,14 @@ def test_lifecycle_done_callback_uses_registered_running_id(
     assert issue.id not in o._retry
 
 
-def test_file_board_e2e_auto_triage_dispatches_and_reaches_human_review(
+def test_file_board_e2e_auto_triage_dispatches_and_reaches_done(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Real Markdown board files move through the automated Kanban lifecycle.
 
     This guards the operator-facing flow: a Todo card is triaged by the
     orchestrator, dispatched from the file board, advanced by a worker through
-    Verify and Learn, then released from the running slot at Human Review.
+    Verify and Learn, then released from the running slot at Done.
     """
 
     board_root = tmp_path / "kanban"
@@ -650,7 +650,7 @@ def test_file_board_e2e_auto_triage_dispatches_and_reaches_human_review(
             "Exercise the real file-board Kanban lifecycle.\n"
             "\n"
             "## Acceptance Criteria\n"
-            "- The card reaches Human Review through automated dispatch.\n"
+            "- The card reaches Done through automated dispatch.\n"
             "\n"
             f"{_CONTRACT_CLEAN_BODY}"
         ),
@@ -691,7 +691,7 @@ def test_file_board_e2e_auto_triage_dispatches_and_reaches_human_review(
     finally:
         final_tracker.close()
     assert final is not None
-    assert final.state == "Human Review"
+    assert final.state == "Done"
     assert "## Agent Board E2E" in (final.description or "")
     assert [state for b in instances for state in b.operated_states] == [
         "In Progress",

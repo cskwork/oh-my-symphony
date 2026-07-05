@@ -94,14 +94,15 @@ class RunningEntry:
     # Set when the worker's own `finally` starts exit cleanup. The task done
     # callback is only a fallback for workers that never reached this point.
     exit_started_at: datetime | None = None
+    # First reconcile tick that observed this running ticket in a terminal
+    # tracker state. Terminal cleanup grace is measured from this timestamp,
+    # not from backend keepalives, so chatty CLIs cannot hold a slot forever
+    # after the board already says the work is terminal.
+    terminal_seen_at: datetime | None = None
     # Set when reconcile already snapshotted/removed this workspace after a
     # terminal or inactive tracker move. Worker exit must not repeat that git
     # cleanup against the same worktree.
     workspace_cleanup_started: bool = False
-    # First poll tick where reconcile observed this running worker's card in a
-    # terminal state. Terminal cleanup uses this to keep backend keepalives from
-    # extending the natural-exit grace period forever.
-    terminal_state_seen_at: datetime | None = None
     # Set when the per-attempt `max_turns` ceiling halted the worker without
     # the ticket having reached a terminal state. Treated as an explicit
     # non-success outcome in `_on_worker_exit`: no automatic continuation is
@@ -118,9 +119,10 @@ class RunningEntry:
     # G2 — empty-response loop guard. Counts consecutive `EVENT_TURN_COMPLETED`
     # events whose turn produced no fresh preview text. Reset to 0 when a turn
     # completes with non-empty `current_turn_message`. Crossing the threshold
-    # (orchestrator-side constant) cancels the worker + persists via
-    # `_persist_budget_exhausted_state` with `budget_kind="empty_response_loop"`.
+    # (orchestrator-side constant) is held until the worker refreshes the
+    # tracker; a real stage transition clears it, an unchanged state escalates.
     consecutive_empty_turns: int = 0
+    hit_empty_response_loop: bool = False
     # Per-turn preview accumulator. Updated alongside `last_codex_message` for
     # any payload that yields preview text; cleared back to "" on every
     # `EVENT_TURN_COMPLETED` after the empty-loop check. `last_codex_message`

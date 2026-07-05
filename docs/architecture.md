@@ -162,6 +162,60 @@ they are easy to regress and hard to spot in a diff:
   remains available even when tracker refresh or run-registry cleanup is
   degraded.
 
+## Continuous improvement heartbeat
+
+A default-off scheduler that periodically re-verifies the integrated
+baseline and files defects as normal Kanban tickets, instead of editing
+product code itself. Full rubric and ticket contract live in
+`docs/continuous-improvement/rubric.md` and
+`docs/continuous-improvement/ticket-template.md`; this section only maps
+the runtime surfaces.
+
+- **Config** — `continuous_improvement:` block in `WORKFLOW.md`
+  (`ContinuousImprovementConfig` in `symphony.workflow.config`): `enabled`,
+  `interval_ms`, `max_turns`, `agent_kind`, `ticket_prefix`,
+  `max_tickets_per_run`, `require_idle_board`. Only `enabled`,
+  `interval_ms`, `max_turns`, and `agent_kind` are browser-editable; the
+  rest is trusted workflow configuration.
+- **Web API** — `GET /api/v1/workflow` gains a `continuous_improvement`
+  field; `PUT /api/v1/workflow/continuous-improvement` mutates
+  `enabled` / `interval_ms` / `max_turns` / `agent_kind` through
+  `symphony.workflow.mutate`; `POST
+  /api/v1/workflow/continuous-improvement/reset-turns` zeroes the
+  in-memory turn counter; `GET /api/v1/continuous-improvement/status`
+  reports read-only run state (`turns_used`, `in_flight`,
+  `last_result`, `next_due_at`, `skipped_reason`, etc.).
+- **Scheduler** — lives in `symphony.orchestrator.core.Orchestrator`,
+  outside the tick loop: a bounded background task, gated by
+  `require_idle_board` (never competes with normal dispatch for
+  `max_concurrent_agents` slots) and by a durable cross-process lease
+  (same family as `RunRegistry.acquire_run` in
+  `orchestrator/run_registry.py`) so two orchestrator processes on the
+  same workflow directory never run concurrent heartbeats.
+- **Runner** — `src/symphony/continuous_improvement.py` (new module):
+  proves the baseline with Git commands that never change the host
+  checkout. If `agent.auto_merge_target_branch` differs from the host
+  branch, the runner creates a temporary detached worktree for that
+  target, verifies/removes it after the run, and reports unresolved
+  targets as `not_proven`. It then runs predefined `argv` checks
+  (`shell=False`, explicit timeouts, capped + redacted output) —
+  `pytest`, `ruff`, `pyright`, plus optional browser/DB probes that
+  report `not_available` when unconfigured.
+- **Report writer** — rewrites only the `<!-- ci:auto:* -->` sections of
+  `docs/continuous-improvement/latest.md`; everything outside those
+  markers is operator content and is preserved. The machine-owned
+  sections include summary, baseline, check table, evidence excerpts,
+  created tickets, and run metadata.
+- **Registrar** — turns `failed` findings into tickets via
+  `FileBoardTracker.create_with_next_identifier(prefix="CI")`,
+  de-duplicated by a `CI Fingerprint: <hash>` line, capped at
+  `max_tickets_per_run` new tickets per run, and stamped with
+  `continuous_improvement.agent_kind` when configured. Trackers without a
+  safe creation contract report `skipped_reason: unsupported_tracker`
+  instead of crashing. The heartbeat never writes ticket Markdown
+  directly — only through tracker lock/compare-and-swap APIs — and never
+  edits files under `src/` or `tests/`.
+
 ## Adding a new public symbol
 
 1. Place it in the most cohesive leaf module (not in `__init__.py`).
