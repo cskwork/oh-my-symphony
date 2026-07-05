@@ -126,29 +126,6 @@ artefacts:
 - `docs/llm-wiki/api-cache-policy.md` - documented that refresh-like control
   routes should use `no-store` when operators expect immediate state.
 
-## Human Review
-
-### What Changed
-- Refresh responses now bypass proxy storage.
-
-### Why It Matters
-- Operators get fresh state after a manual refresh.
-
-### Evidence
-- `pytest -q tests/test_server.py` rc=0.
-- Manual curl shows `Cache-Control: no-store`.
-
-### Risks
-- Other polling routes may still need a broader cache-policy audit.
-
-### Human Checklist
-- [ ] Confirm the focused test command passed.
-- [ ] Confirm curl shows `Cache-Control: no-store`.
-- [ ] Confirm no unrelated route was changed.
-
-### Decision Needed
-Confirm Done
-
 ## As-Is -> To-Be Report
 
 ### Goal

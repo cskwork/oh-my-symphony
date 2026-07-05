@@ -315,7 +315,7 @@ Docs:
 - [x] Add read-only status rendering.
 - [x] Verify with `python -m pytest tests/test_webapi.py -q`.
 - [x] Verify with `python -m pytest tests/test_web_static_contract.py -q`.
-- [ ] Commit `feat: expose continuous improvement settings`.
+- [x] Commit `feat: expose continuous improvement settings`.
 
 ### 4. Heartbeat Scheduler Skeleton
 
@@ -373,7 +373,7 @@ Docs:
   redaction.
 - [x] Implement browser and DB `not_available` handling.
 - [x] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
-- [ ] Commit `feat: add continuous improvement check runner`.
+- [x] Commit `feat: add continuous improvement check runner`.
 
 ### 6. Docs Report Writer
 
@@ -392,7 +392,7 @@ Docs:
 - [x] Render last branch/SHA, commands, outcomes, skipped checks, and ticket
   registration summary.
 - [x] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
-- [ ] Commit `feat: write continuous improvement reports`.
+- [x] Commit `feat: write continuous improvement reports`.
 
 ### 7. Kanban Registrar and De-Duplication
 
@@ -418,7 +418,7 @@ Docs:
 - [x] Report unsupported trackers as status, not a crash.
 - [x] Verify with `python -m pytest tests/test_continuous_improvement.py -q`.
 - [x] Verify with `python -m pytest tests/test_webapi.py -q`.
-- [ ] Commit `feat: register heartbeat findings as kanban tickets`.
+- [x] Commit `feat: register heartbeat findings as kanban tickets`.
 
 ### 8. Final Integration and Full Verification
 
@@ -444,7 +444,7 @@ Docs:
 - [x] Run `python -m pytest -q`.
 - [x] Run `python -m ruff check src tests`.
 - [x] Run `python -m pyright`.
-- [ ] Commit `docs: record continuous improvement heartbeat delivery proof`.
+- [x] Commit `docs: record continuous improvement heartbeat delivery proof`.
 
 ## Edge Cases
 

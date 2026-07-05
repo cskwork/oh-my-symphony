@@ -6,7 +6,7 @@ Date: 2026-07-03.
 
 | Area | Status | Evidence |
 |---|---|---|
-| Prompt contract | Correct | Learn requires `Human Review`; base prompt forbids agents from marking Done without human confirmation. |
+| Prompt contract | Updated | Learn sets `Done` for normal success; `Human Review` is reserved for critical/manual intervention. |
 | TUI confirmation | Present | `KanbanApp.action_confirm_done_focused` moves focused Human Review cards to Done. |
 | Standalone board viewer confirmation | Present | `tools/board-viewer` renders `Confirm Done` and posts `/api/kanban/{id}/confirm-done`. |
 | Service web board confirmation | Missing | `src/symphony/web/static/app.js` has `Skip Learn` but no `Confirm Done` or confirm API client method. |
@@ -34,15 +34,15 @@ Date: 2026-07-03.
 
 ### Prompt Contract
 
-The file prompt declares this flow:
+The file prompt now declares this flow:
 
 ```text
-Todo -> In Progress -> Verify -> Learn -> Human Review -> Done
+Todo -> In Progress -> Verify -> Learn -> Done
 ```
 
-Learn stage requirements say to append `## Human Review`, write
-`Decision Needed`, and set state to `Human Review`. The base prompt says never
-mark `Done` without explicit human confirmation from Human Review.
+Learn stage requirements say to append `## As-Is -> To-Be Report` and set
+state to `Done` for normal success. The base prompt says `Human Review` is only
+for real critical/manual intervention.
 
 ### Existing Non-Service Confirm Paths
 

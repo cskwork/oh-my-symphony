@@ -3,9 +3,9 @@
 Symphony's default workflow now has four active agent lanes:
 
 ```text
-Todo -> In Progress -> Verify -> Learn -> Human Review -> Done
+Todo -> In Progress -> Verify -> Learn -> Done
           ^              |        |
-          |              |        +-> operator may skip Learn to Human Review
+          |              |        +-> critical/manual intervention -> Human Review
           +--------------+
              Verify or Learn findings rewind here
 ```
@@ -19,8 +19,8 @@ plus the current state's stage prompt for each fresh turn.
 | Todo | triage/router | `## Triage`, then route actionable work to `In Progress` or explain `Blocked` |
 | In Progress | implementer | `## Plan`, `## Acceptance Tests`, `## Done Signals`, `## Implementation`, `## Self-Critique`, plus goal/before/after proof notes under `docs/<ID>/work/` |
 | Verify | reviewer + QA + merge gate | `## Security Audit`, clean `## Review` or `## Review Findings`, `## QA Evidence`, `## AC Scorecard`, `## Merge Status`, plus not-covered and rerun guidance |
-| Learn | distiller | `docs/llm-wiki/` updates, `## Wiki Updates`, `## Human Review`; may rewind real defects to `In Progress` |
-| Human Review | operator | human approval before `Done` |
+| Learn | distiller | `docs/llm-wiki/` updates, `## Wiki Updates`, `## As-Is -> To-Be Report`; may rewind real defects to `In Progress` |
+| Human Review | operator | manual intervention or explicit review before `Done` |
 | Done | reporter | `## As-Is -> To-Be Report` with goal, evidence, residual risk, and how to re-run |
 | Blocked | agent or operator | `## Blocker` describing the missing input or failed gate |
 
@@ -80,12 +80,13 @@ retrying until the output looks clean.
 
 Learn compares the ticket's plan, implementation, verification evidence, and
 merge status against what future tickets need to know. It writes durable notes
-to `${LLM_WIKI_PATH:-./docs/llm-wiki}/`, appends `## Wiki Updates`, then
-appends `## Human Review` and moves the ticket to `Human Review`.
+to `${LLM_WIKI_PATH:-./docs/llm-wiki}/`, appends `## Wiki Updates`, appends
+`## As-Is -> To-Be Report`, and moves normal successful work to `Done`.
 
 The operator can skip an idle Learn ticket through the TUI or web app. That
 action appends `## Learn Skipped` and moves the card to `Human Review` without
-spawning an agent. Agents must not simulate this skip themselves.
+spawning an agent. Agents must not simulate this skip themselves, and should
+use `Human Review` only when a recorded critical/manual intervention remains.
 
 ## Stage prompts
 
@@ -118,7 +119,7 @@ tracker:
 
 The orchestrator dispatches a worker for any ticket whose state is active.
 Terminal states stop dispatch. `Human Review` is terminal because a human must
-confirm before `Done`.
+resolve or confirm an explicit intervention before `Done`.
 
 The web board opens on active agent lanes. `Human Review`, `Done`, `Blocked`,
 and `Archive` stay visible in the compact **Review and parked** group until
@@ -162,7 +163,7 @@ A complete worked example lives at [`docs/PIPELINE-DEMO.md`](./PIPELINE-DEMO.md)
 It includes every section a finished pipeline ticket should carry:
 `## Plan`, `## Acceptance Tests`, `## Done Signals`, `## Implementation`,
 `## Self-Critique`, `## Security Audit`, `## Review`, `## QA Evidence`,
-`## AC Scorecard`, `## Merge Status`, `## Wiki Updates`, `## Human Review`,
-and `## As-Is -> To-Be Report`.
+`## AC Scorecard`, `## Merge Status`, `## Wiki Updates`, and
+`## As-Is -> To-Be Report`.
 
 Evidence-first stage rules adapt ideas from cskwork/backend-dev-skills (MIT).

@@ -2,7 +2,7 @@
 
 **Allowed tools (advisory).** Read full ticket history and prior sections. Write ticket comments only. Run read-only commands. Do NOT edit source; the ticket has already shipped.
 
-Terminal. Verify passed, the Verify Merge Gate recorded `## Merge Status`, Learn either wrote wiki updates or was operator-skipped, and a human confirmed Done.
+Terminal. Verify passed, the Verify Merge Gate recorded `## Merge Status`, and Learn wrote wiki updates plus the final delivery report. If this card came through Human Review, a human explicitly confirmed the intervention handoff.
 
 Goal for this lane: leave one concise As-Is -> To-Be report that a human can read later to understand the delivered change, why it was chosen, what evidence proves it, and what still is not proven.
 

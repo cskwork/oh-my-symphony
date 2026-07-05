@@ -5,10 +5,10 @@
 The fix is a narrow parity and contract hardening change.
 
 The service web board needs the same final action that already exists in the
-TUI and standalone board viewer: Human Review cards get an explicit
-`Confirm Done` control. That control calls a Human Review-only API route. The
-route moves the ticket to Done, records stats, and refreshes the orchestrator
-snapshot.
+TUI and standalone board viewer for intervention cards: Human Review cards get
+an explicit `Confirm Done` control. That control calls a Human Review-only API
+route. The route moves the ticket to Done, records stats, and refreshes the
+orchestrator snapshot.
 
 The Verify evidence rule is documented and pinned with tests at the same time
 because RERUN-204 showed that a run can reach the final handoff only after a
@@ -19,9 +19,9 @@ contract rewind caused by path-coordinate drift.
 Verified current behavior:
 
 - `docs/symphony-prompts/file/stages/learn.md` requires Learn to append
-  `## Human Review` and set state to `Human Review`.
-- `docs/symphony-prompts/file/base.md` says agents must not mark `Done`
-  without explicit human confirmation from Human Review.
+  `## As-Is -> To-Be Report` and set state to `Done` for normal success.
+- `docs/symphony-prompts/file/base.md` says `Human Review` is only for real
+  critical/manual intervention, not normal completion.
 - TUI has `action_confirm_done_focused`.
 - Standalone `tools/board-viewer` has `Confirm Done`,
   `/api/kanban/{id}/confirm-done`, and tests.
@@ -137,10 +137,11 @@ Browser-gated tests:
 
 ## Alternatives Considered
 
-### Let Learn mark Done
+### Make Human Review the normal final hop
 
-Rejected. This would weaken the production pipeline and contradict the prompt
-contract: agents hand off to humans; humans decide Done.
+Rejected. Human Review is now an intervention-only terminal state. Normal
+successful work should close as Done after Verify, Learn, final report, and
+history proof all pass.
 
 ### Rely on drag/drop or generic PATCH
 

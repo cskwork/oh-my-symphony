@@ -5,7 +5,8 @@ The Symphony stage prompts encode contracts in narrative form:
 - In Progress must produce planning, acceptance, done-signal,
   implementation, and self-critique sections plus durable work artefacts.
 - Verify must produce review, security, QA, scorecard, and merge evidence.
-- Learn must produce the human handoff and wiki write-back record.
+- Learn must produce the wiki write-back record and either a final delivery
+  report or an intervention-only human handoff.
 - Done must produce `## As-Is -> To-Be Report` and `## Merge Status`, and
   the artefact directories named in `## Evidence` must actually contain
   files on disk.
@@ -123,7 +124,8 @@ _VERIFY_OUTCOMES = ("## Review", "## Review Findings")
 _REVIEW_CLEAN = "## Review"
 _REVIEW_FINDINGS = "## Review Findings"
 _QA_SCORECARD = "## AC Scorecard"
-_LEARN_REQUIRED = ("## Human Review", "## Wiki Updates")
+_LEARN_REQUIRED = ("## Wiki Updates",)
+_LEARN_COMPLETION_OPTIONS = ("## As-Is -> To-Be Report", "## Human Review")
 _DONE_REQUIRED = ("## As-Is -> To-Be Report", "## Merge Status")
 
 # Result/verdict cells that count as "not a clean pass". Compared
@@ -161,8 +163,7 @@ def evaluate_contract(
         return _evaluate_verify_contract(producing_state, body, identifier, docs_root)
 
     if state == "learn":
-        missing = _missing_sections(body, _LEARN_REQUIRED)
-        return _build_result(producing_state, missing)
+        return _evaluate_learn_contract(producing_state, body)
 
     if state == "done":
         return _evaluate_done_contract(producing_state, body, identifier, docs_root)
@@ -215,6 +216,13 @@ def _evaluate_verify_contract(
         warnings=scorecard_problems,
         failures=evidence_failures,
     )
+
+
+def _evaluate_learn_contract(producing_state: str, body: str) -> ContractResult:
+    missing = _missing_sections(body, _LEARN_REQUIRED)
+    if not any(_section_present_nonempty(body, name) for name in _LEARN_COMPLETION_OPTIONS):
+        missing.append("one of `## As-Is -> To-Be Report` or `## Human Review`")
+    return _build_result(producing_state, missing)
 
 
 def _evaluate_done_contract(

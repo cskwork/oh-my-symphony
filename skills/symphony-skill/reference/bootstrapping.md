@@ -67,13 +67,14 @@ them.
 `WORKFLOW.example.md` ships with the supported production flow:
 
 ```text
-Todo -> In Progress -> Verify -> Learn -> Human Review -> Done
+Todo -> In Progress -> Verify -> Learn -> Done
 ```
 
 Do not trim it to a smaller lane set unless the user explicitly asks. The base
 prompt names these stages, Verify is the compulsory review/QA/merge gate, and
-Learn writes back to `docs/llm-wiki/` for future tickets. Operators may skip an
-idle Learn card to `Human Review`; agents should not self-skip it.
+Learn writes back to `docs/llm-wiki/` for future tickets. `Human Review` is an
+intervention-only terminal state for explicit operator review or critical
+manual decisions; agents should not use it as the normal completion path.
 
 If the target project truly needs a different workflow, edit these together:
 

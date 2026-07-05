@@ -67,6 +67,7 @@ LEARN_RULES = (
     "llm-wiki",
     "INDEX.md",
     "## Wiki Updates",
+    "## As-Is -> To-Be Report",
     "Final History Gate",
     "do not use `git add -A`",
     "git commit",
@@ -74,7 +75,8 @@ LEARN_RULES = (
     "git ls-remote",
     "set state to `Blocked`",
     "## Human Review",
-    "Set state to `Human Review`",
+    "Set state to `Done`",
+    "Set state to `Human Review` only",
     "Operator skip",
 )
 
@@ -209,7 +211,7 @@ def test_verify_stage_respects_disabled_auto_merge(workflow: str) -> None:
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
-def test_learn_stage_writes_wiki_and_human_review_handoff(workflow: str) -> None:
+def test_learn_stage_writes_wiki_and_done_or_intervention_handoff(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(
         cfg.prompt_template_for_state("Learn"),
@@ -233,7 +235,8 @@ def test_base_prompt_declares_four_stage_pipeline_and_skip_learn(flavor: str) ->
     assert "Board card mental model" in text
     assert "Each lane answers one human question" in text
     assert "Todo  ->  In Progress  ->  Verify  ->  Learn" in text
-    assert "operator may skip Learn to Human Review" in text
+    assert "critical/manual intervention -> Human Review" in text
+    assert "Use `Human Review` only for real critical/manual intervention" in text
     assert "Use `Not proven` when evidence is missing" in text
     assert "Never skip Verify" in text
 
@@ -323,7 +326,6 @@ def test_pipeline_demo_ticket_is_a_complete_worked_example() -> None:
         "## AC Scorecard",
         "## Merge Status",
         "## Wiki Updates",
-        "## Human Review",
         *DONE_REPORT_SHAPE,
     ):
         assert required in body
