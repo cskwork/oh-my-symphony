@@ -403,8 +403,8 @@ def test_app_card_status_uses_orchestrator_attention() -> None:
 
 
 def _stub_tracker(monkeypatch: Any, candidates: list[Issue], terminals: list[Issue]) -> None:
-    monkeypatch.setattr("symphony.tui._fetch_candidates", lambda _: list(candidates))
-    monkeypatch.setattr("symphony.tui._fetch_terminals", lambda _: list(terminals))
+    monkeypatch.setattr("symphony.tui.app._fetch_candidates", lambda _: list(candidates))
+    monkeypatch.setattr("symphony.tui.app._fetch_terminals", lambda _: list(terminals))
 
 
 @pytest.mark.asyncio

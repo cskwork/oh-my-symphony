@@ -13,9 +13,9 @@ Public surface (kept stable for cli.py and tests):
     _CardStatus, SILENT_THRESHOLD_S, _parse_iso, _silent_seconds
     STATE_COLOR, AGENT_COLOR
 
-Tests stub `symphony.tui._fetch_candidates` / `_fetch_terminals` via
-`monkeypatch.setattr`; the `app` module references those names through
-the parent package so the patch reaches the runtime call path.
+Tests stub `symphony.tui.app._fetch_candidates` / `_fetch_terminals`
+via `monkeypatch.setattr` — the `app` module imports them directly and
+resolves them through its own globals at call time (initiative D).
 """
 
 from __future__ import annotations

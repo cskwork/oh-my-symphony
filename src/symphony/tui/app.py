@@ -7,11 +7,10 @@ The App owns:
   - all key bindings + actions (zoom, pagination, density, filter, archive,
     pause/resume, language toggle, scroll).
 
-`_fetch_candidates` / `_fetch_terminals` are referenced via the parent
-package namespace (`_tui_pkg._fetch_candidates`) so that test stubs
-applied via `monkeypatch.setattr("symphony.tui._fetch_candidates", ...)`
-take effect — a direct `from .helpers import _fetch_candidates` would
-bind the function once at import time and ignore the patch.
+`_fetch_candidates` / `_fetch_terminals` are imported directly and
+resolved through this module's globals at call time, so tests patch
+`symphony.tui.app._fetch_candidates` — the consumer's reference
+(initiative D; the former parent-package indirection is gone).
 """
 
 from __future__ import annotations
@@ -45,6 +44,8 @@ from .helpers import (
     _CardStatus,
     _build_runtime_index,
     _card_sort_key,
+    _fetch_candidates,
+    _fetch_terminals,
     _matches_filter,
     _ordered_column_states,
     _stage_position,
@@ -55,11 +56,6 @@ from .widgets import DetailPane, FilterBar, IssueCard, Lane, StatsBar
 
 log = get_logger()
 
-
-# Bind to the parent package object so `_tui_pkg._fetch_candidates` does
-# attribute lookup at call time — that's how test monkeypatches on
-# `symphony.tui._fetch_candidates` reach this code path.
-import symphony.tui as _tui_pkg  # noqa: E402  (intentional post-import side effect)
 
 
 class KanbanApp(App):
@@ -240,8 +236,8 @@ class KanbanApp(App):
 
     async def _refresh_tracker(self, cfg: ServiceConfig) -> None:
         try:
-            candidates = await asyncio.to_thread(_tui_pkg._fetch_candidates, cfg)
-            terminals = await asyncio.to_thread(_tui_pkg._fetch_terminals, cfg)
+            candidates = await asyncio.to_thread(_fetch_candidates, cfg)
+            terminals = await asyncio.to_thread(_fetch_terminals, cfg)
         except Exception as exc:
             log.debug("tui_tracker_fetch_failed", error=str(exc))
             return

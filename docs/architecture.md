@@ -84,26 +84,19 @@ lanes, first-class cards, and modal detail screens; CLI continues to do
 | `app.py` | `KanbanApp` + `KanbanTUI`, keyboard write actions, API/TUI coordination |
 | `__init__.py` | re-exports the public surface |
 
-### Monkeypatch indirection — `_tui_pkg`
+### Monkeypatch indirection — `_tui_pkg` (removed)
 
-Tests stub `symphony.tui._fetch_candidates` and
-`symphony.tui._fetch_terminals` with `monkeypatch.setattr`. The actual
-call site is `app.py`, which would normally bind these names at import
-time — that would render the patches invisible. To keep the patches
-live, `app.py` does:
+The former parent-package indirection is gone (architecture-improvement
+plan, initiative D). `app.py` imports `_fetch_candidates` /
+`_fetch_terminals` directly from `.helpers` and resolves them through
+its own module globals at call time, so tests patch the consumer's
+reference:
 
-```python
-import symphony.tui as _tui_pkg  # bound to the package module
-...
-candidates = await asyncio.to_thread(_tui_pkg._fetch_candidates, cfg)
-terminals  = await asyncio.to_thread(_tui_pkg._fetch_terminals, cfg)
-```
+- `symphony.tui.app._fetch_candidates`
+- `symphony.tui.app._fetch_terminals`
 
-`_tui_pkg.<name>` resolves through the package namespace at call time,
-so a `monkeypatch.setattr("symphony.tui._fetch_candidates", stub)` in a
-test reaches the actual runtime call. If a future change inlines those
-names back into `app.py`, the relevant tests will silently lose their
-stub coverage — do not inline.
+The package still re-exports both names, but those bindings are no
+longer load-bearing for tests.
 
 ## Orchestrator package (`symphony.orchestrator`)
 
@@ -175,10 +168,9 @@ they are easy to regress and hard to spot in a diff:
 2. Add it to the package `__init__.py` re-export list **and** `__all__`.
 3. If a test needs to stub it, prefer constructor injection or patch
    the consumer module's reference (e.g.
-   `symphony.orchestrator.core.<name>`), per CPython's "where to patch"
-   guidance. The orchestrator's `_pkg` indirection is gone; only the TUI
-   still uses `_tui_pkg.<name>` (initiative D will convert it the same
-   way).
+   `symphony.orchestrator.core.<name>` or `symphony.tui.app.<name>`),
+   per CPython's "where to patch" guidance. The former `_pkg` /
+   `_tui_pkg` indirections are gone (initiative D).
 4. Run the relevant focused tests plus the full pytest suite before publishing
    runtime changes. For documentation-only edits, run stale-string/static
    checks and any affected contract tests.
