@@ -1,0 +1,121 @@
+"""Single owner of the orchestrator's live dispatch/slot state.
+
+Initiative A of docs/improvements/architecture-improvement-plan-2026-07-05.md
+(Encapsulate Record + Tell, Don't Ask). The rules that used to be scattered
+across dispatch/completion/retry/reconcile call sites are encoded once here:
+
+- **Slot budget counts retry-pending.** A ticket holds its slot through the
+  full Todo -> Done lifecycle; the 1s continuation-retry window between a
+  worker exiting and its retry firing must not let a sibling claim the slot
+  (`max_concurrent_agents == 1` means strict serial through Done).
+- **Task identity before eviction.** A worker-done callback may fire after
+  the 1s retry timer installed a *fresh* entry under the same key; only the
+  entry whose `worker_task` is the finished task may be treated as stale.
+- **One pending retry per issue.** Installing a retry cancels the previous
+  timer so a ticket can never hold two timers.
+
+The tick loop is the de-facto single writer of this state; keeping every
+mutation behind these methods makes that explicit.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from .entries import RetryEntry, RunningEntry
+
+
+class DispatchState:
+    """Owns live slot state; its methods are the intended mutation surface.
+
+    ``Orchestrator`` still exposes the collections read-only for the many
+    legacy read sites (and tests); new code should go through the mutators.
+    """
+
+    def __init__(self) -> None:
+        self.running: dict[str, RunningEntry] = {}
+        self.claimed: set[str] = set()
+        self.retry: dict[str, RetryEntry] = {}
+        self.completed: set[str] = set()
+        self.persisted_retry_attempts: dict[str, int] = {}
+        self.turn_budget_exhausted: set[str] = set()
+
+    # ------------------------------------------------------------------
+    # slot budget
+    # ------------------------------------------------------------------
+
+    def available_slots(self, max_concurrent_agents: int) -> int:
+        """Slots left after subtracting running AND retry-pending tickets.
+
+        Retry-pending tickets count against the slot budget so a ticket
+        holds its slot through the full Todo -> Done lifecycle. Without
+        this, the 1s `CONTINUATION_RETRY_DELAY_MS` window between a
+        worker exiting and its retry firing would let another ticket
+        claim the slot — surfacing as "OLV-005 starts while OLV-002 is
+        still in Verify" even though `max_concurrent_agents == 1`.
+        """
+        in_flight = len(self.running) + len(self.retry)
+        return max(max_concurrent_agents - in_flight, 0)
+
+    def in_flight_ids(self) -> set[str]:
+        return set(self.running) | set(self.retry)
+
+    # ------------------------------------------------------------------
+    # run lifecycle
+    # ------------------------------------------------------------------
+
+    def begin_run(self, issue_id: str, entry: RunningEntry) -> None:
+        """Register a dispatched worker and mark the issue claimed."""
+        self.running[issue_id] = entry
+        self.claimed.add(issue_id)
+
+    def abort_run(self, issue_id: str) -> RunningEntry | None:
+        """Roll back `begin_run` when task creation fails."""
+        self.claimed.discard(issue_id)
+        return self.running.pop(issue_id, None)
+
+    def entry_owned_by(
+        self, issue_id: str, task: asyncio.Task[None]
+    ) -> RunningEntry | None:
+        """Return the running entry only if it belongs to `task`.
+
+        The done-callback identity invariant: `_on_worker_exit` yields once,
+        and the continuation retry timer can install a fresh entry under the
+        same key inside that yield. A stale callback acting on the fresh
+        entry would eject a live worker (slot leak + sibling double-start).
+        """
+        entry = self.running.get(issue_id)
+        if entry is None or entry.worker_task is not task:
+            return None
+        return entry
+
+    def prune_claims_not_in(self, keep: set[str]) -> set[str]:
+        """G1 — drop claims with no in-flight owner; returns the pruned ids.
+
+        A claim without a running worker, pending retry, terminal persist,
+        or escalation is a leak from an interrupted dispatch; left alone it
+        blocks the ticket from ever dispatching again.
+        """
+        stale = self.claimed - keep
+        self.claimed -= stale
+        return stale
+
+    # ------------------------------------------------------------------
+    # retry timers
+    # ------------------------------------------------------------------
+
+    def cancel_pending_retry(self, issue_id: str) -> RetryEntry | None:
+        """Pop the pending retry (if any) and cancel its timer."""
+        existing = self.retry.pop(issue_id, None)
+        if existing is not None:
+            existing.timer_handle.cancel()
+        return existing
+
+    def schedule_retry(self, issue_id: str, entry: RetryEntry) -> None:
+        """Install `entry` as the one pending retry for `issue_id`.
+
+        Cancels any previously pending timer first so an issue can never
+        hold two live retry timers.
+        """
+        self.cancel_pending_retry(issue_id)
+        self.retry[issue_id] = entry

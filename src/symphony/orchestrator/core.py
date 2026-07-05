@@ -87,6 +87,7 @@ from .constants import (
     _TOKEN_EMA_ALPHA,
 )
 from .contracts import evaluate_contract
+from .dispatch_state import DispatchState
 from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
 from .helpers import (
     _branch_hook_env,
@@ -216,11 +217,10 @@ class Orchestrator:
     ) -> None:
         self._workflow_state = workflow_state
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._running: dict[str, RunningEntry] = {}
-        self._claimed: set[str] = set()
-        self._retry: dict[str, RetryEntry] = {}
-        self._persisted_retry_attempts: dict[str, int] = {}
-        self._completed: set[str] = set()
+        # Single owner of live dispatch/slot state (initiative A). The
+        # read-only properties below keep the many legacy read sites (and
+        # tests) working; mutations should go through its methods.
+        self._dispatch_state = DispatchState()
         # C5 — `Done`-transition counter for the periodic wiki sweep. Lives
         # in-process; restart resets it (acceptable — the sweep is a
         # housekeeping nudge, not a correctness gate). Wraparound at
@@ -230,7 +230,6 @@ class Orchestrator:
         # (ARCHIVE_SWEEP_INTERVAL_SEC). Monotonic clock so a wall-clock jump
         # can't wedge it; None = never swept, so the first tick sweeps once.
         self._last_archive_sweep_monotonic: float | None = None
-        self._turn_budget_exhausted: set[str] = set()
         self._lease_blocked: dict[str, str] = {}
         # Tickets whose worker-exit handler is mid-flight. `_on_worker_exit`
         # adds the id on entry and clears it in a `finally`, so from the moment
@@ -296,6 +295,36 @@ class Orchestrator:
         # R8 — issue_id -> failed escalation attempts. Keeps a retry-capped
         # ticket out of dispatch while its terminal-state move is retried.
         self._pending_escalations: dict[str, int] = {}
+
+    # ------------------------------------------------------------------
+    # dispatch-state views (initiative A). Read-only aliases so the many
+    # legacy read sites (and tests) keep working while DispatchState owns
+    # the collections; mutations should go through its methods.
+    # ------------------------------------------------------------------
+
+    @property
+    def _running(self) -> dict[str, RunningEntry]:
+        return self._dispatch_state.running
+
+    @property
+    def _claimed(self) -> set[str]:
+        return self._dispatch_state.claimed
+
+    @property
+    def _retry(self) -> dict[str, RetryEntry]:
+        return self._dispatch_state.retry
+
+    @property
+    def _completed(self) -> set[str]:
+        return self._dispatch_state.completed
+
+    @property
+    def _persisted_retry_attempts(self) -> dict[str, int]:
+        return self._dispatch_state.persisted_retry_attempts
+
+    @property
+    def _turn_budget_exhausted(self) -> set[str]:
+        return self._dispatch_state.turn_budget_exhausted
 
     # ------------------------------------------------------------------
     # public accessors for API / TUI layers
@@ -1476,13 +1505,12 @@ class Orchestrator:
         # against the live tracker state — Blocked tickets stay skipped via
         # `_eligible`'s active-state check; recovered tickets dispatch.
         in_flight_ids = self._in_flight_ids()
-        stale_claimed = self._claimed - in_flight_ids
+        stale_claimed = self._dispatch_state.prune_claims_not_in(in_flight_ids)
         if stale_claimed:
             log.info(
                 "stale_claimed_pruned",
                 ids=sorted(stale_claimed),
             )
-            self._claimed -= stale_claimed
             # G3 — record the moment each id left `_claimed`. The dispatch
             # sort uses this to bump candidates whose wait age crossed
             # `WAIT_AGE_BUMP_MIN` ahead of registration FIFO, so a ticket
@@ -1766,14 +1794,10 @@ class Orchestrator:
         return True
 
     def _available_slots(self, cfg: ServiceConfig) -> int:
-        # Retry-pending tickets count against the slot budget so a ticket
-        # holds its slot through the full Todo -> Done lifecycle. Without
-        # this, the 1s `CONTINUATION_RETRY_DELAY_MS` window between a
-        # worker exiting and its retry firing would let another ticket
-        # claim the slot — surfacing as "OLV-005 starts while OLV-002 is
-        # still in Verify" even though `max_concurrent_agents == 1`.
-        in_flight = len(self._running) + len(self._retry)
-        return max(cfg.agent.max_concurrent_agents - in_flight, 0)
+        # The retry-counts-against-the-budget rule lives on DispatchState
+        # (single owner of slot math) — see its docstring for the OLV-005
+        # double-start war story.
+        return self._dispatch_state.available_slots(cfg.agent.max_concurrent_agents)
 
     # ------------------------------------------------------------------
     # C1 — system-level conflict pre-check
@@ -2144,10 +2168,7 @@ class Orchestrator:
         attempt: int | None,
         attempt_kind: str | None = None,
     ) -> None:
-        # Cancel any existing retry timer.
-        existing_retry = self._retry.pop(issue.id, None)
-        if existing_retry is not None:
-            existing_retry.timer_handle.cancel()
+        self._dispatch_state.cancel_pending_retry(issue.id)
 
         workspace_path = (
             self._workspace_manager.path_for(issue.identifier)
@@ -2177,16 +2198,14 @@ class Orchestrator:
             agent_kind=agent_kind,
             run_id=run_id,
         )
-        self._running[issue.id] = entry
-        self._claimed.add(issue.id)
+        self._dispatch_state.begin_run(issue.id, entry)
         try:
             worker_task = asyncio.create_task(
                 self._run_agent_attempt(issue, attempt, cfg),
                 name=f"symphony-worker-{issue.identifier}",
             )
         except Exception:
-            self._running.pop(issue.id, None)
-            self._claimed.discard(issue.id)
+            self._dispatch_state.abort_run(issue.id)
             self._finish_run_lease(issue.id, entry, "dispatch_failed")
             raise
         entry.worker_task = worker_task
@@ -2234,8 +2253,8 @@ class Orchestrator:
         same key. A stale callback that pops it would log a phantom
         `worker_task_finished_without_cleanup` and eject the live worker.
         """
-        entry = self._running.get(issue_id)
-        if entry is None or entry.worker_task is not task:
+        entry = self._dispatch_state.entry_owned_by(issue_id, task)
+        if entry is None:
             return
         if entry.exit_started_at is not None:
             log.info(
@@ -3975,22 +3994,22 @@ class Orchestrator:
             self._persisted_retry_attempts.pop(issue_id, None)
             self._clear_issue_flags(issue_id, retry_attempt=True)
             return
-        existing = self._retry.pop(issue_id, None)
-        if existing is not None:
-            existing.timer_handle.cancel()
         due = self._loop.time() + delay_ms / 1000.0
         handle = self._loop.call_later(
             delay_ms / 1000.0,
             lambda: asyncio.create_task(self._on_retry_timer(issue_id)),
         )
-        self._retry[issue_id] = RetryEntry(
-            issue_id=issue_id,
-            identifier=identifier,
-            attempt=attempt,
-            due_at_ms=due * 1000.0,
-            timer_handle=handle,
-            error=error,
-            kind=kind or ("continuation" if error is None else "retry"),
+        self._dispatch_state.schedule_retry(
+            issue_id,
+            RetryEntry(
+                issue_id=issue_id,
+                identifier=identifier,
+                attempt=attempt,
+                due_at_ms=due * 1000.0,
+                timer_handle=handle,
+                error=error,
+                kind=kind or ("continuation" if error is None else "retry"),
+            ),
         )
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.current_retry_attempt = attempt
@@ -4005,8 +4024,7 @@ class Orchestrator:
     def _in_flight_ids(self) -> set[str]:
         """Issue ids the G1 claim-prune must treat as legitimately claimed."""
         return (
-            set(self._running)
-            | set(self._retry)
+            self._dispatch_state.in_flight_ids()
             | self._terminal_persist_pending
             | set(self._pending_escalations)
         )
