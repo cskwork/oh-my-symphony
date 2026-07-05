@@ -693,3 +693,43 @@ web status, and scheduler status describe the same outcome.
   safe configuration exists.
 - Non-file trackers return `unsupported_tracker` until their safe creation
   contracts are implemented.
+
+---
+
+## Retryable backend failures do not auto-pause
+
+## Goal
+
+Let transient backend throttling recover through Symphony's existing retry
+backoff instead of leaving a Todo/In Progress ticket manually paused after one
+failed turn.
+
+## Decision
+
+Classify explicit rate-limit/overload worker failures as retryable and route
+them through normal retry scheduling without setting `paused=1`. Keep generic
+worker crashes on the existing auto-pause path so unclear failures still stop
+for operator inspection. OpenCode `exit -15` is also treated as retryable
+because the live Jira board showed OpenCode throttling can surface with no
+stderr and only that SIGTERM-shaped exit code.
+
+- Rejected: unpausing every `turn_error`. That would hide real backend crashes
+  and keep restarting tickets that need operator action.
+- Rejected: changing retry timers or retry caps. `agent.max_retries` already
+  provides the bounded safety gate; the defect was the premature pause flag.
+- Rejected: clearing existing operator pauses. A manually paused ticket still
+  remains held; this change only avoids creating a new auto-pause for
+  retryable errors.
+
+## Verification
+
+- Red before fix:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_worker_exit_retryable_rate_limit_schedules_retry_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_opencode_sigterm_schedules_retry_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_hard_failure_with_visible_reason -q`
+  failed: 2 retryable cases still set `paused=True`.
+- Green after fix:
+  same command passed: 3 tests.
+- Surrounding pause/retry regression check:
+  `python -m pytest tests/test_orchestrator_dispatch.py::test_worker_exit_preserves_pause_flag_for_held_ticket tests/test_orchestrator_dispatch.py::test_worker_exit_retryable_rate_limit_schedules_retry_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_opencode_sigterm_schedules_retry_without_pause tests/test_orchestrator_dispatch.py::test_worker_exit_error_auto_pauses_hard_failure_with_visible_reason tests/test_orchestrator_dispatch.py::test_eligible_refuses_paused_ticket_for_dispatch_and_retry tests/test_orchestrator_dispatch.py::test_retry_timer_reparks_paused_ticket_without_dispatching tests/test_orchestrator_dispatch.py::test_resume_worker_releases_held_retry_immediately tests/test_orchestrator_dispatch.py::test_snapshot_retry_row_includes_paused_flag -q`
+  plus `test_retryable_persisted_pause_restarts_as_retry` passed: 9 tests.
+- Full dispatch regression:
+  `python -m pytest tests/test_orchestrator_dispatch.py -q` passed: 132 tests.

@@ -136,6 +136,17 @@ _FAILED_BLOCKER_TERMINAL_STATES = {
     "canceled",
     "duplicate",
 }
+_RETRYABLE_WORKER_ERROR_MARKERS = (
+    "429",
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "too many requests",
+    "temporarily overloaded",
+    "overloaded",
+    "service unavailable",
+    "try again later",
+)
 
 
 def _clean_board_error_message(message: str) -> str:
@@ -148,6 +159,36 @@ def _worker_error_pause_reason(reason: str, error: str | None) -> str:
     detail = f"{reason}: {error}" if error else reason
     clean = _clean_board_error_message(detail)
     return f"worker error: {clean}; paused for operator inspection"
+
+
+def _has_retryable_worker_marker(clean_error: str) -> bool:
+    return any(marker in clean_error for marker in _RETRYABLE_WORKER_ERROR_MARKERS)
+
+
+def _is_opencode_sigterm_retry(agent_kind: str, clean_error: str) -> bool:
+    if "exit -15" not in clean_error:
+        return False
+    return agent_kind == "opencode" or "opencode" in clean_error
+
+
+def _is_retryable_worker_error(agent_kind: str, reason: str, error: str | None) -> bool:
+    detail = f"{reason}: {error}" if error else reason
+    clean = _clean_board_error_message(detail).lower()
+    if _has_retryable_worker_marker(clean):
+        return True
+    # Live OpenCode throttling can surface as SIGTERM with no stderr.
+    return _is_opencode_sigterm_retry(agent_kind, clean)
+
+
+def _is_retryable_auto_pause_reason(pause_reason: str | None) -> bool:
+    if not pause_reason:
+        return False
+    clean = _clean_board_error_message(pause_reason).lower()
+    if "worker error:" not in clean or "paused for operator inspection" not in clean:
+        return False
+    return _has_retryable_worker_marker(clean) or _is_opencode_sigterm_retry(
+        "", clean
+    )
 
 
 def _update_state_turn_counter(debug: _IssueDebug, state: str) -> int:
@@ -535,9 +576,23 @@ class Orchestrator:
             if flag.budget_exhausted:
                 self._turn_budget_exhausted.add(issue_id)
             if flag.paused:
-                self._paused_issue_ids.add(issue_id)
-                if flag.pause_reason:
-                    self._pause_reasons[issue_id] = str(flag.pause_reason)
+                pause_reason = str(flag.pause_reason) if flag.pause_reason else None
+                if (
+                    flag.retry_attempt is not None
+                    and _is_retryable_auto_pause_reason(pause_reason)
+                ):
+                    self._paused_issue_ids.discard(issue_id)
+                    self._pause_reasons.pop(issue_id, None)
+                    self._clear_issue_flags(issue_id, paused=True)
+                    log.info(
+                        "retryable_worker_pause_released",
+                        issue_id=issue_id,
+                        pause_reason=pause_reason,
+                    )
+                else:
+                    self._paused_issue_ids.add(issue_id)
+                    if pause_reason:
+                        self._pause_reasons[issue_id] = pause_reason
             if flag.retry_attempt is not None:
                 self._persisted_retry_attempts[issue_id] = int(flag.retry_attempt)
                 debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
@@ -4169,23 +4224,36 @@ class Orchestrator:
                 debug.last_error = f"max_turns reached ({attempt_cap}/attempt){suffix}"
         else:
             failure_reason = f"{reason}: {error}" if error else reason
-            pause_reason = _worker_error_pause_reason(reason, error)
-            debug.last_error = pause_reason
-            self._paused_issue_ids.add(issue_id)
-            self._pause_reasons[issue_id] = pause_reason
-            self._set_issue_flags(
-                issue_id,
-                paused=True,
-                pause_reason=pause_reason,
-            )
-            log.warning(
-                "worker_error_auto_paused",
-                issue_id=issue_id,
-                issue_identifier=entry.issue.identifier,
-                reason=reason,
-                error=error,
-                pause_reason=pause_reason,
-            )
+            cleaned_failure = _clean_board_error_message(failure_reason)
+            if _is_retryable_worker_error(
+                self._entry_agent_kind(entry), reason, error
+            ):
+                debug.last_error = cleaned_failure
+                log.warning(
+                    "worker_error_retry_scheduled",
+                    issue_id=issue_id,
+                    issue_identifier=entry.issue.identifier,
+                    reason=reason,
+                    error=error,
+                )
+            else:
+                pause_reason = _worker_error_pause_reason(reason, error)
+                debug.last_error = pause_reason
+                self._paused_issue_ids.add(issue_id)
+                self._pause_reasons[issue_id] = pause_reason
+                self._set_issue_flags(
+                    issue_id,
+                    paused=True,
+                    pause_reason=pause_reason,
+                )
+                log.warning(
+                    "worker_error_auto_paused",
+                    issue_id=issue_id,
+                    issue_identifier=entry.issue.identifier,
+                    reason=reason,
+                    error=error,
+                    pause_reason=pause_reason,
+                )
             next_attempt = (entry.retry_attempt or 0) + 1
             cfg = self._workflow_state.current()
             cap = cfg.agent.max_retry_backoff_ms if cfg is not None else 300_000
@@ -4195,7 +4263,7 @@ class Orchestrator:
                 identifier=entry.issue.identifier,
                 attempt=next_attempt,
                 delay_ms=delay_ms,
-                error=_clean_board_error_message(failure_reason),
+                error=cleaned_failure,
                 kind="retry",
             )
         log.info(

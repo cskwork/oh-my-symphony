@@ -571,6 +571,98 @@ def test_persisted_issue_flags_block_dispatch_after_restart(tmp_path):
     assert restarted._should_dispatch(exhausted, cfg) is False
 
 
+def test_retryable_persisted_pause_restarts_as_retry(tmp_path, monkeypatch):
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+        active_states=("Todo",),
+    )
+    state_db = tmp_path / ".symphony" / "state.db"
+    issue = _issue("MT-LEGACY-RETRY", state="Todo")
+    registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+    registry.set_issue_flags(
+        issue.id,
+        retry_attempt=1,
+        paused=True,
+        pause_reason=(
+            "worker error: turn_error: turn_failed: opencode failed with "
+            "exit -15; paused for operator inspection"
+        ),
+    )
+    registry.close()
+    restarted = _orch()
+
+    dispatched: list[tuple[str, int | None, str | None]] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(captured_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append((captured_issue.id, attempt, attempt_kind))
+
+    async def _run() -> None:
+        restarted._loop = asyncio.get_running_loop()
+        monkeypatch.setattr(restarted._workflow_state, "reload", lambda: (cfg, None))
+        monkeypatch.setattr(restarted._workflow_state, "current", lambda: cfg)
+        monkeypatch.setattr(restarted, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(restarted, "_archive_sweep", _archive)
+        monkeypatch.setattr(restarted, "_dispatch", _dispatch)
+
+        restarted._ensure_run_registry(cfg)
+
+        assert restarted.is_paused(issue.id) is False
+        assert issue.id not in restarted._pause_reasons
+        flags = restarted._run_registry.get_issue_flags(issue.id)  # type: ignore[union-attr]
+        assert flags is not None
+        assert flags.retry_attempt == 1
+        assert flags.paused is False
+        assert flags.pause_reason is None
+
+        await restarted._on_tick()
+
+    asyncio.run(_run())
+
+    assert dispatched == [(issue.id, 1, "retry")]
+
+
+def test_non_opencode_persisted_sigterm_pause_stays_paused(tmp_path):
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+        active_states=("Todo",),
+    )
+    state_db = tmp_path / ".symphony" / "state.db"
+    issue = _issue("MT-LEGACY-SIGTERM", state="Todo")
+    pause_reason = (
+        "worker error: turn_error: turn_failed: claude failed with "
+        "exit -15; paused for operator inspection"
+    )
+    registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
+    registry.set_issue_flags(
+        issue.id,
+        retry_attempt=1,
+        paused=True,
+        pause_reason=pause_reason,
+    )
+    registry.close()
+    restarted = _orch()
+
+    restarted._ensure_run_registry(cfg)
+
+    assert restarted.is_paused(issue.id) is True
+    assert restarted._pause_reasons[issue.id] == pause_reason
+    assert restarted._should_dispatch(issue, cfg) is False
+    assert restarted._run_registry is not None
+    flags = restarted._run_registry.get_issue_flags(issue.id)
+    assert flags is not None
+    assert flags.retry_attempt == 1
+    assert flags.paused is True
+    assert flags.pause_reason == pause_reason
+
+
 def test_persisted_retry_attempt_drives_next_dispatch_and_cap(tmp_path, monkeypatch):
     cfg = _make_config(
         workflow_path=tmp_path / "WORKFLOW.md",
@@ -2566,15 +2658,16 @@ def test_worker_exit_preserves_pause_flag_for_held_ticket():
     asyncio.run(_run())
 
 
-def test_worker_exit_error_auto_pauses_with_visible_reason(tmp_path):
+def test_worker_exit_retryable_rate_limit_schedules_retry_without_pause(tmp_path):
     registry = RunRegistry(tmp_path / ".symphony" / "state.db")
     orch = _orch()
-    issue = _issue("MT-ERROR-PAUSE", state="In Progress")
+    issue = _issue("MT-RATE-LIMIT", state="In Progress")
 
     async def _run() -> None:
         orch._loop = asyncio.get_running_loop()
         orch._run_registry = registry
-        _install_running_entry(orch, issue)
+        entry = _install_running_entry(orch, issue)
+        entry.agent_kind = "opencode"
 
         try:
             await orch._on_worker_exit(
@@ -2588,17 +2681,82 @@ def test_worker_exit_error_auto_pauses_with_visible_reason(tmp_path):
 
             flags = registry.get_issue_flags(issue.id)
             assert flags is not None
-            assert flags.paused is True
-            assert flags.pause_reason is not None
-            assert "turn_error" in flags.pause_reason
-            assert "429 The service may be temporarily overloaded" in flags.pause_reason
-            assert "backend-internal" in flags.pause_reason
-            assert "\x1b" not in flags.pause_reason
+            assert flags.retry_attempt == 1
+            assert flags.paused is False
+            assert flags.pause_reason is None
+            assert orch.is_paused(issue.id) is False
             retry = orch._retry[issue.id]
             assert retry.error is not None
             assert "429 The service may be temporarily overloaded" in retry.error
             assert "backend-internal" in retry.error
             assert "\x1b" not in retry.error
+            assert retry.kind == "retry"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_worker_exit_opencode_sigterm_schedules_retry_without_pause(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-OPENCODE-TERM", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        entry = _install_running_entry(orch, issue)
+        entry.agent_kind = "opencode"
+
+        try:
+            await orch._on_worker_exit(
+                issue.id,
+                reason="turn_error",
+                error="turn_failed: opencode failed with exit -15",
+            )
+
+            flags = registry.get_issue_flags(issue.id)
+            assert flags is not None
+            assert flags.retry_attempt == 1
+            assert flags.paused is False
+            assert flags.pause_reason is None
+            assert orch.is_paused(issue.id) is False
+            retry = orch._retry[issue.id]
+            assert retry.error == "turn_error: turn_failed: opencode failed with exit -15"
+            assert retry.kind == "retry"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_worker_exit_error_auto_pauses_hard_failure_with_visible_reason(tmp_path):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    issue = _issue("MT-ERROR-PAUSE", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._run_registry = registry
+        _install_running_entry(orch, issue)
+
+        try:
+            await orch._on_worker_exit(
+                issue.id,
+                reason="turn_error",
+                error="backend crashed before reading prompt; stderr: \x1b[31mboom\x1b[0m",
+            )
+
+            flags = registry.get_issue_flags(issue.id)
+            assert flags is not None
+            assert flags.paused is True
+            assert flags.pause_reason is not None
+            assert "turn_error" in flags.pause_reason
+            assert "backend crashed before reading prompt" in flags.pause_reason
+            assert "boom" in flags.pause_reason
+            assert "\x1b" not in flags.pause_reason
 
             attention = orch.issue_attention(issue)
             assert attention is not None
