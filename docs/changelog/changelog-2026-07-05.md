@@ -569,3 +569,40 @@ the pre-push hook re-running the suite.
 - C: streaming-family base for claude/pi; daily live contract tests.
 - E ratchets: broaden ruff rule set (I, B, UP), pyright over tests,
   raise coverage floor from 80 as it grows.
+
+---
+
+# 2026-07-05 - OpenCode terminal cleanup RCA
+
+## Goal
+
+Make the full OpenCode file-board E2E drain after a worker moves a card to
+`Human Review`.
+
+## Decision
+
+Bound the terminal-state natural-exit grace by the first reconcile tick that
+observes the card in a terminal lane, while still logging the latest backend
+event age. The failed live run reached `Human Review`, but `/api/v1/state`
+kept `running: 1` because OpenCode emits liveness heartbeats every 30 seconds
+while its subprocess is alive. Terminal reconciliation used
+`last_codex_timestamp`, so each heartbeat refreshed the 60 second grace window
+and `reconcile_skip_active_worker` repeated indefinitely.
+
+- Rejected: changing OpenCode heartbeats to non-progress events. OpenCode
+  buffers JSON until the subprocess exits, so those heartbeats are still
+  needed to prevent false stall cancellation during legitimate long turns.
+- Rejected: cancelling immediately on terminal state. The grace window protects
+  the worker's own `EVENT_TURN_COMPLETED`, `after_run`, and workspace snapshot
+  path from reconcile races.
+- Rejected: special-casing OpenCode in reconcile. Terminal cleanup is a board
+  lifecycle rule, and future keepalive-style backends should get the same
+  bounded behavior.
+
+## Verification
+
+- Reproduction: contained `dev` OpenCode E2E reached `Human Review`, but
+  `GET /api/v1/state` still reported one running worker and OpenCode PID
+  `95061` remained alive.
+- Regression test added:
+  `tests/test_orchestrator_dispatch.py::test_reconcile_terminal_grace_expires_despite_recent_heartbeat`.

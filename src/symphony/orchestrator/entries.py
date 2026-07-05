@@ -98,6 +98,10 @@ class RunningEntry:
     # terminal or inactive tracker move. Worker exit must not repeat that git
     # cleanup against the same worktree.
     workspace_cleanup_started: bool = False
+    # First poll tick where reconcile observed this running worker's card in a
+    # terminal state. Terminal cleanup uses this to keep backend keepalives from
+    # extending the natural-exit grace period forever.
+    terminal_state_seen_at: datetime | None = None
     # Set when the per-attempt `max_turns` ceiling halted the worker without
     # the ticket having reached a terminal state. Treated as an explicit
     # non-success outcome in `_on_worker_exit`: no automatic continuation is

@@ -2915,6 +2915,96 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
     asyncio.run(_run())
 
 
+def test_reconcile_terminal_grace_expires_despite_recent_heartbeat(monkeypatch):
+    """Backend keepalives must not extend terminal cleanup forever."""
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress", "Verify", "Learn"),
+        terminal_states=("Human Review", "Done", "Blocked"),
+    )
+    cfg = replace(cfg, agent=replace(cfg.agent, auto_merge_on_done=False))
+    orch = _orch()
+    issue = _issue("MT-HB", state="Verify")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            now = datetime.now(timezone.utc)
+            entry = RunningEntry(
+                issue=issue,
+                started_at=now,
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp/ws-hb"),
+            )
+            entry.last_codex_timestamp = now
+            orch._running[issue.id] = entry
+
+            moved = Issue(
+                id=issue.id,
+                identifier=issue.identifier,
+                title=issue.title,
+                description=issue.description,
+                priority=issue.priority,
+                state="Human Review",
+                blocked_by=issue.blocked_by,
+                created_at=issue.created_at,
+                updated_at=issue.updated_at,
+            )
+            monkeypatch.setattr(
+                orch, "_tracker_call_states_by_ids", lambda c, ids: [moved]
+            )
+
+            calls: list[str] = []
+
+            async def _capture_commit(path, *, identifier, title, **_):
+                calls.append(f"commit:{identifier}")
+
+            class _StubWS:
+                async def remove(self, p):
+                    calls.append(f"remove:{p}")
+
+                async def after_done_best_effort(self, p, *, identifier, title):
+                    pass
+
+                def path_for(self, ident):
+                    return Path("/tmp/ws-hb")
+
+            monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
+            orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+            await orch._reconcile_running(cfg)
+
+            assert calls == []
+            assert worker_task.cancelled() is False
+            assert entry.terminal_state_seen_at is not None
+
+            # Simulate OpenCode's periodic liveness event after the terminal
+            # state has already had its one bounded natural-exit window.
+            entry.terminal_state_seen_at = datetime.now(timezone.utc) - timedelta(
+                seconds=61
+            )
+            entry.last_codex_timestamp = datetime.now(timezone.utc)
+
+            await orch._reconcile_running(cfg)
+
+            expected = ["commit:MT-HB", f"remove:{Path('/tmp/ws-hb')}"]
+            assert calls == expected
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
 def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
     """If the operator opted out via auto_commit_on_done=False, reconcile
     must still remove but skip the commit."""

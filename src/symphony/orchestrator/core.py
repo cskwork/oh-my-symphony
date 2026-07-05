@@ -4452,15 +4452,23 @@ class Orchestrator:
                 updated_at=entry.issue.updated_at,
             )
             last_seen = entry.last_codex_timestamp
-            age = (now - last_seen).total_seconds() if last_seen else None
-            if age is not None and age < recent_grace_s:
+            event_age = (now - last_seen).total_seconds() if last_seen else None
+            if entry.terminal_state_seen_at is None:
+                entry.terminal_state_seen_at = now
+            terminal_age = (now - entry.terminal_state_seen_at).total_seconds()
+            if (
+                event_age is not None
+                and event_age < recent_grace_s
+                and terminal_age < recent_grace_s
+            ):
                 # Active worker — let it exit on its own.
                 log.info(
                     "reconcile_skip_active_worker",
                     issue_id=issue.id,
                     identifier=issue.identifier,
                     state=issue.state,
-                    last_event_age_s=round(age, 1),
+                    last_event_age_s=round(event_age, 1),
+                    terminal_state_age_s=round(terminal_age, 1),
                 )
                 return
             if entry.exit_started_at is not None:
@@ -4477,7 +4485,8 @@ class Orchestrator:
                 issue_id=issue.id,
                 identifier=issue.identifier,
                 state=issue.state,
-                last_event_age_s=round(age, 1) if age is not None else None,
+                last_event_age_s=round(event_age, 1) if event_age is not None else None,
+                terminal_state_age_s=round(terminal_age, 1),
             )
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
@@ -4518,6 +4527,7 @@ class Orchestrator:
                     # no after_done hook, just reap the workspace.
                     await self._workspace_manager.remove(entry.workspace_path)
         elif state in active:
+            entry.terminal_state_seen_at = None
             # Update in-memory issue snapshot.
             entry.issue = Issue(
                 id=issue.id,
