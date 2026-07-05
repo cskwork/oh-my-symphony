@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, cast
 
 from ..issue import Issue
 
@@ -386,13 +386,13 @@ class RunRegistry:
         next_paused = existing.paused if existing is not None else False
         next_pause_reason = existing.pause_reason if existing is not None else None
         if retry_attempt is not _UNSET:
-            next_retry_attempt = retry_attempt  # type: ignore[assignment]
+            next_retry_attempt = cast("int | None", retry_attempt)
         if budget_exhausted is not _UNSET:
             next_budget_exhausted = bool(budget_exhausted)
         if paused is not _UNSET:
             next_paused = bool(paused)
         if pause_reason is not _UNSET:
-            next_pause_reason = pause_reason  # type: ignore[assignment]
+            next_pause_reason = cast("str | None", pause_reason)
         elif not next_paused:
             next_pause_reason = None
         self._write_issue_flags(

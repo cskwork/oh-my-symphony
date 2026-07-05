@@ -13,6 +13,7 @@ branch the live agents only hit once a day.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -110,9 +111,6 @@ def _make_cfg(kind: str, *, workspace_root: Path) -> ServiceConfig:
         server=ServerConfig(port=None),
         prompt_template="hi",
     )
-
-
-import asyncio
 
 
 def _noop_event(_: dict) -> "asyncio.Future[None]":

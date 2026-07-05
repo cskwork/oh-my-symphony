@@ -16,7 +16,7 @@ from typing import Iterable, Protocol, runtime_checkable
 
 from ..errors import UnsupportedTrackerKind
 from ..issue import Issue
-from ..workflow import ServiceConfig, TrackerConfig
+from ..workflow import ServiceConfig
 
 
 @runtime_checkable

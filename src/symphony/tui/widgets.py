@@ -244,7 +244,7 @@ class IssueCard(Static):
         elif normalize_state(issue.state) == "learn":
             meta.append("S to skip Learn", style="dim magenta")
         elif issue.labels:
-            meta.append("  ".join(f"#{l}" for l in issue.labels[:3]), style="dim")
+            meta.append("  ".join(f"#{label}" for label in issue.labels[:3]), style="dim")
         if status.attention:
             if meta.plain.strip():
                 meta.append("\n")
@@ -549,7 +549,7 @@ class DetailPane(Vertical):
         if issue.priority:
             meta.append(f"  P{issue.priority}", style="bright_red bold")
         if issue.labels:
-            meta.append("  " + " ".join(f"#{l}" for l in issue.labels), style="dim")
+            meta.append("  " + " ".join(f"#{label}" for label in issue.labels), style="dim")
         if status.runtime != "idle":
             runtime_label = (
                 f"runtime={status.runtime} (paused)"

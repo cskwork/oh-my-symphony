@@ -20,10 +20,7 @@ import pytest
 
 import symphony._shell as shell_module
 import symphony.backends.claude_code as claude_module
-import symphony.backends.codex as codex_module
-import symphony.backends.agy as agy_module
 import symphony.backends.gemini as gemini_module
-import symphony.backends.kiro as kiro_module
 import symphony.backends.opencode as opencode_module
 import symphony.backends.pi as pi_module
 import symphony.backends.plain_cli as plain_cli_module

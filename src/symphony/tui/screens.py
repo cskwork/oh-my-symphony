@@ -75,7 +75,7 @@ class TicketDetailScreen(ModalScreen[None]):
         if self._issue.priority:
             meta.append(f"  P{self._issue.priority}", style="bright_red bold")
         if self._issue.labels:
-            meta.append("  " + " ".join(f"#{l}" for l in self._issue.labels), style="dim")
+            meta.append("  " + " ".join(f"#{label}" for label in self._issue.labels), style="dim")
         if self._status.attention:
             meta.append("\n")
             _append_attention_meta(meta, self._status.attention, include_due_at=True)

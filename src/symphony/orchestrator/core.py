@@ -111,6 +111,7 @@ from .run_registry import RunRecord, RunRegistry, registry_path_for_workflow
 # entries below) re-resolve at call time so test monkeypatches on
 # ``symphony.orchestrator.<name>`` reach the orchestrator's call sites.
 # The package __init__ binds these names before importing this module.
+assert __package__ is not None  # always imported as symphony.orchestrator.core
 _pkg = sys.modules[__package__]
 
 
@@ -403,13 +404,25 @@ class Orchestrator:
             None,
         )
 
-    def _clear_issue_flags(self, issue_id: str, **flags: bool) -> None:
+    def _clear_issue_flags(
+        self,
+        issue_id: str,
+        *,
+        retry_attempt: bool = False,
+        budget_exhausted: bool = False,
+        paused: bool = False,
+    ) -> None:
         registry = self._run_registry
         if registry is None:
             return
         self._registry_guard(
             "clear_issue_flags",
-            lambda: registry.clear_issue_flags(issue_id, **flags),
+            lambda: registry.clear_issue_flags(
+                issue_id,
+                retry_attempt=retry_attempt,
+                budget_exhausted=budget_exhausted,
+                paused=paused,
+            ),
             None,
         )
 

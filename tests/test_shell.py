@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import subprocess as _subprocess
 import sys
+from types import SimpleNamespace
 from typing import Iterator
 
 import pytest
 
 from symphony import _shell
-from symphony._shell import _is_wsl_launcher, resolve_bash
+from symphony._shell import _is_wsl_launcher, resolve_bash, safe_proc_wait
 
 
 @pytest.fixture(autouse=True)
@@ -83,13 +86,6 @@ def test_windows_picks_git_bash_when_available(
 # ---------------------------------------------------------------------------
 # safe_proc_wait — bypass for asyncio's broken child watcher under Textual
 # ---------------------------------------------------------------------------
-
-
-import asyncio
-import subprocess as _subprocess
-from types import SimpleNamespace
-
-from symphony._shell import safe_proc_wait
 
 
 class _FakeWindowsProcess:

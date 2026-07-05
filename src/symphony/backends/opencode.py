@@ -425,7 +425,7 @@ def _usage_dicts(value: Any) -> Iterable[dict[str, Any]]:
 def _int_value(data: dict[str, Any], *keys: str) -> int:
     for key in keys:
         value = data.get(key)
-        if isinstance(value, bool):
+        if value is None or isinstance(value, bool):
             continue
         try:
             ivalue = int(value)
@@ -440,7 +440,7 @@ def _sum_int_values(data: dict[str, Any], *keys: str) -> int:
     total = 0
     for key in keys:
         value = data.get(key)
-        if isinstance(value, bool):
+        if value is None or isinstance(value, bool):
             continue
         try:
             ivalue = int(value)

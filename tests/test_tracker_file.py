@@ -554,6 +554,7 @@ def test_g5_strip_does_not_fire_on_transition_into_terminal_state(tmp_path):
     fbt.append_note(issue, "Conflict", "MT-2 conflict with X.")
     path = fbt.find_path("MT-2")
     before = path.read_text()
+    assert "## Conflict" in before
 
     issue = issue_from_file(path)
     fbt.update_state(issue, "Done")

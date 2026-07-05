@@ -308,6 +308,18 @@ class LinearClient:
                 "issueUpdate did not report success", payload_preview=str(result)[:200]
             )
 
+    def append_note(self, issue: Issue, heading: str, body: str) -> None:
+        """Linear comment append is not wired yet; skip and log.
+
+        The orchestrator treats note-append as best-effort, so skipping is
+        safe — state transitions still carry the workflow forward.
+        """
+        log.debug(
+            "linear_append_note_skipped",
+            issue=issue.identifier or issue.id,
+            heading=heading,
+        )
+
     def _team_id_for_issue(self, issue_id: str) -> str:
         cached = self._issue_team_cache.get(issue_id)
         if cached:

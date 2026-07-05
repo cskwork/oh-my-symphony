@@ -7,7 +7,6 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from symphony.notifications import (
     DEFAULT_TEMPLATE,

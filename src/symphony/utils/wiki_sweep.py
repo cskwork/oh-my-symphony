@@ -20,7 +20,7 @@ unit tests can drive `sweep` against a temp tree without monkeypatching.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 

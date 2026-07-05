@@ -18,12 +18,14 @@ from symphony.backends import (
 )
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import (
+    STALL_FORCE_EJECT_GRACE_S,
     Orchestrator,
     RunningEntry,
     _is_auto_triage_todo_candidate,
     _IssueDebug,
     _sort_for_dispatch_fifo,
 )
+from symphony.orchestrator.run_registry import RunRegistry
 from symphony.workspace import WorkspaceManager
 from symphony.workflow import (
     AgentConfig,
@@ -420,13 +422,6 @@ def test_orchestrator_dispatch_prioritizes_ticket_registration_order():
     ]
 
     assert ordered == ["OLV-061", "OLV-131"]
-
-
-import asyncio
-from datetime import timedelta
-
-from symphony.orchestrator import STALL_FORCE_EJECT_GRACE_S
-from symphony.orchestrator.run_registry import RunRegistry
 
 
 def test_reconcile_force_ejects_zombie_after_grace(monkeypatch: pytest.MonkeyPatch):
@@ -4610,9 +4605,6 @@ def test_g2_auto_pause_idempotent_on_subsequent_empty_turns(monkeypatch):
     cfg = _replace_agent_field(_make_config(max_concurrent=1), budget_exhausted_state="Blocked")
     orch = _orch()
     issue = _issue("MT-LOOP-IDEM", state="In Progress")
-
-    pause_log_count = {"n": 0}
-    orig_info = orch.__class__.__dict__.get("_log", None)
 
     async def _run() -> None:
         orch._loop = asyncio.get_running_loop()

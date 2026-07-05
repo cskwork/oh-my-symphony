@@ -33,7 +33,6 @@ from ..errors import (
     ResponseTimeout,
     TurnCancelled,
     TurnFailed,
-    TurnInputRequired,
     TurnTimeout,
 )
 from ..logging import get_logger
@@ -47,7 +46,6 @@ from . import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_CANCELLED,
     EVENT_TURN_COMPLETED,
-    EVENT_TURN_ENDED_WITH_ERROR,
     EVENT_TURN_FAILED,
     EVENT_TURN_INPUT_REQUIRED,
     EVENT_UNSUPPORTED_TOOL_CALL,
