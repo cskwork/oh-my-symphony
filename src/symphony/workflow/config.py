@@ -27,6 +27,10 @@ from .constants import (
     DEFAULT_BACKEND_READ_TIMEOUT_MS,
     DEFAULT_BACKEND_STALL_TIMEOUT_MS,
     DEFAULT_BACKEND_TURN_TIMEOUT_MS,
+    DEFAULT_CI_INTERVAL_MS,
+    DEFAULT_CI_MAX_TICKETS_PER_RUN,
+    DEFAULT_CI_MAX_TURNS,
+    DEFAULT_CI_TICKET_PREFIX,
     DEFAULT_CODEX_MODEL,
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_KIRO_COMMAND,
@@ -397,6 +401,26 @@ class PromptConfig:
 
 
 @dataclass(frozen=True)
+class ContinuousImprovementConfig:
+    """Default-off heartbeat that periodically runs product-readiness checks.
+
+    Missing `continuous_improvement:` in WORKFLOW.md means disabled with all
+    defaults below. Only `enabled`, `interval_ms`, and `max_turns` are
+    settable through the mutation API (`set_continuous_improvement_settings`);
+    the remaining fields are parse-only from WORKFLOW.md.
+    """
+
+    enabled: bool = False
+    # Minimum enforced by the parser is 60_000 ms (1 minute).
+    interval_ms: int = DEFAULT_CI_INTERVAL_MS
+    # 0 means unlimited.
+    max_turns: int = DEFAULT_CI_MAX_TURNS
+    ticket_prefix: str = DEFAULT_CI_TICKET_PREFIX
+    max_tickets_per_run: int = DEFAULT_CI_MAX_TICKETS_PER_RUN
+    require_idle_board: bool = True
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     workflow_path: Path
     poll_interval_ms: int
@@ -418,6 +442,9 @@ class ServiceConfig:
     prompts: PromptConfig = field(default_factory=PromptConfig)
     wiki: WikiConfig = field(default_factory=WikiConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    continuous_improvement: ContinuousImprovementConfig = field(
+        default_factory=ContinuousImprovementConfig
+    )
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
     workspace_reuse_policy: str = DEFAULT_WORKSPACE_REUSE_POLICY

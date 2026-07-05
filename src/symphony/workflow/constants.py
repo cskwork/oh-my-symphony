@@ -51,6 +51,14 @@ SUPPORTED_WORKSPACE_REUSE_POLICIES = {"preserve", "refresh"}
 
 DEFAULT_PROMPT = "You are working on an issue from Linear."
 
+# Continuous-improvement heartbeat (default off).
+DEFAULT_CI_INTERVAL_MS = 1_800_000
+DEFAULT_CI_MIN_INTERVAL_MS = 60_000
+DEFAULT_CI_MAX_TURNS = 48
+DEFAULT_CI_TICKET_PREFIX = "CI"
+DEFAULT_CI_MAX_TICKETS_PER_RUN = 5
+_CI_TICKET_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,19}$")
+
 SUPPORTED_AGENT_KINDS = {"agy", "codex", "claude", "gemini", "kiro", "opencode", "pi"}
 DEFAULT_AGENT_KIND = "codex"
 DEFAULT_CLAUDE_COMMAND = (

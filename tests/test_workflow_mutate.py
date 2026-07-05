@@ -13,6 +13,7 @@ from symphony.workflow.mutate import (
     read_prompt,
     resolve_prompt_path,
     set_branch_policy,
+    set_continuous_improvement_settings,
     validate_states,
     write_prompt,
 )
@@ -209,6 +210,65 @@ def test_set_branch_policy_writes_agent_keys(workflow: Path) -> None:
 # ---------------------------------------------------------------------------
 # review follow-ups (2026-07-02)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# continuous improvement settings
+# ---------------------------------------------------------------------------
+
+
+def test_set_continuous_improvement_settings_writes_keys(workflow: Path) -> None:
+    set_continuous_improvement_settings(
+        workflow, enabled=True, interval_ms=120_000, max_turns=10
+    )
+    text = workflow.read_text(encoding="utf-8")
+    assert "continuous_improvement:" in text
+    assert "enabled: true" in text
+    assert "interval_ms: 120000" in text
+    assert "max_turns: 10" in text
+
+
+def test_set_continuous_improvement_settings_preserves_comments_and_order(
+    workflow: Path,
+) -> None:
+    before = workflow.read_text(encoding="utf-8")
+    set_continuous_improvement_settings(workflow, enabled=True)
+    after = workflow.read_text(encoding="utf-8")
+    # Existing sections/comments/order are untouched — only the new section
+    # is appended, so every pre-existing line still appears verbatim.
+    for line in before.splitlines():
+        assert line in after
+    assert "# operator note: keep Todo first" in after
+    assert after.index("tracker:") < after.index("agent:") < after.index("prompts:")
+    assert "Body text with {{ issue.identifier }} stays untouched." in after
+
+
+def test_set_continuous_improvement_settings_partial_update_keeps_others(
+    workflow: Path,
+) -> None:
+    set_continuous_improvement_settings(
+        workflow, enabled=True, interval_ms=120_000, max_turns=10
+    )
+    set_continuous_improvement_settings(workflow, enabled=False)
+    text = workflow.read_text(encoding="utf-8")
+    assert "enabled: false" in text
+    # interval_ms/max_turns from the first call are untouched.
+    assert "interval_ms: 120000" in text
+    assert "max_turns: 10" in text
+
+
+def test_set_continuous_improvement_settings_rejects_invalid_interval(
+    workflow: Path,
+) -> None:
+    with pytest.raises(WorkflowMutationError):
+        set_continuous_improvement_settings(workflow, interval_ms=1000)
+
+
+def test_set_continuous_improvement_settings_rejects_invalid_max_turns(
+    workflow: Path,
+) -> None:
+    with pytest.raises(WorkflowMutationError):
+        set_continuous_improvement_settings(workflow, max_turns=-1)
 
 
 def test_malformed_yaml_raises_mutation_error(tmp_path: Path) -> None:

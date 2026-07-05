@@ -31,6 +31,11 @@ from .constants import (
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_CODEX_STALL_TIMEOUT_MS,
     DEFAULT_CODEX_TURN_TIMEOUT_MS,
+    DEFAULT_CI_INTERVAL_MS,
+    DEFAULT_CI_MAX_TICKETS_PER_RUN,
+    DEFAULT_CI_MAX_TURNS,
+    DEFAULT_CI_MIN_INTERVAL_MS,
+    DEFAULT_CI_TICKET_PREFIX,
     DEFAULT_GEMINI_COMMAND,
     DEFAULT_HOOK_TIMEOUT_MS,
     DEFAULT_KIRO_COMMAND,
@@ -73,6 +78,7 @@ from .config import (
     AgyConfig,
     ClaudeConfig,
     CodexConfig,
+    ContinuousImprovementConfig,
     GeminiConfig,
     HooksConfig,
     KiroConfig,
@@ -118,6 +124,7 @@ __all__ = [
     "WikiConfig",
     "PromptConfig",
     "ServiceConfig",
+    "ContinuousImprovementConfig",
     # builder
     "build_service_config",
     # preflight

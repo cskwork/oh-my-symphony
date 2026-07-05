@@ -971,3 +971,207 @@ def test_invalid_polling_interval_fails_validation(tmp_path):
     )
     with pytest.raises(ConfigValidationError):
         build_service_config(load_workflow(path))
+
+
+# ---------------------------------------------------------------------------
+# continuous_improvement
+# ---------------------------------------------------------------------------
+
+
+def test_continuous_improvement_defaults_disabled(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x, api_key: xx }
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.continuous_improvement.enabled is False
+    assert cfg.continuous_improvement.interval_ms == 1_800_000
+    assert cfg.continuous_improvement.max_turns == 48
+    assert cfg.continuous_improvement.ticket_prefix == "CI"
+    assert cfg.continuous_improvement.max_tickets_per_run == 5
+    assert cfg.continuous_improvement.require_idle_board is True
+
+
+def test_continuous_improvement_reads_configured_values(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x, api_key: xx }
+            continuous_improvement:
+              enabled: true
+              interval_ms: 120000
+              max_turns: 10
+              ticket_prefix: HB
+              max_tickets_per_run: 2
+              require_idle_board: false
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    ci = cfg.continuous_improvement
+    assert ci.enabled is True
+    assert ci.interval_ms == 120_000
+    assert ci.max_turns == 10
+    assert ci.ticket_prefix == "HB"
+    assert ci.max_tickets_per_run == 2
+    assert ci.require_idle_board is False
+
+
+def test_continuous_improvement_max_turns_zero_means_unlimited(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x, api_key: xx }
+            continuous_improvement:
+              max_turns: 0
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.continuous_improvement.max_turns == 0
+
+
+@pytest.mark.parametrize("raw_value", ["\"false\"", "1", "0", "\"true\""])
+def test_continuous_improvement_enabled_rejects_non_bool(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ enabled: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError, match="continuous_improvement.enabled"):
+        build_service_config(load_workflow(path))
+
+
+@pytest.mark.parametrize("raw_value", ["true", "false", "\"1800000\"", "0", "-1", "1.5"])
+def test_continuous_improvement_interval_ms_rejects_invalid(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ interval_ms: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError, match="continuous_improvement.interval_ms"):
+        build_service_config(load_workflow(path))
+
+
+def test_continuous_improvement_interval_ms_enforces_lower_bound(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x, api_key: xx }
+            continuous_improvement: { interval_ms: 59999 }
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError, match="continuous_improvement.interval_ms"):
+        build_service_config(load_workflow(path))
+
+
+@pytest.mark.parametrize("raw_value", ["true", "false", "\"48\"", "-1"])
+def test_continuous_improvement_max_turns_rejects_invalid(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ max_turns: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError, match="continuous_improvement.max_turns"):
+        build_service_config(load_workflow(path))
+
+
+@pytest.mark.parametrize("raw_value", ["true", "false", "\"5\"", "0", "-1"])
+def test_continuous_improvement_max_tickets_per_run_rejects_invalid(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ max_tickets_per_run: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(
+        ConfigValidationError, match="continuous_improvement.max_tickets_per_run"
+    ):
+        build_service_config(load_workflow(path))
+
+
+@pytest.mark.parametrize("raw_value", ["\"false\"", "1", "0"])
+def test_continuous_improvement_require_idle_board_rejects_non_bool(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ require_idle_board: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(
+        ConfigValidationError, match="continuous_improvement.require_idle_board"
+    ):
+        build_service_config(load_workflow(path))
+
+
+@pytest.mark.parametrize("raw_value", ["\"1CI\"", "\"CI-1\"", "\"\"", "123"])
+def test_continuous_improvement_ticket_prefix_rejects_invalid(tmp_path, raw_value):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            continuous_improvement: {{ ticket_prefix: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(
+        ConfigValidationError, match="continuous_improvement.ticket_prefix"
+    ):
+        build_service_config(load_workflow(path))

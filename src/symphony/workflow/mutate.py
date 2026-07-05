@@ -409,3 +409,59 @@ def set_branch_policy(
     if auto_merge_target_branch is not None:
         agent["auto_merge_target_branch"] = auto_merge_target_branch.strip()
     _write_workflow_atomic(workflow_path, data, body)
+
+
+# ---------------------------------------------------------------------------
+# continuous improvement heartbeat
+# ---------------------------------------------------------------------------
+
+# Mirrors the parser floor in workflow/constants.py (DEFAULT_CI_MIN_INTERVAL_MS)
+# so a bad UI edit fails at write time instead of silently landing an
+# unstartable config.
+_CI_MIN_INTERVAL_MS = 60_000
+
+
+def set_continuous_improvement_settings(
+    workflow_path: Path,
+    *,
+    enabled: bool | None = None,
+    interval_ms: int | None = None,
+    max_turns: int | None = None,
+) -> None:
+    """Update the settable subset of `continuous_improvement:` in WORKFLOW.md.
+
+    Only `enabled`, `interval_ms`, and `max_turns` are writable here — the
+    remaining fields (`ticket_prefix`, `max_tickets_per_run`,
+    `require_idle_board`) are parse-only and must be hand-edited. Omitted
+    keyword arguments leave the existing value untouched.
+    """
+    if enabled is not None and not isinstance(enabled, bool):
+        raise WorkflowMutationError("continuous_improvement.enabled must be a boolean")
+    if interval_ms is not None:
+        if isinstance(interval_ms, bool) or not isinstance(interval_ms, int):
+            raise WorkflowMutationError(
+                "continuous_improvement.interval_ms must be an integer"
+            )
+        if interval_ms < _CI_MIN_INTERVAL_MS:
+            raise WorkflowMutationError(
+                f"continuous_improvement.interval_ms must be >= {_CI_MIN_INTERVAL_MS}"
+            )
+    if max_turns is not None:
+        if isinstance(max_turns, bool) or not isinstance(max_turns, int):
+            raise WorkflowMutationError(
+                "continuous_improvement.max_turns must be an integer"
+            )
+        if max_turns < 0:
+            raise WorkflowMutationError(
+                "continuous_improvement.max_turns must be >= 0"
+            )
+
+    data, body = _load_frontmatter(workflow_path)
+    ci = _ensure_map(data, "continuous_improvement")
+    if enabled is not None:
+        ci["enabled"] = enabled
+    if interval_ms is not None:
+        ci["interval_ms"] = interval_ms
+    if max_turns is not None:
+        ci["max_turns"] = max_turns
+    _write_workflow_atomic(workflow_path, data, body)

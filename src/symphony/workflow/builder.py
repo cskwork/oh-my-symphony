@@ -35,6 +35,7 @@ from .config import (
     AgyConfig,
     ClaudeConfig,
     CodexConfig,
+    ContinuousImprovementConfig,
     GeminiConfig,
     HooksConfig,
     KiroConfig,
@@ -59,6 +60,11 @@ from .constants import (
     DEFAULT_BACKEND_STALL_TIMEOUT_MS,
     DEFAULT_BACKEND_TURN_TIMEOUT_MS,
     DEFAULT_BOARD_ROOT_NAME,
+    DEFAULT_CI_INTERVAL_MS,
+    DEFAULT_CI_MAX_TICKETS_PER_RUN,
+    DEFAULT_CI_MAX_TURNS,
+    DEFAULT_CI_MIN_INTERVAL_MS,
+    DEFAULT_CI_TICKET_PREFIX,
     DEFAULT_CLAUDE_COMMAND,
     DEFAULT_CODEX_COMMAND,
     DEFAULT_CODEX_MODEL,
@@ -88,6 +94,7 @@ from .constants import (
     LINEAR_DEFAULT_ENDPOINT,
     SUPPORTED_AGENT_KINDS,
     SUPPORTED_WORKSPACE_REUSE_POLICIES,
+    _CI_TICKET_PREFIX_RE,
 )
 from .parser import WorkflowDefinition
 
@@ -638,6 +645,10 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         resolve_var=resolve_var_indirection,
     )
 
+    continuous_improvement = _build_continuous_improvement_config(
+        cfg.get("continuous_improvement")
+    )
+
     return ServiceConfig(
         workflow_path=workflow.source_path,
         poll_interval_ms=poll_interval_ms,
@@ -659,6 +670,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         prompts=prompts,
         wiki=wiki,
         notifications=notifications,
+        continuous_improvement=continuous_improvement,
         raw=dict(cfg),
         prompt_template=prompt_template,
         workspace_reuse_policy=workspace_reuse_policy,
@@ -751,3 +763,90 @@ def _validated_no_stage_change_action(
             value=action,
         )
     return configured[key]
+
+
+def _validated_bool(value: Any, default: bool, *, name: str) -> bool:
+    """Strict boolean — YAML `1`/`"true"`/`"false"` are config errors, not truthy coercions."""
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ConfigValidationError(f"{name} must be a boolean", value=value)
+    return value
+
+
+def _validated_strict_int(
+    value: Any, default: int, *, name: str, minimum: int
+) -> int:
+    """Stricter than `_validated_positive_or_default`: rejects numeric strings too.
+
+    Only a real `int` (never `bool`) is accepted — `"1800000"` is a config
+    error here, unlike the legacy `_validated_*_or_default` family which
+    happily coerces any int-parseable string.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigValidationError(f"{name} must be an integer", value=value)
+    if value < minimum:
+        raise ConfigValidationError(f"{name} must be >= {minimum}", value=value)
+    return value
+
+
+def _validated_ci_ticket_prefix(value: Any) -> str:
+    if value is None:
+        return DEFAULT_CI_TICKET_PREFIX
+    if not isinstance(value, str) or not _CI_TICKET_PREFIX_RE.match(value):
+        raise ConfigValidationError(
+            "continuous_improvement.ticket_prefix must be an identifier-safe string "
+            "(letters/digits, starting with a letter, max 20 chars)",
+            value=value,
+        )
+    return value
+
+
+def _build_continuous_improvement_config(raw: Any) -> ContinuousImprovementConfig:
+    """§continuous-improvement heartbeat — default-off, all fields validated strictly.
+
+    Missing `continuous_improvement:` in WORKFLOW.md means disabled with
+    defaults (see docs/continuous-improvement/rubric.md "Default configuration").
+    """
+    ci_raw = raw or {}
+    if not isinstance(ci_raw, dict):
+        ci_raw = {}
+
+    enabled = _validated_bool(
+        ci_raw.get("enabled"), False, name="continuous_improvement.enabled"
+    )
+    interval_ms = _validated_strict_int(
+        ci_raw.get("interval_ms"),
+        DEFAULT_CI_INTERVAL_MS,
+        name="continuous_improvement.interval_ms",
+        minimum=DEFAULT_CI_MIN_INTERVAL_MS,
+    )
+    max_turns = _validated_strict_int(
+        ci_raw.get("max_turns"),
+        DEFAULT_CI_MAX_TURNS,
+        name="continuous_improvement.max_turns",
+        minimum=0,
+    )
+    ticket_prefix = _validated_ci_ticket_prefix(ci_raw.get("ticket_prefix"))
+    max_tickets_per_run = _validated_strict_int(
+        ci_raw.get("max_tickets_per_run"),
+        DEFAULT_CI_MAX_TICKETS_PER_RUN,
+        name="continuous_improvement.max_tickets_per_run",
+        minimum=1,
+    )
+    require_idle_board = _validated_bool(
+        ci_raw.get("require_idle_board"),
+        True,
+        name="continuous_improvement.require_idle_board",
+    )
+
+    return ContinuousImprovementConfig(
+        enabled=enabled,
+        interval_ms=interval_ms,
+        max_turns=max_turns,
+        ticket_prefix=ticket_prefix,
+        max_tickets_per_run=max_tickets_per_run,
+        require_idle_board=require_idle_board,
+    )
