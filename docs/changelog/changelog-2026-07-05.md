@@ -569,3 +569,58 @@ the pre-push hook re-running the suite.
 - C: streaming-family base for claude/pi; daily live contract tests.
 - E ratchets: broaden ruff rule set (I, B, UP), pyright over tests,
   raise coverage floor from 80 as it grows.
+
+## Continuous improvement heartbeat — docs-first contract (step 1)
+
+## Goal
+
+Define the rubric, ticket contract, and invariants for a default-off
+heartbeat that periodically re-verifies the integrated baseline and files
+defects as normal Kanban tickets, before any runtime code lands. Docs-first
+so the implementation (config parsing, web API, scheduler, runner,
+registrar) has one pinned contract to build against and review.
+
+## Decision
+
+Add `docs/continuous-improvement/rubric.md` (result semantics —
+`passed` / `failed` / `not_available` / `not_proven`; default checks;
+no-code-edit invariant; command safety; cross-process lease; tracker
+support matrix; de-duplication), `docs/continuous-improvement/
+ticket-template.md` (ticket body fields + `CI Fingerprint` hash rule), and
+a placeholder `docs/continuous-improvement/latest.md` with
+`<!-- ci:auto:* -->` markers so the future report writer can rewrite
+machine-owned sections while preserving operator notes. Added a
+"Continuous improvement heartbeat (planned)" subsection to
+`docs/architecture.md` mapping config, web API endpoints, scheduler,
+runner module, report writer, and registrar to their planned homes.
+
+- Rejected: default-on. The heartbeat runs real commands against the
+  integrated branch on a schedule; an operator must opt in explicitly, per
+  the plan's non-goals.
+- Rejected: browser-editable command lists. Letting the web UI configure
+  arbitrary check commands turns a read-only inspector into a remote code
+  execution surface; only `enabled` / `interval_ms` / `max_turns` are
+  browser-editable, everything else is trusted `WORKFLOW.md` config.
+- Rejected: one omnibus ticket per run. Findings are fingerprinted and
+  registered as individual tickets (capped by `max_tickets_per_run`) so
+  normal workers can pick up and close them independently, matching the
+  existing file-tracker Kanban model instead of an unbounded triage doc.
+- Rejected: letting the heartbeat edit product code directly. Its job is to
+  prove the baseline and describe defects; fixes flow through the normal
+  worker/ticket pipeline so they get the same review and contract checks as
+  any other change.
+
+## Verification
+
+- `git diff --check` — clean (no trailing-whitespace / conflict-marker
+  issues in the changed docs).
+- Docs-only change; no code touched, no test suite run required for this
+  step.
+
+## Remaining from the plan (follow-ups)
+
+- Step 2: `ContinuousImprovementConfig`, strict parsing, workflow mutation.
+- Step 3: web API + settings card.
+- Step 4: orchestrator scheduler skeleton + lease.
+- Step 5+: runner, report writer, registrar implementation against the
+  rubric and ticket template defined here.
