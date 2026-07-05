@@ -454,3 +454,118 @@ normal Symphony workflow owns remediation.
 - Confirmed the plan file exists.
 - Scanned the plan for placeholder terms that would make it non-actionable.
 - Ran `git diff --check`.
+
+---
+
+# Architecture improvement plan — implementation session (E, C, A1, B, D)
+
+Executed the first tranche of
+`docs/improvements/architecture-improvement-plan-2026-07-05.md` in plan
+order (E -> C -> A step 1 -> B -> D), one green commit per step on `dev`
+(24aa571, a2c5746, e1c676d, 7f1a421, 1e7a3d2, 78bd505, 67eb6ba, 45c4a01,
+8711925, 51cb5c3).
+
+## E — CI gates (24aa571)
+
+ruff (default E4/E7/E9/F, `__init__.py` F401 per-file-ignore), pyright
+basic scoped to `src`, and `pytest --cov-fail-under=80` (baseline 82%)
+are now blocking CI steps. All 9 pre-existing pyright errors and ~30
+ruff findings were fixed rather than baselined — the baseline was small
+enough that report-only mode would have added ratchet bureaucracy for
+nothing.
+
+- Rejected: `ruff format` gate. Formatting the whole repo is a
+  giant, review-hostile diff; lint-only now, format can ratchet later.
+- Rejected: pyright over `tests/`. Tests carry deliberate loose
+  patterns (Optional-heavy fixtures); gate `src` first, burn tests down
+  later.
+- Rejected: suppressing `LinearClient.append_note` protocol mismatch
+  with a type-ignore. Implemented an explicit no-op (the orchestrator
+  already treats note-append as best-effort via a getattr guard).
+
+## C — backend contract + Template Method (a2c5746, e1c676d, 7f1a421, 1e7a3d2)
+
+`tests/test_backend_contract.py` is the Testcase Superclass every
+per-turn adapter runs identically (lifecycle order, MUST-emit events,
+shared envelope, TurnFailed on nonzero exit, idempotent stop).
+`backends/per_turn.py` now owns the per-turn family skeleton
+(spawn -> feed prompt -> bounded collect -> safe_proc_wait reap ->
+normalized emit, closed-flag race, cancellation reap); plain_cli
+(agy/kiro), gemini, and opencode migrated one commit at a time.
+
+- Codex deliberately NOT forced into the base — it is the second
+  lifecycle family (persistent app-server, JSON-RPC over stdio).
+- claude/pi remain unmigrated: they are the *streaming* per-turn
+  variant (readline loop, malformed-line streak, mid-turn progress);
+  they need a streaming sibling of the skeleton, left as follow-up.
+  The contract suite already pins them.
+- Out-of-pipeline live CLI contract tests (run daily against real
+  binaries) also remain follow-up.
+- Test doubles now patch the consumer namespace
+  (`symphony.backends.per_turn`) per CPython "where to patch".
+- opencode's wholesale rewrite was verified by AST-diffing old vs new:
+  removed defs exactly equal the base's, only `__init__` changed.
+
+## A step 1 — DispatchState (78bd505)
+
+`orchestrator/dispatch_state.py` owns
+running/claimed/retry/completed/persisted_retry_attempts/
+turn_budget_exhausted. The three historically-regressed rules are
+encoded once: `available_slots` subtracts running AND retry-pending;
+`entry_owned_by` requires worker-task identity before eviction;
+`schedule_retry` cancels the previous timer. G1 prune became
+`prune_claims_not_in`.
+
+- Strangler approach: Orchestrator exposes the collections through
+  read-only properties so ~100 legacy read sites and the test suite
+  keep working; only the mutation clusters were converted. Rejected a
+  big-bang conversion of every touch point — the 72+ dispatch tests pin
+  behaviour, and the property alias makes each future conversion local.
+- Found by the new pyright gate during the switch: a `self._claimed -=`
+  augmented assignment (property without setter) — converted into the
+  owner's mutator.
+
+## B — supervised background tasks (67eb6ba)
+
+`_spawn_supervised` pins fire-and-forget tasks (worker-exit cleanup,
+retry firing, escalations) in `_background_tasks`, logs non-cancel
+exceptions, and `stop()` drains the set (bounded 5s) before closing the
+run registry.
+
+- Rejected (for now): full `asyncio.TaskGroup` adoption. Sibling
+  auto-cancel would couple independent ticket workers — one ticket's
+  unexpected exception must not cancel the others. The plan's own
+  fallback (identity check in DispatchState + exception-checked
+  done-callbacks + strong refs) delivers the leak-proofing without the
+  semantic change. Revisit if worker isolation ever moves into
+  per-ticket scopes.
+
+## D — DI over monkeypatch indirection (45c4a01, 8711925, 51cb5c3)
+
+All 15 `_pkg`/`_tui_pkg` indirection sites are gone. `build_backend` is
+constructor-injectable on `Orchestrator`; it and
+`commit_workspace_on_done` / `auto_merge_on_done_best_effort` are
+imported directly into `core` and late-bound from its module globals,
+so tests patch `symphony.orchestrator.core.<name>`
+(`symphony.tui.app.<name>` for the TUI fetch helpers). The "bind names
+before importing core" package contract is no longer load-bearing;
+architecture.md updated in the same commits.
+
+- Rejected: converting the two workspace/git helpers to constructor
+  params as well. The composition seam that matters is the backend
+  factory; module-global late binding keeps the helpers patchable
+  without widening the constructor for YAGNI DI.
+
+## Verification
+
+Every commit: `ruff check src tests`, `pyright` (0 errors), full
+`pytest` (1119 -> 1151 tests, all green), pushed to `origin/dev` with
+the pre-push hook re-running the suite.
+
+## Remaining from the plan (follow-ups)
+
+- A steps 2–4: TokenAccountant / HealthReporter / PauseController /
+  StallReconciler extracts; Split Phase of the worker-exit decision.
+- C: streaming-family base for claude/pi; daily live contract tests.
+- E ratchets: broaden ruff rule set (I, B, UP), pyright over tests,
+  raise coverage floor from 80 as it grows.
