@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import shlex
-
 from . import EVENT_TURN_COMPLETED, BackendInit, TurnResult
-from .per_turn import PerTurnCliBackend
+from .per_turn import PerTurnCliBackend, _has_shell_flag
 
 
 class PlainCliBackend(PerTurnCliBackend):
@@ -59,11 +57,3 @@ class PlainCliBackend(PerTurnCliBackend):
             turn_id=self._session_id,
             last_message=stdout_text[:400],
         )
-
-
-def _has_shell_flag(command: str, *flags: str) -> bool:
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return False
-    return any(part in flags for part in parts)

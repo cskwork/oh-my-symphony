@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from . import BackendInit
-from .plain_cli import PlainCliBackend, _has_shell_flag
+from .per_turn import _has_shell_flag
+from .plain_cli import PlainCliBackend
 
 
 class KiroBackend(PlainCliBackend):

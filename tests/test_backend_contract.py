@@ -30,7 +30,6 @@ from typing import Any
 import pytest
 
 import symphony.backends.claude_code as claude_module
-import symphony.backends.gemini as gemini_module
 import symphony.backends.opencode as opencode_module
 import symphony.backends.per_turn as per_turn_module
 import symphony.backends.pi as pi_module
@@ -179,7 +178,7 @@ class TestClaudeBackendContract(PerTurnBackendContract):
 
 class TestGeminiBackendContract(PerTurnBackendContract):
     kind = "gemini"
-    module = gemini_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [

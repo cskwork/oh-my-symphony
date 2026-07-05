@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import time
 import uuid
 from collections import deque
@@ -46,6 +47,14 @@ MAX_LINE_BYTES = 10 * 1024 * 1024
 
 def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _has_shell_flag(command: str, *flags: str) -> bool:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return False
+    return any(part in flags for part in parts)
 
 
 class PerTurnCliBackend(BaseAgentBackend):

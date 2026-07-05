@@ -20,7 +20,6 @@ import pytest
 
 import symphony._shell as shell_module
 import symphony.backends.claude_code as claude_module
-import symphony.backends.gemini as gemini_module
 import symphony.backends.opencode as opencode_module
 import symphony.backends.pi as pi_module
 import symphony.backends.per_turn as per_turn_module
@@ -711,13 +710,13 @@ async def test_gemini_run_turn_cancellation_terminates_active_subprocess(
         return -15
 
     monkeypatch.setattr(
-        gemini_module.asyncio,
+        per_turn_module.asyncio,
         "create_subprocess_exec",
         fake_create_subprocess_exec,
     )
-    monkeypatch.setattr(gemini_module, "safe_proc_wait", fake_safe_proc_wait)
+    monkeypatch.setattr(per_turn_module, "safe_proc_wait", fake_safe_proc_wait)
     monkeypatch.setattr(
-        gemini_module, "terminate_process_tree", fake_terminate_process_tree
+        per_turn_module, "terminate_process_tree", fake_terminate_process_tree
     )
     backend = GeminiBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
@@ -1192,7 +1191,7 @@ async def test_gemini_session_id_is_minted_locally(
 
     commands = _install_subprocess_double(
         monkeypatch,
-        gemini_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_blob=json.dumps(
@@ -1227,7 +1226,7 @@ async def test_gemini_plain_text_stdout_is_a_completed_turn(
     sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
     _install_subprocess_double(
         monkeypatch,
-        gemini_module,
+        per_turn_module,
         [_FakeSubprocess(stdout_blob=b"plain text result\n")],
     )
 
@@ -1256,7 +1255,7 @@ async def test_gemini_parses_token_stats_from_json_output(
     sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
     _install_subprocess_double(
         monkeypatch,
-        gemini_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_blob=json.dumps(
@@ -1311,7 +1310,7 @@ async def test_gemini_resume_across_turns_reuses_session_id(
     sid = await backend.start_session(initial_prompt="hi", issue_title="Fix login")
     commands = _install_subprocess_double(
         monkeypatch,
-        gemini_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_blob=json.dumps(
