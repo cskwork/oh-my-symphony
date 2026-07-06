@@ -24,7 +24,7 @@ Every claim below was re-measured today, not carried over:
 | **E — CI gates** | **Done, incl. ratchet** | `tests.yml` (ruff/pyright/cov≥80), `pyproject.toml` `[tool.ruff]`/`[tool.pyright]`; both clean today. Commit `24aa571`. |
 | **C — backend contract** | **~80% done** | `tests/test_backend_contract.py` (Testcase Superclass; claude/gemini/agy/kiro/opencode/pi subclasses); `backends/per_turn.py` Template Method; gemini/opencode/plain_cli migrated (`e1c676d`…`1e7a3d2`). Remaining below. |
 | **A — god-class split** | **Step 1 done** | `orchestrator/dispatch_state.py` (121 lines) owns the slot maps (`78bd505`). Steps 2–4 remain — and the target moved, see "New friction". |
-| **B — structured concurrency** | **Partial** | Fire-and-forget tasks supervised (`67eb6ba`); worker fan-out is still `create_task` + `add_done_callback` (`core.py:3237`). |
+| **B — structured concurrency** | **Done in fallback form** | `_spawn_supervised` + `_background_tasks` + stop() drain (`67eb6ba`). `TaskGroup` was evaluated and **rejected**: sibling auto-cancel would couple independent ticket workers. Worker fan-out stays `create_task` + `add_done_callback` (`core.py:3237`) by design. |
 | **D — DI over monkeypatch** | **Done** | `_pkg`/`_tui_pkg` indirection retired in 3 steps (`45c4a01`, `8711925`, `51cb5c3`); 1 residual `_pkg.` reference in core/tui. |
 
 Also closed since the umbrella was written (previously tracked as open gaps):
@@ -35,8 +35,9 @@ Also closed since the umbrella was written (previously tracked as open gaps):
   **stale**.
 - **Raw `proc.wait()` in backends: zero** — the PerTurnCliBackend migration
   removed the codex/gemini/pi reap gap.
-- **opencode token accounting** — `opencode.py:199` now parses usage with
-  multi-key fallback; the `input_tokens=0` tell is gone.
+- **opencode token accounting** — `_usage_dicts` (`opencode.py:276`) now
+  recurses through `usage`/`tokens`/`part`/`info`, so opencode 1.17's
+  `info.tokens` path is covered; the `input_tokens=0` tell is gone.
 - **`feat/reliability-hardening` fully merged** — its 5 known-red tests are
   resolved history; `docs/plans/2026-07-02-reliability-handoff.md` is stale.
 
@@ -95,18 +96,20 @@ Also closed since the umbrella was written (previously tracked as open gaps):
   `core.py:3266` is now thin), but the decide/apply split (`TurnOutcome`
   value object) still does not exist — continuation decisions remain
   interleaved with mutation inside `_run_agent_attempt` and its helpers.
-- **P1-4 B remainder: TaskGroup for worker fan-out.** Workers are still bare
-  tasks tracked by dict (`core.py:3237`). Adopt `asyncio.TaskGroup` (or at
-  minimum move the identity check fully into `DispatchState.free_slot`),
-  plus `asyncio.timeout()` for external awaits. Gate behind
-  `test_orchestrator_reconcile.py` + `test_agent_lifecycle_e2e.py`.
-- **P1-5 C remainder.**
-  - Migrate `claude_code.py` (444 lines, per-turn CLI, still on
-    `BaseAgentBackend`) onto `PerTurnCliBackend`.
-  - Decide `pi.py`'s family (506 lines, on `BaseAgentBackend`): per-turn →
-    migrate; persistent → document it beside codex as family #2.
-  - Optional: the umbrella's out-of-pipeline daily contract job against the
-    real CLIs (schema drift is the incident class that has actually bitten).
+- **P1-4 B remainder.** Do **not** re-propose `TaskGroup` — it was evaluated
+  on 2026-07-05 and rejected because sibling auto-cancel couples independent
+  ticket workers; record that as an ADR under `docs/adr/` so future surveys
+  stop re-suggesting it. Remaining work: move the done-callback identity
+  check fully into `DispatchState.free_slot`, and adopt `asyncio.timeout()`
+  for external awaits. Gate behind `test_orchestrator_reconcile.py` +
+  `test_agent_lifecycle_e2e.py`.
+- **P1-5 C remainder.** `claude_code.py` (444) and `pi.py` (506) are
+  *streaming* (readline-loop) CLIs — they need a streaming sibling of
+  `PerTurnCliBackend`, not a forced fit onto it (2026-07-05 session note).
+  Extract the shared readline/reap skeleton as `StreamingCliBackend`, migrate
+  both. Optional: the umbrella's out-of-pipeline daily contract job against
+  the real CLIs (schema drift is the incident class that has actually
+  bitten — twice for opencode).
 
 ### P2 — opportunistic
 
