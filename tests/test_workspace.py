@@ -369,6 +369,99 @@ def test_setup_worktree_script_uses_pyproject_compatible_browser_env():
     assert "-e '.[dev,browser]'" in script
 
 
+_SETUP_SCRIPT_POSIX_COMMANDS = (
+    "bash",
+    "basename",
+    "chmod",
+    "date",
+    "dirname",
+    "git",
+    "grep",
+    "ln",
+    "mkdir",
+    "rm",
+    "sleep",
+    "stat",
+    "xargs",
+)
+
+
+def _setup_script_test_path(tmp_path: Path, *, include_flock: bool) -> str:
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    commands = _SETUP_SCRIPT_POSIX_COMMANDS + (("flock",) if include_flock else ())
+    for command in commands:
+        source = shutil.which(command)
+        if source is None and command == "flock":
+            pytest.skip("flock CLI not available")
+        assert source is not None
+        (fakebin / command).symlink_to(source)
+
+    fake_python = fakebin / "python3.12"
+    fake_python.write_text(
+        """#!/bin/sh
+set -eu
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then
+  mkdir -p "$3/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$3/bin/python"
+  chmod +x "$3/bin/python"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    return str(fakebin)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX lock integration test")
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.parametrize("lock_backend", ["mkdir", "flock"])
+def test_setup_worktree_script_supports_linked_workflow_dir(tmp_path, lock_backend):
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    _git(primary, "init", "-q", "-b", "main")
+    (primary / "kanban").mkdir()
+    (primary / "kanban" / "DEMO-1.md").write_text("---\nstate: Todo\n---\n")
+    _git(primary, "add", "-A")
+    _git(primary, "commit", "-q", "-m", "seed")
+
+    workflow_dir = tmp_path / "workflow"
+    _git(primary, "worktree", "add", "-q", "-b", "operator", str(workflow_dir))
+    assert (workflow_dir / ".git").is_file()
+
+    workspace = tmp_path / "workspaces" / f"LINKED-{lock_backend.upper()}"
+    workspace.mkdir(parents=True)
+    repo_root = Path(__file__).parents[1]
+    env = {
+        **os.environ,
+        "SYMPHONY_WORKFLOW_DIR": str(workflow_dir),
+        "SYMPHONY_FEATURE_BASE_BRANCH": "operator",
+        "PATH": _setup_script_test_path(
+            tmp_path, include_flock=lock_backend == "flock"
+        ),
+    }
+
+    subprocess.run(
+        [_BASH, str(repo_root / "scripts" / "symphony-setup-worktree.sh")],
+        cwd=str(workspace),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    )
+
+    common_git_dir = Path(
+        _git(workflow_dir, "rev-parse", "--git-common-dir").stdout.strip()
+    )
+    if not common_git_dir.is_absolute():
+        common_git_dir = workflow_dir / common_git_dir
+    common_git_dir = common_git_dir.resolve()
+    assert (workspace / ".git").is_file()
+    assert (workspace / "kanban").is_symlink()
+    assert not (common_git_dir / "symphony-worktree.lock.d").exists()
+
+
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
 async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_path):

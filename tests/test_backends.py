@@ -25,6 +25,7 @@ import symphony.backends.pi as pi_module
 import symphony.backends.per_turn as per_turn_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
+    EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
     BackendInit,
@@ -189,7 +190,10 @@ class _FakeStdin:
 
 class _FakeStream:
     def __init__(self, *, lines: list[bytes] | None = None, blob: bytes | None = None) -> None:
-        self._lines = list(lines or [])
+        if lines is not None:
+            self._lines = list(lines)
+        else:
+            self._lines = (blob or b"").splitlines(keepends=True)
         self._blob = blob if blob is not None else b"".join(self._lines)
 
     async def readline(self) -> bytes:
@@ -197,7 +201,8 @@ class _FakeStream:
             return self._lines.pop(0)
         return b""
 
-    async def read(self) -> bytes:
+    async def read(self, n: int = -1) -> bytes:
+        del n
         blob = self._blob
         self._blob = b""
         return blob
@@ -208,7 +213,8 @@ class _BlockingStream:
         await asyncio.Future()
         return b""
 
-    async def read(self) -> bytes:
+    async def read(self, n: int = -1) -> bytes:
+        del n
         await asyncio.Future()
         return b""
 
@@ -987,6 +993,144 @@ async def test_opencode_extracts_text_from_jsonl_part_frames(
     assert completed
     assert completed[0]["payload"]["message"] == "Learn summary: schema drift resolved."
     assert result.last_message == "Learn summary: schema drift resolved."
+
+
+_OPENCODE_LIVE_USAGE_FRAME = (
+    b'{"type":"step_finish","sessionID":"ses_live","part":'
+    b'{"type":"step-finish","tokens":{"total":48694,"input":1375,'
+    b'"output":215,"reasoning":0,"cache":{"read":47104,"write":0}}}}\n'
+)
+_OPENCODE_LIVE_TEXT_FRAME = (
+    b'{"type":"text","sessionID":"ses_live","part":'
+    b'{"type":"text","text":"DONE"}}\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_opencode_streams_step_finish_usage_before_process_exit_without_double_counting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict] = []
+    usage_seen = asyncio.Event()
+    proc = _FakeSubprocess(returncode=None)
+    proc.stdout = stream = asyncio.StreamReader()
+
+    async def record(event: dict) -> None:
+        events.append(event)
+        if event["payload"].get("type") == "opencode_usage":
+            usage_seen.set()
+
+    _install_subprocess_double(monkeypatch, per_turn_module, [proc])
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=record)
+    )
+    await backend.start_session(initial_prompt="hi", issue_title="Live usage")
+    turn = asyncio.create_task(backend.run_turn(prompt="first", is_continuation=False))
+    await _wait_until_backend_has_pid(backend)
+    stream.feed_data(_OPENCODE_LIVE_USAGE_FRAME)
+
+    try:
+        await asyncio.wait_for(usage_seen.wait(), timeout=0.5)
+        live_usage = backend.latest_usage
+        assert proc.returncode is None and not turn.done()
+        assert backend.session_id == "ses_live"
+        assert any(
+            event["event"] == EVENT_SESSION_STARTED
+            and event["payload"].get("session_id") == "ses_live"
+            for event in events
+        )
+        assert live_usage == {
+            "input_tokens": 48479,
+            "output_tokens": 215,
+            "total_tokens": 48694,
+        }
+        usage_event = next(
+            e for e in events if e["payload"].get("type") == "opencode_usage"
+        )
+        assert usage_event["usage"] == live_usage
+        assert backend.is_progress_event(usage_event["payload"]) is True
+    finally:
+        proc.returncode = 0
+        stream.feed_data(_OPENCODE_LIVE_TEXT_FRAME)
+        stream.feed_eof()
+        result = await turn
+
+    assert result.last_message == "DONE"
+    assert backend.latest_usage == live_usage
+
+
+@pytest.mark.asyncio
+async def test_opencode_completion_applies_unstreamed_pretty_json_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    stdout = json.dumps(
+        {
+            "type": "message",
+            "sessionID": "ses_pretty",
+            "message": "DONE",
+            "usage": {
+                "input_tokens": 30,
+                "output_tokens": 7,
+                "total_tokens": 37,
+            },
+        },
+        indent=2,
+    ).encode()
+    _install_subprocess_double(
+        monkeypatch, per_turn_module, [_FakeSubprocess(stdout_blob=stdout)]
+    )
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    local_sid = await backend.start_session(initial_prompt="hi", issue_title="Pretty JSON")
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert local_sid != "ses_pretty"
+    assert result.turn_id == "ses_pretty"
+    assert result.last_message == "DONE"
+    assert backend.latest_usage == {
+        "input_tokens": 30,
+        "output_tokens": 7,
+        "total_tokens": 37,
+    }
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_accepts_jsonl_frame_larger_than_reader_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("opencode", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    long_text = "x" * 256
+    frame = json.dumps(
+        {
+            "type": "text",
+            "sessionID": "ses_large",
+            "part": {"type": "text", "text": long_text},
+        }
+    ).encode() + b"\n"
+    proc = _FakeSubprocess()
+    proc.stdout = stream = asyncio.StreamReader(limit=64)
+    stream.feed_data(frame)
+    stream.feed_eof()
+    _install_subprocess_double(monkeypatch, per_turn_module, [proc])
+    backend = OpenCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    await backend.start_session(initial_prompt="hi", issue_title="Large JSONL")
+    result = await backend.run_turn(prompt="first", is_continuation=False)
+
+    assert result.turn_id == "ses_large"
+    assert result.last_message == long_text
 
 
 @pytest.mark.asyncio
@@ -2637,7 +2781,7 @@ def test_gemini_backend_is_progress_event_is_always_false(tmp_path: Path) -> Non
     assert backend.is_progress_event({}) is False
 
 
-def test_opencode_backend_is_progress_event_accepts_only_heartbeat(
+def test_opencode_backend_is_progress_event_accepts_live_telemetry(
     tmp_path: Path,
 ) -> None:
     cfg = _make_cfg("opencode", workspace_root=tmp_path)
@@ -2647,6 +2791,7 @@ def test_opencode_backend_is_progress_event_accepts_only_heartbeat(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
     assert backend.is_progress_event({"type": "opencode_heartbeat"}) is True
+    assert backend.is_progress_event({"type": "opencode_usage"}) is True
     assert backend.is_progress_event({"type": "assistant"}) is False
     assert backend.is_progress_event({}) is False
 

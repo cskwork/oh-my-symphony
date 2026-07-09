@@ -69,6 +69,8 @@ class PerTurnCliBackend(BaseAgentBackend):
     Subclasses MAY override:
       - ``_stdin_payload``: text piped to the child's stdin; return ``None``
         when the prompt travels in the command line (stdin -> /dev/null).
+      - ``_read_stdout``: collect stdout incrementally when the CLI exposes
+        useful streaming frames; returned bytes still feed ``_complete_turn``.
       - ``_start_watchers``: extra per-turn side tasks (e.g. opencode's
         heartbeats); the skeleton cancels them when the turn ends.
       - ``session_id`` property, ``start_session``, ``is_progress_event``.
@@ -104,6 +106,9 @@ class PerTurnCliBackend(BaseAgentBackend):
 
     def _stdin_payload(self, prompt: str) -> str | None:
         return prompt
+
+    async def _read_stdout(self, stream: asyncio.StreamReader) -> bytes:
+        return await stream.read()
 
     def _start_watchers(
         self, proc: asyncio.subprocess.Process
@@ -242,7 +247,7 @@ class PerTurnCliBackend(BaseAgentBackend):
         self, proc: asyncio.subprocess.Process
     ) -> tuple[bytes, bytes, int]:
         assert proc.stdout is not None and proc.stderr is not None
-        stdout_task = asyncio.create_task(proc.stdout.read())
+        stdout_task = asyncio.create_task(self._read_stdout(proc.stdout))
         stderr_task = asyncio.create_task(proc.stderr.read())
         try:
             stdout, stderr, safe_rc = await asyncio.wait_for(

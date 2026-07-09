@@ -19,6 +19,8 @@ BRANCH="symphony/${ISSUE_ID}"
 # Symphony pre-creates the workspace dir; git worktree add refuses to
 # populate an existing path, so drop the empty dir first.
 cd "$HOST_REPO"
+# Linked worktrees expose `.git` as a file; lock their shared admin directory.
+COMMON_GIT_DIR="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 BASE_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current 2>/dev/null || true)"
 FEATURE_BASE_BRANCH="${SYMPHONY_FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
 MERGE_TARGET_BRANCH="${SYMPHONY_MERGE_TARGET_BRANCH:-${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}}"
@@ -47,7 +49,7 @@ _symphony_release_worktree_lock() {
 }
 
 _symphony_acquire_worktree_lock() {
-  local lock_file="$HOST_REPO/.git/symphony-worktree.lock"
+  local lock_file="$COMMON_GIT_DIR/symphony-worktree.lock"
   local lock_dir="${lock_file}.d"
   local start now mtime
   if command -v flock >/dev/null 2>&1; then

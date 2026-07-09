@@ -129,3 +129,47 @@ focused controls, 34 combined AF-02 tests, and 266 affected-module tests. Full R
 
 Non-goals honored: AF-01 task-identity changes preserved; no schema, startup reclaim, signal,
 `safe_proc_wait`, or unrelated reaping changes.
+
+## Linked-worktree setup lock uses the common Git directory
+
+### What
+
+`scripts/symphony-setup-worktree.sh` now resolves `git rev-parse --git-common-dir` to an
+absolute path before acquiring its administrative lock. A real-script integration test runs the
+hook with `SYMPHONY_WORKFLOW_DIR` set to a linked worktree, forces the macOS-style `mkdir` lock
+fallback, and verifies worktree creation, board linking, and lock cleanup after the hook changes
+into the ticket worktree. The same test exercises `flock` when that command is available.
+
+### Why (decisions and rejected alternatives)
+
+- **Common Git directory over `$HOST_REPO/.git`.** A linked worktree's `.git` is a file, so a lock
+  cannot live beneath it; all linked worktrees share the directory reported by Git.
+- **Resolve once before `cd` over retaining Git's relative path.** A primary worktree may report
+  `.git`; converting it with `pwd -P` keeps fallback-lock cleanup correct after the script changes
+  directories.
+- **No timeout or retry changes.** Shortening the production wait would only hide the invalid lock
+  path. The root path is fixed while the existing serialization and stale-lock behavior remain.
+
+## OpenCode publishes JSONL telemetry before process exit
+
+### What
+
+`PerTurnCliBackend` now exposes an overridable stdout reader while retaining ownership of timeout,
+cancellation, stderr collection, and process reaping. `OpenCodeBackend` frames JSONL from bounded
+chunks, publishes the real OpenCode session ID immediately, and emits cumulative usage updates as
+`opencode_usage` progress events. The same bytes are retained for the existing final-response
+decoder; completion applies only events that were not already processed from the live stream.
+
+### Why (decisions and rejected alternatives)
+
+- **One stdout hook over an OpenCode-specific collector.** Duplicating `_collect` would let timeout
+  and teardown behavior drift across backend implementations.
+- **CLI JSONL over SQLite polling.** The documented stream is the backend boundary; OpenCode's
+  internal database would add schema coupling and a second source of truth.
+- **Apply each frame once over completion-time replay.** Live events expose token-budget progress,
+  while a per-turn event multiset preserves pretty/multiline whole-JSON compatibility without
+  double-counting JSONL usage.
+- **Chunk framing over `readline`.** OpenCode text frames can exceed the stream reader's configured
+  line limit; fixed-size reads avoid `LimitOverrunError` while still publishing complete lines.
+- **Usage plus heartbeat progress.** Token frames are productive activity; heartbeats still cover
+  quiet model and tool intervals that emit no JSONL.

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+from collections import Counter
 from typing import Any, Iterable
 
 from . import (
@@ -24,6 +25,7 @@ from .per_turn import PerTurnCliBackend
 
 
 HEARTBEAT_INTERVAL_S = 30.0
+STREAM_READ_CHUNK_BYTES = 64 * 1024
 TOKEN_KEYS = {
     "cached",
     "cache_input_tokens",
@@ -59,13 +61,14 @@ class OpenCodeBackend(PerTurnCliBackend):
         )
         self._opencode = cfg
         self._opencode_session_id: str | None = None
+        self._streamed_event_counts: Counter[str] = Counter()
 
     # ------------------------------------------------------------------
     # per-turn hooks
     # ------------------------------------------------------------------
 
     def is_progress_event(self, event: dict[str, Any]) -> bool:
-        return event.get("type") == "opencode_heartbeat"
+        return event.get("type") in {"opencode_heartbeat", "opencode_usage"}
 
     @property
     def session_id(self) -> str | None:
@@ -90,20 +93,56 @@ class OpenCodeBackend(PerTurnCliBackend):
     ) -> list["asyncio.Task[None]"]:
         return [asyncio.create_task(self._emit_heartbeats(proc))]
 
-    async def _complete_turn(self, stdout_text: str, rc: int) -> TurnResult:
-        events = self._decode_events(stdout_text)
-        response = self._response_from_events(events) if events else stdout_text
-        new_sid = self._session_id_from_events(events)
+    async def _read_stdout(self, stream: asyncio.StreamReader) -> bytes:
+        chunks: list[bytes] = []
+        pending = bytearray()
+        self._streamed_event_counts.clear()
+        while chunk := await stream.read(STREAM_READ_CHUNK_BYTES):
+            chunks.append(chunk)
+            pending.extend(chunk)
+            start = 0
+            while (end := pending.find(b"\n", start)) >= 0:
+                await self._publish_stream_frame(bytes(pending[start : end + 1]))
+                start = end + 1
+            if start:
+                del pending[:start]
+        if pending:
+            await self._publish_stream_frame(bytes(pending))
+        return b"".join(chunks)
+
+    async def _publish_stream_frame(self, frame: bytes) -> None:
+        text = frame.decode("utf-8", errors="replace")
+        for event in self._decode_events(text):
+            await self._publish_stream_event(event)
+            self._streamed_event_counts[_event_fingerprint(event)] += 1
+
+    async def _publish_stream_event(self, event: dict[str, Any]) -> None:
+        new_sid = _extract_session_id(event)
         if new_sid and new_sid != self._opencode_session_id:
             self._opencode_session_id = new_sid
             await self._emit(
                 EVENT_SESSION_STARTED,
                 {"session_id": new_sid, "thread_id": new_sid},
             )
-        self._update_usage_from_events(events)
+        previous_usage = self.latest_usage
+        self._update_usage_from_events((event,))
+        if self.latest_usage != previous_usage:
+            await self._emit(EVENT_OTHER_MESSAGE, {"type": "opencode_usage"})
+
+    async def _complete_turn(self, stdout_text: str, rc: int) -> TurnResult:
+        events = self._decode_events(stdout_text)
+        streamed = self._streamed_event_counts.copy()
+        for event in events:
+            fingerprint = _event_fingerprint(event)
+            if streamed[fingerprint]:
+                streamed[fingerprint] -= 1
+            else:
+                await self._publish_stream_event(event)
+        self._streamed_event_counts.clear()
+        response = self._response_from_events(events) if events else stdout_text
         # `message` key feeds _preview_from_payload -> current_turn_message so a
-        # productive turn resets the G2 empty-loop counter (opencode delivers
-        # text only at turn end).
+        # productive turn resets the G2 empty-loop counter. Streaming frames
+        # are retained so the final response can still be assembled here.
         payload = {
             "message": response,
             "result": response,
@@ -120,8 +159,7 @@ class OpenCodeBackend(PerTurnCliBackend):
         )
 
     async def _emit_heartbeats(self, proc: asyncio.subprocess.Process) -> None:
-        # OpenCode emits no JSON until the per-turn subprocess exits; liveness
-        # keeps the shared stall detector from cancelling healthy long turns.
+        # Usage frames mark progress; heartbeats cover quiet model/tool periods.
         while proc.returncode is None:
             await asyncio.sleep(HEARTBEAT_INTERVAL_S)
             if proc.returncode is not None:
@@ -161,13 +199,6 @@ class OpenCodeBackend(PerTurnCliBackend):
             if isinstance(parsed, dict):
                 events.append(parsed)
         return events
-
-    def _session_id_from_events(self, events: Iterable[dict[str, Any]]) -> str | None:
-        for event in events:
-            session_id = _extract_session_id(event)
-            if session_id:
-                return session_id
-        return None
 
     def _response_from_events(self, events: Iterable[dict[str, Any]]) -> str:
         parts = [self._text_from_event(event) for event in events]
@@ -257,6 +288,10 @@ def _extract_session_id(event: dict[str, Any]) -> str | None:
             if isinstance(nested_id, str) and nested_id:
                 return nested_id
     return None
+
+
+def _event_fingerprint(event: dict[str, Any]) -> str:
+    return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _extract_text(value: Any) -> str:
