@@ -367,8 +367,6 @@ class CodexAppServerBackend(BaseAgentBackend):
         return new_command, env
 
     async def stop(self) -> None:
-        if self._closed:
-            return
         self._closed = True
         # v2 has no `thread/stop` — `thread/archive` exists but only
         # finalizes server-side bookkeeping. Symphony already terminates
@@ -654,6 +652,7 @@ class CodexAppServerBackend(BaseAgentBackend):
                 f"codex stream unreadable: {MALFORMED_LINE_LIMIT} consecutive "
                 f"malformed lines (last: {stream_corrupt[:200]!r})"
             )
+            self._closed = True
         else:
             reason = f"codex app-server closed stdout (rc={rc})"
         for fut in self._pending.values():
@@ -666,6 +665,17 @@ class CodexAppServerBackend(BaseAgentBackend):
         waiter = self._turn_completion_waiter
         if waiter is not None and not waiter.done():
             waiter.set_exception(TurnFailed(reason))
+        if stream_corrupt is not None:
+            log.error(
+                "codex_stream_corrupt",
+                malformed_line_limit=MALFORMED_LINE_LIMIT,
+                last_line=stream_corrupt[:200],
+            )
+            process = self._process
+            if process is not None and process.returncode is None:
+                # This reader task cannot call stop(): stop() cancels and awaits
+                # the reader itself. Reuse the same process-tree reaper directly.
+                await terminate_process_tree(process)
 
     async def _stderr_reader(self) -> None:
         assert self._process is not None and self._process.stderr is not None

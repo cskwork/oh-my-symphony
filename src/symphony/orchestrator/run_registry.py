@@ -268,7 +268,8 @@ class RunRegistry:
         rows = self._connect().execute(
             """
             SELECT * FROM runs
-            WHERE status = 'active' AND lease_expires_at > ?
+            WHERE status = 'reclaiming'
+               OR (status = 'active' AND lease_expires_at > ?)
             ORDER BY started_at, run_id
             """,
             (_iso(now),),
@@ -300,8 +301,10 @@ class RunRegistry:
         re-dispatch the interrupted ticket for minutes. Leases owned by this
         registry instance (same boot id) or by a live pid are left alone —
         the safe direction for pid reuse is to wait out the TTL.
-        Reclaimed rows get status 'orphaned' (distinct from TTL 'expired')
-        so a later recovery pass can decide about their workspaces.
+        Rows first enter `reclaiming`, which remains lease-blocking while the
+        caller performs OS cleanup outside this transaction. Existing
+        `reclaiming` rows are returned again so a crash between claim, kill,
+        and finalize is retry-safe.
         """
         now = _utc(now)
         alive = pid_alive or _pid_alive
@@ -311,13 +314,17 @@ class RunRegistry:
             rows = conn.execute(
                 """
                 SELECT * FROM runs
-                WHERE status = 'active' AND lease_expires_at > ?
+                WHERE status = 'reclaiming'
+                   OR (status = 'active' AND lease_expires_at > ?)
                 ORDER BY started_at, run_id
                 """,
                 (_iso(now),),
             ).fetchall()
             reclaimed: list[RunRecord] = []
             for row in rows:
+                if row["status"] == "reclaiming":
+                    reclaimed.append(_record(row))
+                    continue
                 if row["owner_boot_id"] == self._boot_id:
                     continue
                 pid = row["owner_pid"]
@@ -326,17 +333,37 @@ class RunRegistry:
                 conn.execute(
                     """
                     UPDATE runs
-                    SET status = 'orphaned', updated_at = ?, completed_at = ?
+                    SET status = 'reclaiming', updated_at = ?, completed_at = NULL
                     WHERE run_id = ?
                     """,
-                    (_iso(now), _iso(now), row["run_id"]),
+                    (_iso(now), row["run_id"]),
                 )
-                reclaimed.append(_record(row))
+                claimed = conn.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (row["run_id"],)
+                ).fetchone()
+                if claimed is not None:
+                    reclaimed.append(_record(claimed))
             conn.execute("COMMIT")
             return reclaimed
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+    def finalize_reclaimed_lease(
+        self, run_id: str, now: datetime | None = None
+    ) -> bool:
+        """Release a reclaim fence after external process cleanup completes."""
+        now = _utc(now)
+        cur = self._connect().execute(
+            """
+            UPDATE runs
+            SET status = 'orphaned', updated_at = ?, completed_at = ?,
+                lease_expires_at = NULL
+            WHERE run_id = ? AND status = 'reclaiming'
+            """,
+            (_iso(now), _iso(now), run_id),
+        )
+        return cur.rowcount > 0
 
     def get_run(self, run_id: str) -> RunRecord:
         row = self._connect().execute(
@@ -568,8 +595,10 @@ class RunRegistry:
             """
             SELECT * FROM runs
             WHERE issue_id = ?
-              AND status = 'active'
-              AND lease_expires_at > ?
+              AND (
+                  status = 'reclaiming'
+                  OR (status = 'active' AND lease_expires_at > ?)
+              )
             ORDER BY started_at DESC
             LIMIT 1
             """,

@@ -59,3 +59,10 @@ turn slot as if productive.
 
 StreamingCliBackend extraction (07-07 P1-5); changing the G2 threshold;
 token accounting (AF-14).
+
+## Resolution — 2026-07-10
+
+Resolved by giving productive Plain, Gemini, and Claude completions the
+canonical string `message` preview and treating successful whitespace-only
+stdout as `turn_failed`. Backend contract tests cover preview extraction and
+silent exits; the G2 regression preserves the real three-empty-turn guard.

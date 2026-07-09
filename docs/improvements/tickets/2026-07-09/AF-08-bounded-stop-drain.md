@@ -33,3 +33,11 @@ task.
 ## Non-goals
 
 Signal handling in launchers; changing `_drain_background_tasks`' bound.
+
+## Resolution — 2026-07-10
+
+Resolved with a bounded worker-task drain using the existing force-eject grace
+window. Survivors are logged and their recorded process group is killed when
+available. Every cancellation-resistant survivor's run lease is finalized as
+`shutdown_abandoned` before in-memory ownership is cleared and the registry is
+closed; prompt cancellation behavior remains green.

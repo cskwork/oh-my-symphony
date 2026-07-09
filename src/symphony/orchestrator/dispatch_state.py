@@ -36,7 +36,6 @@ class DispatchState:
         self.running: dict[str, RunningEntry] = {}
         self.claimed: set[str] = set()
         self.retry: dict[str, RetryEntry] = {}
-        self.completed: set[str] = set()
         self.persisted_retry_attempts: dict[str, int] = {}
         self.turn_budget_exhausted: set[str] = set()
 

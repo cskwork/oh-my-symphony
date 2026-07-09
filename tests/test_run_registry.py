@@ -206,8 +206,65 @@ def test_run_registry_reclaims_dead_owner_lease_before_ttl(tmp_path: Path) -> No
         now=now + timedelta(seconds=2), pid_alive=lambda _pid: False
     )
     assert [r.run_id for r in reclaimed] == [run_id]
-    assert fresh.has_active_lease(issue.id, now=now + timedelta(seconds=3)) is False
+    assert fresh.has_active_lease(issue.id, now=now + timedelta(seconds=3)) is True
+    assert fresh.get_run(run_id).status == "reclaiming"
+    assert (
+        fresh.acquire_run(
+            issue,
+            workspace_path=tmp_path / "ws" / issue.identifier,
+            attempt=1,
+            attempt_kind="retry",
+            agent_kind="codex",
+            now=now + timedelta(seconds=3),
+        )
+        is None
+    )
+    assert fresh.finalize_reclaimed_lease(run_id, now=now + timedelta(seconds=4))
+    assert fresh.has_active_lease(issue.id, now=now + timedelta(seconds=5)) is False
     assert fresh.get_run(run_id).status == "orphaned"
+
+
+def test_run_registry_retries_interrupted_reclaim_after_reopen(tmp_path: Path) -> None:
+    """AF-10 — a crash between claim and kill keeps the lease fenced."""
+    path = tmp_path / "state.db"
+    now = datetime(2026, 7, 2, 1, 0, tzinfo=timezone.utc)
+    issue = _issue()
+    crashed = RunRegistry(path, owner_pid=4242, boot_id="crashed")
+    run_id = crashed.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+        now=now,
+    )
+    assert run_id
+    crashed.close()
+
+    first_recovery = RunRegistry(path, boot_id="first-recovery")
+    assert [
+        record.run_id
+        for record in first_recovery.reclaim_dead_owner_leases(
+            now=now + timedelta(seconds=1), pid_alive=lambda _pid: False
+        )
+    ] == [run_id]
+    assert first_recovery.get_run(run_id).status == "reclaiming"
+    first_recovery.close()
+
+    retry_recovery = RunRegistry(path, boot_id="retry-recovery")
+    assert [
+        record.run_id
+        for record in retry_recovery.reclaim_dead_owner_leases(
+            now=now + timedelta(seconds=2), pid_alive=lambda _pid: True
+        )
+    ] == [run_id]
+    assert retry_recovery.has_active_lease(
+        issue.id, now=now + timedelta(seconds=2)
+    )
+    assert retry_recovery.finalize_reclaimed_lease(
+        run_id, now=now + timedelta(seconds=3)
+    )
+    assert retry_recovery.get_run(run_id).status == "orphaned"
 
 
 def test_run_registry_reclaim_skips_own_boot(tmp_path: Path) -> None:
@@ -282,6 +339,9 @@ def test_run_registry_migrates_legacy_schema_and_reclaims_null_owner(
         now=now + timedelta(seconds=1), pid_alive=lambda _pid: False
     )
     assert [r.run_id for r in reclaimed] == ["legacy-run"]
+    assert registry.finalize_reclaimed_lease(
+        "legacy-run", now=now + timedelta(seconds=2)
+    )
     assert registry.has_active_lease("id-MT-1", now=now + timedelta(seconds=2)) is False
 
 

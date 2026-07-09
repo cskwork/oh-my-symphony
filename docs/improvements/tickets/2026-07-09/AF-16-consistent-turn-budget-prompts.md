@@ -32,3 +32,9 @@ document the variable semantics in the WORKFLOW template docs.
 ## Non-goals
 
 Changing cap values; template content redesign.
+
+## Resolution — 2026-07-10
+
+Resolved by rendering all first, continuation, and phase-rebuild prompts with
+the ticket-lifetime turn position and `max_total_turns` denominator. The
+per-attempt `max_turns` execution cap and template content remain unchanged.

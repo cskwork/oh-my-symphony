@@ -36,3 +36,9 @@ recommended default (no config surface, matches operator intuition).
 ## Non-goals
 
 Changing the rewind cap value; contract-eval rewind mechanics.
+
+## Resolution — 2026-07-10
+
+Resolved by comparing case-normalized positions in configured
+`tracker.active_states`. Custom QA and Korean rewinds consume the existing
+budget and block at the cap; default pipeline behavior remains green.

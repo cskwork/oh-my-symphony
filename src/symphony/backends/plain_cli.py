@@ -45,6 +45,7 @@ class PlainCliBackend(PerTurnCliBackend):
         await self._emit(
             EVENT_TURN_COMPLETED,
             {
+                "message": stdout_text,
                 "result": stdout_text,
                 "response": stdout_text,
                 "session_id": self._session_id,

@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -57,6 +58,7 @@ from ..issue import (
     normalize_state,
     parse_iso_timestamp,
 )
+from ..logging import get_logger
 from ..skills import normalize_skill_names
 from ..ticket_markdown import parse_body_dependency_ids
 from ..workflow import TrackerConfig
@@ -82,11 +84,16 @@ _CANONICAL_FRONT_MATTER_KEYS = {
     "updated_at",
 }
 _LOCK_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_TRACKER_TEMP_NAME_RE = re.compile(
+    r"^\.tmp-symphony-ticket-[a-z0-9_]{8}\.tmp$"
+)
 _GENERATED_ID_ATTEMPTS = 100
+_STALE_TEMP_AGE_SECONDS = 60.0
 _TicketMutation = Callable[
     [dict[str, Any], str], tuple[dict[str, Any], str] | None
 ]
 _CasToken = tuple[Any, int | None]
+log = get_logger()
 
 
 @contextmanager
@@ -467,7 +474,9 @@ def _strip_warning_blocks(body: str) -> str:
 def write_ticket_atomic(path: Path, front: dict[str, Any], body: str) -> None:
     """Atomic write: temp file in same dir + rename."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".md", dir=path.parent)
+    fd, tmp = tempfile.mkstemp(
+        prefix=".tmp-symphony-ticket-", suffix=".tmp", dir=path.parent
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(serialize_ticket(front, body))
@@ -478,6 +487,17 @@ def write_ticket_atomic(path: Path, front: dict[str, Any], body: str) -> None:
         except OSError:
             pass
         raise
+
+
+def _is_owned_tracker_temp(path: Path) -> bool:
+    if _TRACKER_TEMP_NAME_RE.fullmatch(path.name) is not None:
+        return True
+    if not (path.name.startswith(".tmp-") and path.suffix == ".md"):
+        return False
+    try:
+        return issue_from_file(path) is not None
+    except (OSError, SymphonyError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +515,7 @@ class FileBoardTracker:
         self._active = {s.lower() for s in tracker.active_states}
         self._terminal = {s.lower() for s in tracker.terminal_states}
         self._root.mkdir(parents=True, exist_ok=True)
+        self._sweep_stale_temps()
 
     def _lock_path(self, name: str) -> Path:
         return self._root / ".locks" / f"{_lock_name(name)}.lock"
@@ -504,6 +525,39 @@ class FileBoardTracker:
 
     def _ticket_lock_path(self, identifier: str) -> Path:
         return self._lock_path(identifier)
+
+    def _sweep_stale_temps(self) -> None:
+        now = time.time()
+        for path in self._root.glob(".tmp-*"):
+            if not _is_owned_tracker_temp(path):
+                continue
+            try:
+                age_seconds = now - path.stat().st_mtime
+            except OSError:
+                continue
+            if age_seconds < _STALE_TEMP_AGE_SECONDS:
+                continue
+            try:
+                path.unlink()
+            except OSError as exc:
+                log.warning(
+                    "stale_tracker_temp_sweep_failed",
+                    path=str(path),
+                    error=str(exc),
+                )
+            else:
+                log.warning(
+                    "stale_tracker_temp_swept",
+                    path=str(path),
+                    age_seconds=age_seconds,
+                )
+
+    def _ticket_paths(self) -> list[Path]:
+        return sorted(
+            path
+            for path in self._root.glob("*.md")
+            if not path.name.startswith(".tmp-")
+        )
 
     def close(self) -> None:
         return None
@@ -576,12 +630,24 @@ class FileBoardTracker:
 
     def _scan_all(self) -> list[Issue]:
         out: list[Issue] = []
-        for path in sorted(self._root.glob("*.md")):
+        seen: dict[str, Path] = {}
+        for path in self._ticket_paths():
             try:
                 issue = issue_from_file(path)
-            except SymphonyError:
+            except SymphonyError as exc:
+                log.warning("ticket_parse_skipped", path=str(path), error=str(exc))
                 continue
             if issue is not None:
+                kept_path = seen.get(issue.id)
+                if kept_path is not None:
+                    log.warning(
+                        "duplicate_ticket_id_skipped",
+                        identifier=issue.identifier,
+                        kept_path=str(kept_path),
+                        skipped_path=str(path),
+                    )
+                    continue
+                seen[issue.id] = path
                 out.append(issue)
         return _hydrate_blocker_states(out)
 
@@ -591,12 +657,13 @@ class FileBoardTracker:
 
     def find_path(self, identifier: str) -> Path | None:
         candidate = self._root / f"{identifier}.md"
-        if candidate.exists():
+        if candidate.exists() and not candidate.name.startswith(".tmp-"):
             return candidate
-        for path in self._root.glob("*.md"):
+        for path in self._ticket_paths():
             try:
                 front, _ = parse_ticket_file(path)
-            except SymphonyError:
+            except SymphonyError as exc:
+                log.warning("ticket_parse_skipped", path=str(path), error=str(exc))
                 continue
             raw_id = front.get("id") or front.get("identifier")
             if raw_id and str(raw_id) == identifier:
@@ -743,7 +810,7 @@ class FileBoardTracker:
     def _next_identifier_unlocked(self, prefix: str) -> str:
         highest = 0
         pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$", re.IGNORECASE)
-        for path in self._root.glob("*.md"):
+        for path in self._ticket_paths():
             match = pattern.match(path.stem)
             if match:
                 highest = max(highest, int(match.group(1)))
@@ -796,7 +863,7 @@ class FileBoardTracker:
     ) -> Path:
         path = self._root / f"{identifier}.md"
         with _exclusive_lock(self._ticket_lock_path(identifier)):
-            if path.exists():
+            if self.find_path(identifier) is not None:
                 raise SymphonyError("ticket already exists", identifier=identifier)
             front = self._new_ticket_front(
                 identifier=identifier,
@@ -891,11 +958,12 @@ class FileBoardTracker:
         return path
 
     def delete(self, identifier: str) -> Path:
-        path = self.find_path(identifier)
-        if path is None:
-            raise SymphonyError("ticket not found", identifier=identifier)
-        path.unlink()
-        return path
+        with _exclusive_lock(self._ticket_lock_path(identifier)):
+            path = self.find_path(identifier)
+            if path is None:
+                raise SymphonyError("ticket not found", identifier=identifier)
+            path.unlink()
+            return path
 
 
 def _hydrate_blocker_states(issues: list[Issue]) -> list[Issue]:

@@ -246,8 +246,12 @@ class ClaudeCodeBackend(BaseAgentBackend):
                 await self._emit(EVENT_TURN_FAILED, payload)
                 raise TurnFailed(reason)
 
-            self._last_message = str(terminal.get("result") or "")[:400]
-            await self._emit(EVENT_TURN_COMPLETED, terminal)
+            message = str(terminal.get("result") or "").strip() or self._last_message
+            self._last_message = message[:400]
+            await self._emit(
+                EVENT_TURN_COMPLETED,
+                {**terminal, "message": message},
+            )
             return TurnResult(
                 status=EVENT_TURN_COMPLETED,
                 turn_id=str(terminal.get("session_id") or self._session_id or ""),
@@ -404,7 +408,7 @@ def _extract_text(message: dict[str, Any]) -> str:
     for block in reversed(content):
         if isinstance(block, dict) and block.get("type") == "text":
             text = block.get("text")
-            if isinstance(text, str) and text:
+            if isinstance(text, str) and text.strip():
                 return text
     return ""
 

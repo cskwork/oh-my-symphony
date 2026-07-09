@@ -46,6 +46,10 @@ class RunningEntry:
     # keepalive. Stall detection reads this; UI keeps last_codex_timestamp
     # to show "any activity at all". See _on_codex_event for the predicate.
     last_progress_timestamp: datetime | None = None
+    # Fresh stall-detection floor set by `resume_worker`. A long operator
+    # pause is not backend inactivity, so reconcile grants one full stall
+    # window after resume without rewriting the progress timestamp.
+    resumed_at: datetime | None = None
     codex_input_tokens: int = 0
     codex_cache_input_tokens: int = 0
     codex_output_tokens: int = 0

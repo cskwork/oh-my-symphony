@@ -35,3 +35,12 @@ high-water mark downward off a non-cumulative frame.
 
 Other backends' accounting (claude's `+=` vs codex's `=` naming nit is a
 comment-only cleanup); budget thresholds.
+
+## Resolution — 2026-07-10
+
+Resolved by research as not protocol-reachable; no production change.
+
+- Installed Codex 0.144 and the checked-in Codex 0.130 schemas both require
+  `ThreadTokenUsage.last` and `.total` in every token-usage notification.
+- The two generated notification schemas are byte-identical.
+- Evidence: `docs/improvements/research/2026-07-10-af-14-codex-token-usage-schema.md`.

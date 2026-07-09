@@ -510,6 +510,7 @@ def build_first_turn_prompt(
     issue: Any,
     attempt: int | None,
     language: str,
+    turn_number: int = 1,
     max_turns: int,
     max_attempts: int = 3,
     is_rewind: bool = False,
@@ -560,7 +561,7 @@ def build_first_turn_prompt(
         compact_issue_context=compact_issue_context,
         full_ticket_path=full_ticket_path,
     )
-    env["turn_number"] = 1
+    env["turn_number"] = turn_number
     env["max_turns"] = max_turns
     body = render(prompt_template, env)
     if extra_context.strip():

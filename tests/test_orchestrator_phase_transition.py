@@ -20,6 +20,7 @@ import symphony.orchestrator.core as core_mod
 from symphony.errors import TurnFailed
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator, RunningEntry
+from symphony.orchestrator.entries import _IssueDebug
 from symphony.orchestrator.run_registry import RunRegistry
 from symphony.workflow import (
     AgentConfig,
@@ -608,6 +609,7 @@ def test_phase_transition_stop_failure_retains_old_backend_ownership(
                 doc_language="en",
                 old_client=old_client,
                 is_rewind=False,
+                turn_number=1,
             )
 
     asyncio.run(_exercise())
@@ -1013,6 +1015,61 @@ def test_persistent_backend_pid_is_registered_before_each_initialize(
     ]
 
 
+def test_prompt_turn_budget_continues_across_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_cfg = _make_config(
+        max_turns=5,
+        prompt_template="budget={{ turn_number }}/{{ max_turns }}",
+    )
+    cfg = replace(base_cfg, agent=replace(base_cfg.agent, max_total_turns=60))
+    issue = _make_issue(state="In Progress")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    o._issue_debug[issue.id] = _IssueDebug(completed_turn_count=6)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=2, cfg=cfg))
+
+    start_prompt = next(
+        details["initial_prompt"]
+        for name, details in instances[0].calls
+        if name == "start_session"
+    )
+    run_turns = [details for name, details in instances[0].calls if name == "run_turn"]
+    assert "budget=7/60" in start_prompt
+    assert run_turns[0]["prompt"] == start_prompt
+    assert "turn 8 of up to 60" in run_turns[1]["prompt"]
+
+
+def test_phase_rebuild_prompt_keeps_lifetime_turn_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_cfg = _make_config(
+        max_turns=5,
+        prompt_template="budget={{ turn_number }}/{{ max_turns }}",
+    )
+    cfg = replace(base_cfg, agent=replace(base_cfg.agent, max_total_turns=60))
+    issue = _make_issue(state="Verify")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    o._issue_debug[issue.id] = _IssueDebug(completed_turn_count=6)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=2, cfg=cfg))
+
+    prompts = [
+        details["initial_prompt"]
+        for instance in instances
+        for name, details in instance.calls
+        if name == "start_session"
+    ]
+    assert "budget=7/60" in prompts[0]
+    assert "budget=8/60" in prompts[1]
+
+
 def test_worker_cleanup_uses_registered_running_issue_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1185,6 +1242,62 @@ def test_is_rewind_transition_pure_function() -> None:
     # Backward jumps to states OTHER than In Progress are out of scope.
     assert _is_rewind_transition("verify", "todo") is False
     assert _is_rewind_transition("learn", "verify") is False
+
+
+def test_is_rewind_transition_uses_configured_active_state_order() -> None:
+    """AF-13 — rewind meaning comes from the configured pipeline order."""
+    from symphony.orchestrator import _is_rewind_transition
+
+    assert _is_rewind_transition(
+        "QA", "In Progress", ("Todo", "In Progress", "QA")
+    )
+    assert _is_rewind_transition("검수", "진행", ("대기", "진행", "검수"))
+    assert not _is_rewind_transition(
+        "In Progress", "QA", ("Todo", "In Progress", "QA")
+    )
+
+
+@pytest.mark.parametrize(
+    ("active_states", "later", "earlier"),
+    [
+        (("In Progress", "QA"), "QA", "In Progress"),
+        (("진행", "검수"), "검수", "진행"),
+    ],
+)
+def test_custom_pipeline_rewinds_increment_budget_and_block_at_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    active_states: tuple[str, ...],
+    later: str,
+    earlier: str,
+) -> None:
+    """AF-13 — custom and non-English rewinds cannot evade the cap."""
+    cfg = _make_config(
+        max_turns=5,
+        max_attempts=1,
+        active_states=active_states,
+    )
+    issue = _make_issue(state=later)
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, [earlier, later, earlier, "Done"])
+    updates: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_update_state",
+        staticmethod(
+            lambda _cfg, issue_arg, target: updates.append(
+                (issue_arg.state, target)
+            )
+        ),
+    )
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert updates == [(earlier, "Blocked")]
+    assert o._issue_debug[issue.id].rewind_count == 2
 
 
 def test_verify_rewind_renders_is_rewind_in_first_prompt(

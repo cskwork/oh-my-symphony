@@ -129,7 +129,6 @@ focused controls, 34 combined AF-02 tests, and 266 affected-module tests. Full R
 
 Non-goals honored: AF-01 task-identity changes preserved; no schema, startup reclaim, signal,
 `safe_proc_wait`, or unrelated reaping changes.
-
 ## Linked-worktree setup lock uses the common Git directory
 
 ### What
@@ -173,3 +172,75 @@ decoder; completion applies only events that were not already processed from the
   line limit; fixed-size reads avoid `LimitOverrunError` while still publishing complete lines.
 - **Usage plus heartbeat progress.** Token frames are productive activity; heartbeats still cover
   quiet model and tool intervals that emit no JSONL.
+
+## AF-03 through AF-16 — Orchestrator reliability decisions
+
+Scope in this entry: AF-03 through AF-16. Detailed command evidence remains in
+the three batch builder records under
+`docs/changelog/2026-07/10-af-03-16-reliability/`.
+
+### What and why
+
+- AF-03: add a resume timestamp as the post-pause stall floor. Rewriting the
+  real progress timestamp was rejected because it would misreport operator
+  activity as model progress.
+- AF-04: reject only an actual state delta while a worker owns the ticket,
+  before writing any mixed PATCH fields. Blocking all running-ticket edits was
+  rejected because metadata and same-state edits are existing supported behavior.
+- AF-05: normalize productive Plain, Gemini, and Claude completion previews at
+  each backend boundary and reject successful empty stdout before completion.
+  Broadening generic preview parsing was rejected because the emitting adapters
+  can satisfy the existing canonical `message` contract directly.
+- AF-06: give atomic temps a tracker-owned marker, retain defensive filtering
+  for legacy `.tmp-*.md` files, and sweep only safety-aged marker-owned or
+  parseable legacy ticket artifacts. A broad `.tmp-*` sweep was rejected
+  because it can delete operator-owned files.
+- AF-07: process cancellation escalation before pause, isolate reconcile Part
+  A per issue, and make force-eject lease/retry cleanup exception-safe. Letting
+  operator pause hide system cancellation was rejected as a slot leak.
+- AF-08: bound worker drain to the existing force-eject grace window, then log
+  and reap recorded survivors and finish each survivor lease before clearing
+  ownership or closing SQLite. Sequential unbounded awaits were rejected
+  because `stop()` must have a deadline.
+- AF-09: close and reap a persistent Codex backend after the malformed-line
+  limit so pending and future turns fail promptly, while leaving process
+  teardown retryable by later `stop()`. Calling `stop()` from its own reader
+  was rejected because it would cancel and await itself.
+- AF-10: move a dead-owner lease through `reclaiming`, kill its recorded
+  process group outside SQLite, then finalize it as `orphaned`. Failed or
+  interrupted cleanup stays lease-blocking for startup retry. A non-null pid
+  migration and OS side effects inside the transaction were rejected for
+  backward compatibility and failure isolation.
+- AF-11: keep the documented lifetime CI cap and add a one-warning latch,
+  full-interval lease retry, terminal-persist idleness, and CI/worker exclusion.
+  Automatic interval reset was rejected because it silently re-enables spend.
+- AF-12: warn on parse drops and duplicate ids, collapse duplicates by sorted
+  path, reject non-canonical duplicate creation, and serialize delete with the
+  existing per-ticket lock; also treat an omitted running id as a visible
+  degraded signal. Cross-process locking and CAS redesign were rejected.
+- AF-13: compare case-normalized indexes in configured active-state order,
+  retaining static default behavior for callers without configuration. Static
+  English-only rewind pairs were rejected.
+- AF-14: close by research with no production change. Codex 0.144 and the
+  checked-in 0.130 schema both require token-usage `last` and `total`; a
+  last-only defensive branch would support an unobserved invalid protocol.
+- AF-15: remove reader-less completed-id retention and clear issue diagnostics
+  on stop. Bounding `_completed` was rejected because there is no consumer.
+- AF-16: render first, continuation, and phase-rebuild prompts with the ticket
+  lifetime numerator and `max_total_turns` denominator while retaining
+  `max_turns` as the execution cap. Per-attempt prompt counters were rejected
+  because they disagree with the lifetime guard.
+- AF-05 integration: a canonical productive `message` resets G2, while three
+  later empty completions still persist `empty_response_loop` and cancel.
+
+Evidence: `docs/changelog/2026-07/10-af-03-16-reliability/builder-orchestrator.md`.
+
+### Edge-case improver follow-up
+
+- AF-10: reject non-positive recovered backend pids at the startup signalling
+  boundary. A registry migration and a global process-helper change were
+  rejected because boundary validation is smaller and preserves existing
+  storage compatibility.
+- AF-05: ignore trailing whitespace-only Claude text blocks while preserving
+  the original last meaningful block. Concatenating every text block was
+  rejected because it would mix tool narration into the completion preview.

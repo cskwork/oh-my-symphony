@@ -46,6 +46,7 @@ from symphony.backends import (
     build_backend,
 )
 from symphony.errors import ResponseError, TurnFailed
+from symphony.orchestrator import Orchestrator
 from tests.test_backends import (
     _BlockingStream,
     _FakeSubprocess,
@@ -116,6 +117,7 @@ class PerTurnBackendContract:
 
     kind: str
     module: Any
+    canonical_message: str | None = None
 
     def success_processes(self) -> list[_FakeSubprocess]:
         raise NotImplementedError
@@ -209,6 +211,42 @@ class PerTurnBackendContract:
 
         assert [event["agent_pid"] for event in spawn_events] == [11111, 22222]
 
+    async def test_productive_completion_exposes_canonical_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        if self.canonical_message is None:
+            pytest.skip("backend is outside the AF-05 preview contract")
+        events: list[dict[str, Any]] = []
+        _install_subprocess_double(monkeypatch, self.module, self.success_processes())
+        backend = self._make_backend(tmp_path, events)
+
+        await backend.start_session(initial_prompt="hi", issue_title="Contract")
+        await backend.run_turn(prompt="do the thing", is_continuation=False)
+
+        completed = [event for event in events if event["event"] == EVENT_TURN_COMPLETED]
+        payload = completed[-1]["payload"]
+        assert payload["message"] == self.canonical_message
+        assert Orchestrator._preview_from_payload(payload) == self.canonical_message
+
+    async def test_zero_exit_whitespace_stdout_is_a_failed_turn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events: list[dict[str, Any]] = []
+        _install_subprocess_double(
+            monkeypatch,
+            self.module,
+            [_FakeSubprocess(stdout_blob=b" \n\t", returncode=0)],
+        )
+        backend = self._make_backend(tmp_path, events)
+
+        await backend.start_session(initial_prompt="hi", issue_title="Contract")
+        with pytest.raises(TurnFailed):
+            await backend.run_turn(prompt="do the thing", is_continuation=False)
+
+        names = [event["event"] for event in events]
+        assert EVENT_TURN_FAILED in names
+        assert EVENT_TURN_COMPLETED not in names
+
     async def test_nonzero_exit_emits_turn_failed_and_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -239,14 +277,18 @@ class PerTurnBackendContract:
 class TestClaudeBackendContract(PerTurnBackendContract):
     kind = "claude"
     module = claude_module
+    canonical_message = "done"
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [
             _FakeSubprocess(
                 stdout_lines=[
                     b'{"type":"system","subtype":"init","session_id":"claude-c1"}\n',
+                    b'{"type":"assistant","message":{"content":['
+                    b'{"type":"tool_use","name":"Edit"},'
+                    b'{"type":"text","text":"done"}]}}\n',
                     b'{"type":"result","subtype":"success","is_error":false,'
-                    b'"result":"done","session_id":"claude-c1","usage":{}}\n',
+                    b'"result":"","session_id":"claude-c1","usage":{}}\n',
                 ]
             )
         ]
@@ -255,6 +297,7 @@ class TestClaudeBackendContract(PerTurnBackendContract):
 class TestGeminiBackendContract(PerTurnBackendContract):
     kind = "gemini"
     module = per_turn_module
+    canonical_message = "done"
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [
@@ -267,6 +310,7 @@ class TestGeminiBackendContract(PerTurnBackendContract):
 class TestAgyBackendContract(PerTurnBackendContract):
     kind = "agy"
     module = per_turn_module
+    canonical_message = "done"
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [_FakeSubprocess(stdout_blob=b"done")]
@@ -275,6 +319,7 @@ class TestAgyBackendContract(PerTurnBackendContract):
 class TestKiroBackendContract(PerTurnBackendContract):
     kind = "kiro"
     module = per_turn_module
+    canonical_message = "done"
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [_FakeSubprocess(stdout_blob=b"done")]

@@ -214,6 +214,21 @@ def test_first_turn_prompt_prepends_english_preamble_by_default():
     assert env["agent"]["auto_merge_on_done"] is True
 
 
+def test_first_turn_prompt_accepts_lifetime_turn_budget() -> None:
+    prompt, env = build_first_turn_prompt(
+        prompt_template="turn={{ turn_number }}/{{ max_turns }}",
+        issue=_issue(),
+        attempt=None,
+        language="en",
+        turn_number=7,
+        max_turns=60,
+    )
+
+    assert "turn=7/60" in prompt
+    assert env["turn_number"] == 7
+    assert env["max_turns"] == 60
+
+
 def test_first_turn_prompt_exposes_auto_merge_flag():
     prompt, env = build_first_turn_prompt(
         prompt_template="merge={{ agent.auto_merge_on_done }}",

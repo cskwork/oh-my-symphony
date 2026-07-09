@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import sys
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -733,6 +734,99 @@ def test_reconcile_force_eject_without_safe_pgid_releases_slot_and_retries(
     assert killed == [], "missing or unsafe pid must not trigger an unscoped kill"
 
 
+def test_reconcile_force_ejects_cancelled_worker_even_when_paused():
+    """AF-07 — an operator pause cannot hide a system-cancelled zombie."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-PAUSED-ZOMBIE", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        now = datetime.now(timezone.utc)
+        orch._running[issue.id] = RunningEntry(
+            issue=issue,
+            started_at=now - timedelta(hours=1),
+            retry_attempt=None,
+            worker_task=None,
+            workspace_path=Path("/tmp"),
+            cancelled_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 1),
+        )
+        orch._claimed.add(issue.id)
+        assert orch.pause_worker(issue.id) is True
+
+        await orch._reconcile_running(cfg)
+
+        for retry in list(orch._retry.values()):
+            retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+    assert issue.id not in orch._running
+    assert issue.id in orch._retry
+
+
+def test_reconcile_isolates_force_eject_cleanup_and_still_schedules_retry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """AF-07 — one cleanup failure cannot orphan or starve other issues."""
+    cfg = _make_config(max_concurrent=2)
+    orch = _orch()
+    zombie = _issue("MT-BROKEN-CLEANUP", state="In Progress")
+    stalled = _issue("MT-NEXT-STALL", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        stalled_task = asyncio.create_task(_noop())
+        try:
+            now = datetime.now(timezone.utc)
+            orch._running[zombie.id] = RunningEntry(
+                issue=zombie,
+                started_at=now - timedelta(hours=1),
+                retry_attempt=None,
+                worker_task=None,
+                workspace_path=Path("/tmp"),
+                cancelled_at=now
+                - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 1),
+                agent_pgid=4343,
+            )
+            orch._running[stalled.id] = RunningEntry(
+                issue=stalled,
+                started_at=now - timedelta(hours=1),
+                retry_attempt=None,
+                worker_task=stalled_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._claimed.update({zombie.id, stalled.id})
+            monkeypatch.setattr(
+                core_module,
+                "kill_process_group",
+                lambda _pid: (_ for _ in ()).throw(RuntimeError("kill failed")),
+            )
+            monkeypatch.setattr(
+                orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: []
+            )
+
+            await orch._reconcile_running(cfg)
+
+            assert zombie.id in orch._retry
+            assert orch._retry[zombie.id].error == "force_ejected_zombie"
+            assert orch._running[stalled.id].cancelled_at is not None
+        finally:
+            stalled_task.cancel()
+            try:
+                await stalled_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 class _AF01StubWorkspace:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -1019,7 +1113,6 @@ def test_worker_exit_rechecks_identity_after_finally_gate(monkeypatch):
             assert orch._running.get(issue.id) is entry_b
             assert entry_b.exit_started_at is None
             assert not worker_b.done()
-            assert issue.id not in orch._completed
             assert issue.id not in orch._retry
         finally:
             worker_b.cancel()
@@ -1317,6 +1410,182 @@ def test_persisted_issue_flags_block_dispatch_after_restart(tmp_path):
     assert exhausted.id in restarted._turn_budget_exhausted
     assert restarted._should_dispatch(paused, cfg) is False
     assert restarted._should_dispatch(exhausted, cfg) is False
+
+
+def test_startup_reclaim_kills_recorded_orphan_agent_before_return(
+    tmp_path, monkeypatch
+):
+    """AF-10 — startup reaps a dead owner's recorded live agent group."""
+    import symphony.orchestrator.run_registry as run_registry_module
+
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws"
+    )
+    issue = _issue("MT-ORPHAN", state="Todo")
+    now = datetime.now(timezone.utc)
+    crashed = RunRegistry(
+        tmp_path / ".symphony" / "state.db",
+        lease_ttl=timedelta(minutes=5),
+        owner_pid=4242,
+        boot_id="crashed",
+    )
+    run_id = crashed.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+        now=now,
+    )
+    assert run_id
+    assert crashed.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=1),
+        backend_agent_pid=4343,
+    )
+    crashed.close()
+
+    killed: list[int] = []
+    monkeypatch.setattr(run_registry_module, "_pid_alive", lambda _pid: False)
+    restarted = _orch()
+    status_during_kill: list[str] = []
+    contender_claims: list[str | None] = []
+
+    def kill_while_proving_fence(pid: int) -> bool:
+        killed.append(pid)
+        assert restarted._run_registry is not None
+        status_during_kill.append(restarted._run_registry.get_run(run_id).status)
+        contender = RunRegistry(
+            tmp_path / ".symphony" / "state.db", boot_id="contender"
+        )
+        try:
+            contender_claims.append(
+                contender.acquire_run(
+                    issue,
+                    workspace_path=tmp_path / "ws" / issue.identifier,
+                    attempt=1,
+                    attempt_kind="retry",
+                    agent_kind="codex",
+                )
+            )
+        finally:
+            contender.close()
+        return True
+
+    monkeypatch.setattr(core_module, "kill_process_group", kill_while_proving_fence)
+    restarted._ensure_run_registry(cfg)
+
+    assert killed == [4343]
+    assert status_during_kill == ["reclaiming"]
+    assert contender_claims == [None]
+    assert restarted._run_registry is not None
+    assert restarted._run_registry.get_run(run_id).status == "orphaned"
+
+
+@pytest.mark.parametrize("invalid_pid", [0, -1])
+def test_startup_reclaim_skips_invalid_recorded_orphan_agent_pid(
+    tmp_path, monkeypatch, invalid_pid
+):
+    """AF-10 — corrupt ownership rows must never target our process group."""
+    import symphony.orchestrator.run_registry as run_registry_module
+
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws"
+    )
+    issue = _issue(f"MT-INVALID-PID-{invalid_pid}", state="Todo")
+    now = datetime.now(timezone.utc)
+    crashed = RunRegistry(
+        tmp_path / ".symphony" / "state.db",
+        lease_ttl=timedelta(minutes=5),
+        owner_pid=4242,
+        boot_id="crashed",
+    )
+    run_id = crashed.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+        now=now,
+    )
+    assert run_id
+    assert crashed.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=1),
+        backend_agent_pid=invalid_pid,
+    )
+    crashed.close()
+
+    killed: list[int] = []
+    monkeypatch.setattr(run_registry_module, "_pid_alive", lambda _pid: False)
+    monkeypatch.setattr(
+        core_module, "kill_process_group", lambda pid: killed.append(pid) or True
+    )
+
+    restarted = _orch()
+    restarted._ensure_run_registry(cfg)
+
+    assert killed == []
+    assert restarted._run_registry is not None
+    assert restarted._run_registry.get_run(run_id).status == "orphaned"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
+def test_startup_reclaim_terminates_live_recorded_orphan_agent_group(
+    tmp_path, monkeypatch
+):
+    """AF-10 — recovery kills a real recorded process group before returning."""
+    import symphony.orchestrator.run_registry as run_registry_module
+
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    restarted = _orch()
+    try:
+        cfg = _make_config(
+            workflow_path=tmp_path / "WORKFLOW.md",
+            workspace_root=tmp_path / "ws",
+        )
+        issue = _issue("MT-LIVE-ORPHAN", state="Todo")
+        now = datetime.now(timezone.utc)
+        crashed = RunRegistry(
+            tmp_path / ".symphony" / "state.db",
+            lease_ttl=timedelta(minutes=5),
+            owner_pid=4242,
+            boot_id="crashed",
+        )
+        run_id = crashed.acquire_run(
+            issue,
+            workspace_path=tmp_path / "ws" / issue.identifier,
+            attempt=None,
+            attempt_kind="initial",
+            agent_kind="codex",
+            now=now,
+        )
+        assert run_id
+        assert crashed.heartbeat(
+            issue_id=issue.id,
+            run_id=run_id,
+            now=now + timedelta(seconds=1),
+            backend_agent_pid=sleeper.pid,
+        )
+        crashed.close()
+        monkeypatch.setattr(run_registry_module, "_pid_alive", lambda _pid: False)
+
+        restarted._ensure_run_registry(cfg)
+
+        assert sleeper.wait(timeout=5) < 0
+        assert restarted._run_registry is not None
+        assert restarted._run_registry.get_run(run_id).status == "orphaned"
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+            sleeper.wait(timeout=5)
+        if restarted._run_registry is not None:
+            restarted._run_registry.close()
 
 
 def test_retryable_persisted_pause_restarts_as_retry(tmp_path, monkeypatch):
@@ -2700,6 +2969,88 @@ def test_reconcile_skips_stall_detection_for_paused_worker():
     asyncio.run(_run())
 
 
+def test_resume_after_long_pause_gets_fresh_stall_window():
+    """AF-03 — resume must not inherit the pause's stale progress clock."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-RESUME", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+            orch._running[issue.id] = RunningEntry(
+                issue=issue,
+                started_at=stale,
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+                last_progress_timestamp=stale,
+            )
+            assert orch.pause_worker(issue.id) is True
+            assert orch.resume_worker(issue.id) is True
+
+            await orch._reconcile_running(cfg)
+
+            assert orch._running[issue.id].cancelled_at is None
+            assert worker_task.cancelled() is False
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_resumed_worker_stalls_after_fresh_window_expires():
+    """AF-03 — resume resets the window, not genuine-stall detection."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-RESUME-STALL", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+            entry = RunningEntry(
+                issue=issue,
+                started_at=stale,
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+                last_progress_timestamp=stale,
+            )
+            orch._running[issue.id] = entry
+            assert orch.pause_worker(issue.id) is True
+            assert orch.resume_worker(issue.id) is True
+            assert entry.resumed_at is not None
+            entry.resumed_at = stale
+
+            await orch._reconcile_running(cfg)
+
+            assert entry.cancelled_at is not None
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
 def test_max_total_turns_exhaustion_persists_via_tracker_transition(monkeypatch):
     """`agent.budget_exhausted_state` set + max_total_turns reached →
     tracker.update_state is called with the configured target so the
@@ -3866,6 +4217,47 @@ def test_reconcile_part_b_skips_paused_worker_on_terminal_state(monkeypatch):
                 "paused worker must survive reconcile despite terminal state"
             )
             assert issue.id in orch._running
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_reconcile_marks_running_issue_missing_from_tracker_refresh(monkeypatch):
+    """AF-12 — a vanished running row is explicit degraded state."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-MISSING", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            orch._running[issue.id] = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            monkeypatch.setattr(
+                orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: []
+            )
+
+            await orch._reconcile_running(cfg)
+
+            attention = orch.issue_attention(issue)
+            assert attention is not None
+            assert attention["kind"] == "tracker_error"
+            assert "omitted running issue" in attention["message"]
         finally:
             worker_task.cancel()
             try:
@@ -7016,6 +7408,22 @@ def test_g2_opencode_shaped_payload_resets_only_with_message_key(monkeypatch):
             )
             assert entry.cancelled_at is None
             assert persisted_kinds == []
+
+            empty_event = {
+                "event": "turn_completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {},
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 0,
+                    "total_tokens": 100,
+                },
+            }
+            for _ in range(3):
+                await orch._on_codex_event(issue.id, empty_event)
+
+            assert entry.cancelled_at is not None
+            assert persisted_kinds == ["empty_response_loop"]
         finally:
             worker_task.cancel()
             try:

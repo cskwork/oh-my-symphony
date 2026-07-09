@@ -594,6 +594,7 @@ class Orchestrator:
         self._last_improvement_monotonic: float | None = None
         self._next_improvement_due_monotonic: float | None = None
         self._improvement_turns_used: int = 0
+        self._improvement_cap_warned: bool = False
         self._improvement_status: dict[str, Any] = _initial_improvement_status()
 
     # ------------------------------------------------------------------
@@ -613,10 +614,6 @@ class Orchestrator:
     @property
     def _retry(self) -> dict[str, RetryEntry]:
         return self._dispatch_state.retry
-
-    @property
-    def _completed(self) -> set[str]:
-        return self._dispatch_state.completed
 
     @property
     def _persisted_retry_attempts(self) -> dict[str, int]:
@@ -687,6 +684,51 @@ class Orchestrator:
             )
             task.cancel()
 
+    async def _drain_worker_tasks(self) -> None:
+        """Wait one eject-grace window, then abandon cancellation resisters."""
+        workers = {
+            issue_id: entry
+            for issue_id, entry in self._running.items()
+            if entry.worker_task is not None
+        }
+        if not workers:
+            return
+        done, pending = await asyncio.wait(
+            [entry.worker_task for entry in workers.values() if entry.worker_task],
+            timeout=STALL_FORCE_EJECT_GRACE_S,
+        )
+        for task in done:
+            try:
+                task.result()
+            except (asyncio.CancelledError, Exception):
+                pass
+        for issue_id, entry in workers.items():
+            task = entry.worker_task
+            if task not in pending:
+                continue
+            killed: bool | None = None
+            agent_pgid = _normalize_agent_pid(entry.agent_pgid)
+            if agent_pgid is not None:
+                try:
+                    killed = kill_process_group(agent_pgid)
+                except Exception as exc:
+                    log.warning(
+                        "worker_process_kill_failed_on_stop",
+                        issue_id=issue_id,
+                        agent_kind=self._entry_agent_kind(entry),
+                        pid=agent_pgid,
+                        error=str(exc),
+                    )
+            log.warning(
+                "worker_task_abandoned_on_stop",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                agent_kind=self._entry_agent_kind(entry),
+                pid=agent_pgid,
+                killed=killed,
+            )
+            self._finish_run_lease(issue_id, entry, "shutdown_abandoned")
+
     # ------------------------------------------------------------------
     # public accessors for API / TUI layers
     # ------------------------------------------------------------------
@@ -735,10 +777,16 @@ class Orchestrator:
             "reclaim_dead_owner", registry.reclaim_dead_owner_leases, []
         )
         if reclaimed:
+            finalized = [
+                record
+                for record in reclaimed
+                if self._reap_and_finalize_reclaimed_run(registry, record)
+            ]
             log.info(
                 "run_leases_reclaimed_dead_owner",
-                count=len(reclaimed),
-                identifiers=[r.identifier for r in reclaimed],
+                count=len(finalized),
+                pending_count=len(reclaimed) - len(finalized),
+                identifiers=[r.identifier for r in finalized],
                 path=str(path),
             )
         expired = self._registry_guard("expire_stale", registry.expire_stale, 0)
@@ -746,6 +794,45 @@ class Orchestrator:
             log.info("run_leases_expired_on_start", count=expired, path=str(path))
         flags = self._registry_guard("list_issue_flags", registry.list_issue_flags, [])
         self._rehydrate_issue_flags(flags)
+
+    def _reap_and_finalize_reclaimed_run(
+        self, registry: RunRegistry, record: RunRecord
+    ) -> bool:
+        """Kill outside SQLite, then release the persisted reclaim fence."""
+        pid = record.backend_agent_pid
+        if pid is not None and pid <= 0:
+            log.warning(
+                "reclaim_invalid_orphan_agent_pid",
+                issue_id=record.issue_id,
+                identifier=record.identifier,
+                pid=pid,
+            )
+        elif pid is not None:
+            try:
+                killed = kill_process_group(pid)
+            except Exception as exc:
+                log.warning(
+                    "reclaim_killed_orphan_agent",
+                    issue_id=record.issue_id,
+                    identifier=record.identifier,
+                    pid=pid,
+                    outcome=f"error: {exc}",
+                )
+                return False
+            log.warning(
+                "reclaim_killed_orphan_agent",
+                issue_id=record.issue_id,
+                identifier=record.identifier,
+                pid=pid,
+                outcome="killed" if killed else "not_found",
+            )
+        return bool(
+            self._registry_guard(
+                "finalize_reclaimed_lease",
+                lambda: registry.finalize_reclaimed_lease(record.run_id),
+                False,
+            )
+        )
 
     def recent_runs(
         self, issue_id: str | None = None, limit: int = 50
@@ -1103,13 +1190,7 @@ class Orchestrator:
                 entry.worker_task.cancel()
         for entry in list(self._retry.values()):
             entry.timer_handle.cancel()
-        for entry in list(self._running.values()):
-            if entry.worker_task is None:
-                continue
-            try:
-                await entry.worker_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await self._drain_worker_tasks()
         # Worker exits above may have fired supervised cleanup tasks
         # (lease release, registry writes). Let them land before closing
         # the registry; cancel anything still stuck after the bound.
@@ -1122,6 +1203,7 @@ class Orchestrator:
         self._turn_budget_exhausted.clear()
         self._lease_blocked.clear()
         self._blocked_rca_source_ids.clear()
+        self._issue_debug.clear()
         if self._run_registry is not None:
             self._run_registry.close()
             self._run_registry = None
@@ -1532,6 +1614,9 @@ class Orchestrator:
         self._paused_issue_ids.discard(issue_id)
         self._pause_reasons.pop(issue_id, None)
         self._clear_issue_flags(issue_id, paused=True)
+        running = self._running.get(issue_id)
+        if running is not None:
+            running.resumed_at = datetime.now(timezone.utc)
         event = self._pause_events.get(issue_id)
         if event is not None and not event.is_set():
             event.set()
@@ -2629,6 +2714,13 @@ class Orchestrator:
         """
         if issue.id in self._running:
             return False
+        ci_task = self._improvement_task
+        if (
+            cfg.continuous_improvement.require_idle_board
+            and ci_task is not None
+            and not ci_task.done()
+        ):
+            return False
         if self._has_active_run_lease(issue.id):
             self._lease_blocked[issue.id] = (
                 "another active run lease exists for this issue"
@@ -2727,10 +2819,19 @@ class Orchestrator:
         # Due. Turn budget (0 == unlimited).
         if ci.max_turns and self._improvement_turns_used >= ci.max_turns:
             self._improvement_status["skipped_reason"] = "max_turns_reached"
+            if not self._improvement_cap_warned:
+                log.warning(
+                    "continuous_improvement_max_turns_reached",
+                    turns_used=self._improvement_turns_used,
+                    max_turns=ci.max_turns,
+                )
+                self._improvement_cap_warned = True
             return
         # Idle-board guard: postpone (don't consume the turn), re-check next
         # tick. Any live worker or retry-pending ticket counts as busy.
-        if ci.require_idle_board and (self._running or self._retry):
+        if ci.require_idle_board and (
+            self._running or self._retry or self._terminal_persist_pending
+        ):
             self._improvement_status["skipped_reason"] = "board_busy"
             return
 
@@ -2761,7 +2862,8 @@ class Orchestrator:
         lease = self._improvement_lease or FileLease(lease_path_for(workflow_dir))
         if not lease.acquire():
             # Another orchestrator holds the heartbeat; postpone silently.
-            self._next_improvement_due_monotonic = time.monotonic()
+            interval_s = max(cfg.continuous_improvement.interval_ms, 0) / 1000.0
+            self._next_improvement_due_monotonic = time.monotonic() + interval_s
             self._improvement_status.update(
                 in_flight=False, current_phase=None, skipped_reason="lease_held"
             )
@@ -2830,6 +2932,7 @@ class Orchestrator:
     def reset_continuous_improvement_turns(self) -> None:
         """Web-API hook: zero the turn counter, clear a max_turns skip."""
         self._improvement_turns_used = 0
+        self._improvement_cap_warned = False
         if self._improvement_status.get("skipped_reason") == "max_turns_reached":
             self._improvement_status["skipped_reason"] = None
 
@@ -3462,6 +3565,9 @@ class Orchestrator:
                 await client.initialize()
 
                 turn_number = 1
+                debug = self._issue_debug.setdefault(
+                    running_issue_id, _IssueDebug()
+                )
                 # `cfg.tui.language` is the operator-chosen language for
                 # both TUI chrome AND artefact docs. Resolution already
                 # honours `SYMPHONY_LANG` (build_service_config call).
@@ -3476,7 +3582,8 @@ class Orchestrator:
                     issue=issue,
                     attempt=attempt,
                     language=doc_language,
-                    max_turns=cfg.agent.max_turns,
+                    turn_number=debug.completed_turn_count + turn_number,
+                    max_turns=cfg.agent.max_total_turns,
                     max_attempts=cfg.agent.max_attempts,
                     auto_merge_on_done=cfg.agent.auto_merge_on_done,
                     token_ema=self._token_ema_for_state(issue.state),
@@ -3559,7 +3666,9 @@ class Orchestrator:
                     if is_phase_transition:
                         try:
                             is_rewind = _is_rewind_transition(
-                                prev_phase_state, current_state
+                                prev_phase_state,
+                                current_state,
+                                cfg.tracker.active_states,
                             )
                             # v0.6.7 — contract validator. When the agent
                             # moved forward (not a rewind), check that
@@ -3718,6 +3827,7 @@ class Orchestrator:
                                 doc_language=doc_language,
                                 old_client=client,
                                 is_rewind=is_rewind,
+                                turn_number=debug.completed_turn_count + turn_number,
                             )
                             running_entry = self._running.get(running_issue_id)
                             if running_entry is not None:
@@ -4035,6 +4145,7 @@ class Orchestrator:
         doc_language: str,
         old_client: AgentBackend,
         is_rewind: bool,
+        turn_number: int,
     ) -> tuple[AgentBackend, str]:
         """Tear down `old_client` and rebuild a fresh-context backend.
 
@@ -4096,7 +4207,8 @@ class Orchestrator:
                 issue=issue,
                 attempt=attempt,
                 language=doc_language,
-                max_turns=cfg.agent.max_turns,
+                turn_number=turn_number,
+                max_turns=cfg.agent.max_total_turns,
                 max_attempts=cfg.agent.max_attempts,
                 is_rewind=is_rewind,
                 auto_merge_on_done=cfg.agent.auto_merge_on_done,
@@ -4987,7 +5099,6 @@ class Orchestrator:
                         budget_kind="turns",
                     )
                 return
-            self._completed.add(issue_id)
             cleanup_started = entry.workspace_cleanup_started
             if (
                 cfg is not None
@@ -5154,34 +5265,38 @@ class Orchestrator:
         """
         self._running.pop(issue_id, None)
         self._claimed.discard(issue_id)
-        agent_pgid = _normalize_agent_pid(entry.agent_pgid)
-        if agent_pgid is not None:
-            killed = kill_process_group(agent_pgid)
-            log.warning(
-                "force_eject_killed_process_group",
-                issue_id=issue_id,
+        try:
+            try:
+                agent_pgid = _normalize_agent_pid(entry.agent_pgid)
+                if agent_pgid is not None:
+                    killed = kill_process_group(agent_pgid)
+                    log.warning(
+                        "force_eject_killed_process_group",
+                        issue_id=issue_id,
+                        identifier=entry.issue.identifier,
+                        agent_kind=self._entry_agent_kind(entry),
+                        pid=agent_pgid,
+                        killed=killed,
+                    )
+            finally:
+                self._finish_run_lease(issue_id, entry, "force_ejected_zombie")
+        finally:
+            pause_event = self._pause_events.pop(issue_id, None)
+            if pause_event is not None and not pause_event.is_set():
+                pause_event.set()
+            next_attempt = (entry.retry_attempt or 0) + 1
+            cap = cfg.agent.max_retry_backoff_ms
+            delay_ms = min(RETRY_BASE_MS * (2 ** (next_attempt - 1)), cap)
+            self._schedule_retry(
+                issue_id,
                 identifier=entry.issue.identifier,
-                agent_kind=self._entry_agent_kind(entry),
-                pid=agent_pgid,
-                killed=killed,
+                attempt=next_attempt,
+                delay_ms=delay_ms,
+                error="force_ejected_zombie",
             )
-        self._finish_run_lease(issue_id, entry, "force_ejected_zombie")
-        pause_event = self._pause_events.pop(issue_id, None)
-        if pause_event is not None and not pause_event.is_set():
-            pause_event.set()
-        next_attempt = (entry.retry_attempt or 0) + 1
-        cap = cfg.agent.max_retry_backoff_ms
-        delay_ms = min(RETRY_BASE_MS * (2 ** (next_attempt - 1)), cap)
-        self._schedule_retry(
-            issue_id,
-            identifier=entry.issue.identifier,
-            attempt=next_attempt,
-            delay_ms=delay_ms,
-            error="force_ejected_zombie",
-        )
-        debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
-        debug.last_workspace = entry.workspace_path
-        debug.last_error = "force_ejected_zombie"
+            debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
+            debug.last_workspace = entry.workspace_path
+            debug.last_error = "force_ejected_zombie"
 
     # ------------------------------------------------------------------
     # retry handling (§16.6)
@@ -5481,56 +5596,75 @@ class Orchestrator:
     # reconciliation (§16.3)
     # ------------------------------------------------------------------
 
+    def _reconcile_stall_state(
+        self,
+        issue_id: str,
+        entry: RunningEntry,
+        cfg: ServiceConfig,
+        *,
+        now: datetime,
+        stall_timeout_ms: int,
+    ) -> None:
+        """Apply one issue's cancel/eject/stall state in priority order."""
+        if entry.cancelled_at is not None:
+            since_cancel = (now - entry.cancelled_at).total_seconds()
+            if since_cancel > STALL_FORCE_EJECT_GRACE_S:
+                log.error(
+                    "stalled_worker_force_ejected",
+                    issue_id=issue_id,
+                    identifier=entry.issue.identifier,
+                    elapsed_since_cancel_s=round(since_cancel, 1),
+                )
+                self._force_eject_zombie(issue_id, entry, cfg)
+            return
+        if self.is_paused(issue_id):
+            return
+        seen = max(
+            timestamp
+            for timestamp in (
+                entry.last_progress_timestamp,
+                entry.resumed_at,
+                entry.started_at,
+            )
+            if timestamp is not None
+        )
+        elapsed_ms = (now - seen).total_seconds() * 1000
+        if elapsed_ms <= stall_timeout_ms:
+            return
+        log.warning(
+            "stalled_session",
+            issue_id=issue_id,
+            identifier=entry.issue.identifier,
+            elapsed_ms=int(elapsed_ms),
+        )
+        if entry.worker_task is not None:
+            entry.worker_task.cancel()
+        entry.cancelled_at = now
+
     async def _reconcile_running(self, cfg: ServiceConfig) -> None:
-        # Part A: stall detection + force-eject of zombie workers.
+        # Part A: isolate each heartbeat/stall/eject lifecycle.
         _, _, stall_timeout_ms = cfg.backend_timeouts()
+        now = datetime.now(timezone.utc)
         for issue_id, entry in list(self._running.items()):
-            self._heartbeat_run_lease(issue_id, entry)
-        if stall_timeout_ms > 0:
-            now = datetime.now(timezone.utc)
-            for issue_id, entry in list(self._running.items()):
-                # Paused workers are intentionally idle — operator chose to
-                # hold them. Treating that idleness as a stall would defeat
-                # the whole feature: a pause would trip cancel + force-eject
-                # within the stall window. Skip stall checks while paused;
-                # the moment the operator resumes, the next turn re-enters
-                # the normal progress-timestamp loop.
-                if self.is_paused(issue_id):
-                    continue
-                # Worker that already received a stall-cancel: if it didn't
-                # exit within the grace window, force-eject so its slot
-                # doesn't leak. The cancel is still in flight; if the worker
-                # eventually wakes, `_on_worker_exit` no-ops on a missing
-                # entry.
-                if entry.cancelled_at is not None:
-                    since_cancel = (now - entry.cancelled_at).total_seconds()
-                    if since_cancel > STALL_FORCE_EJECT_GRACE_S:
-                        log.error(
-                            "stalled_worker_force_ejected",
-                            issue_id=issue_id,
-                            identifier=entry.issue.identifier,
-                            elapsed_since_cancel_s=round(since_cancel, 1),
-                        )
-                        self._force_eject_zombie(issue_id, entry, cfg)
-                    continue
-                # Use last_progress_timestamp (real model/lifecycle activity)
-                # rather than last_codex_timestamp (any byte from the backend),
-                # so claude API tool_result echoes / stream keepalive don't
-                # keep resetting the stall clock. Until real progress exists,
-                # measure from started_at; backend keepalives are UI activity,
-                # not proof that the turn is advancing.
-                seen = entry.last_progress_timestamp or entry.started_at
-                elapsed_ms = (now - seen).total_seconds() * 1000
-                if elapsed_ms > stall_timeout_ms:
-                    log.warning(
-                        "stalled_session",
-                        issue_id=issue_id,
-                        identifier=entry.issue.identifier,
-                        elapsed_ms=int(elapsed_ms),
+            try:
+                self._heartbeat_run_lease(issue_id, entry)
+                if stall_timeout_ms > 0:
+                    self._reconcile_stall_state(
+                        issue_id,
+                        entry,
+                        cfg,
+                        now=now,
+                        stall_timeout_ms=stall_timeout_ms,
                     )
-                    if entry.worker_task is not None:
-                        entry.worker_task.cancel()
-                    entry.cancelled_at = now
+            except Exception as exc:
+                log.warning(
+                    "reconcile_issue_failed",
+                    phase="stall",
+                    issue_id=issue_id,
+                    identifier=entry.issue.identifier,
+                    error=str(exc),
+                )
+                self._record_tracker_error(issue_id, exc)
         # Part B: tracker state refresh.
         running_ids = list(self._running.keys())
         if not running_ids:
@@ -5542,6 +5676,21 @@ class Orchestrator:
         except Exception as exc:
             log.warning("reconciliation_state_refresh_failed", error=str(exc))
             return
+        refreshed_ids = {issue.id for issue in refreshed}
+        for missing_id in set(running_ids) - refreshed_ids:
+            entry = self._running.get(missing_id)
+            if entry is None:
+                continue
+            detail = (
+                "tracker state refresh omitted running issue "
+                f"{entry.issue.identifier}"
+            )
+            log.warning(
+                "reconciliation_running_issue_missing",
+                issue_id=missing_id,
+                identifier=entry.issue.identifier,
+            )
+            self._record_tracker_error(missing_id, detail)
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         active = {s.lower() for s in cfg.tracker.active_states}
         # Grace period: a worker that just emitted an event is almost
@@ -5555,6 +5704,7 @@ class Orchestrator:
         RECONCILE_RECENT_EVENT_GRACE_S = 60.0
         now = datetime.now(timezone.utc)
         for issue in refreshed:
+            self._clear_tracker_error(issue.id)
             entry = self._running.get(issue.id)
             if entry is None:
                 continue

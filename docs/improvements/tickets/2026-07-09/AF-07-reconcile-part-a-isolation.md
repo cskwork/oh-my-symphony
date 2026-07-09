@@ -44,3 +44,9 @@ the exception aborts stall checks for all remaining issues that tick.
 
 Exit identity checks (AF-01); killing non-codex processes (AF-02);
 resume stamping (AF-03).
+
+## Resolution — 2026-07-10
+
+Resolved by prioritizing cancelled-worker escalation before pause, isolating
+Part A per running issue, and making force-eject lease/retry cleanup
+exception-safe. Existing two-stage timing remains covered.

@@ -53,3 +53,11 @@ that only `find_path`'s canonical-first pick keeps from being mutated.
 
 Temp-file scan exclusion (AF-06); CAS retry-count tuning; jira/linear parity
 (follow-up if the same seams exist there).
+
+## Resolution — 2026-07-10
+
+Parse failures and duplicate ids now emit structured warnings; scans collapse
+duplicates deterministically, create rejects non-canonical duplicates, and
+delete re-resolves under the existing per-ticket mutation lock. The running
+refresh seam records a visible tracker error for an omitted id and clears it
+when the id returns. Evidence: focused tracker, reconcile, and web API tests.

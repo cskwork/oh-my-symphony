@@ -189,6 +189,8 @@ hooks:
 agent:
   kind: codex          # codex | claude | gemini | agy | kiro | opencode | pi
   max_concurrent_agents: 1
+  # This is the per-attempt execution cap. In prompt templates,
+  # {{ turn_number }}/{{ max_turns }} reports the ticket lifetime position/cap.
   max_turns: 100
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.

@@ -33,14 +33,21 @@ from .constants import (
 log = get_logger()
 
 
-def _is_rewind_transition(prev_state: str, current_state: str) -> bool:
-    """True when a phase transition is moving backwards in the pipeline.
-
-    Verify and Learn are the only 4-stage pipeline rewinds. Contract
-    failures still force a rewind at the caller even when the state pair
-    itself is not in this static map.
-    """
-    return (prev_state, current_state) in _REWIND_TRANSITIONS
+def _is_rewind_transition(
+    prev_state: str,
+    current_state: str,
+    active_states: tuple[str, ...] | None = None,
+) -> bool:
+    """True when a transition moves backwards in configured active order."""
+    previous = normalize_state(prev_state)
+    current = normalize_state(current_state)
+    if active_states is None:
+        return (previous, current) in _REWIND_TRANSITIONS
+    order = [normalize_state(state) for state in active_states]
+    try:
+        return order.index(previous) > order.index(current)
+    except ValueError:
+        return False
 
 
 def _branch_hook_env(cfg: ServiceConfig) -> dict[str, str]:

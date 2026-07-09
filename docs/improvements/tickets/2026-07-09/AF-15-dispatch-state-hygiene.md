@@ -32,3 +32,9 @@ collections.
 
 `_persisted_retry_attempts` semantics (persisted by design — verify before
 touching); any dispatch-behavior change.
+
+## Resolution — 2026-07-10
+
+Resolved by removing reader-less `_completed` storage and clearing
+`_issue_debug` during stop. Persisted retry accounting and dispatch behavior
+are unchanged.

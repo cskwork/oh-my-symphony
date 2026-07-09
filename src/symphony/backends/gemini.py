@@ -62,6 +62,7 @@ class GeminiBackend(PerTurnCliBackend):
             last_message = stdout_text
             stats = {}
         payload = {
+            "message": last_message,
             "result": last_message,
             "response": last_message,
             "session_id": self._session_id,

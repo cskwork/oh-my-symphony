@@ -15,12 +15,14 @@ from pathlib import Path
 
 import pytest
 
+import symphony.orchestrator.core as core_module
 from symphony.continuous_improvement import (
     FileLease,
     ImprovementRunResult,
     Lease,
     lease_path_for,
 )
+from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator
 from symphony.workflow import (
     AgentConfig,
@@ -379,6 +381,78 @@ async def test_require_idle_board_postpones_when_retry_pending() -> None:
 
 
 @pytest.mark.asyncio
+async def test_require_idle_board_counts_terminal_persist_pending() -> None:
+    """AF-11 — exit-time ticket persistence still makes the board busy."""
+    runner = _FakeRunner()
+    orch = _orch(improvement_runner=runner, improvement_lease=_FakeLease())
+    cfg = _make_config(ci=_enabled_ci(require_idle_board=True))
+
+    orch._maybe_schedule_continuous_improvement(cfg)
+    orch._next_improvement_due_monotonic = time.monotonic() - 1
+    orch._terminal_persist_pending.add("X-3")
+    orch._maybe_schedule_continuous_improvement(cfg)
+
+    assert orch._improvement_task is None
+    assert orch.continuous_improvement_status()["skipped_reason"] == "board_busy"
+    assert runner.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_require_idle_board_blocks_dispatch_while_ci_active() -> None:
+    """AF-11 — a long CI run and normal worker must never overlap."""
+    orch = _orch()
+    cfg = _make_config(ci=_enabled_ci(require_idle_board=True))
+    issue = Issue(
+        id="X-4",
+        identifier="X-4",
+        title="Dispatch candidate",
+        description="",
+        priority=None,
+        state="Todo",
+    )
+    release = asyncio.Event()
+
+    async def _hold() -> None:
+        await release.wait()
+
+    task = asyncio.create_task(_hold())
+    orch._improvement_task = task
+    try:
+        assert orch._eligible(issue, cfg, owning_retry=False) is False
+    finally:
+        release.set()
+        await task
+
+
+def test_max_turns_latch_warns_once_until_manual_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AF-11 — lifetime cap is observable once per manual-reset latch."""
+    orch = _orch()
+    cfg = _make_config(ci=_enabled_ci(max_turns=1))
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        core_module.log,
+        "warning",
+        lambda message, **_fields: warnings.append(message),
+    )
+    orch._improvement_turns_used = 1
+    orch._next_improvement_due_monotonic = time.monotonic() - 1
+
+    orch._maybe_schedule_continuous_improvement(cfg)
+    orch._maybe_schedule_continuous_improvement(cfg)
+
+    assert warnings.count("continuous_improvement_max_turns_reached") == 1
+
+    orch.reset_continuous_improvement_turns()
+    orch._improvement_turns_used = 1
+    orch._next_improvement_due_monotonic = time.monotonic() - 1
+    orch._maybe_schedule_continuous_improvement(cfg)
+
+    assert warnings.count("continuous_improvement_max_turns_reached") == 2
+
+
+@pytest.mark.asyncio
 async def test_turn_budget_exhaustion_and_reset() -> None:
     runner = _FakeRunner()
     orch = _orch(improvement_runner=runner, improvement_lease=_FakeLease())
@@ -472,21 +546,31 @@ async def test_lease_held_postpones_without_consuming_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lease_held_retries_next_tick_without_full_interval() -> None:
+async def test_lease_held_retries_after_full_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runner = _FakeRunner()
     lease = _FlippingLease()
     orch = _orch(improvement_runner=runner, improvement_lease=lease)
     cfg = _make_config(ci=_enabled_ci())
+    clock = [100.0]
+    monkeypatch.setattr(core_module.time, "monotonic", lambda: clock[0])
 
     orch._maybe_schedule_continuous_improvement(cfg)
-    orch._next_improvement_due_monotonic = time.monotonic() - 1
+    clock[0] = 161.0
     orch._maybe_schedule_continuous_improvement(cfg)
     await _drain_improvement(orch)
 
     assert runner.calls == 0
     assert orch._improvement_turns_used == 0
     assert orch.continuous_improvement_status()["skipped_reason"] == "lease_held"
+    assert orch._next_improvement_due_monotonic == 221.0
 
+    clock[0] = 220.0
+    orch._maybe_schedule_continuous_improvement(cfg)
+    assert lease.calls == 1
+
+    clock[0] = 221.0
     orch._maybe_schedule_continuous_improvement(cfg)
     await _drain_improvement(orch)
 

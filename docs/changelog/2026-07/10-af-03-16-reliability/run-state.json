@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "mode": "LEGACY",
+  "intent_gate": {
+    "intent": "Resolve every AF-03 through AF-16 reliability ticket with test-first, ticket-traceable changes.",
+    "confidence": "high",
+    "mode": "LEGACY with DEBUG protocol per defect",
+    "capability_refs": ["supergoal", "test-driven-development", "codebase-memory"],
+    "uncertainty": "AF-02 is isolated in another dirty worktree; AF-10 composes through the existing backend_agent_pid lease field."
+  },
+  "branches": {
+    "source_base_branch": "dev",
+    "target_integration_branch": "dev",
+    "run_branch": "codex/supergoal-af-03-16",
+    "worktree_path": "/private/tmp/symphony-supergoal-af-03-16",
+    "refs_verified": true
+  },
+  "plan_approval": "auto",
+  "completion_promise": {
+    "promised_outcome": "Every AF-03 through AF-16 criterion is implemented or research-closed and exactly verified.",
+    "required_proof": ["ticket-focused red-green tests", "full pytest", "ruff", "pyright", "Codex generated schema", "adversarial diff review"],
+    "stop_condition": "All GOAL criteria checked and commit gate passes, or a concrete requirement-level blocker is reported.",
+    "max_iterations": 8,
+    "status": "open"
+  },
+  "phase": "Review",
+  "iteration": 2,
+  "unresolved_gates": [],
+  "regression_ledger": [
+    {
+      "criterion": "clean baseline",
+      "command": "pytest -q; ruff check src tests; pyright src",
+      "result": "1286 passed, 2 skipped; lint clean; 0 type errors"
+    }
+  ],
+  "blockers": [],
+  "last_proof_command": ".venv/bin/pytest -q <owned nine-module regression set>",
+  "next_action": "Run mandatory fresh full-spec improver, edge-case improver, adversarial reviewer, and exact verifier roles.",
+  "forced_reflection": {
+    "required_when_iteration_cap_hit": true,
+    "what_keeps_failing": "",
+    "likely_root_cause": "",
+    "unproven_requirement": "",
+    "regressed_previously_green": "",
+    "smallest_next_action": ""
+  },
+  "updated_at": "2026-07-09T20:59:57Z"
+}

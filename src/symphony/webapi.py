@@ -584,6 +584,16 @@ def _register_issue_routes(
 
         if not fields:
             return _json_error(400, "empty_patch", "no editable fields in body")
+        if (
+            new_state is not None
+            and new_state.lower() != current.state.lower()
+            and orchestrator.find_running_issue_id(identifier) is not None
+        ):
+            return _json_error(
+                409,
+                "state_in_use",
+                f"{identifier} has a running worker; pause or wait before changing state",
+            )
         await asyncio.to_thread(tracker.update_fields, identifier, **fields)
         if new_state is not None and new_state.lower() != current.state.lower():
             await asyncio.to_thread(

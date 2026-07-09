@@ -35,3 +35,11 @@ tree (reusing `stop()`'s teardown) after failing pending futures, so later
 
 Malformed-limit tuning; app-server restart/reconnect logic (worker retry
 already covers recovery at the orchestrator level).
+
+## Resolution — 2026-07-10
+
+Resolved by closing the persistent backend at the malformed-line limit,
+failing pending work, logging `codex_stream_corrupt`, and reaping the process
+tree from the reader without self-awaiting. Focused backend tests cover fast
+later-turn failure and valid-line streak reset. Process teardown remains
+idempotently retryable by a later `stop()` when the reader's first reap fails.

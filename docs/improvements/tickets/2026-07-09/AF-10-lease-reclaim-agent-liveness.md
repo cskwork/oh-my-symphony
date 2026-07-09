@@ -30,3 +30,11 @@ survivor, logging `reclaim_killed_orphan_agent`.
 ## Non-goals
 
 Force-eject kill coverage (AF-02); worktree-per-attempt isolation redesign.
+
+## Resolution — 2026-07-10
+
+Resolved with a backward-compatible two-phase recovery state: dead-owner rows
+first become lease-blocking `reclaiming`, the recorded process group is reaped
+outside SQLite, and only then is the row finalized as `orphaned`. Interrupted
+or failed cleanup stays fenced and is retried on the next startup. Legacy
+null-pid rows retain their previous effective reclaim behavior.

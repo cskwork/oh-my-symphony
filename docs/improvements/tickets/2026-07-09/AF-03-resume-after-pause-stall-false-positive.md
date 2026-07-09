@@ -38,3 +38,9 @@ semantically pure (only real progress events advance it).
 
 Pause interaction with already-cancelled zombies (AF-07); changing the
 stall-timeout default.
+
+## Resolution — 2026-07-10
+
+Resolved with a separate resume timestamp used as the stall-clock floor.
+Focused resume, paused-worker, and genuine-stall regressions are green; the
+timeout default is unchanged.

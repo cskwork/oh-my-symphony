@@ -369,6 +369,43 @@ async def test_patch_moves_state_and_updates_fields(client: TestClient) -> None:
     assert detail["labels"] == ["a", "b"]
 
 
+async def test_patch_rejects_running_state_change_without_mutating_file(
+    client: TestClient, board_dir: Path
+) -> None:
+    stub = client.stub  # type: ignore[attr-defined]
+    stub.running_identifiers["SEED-1"] = "iss-1"
+    ticket_path = board_dir / "kanban" / "SEED-1.md"
+    before = ticket_path.read_bytes()
+
+    resp = await client.patch(
+        "/api/v1/issues/SEED-1",
+        json={"state": "Done", "title": "must not be written"},
+    )
+
+    assert resp.status == 409
+    payload = await resp.json()
+    assert payload["error"]["code"] == "state_in_use"
+    assert "pause or wait" in payload["error"]["message"]
+    assert ticket_path.read_bytes() == before
+
+
+async def test_patch_allows_running_non_state_and_same_state_edits(
+    client: TestClient,
+) -> None:
+    stub = client.stub  # type: ignore[attr-defined]
+    stub.running_identifiers["SEED-1"] = "iss-1"
+
+    title_resp = await client.patch(
+        "/api/v1/issues/SEED-1", json={"title": "running edit"}
+    )
+    same_state_resp = await client.patch(
+        "/api/v1/issues/SEED-1", json={"state": "todo"}
+    )
+
+    assert title_resp.status == 200
+    assert same_state_resp.status == 200
+
+
 async def test_patch_unknown_issue_404_and_empty_400(client: TestClient) -> None:
     assert (
         await client.patch("/api/v1/issues/GHOST-1", json={"title": "x"})

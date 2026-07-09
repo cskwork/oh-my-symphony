@@ -20,6 +20,7 @@ import pytest
 
 import symphony._shell as shell_module
 import symphony.backends.claude_code as claude_module
+import symphony.backends.codex as codex_module
 import symphony.backends.opencode as opencode_module
 import symphony.backends.pi as pi_module
 import symphony.backends.per_turn as per_turn_module
@@ -28,6 +29,7 @@ from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
+    MALFORMED_LINE_LIMIT,
     BackendInit,
     BaseAgentBackend,
     build_backend,
@@ -53,7 +55,7 @@ from symphony.backends.pi import (
     _extract_failure_reason,
     _extract_text as _pi_extract_text,
 )
-from symphony.errors import ConfigValidationError, TurnFailed
+from symphony.errors import ConfigValidationError, ResponseError, TurnFailed
 from symphony.workflow import (
     AgentConfig,
     AgyConfig,
@@ -501,6 +503,19 @@ def test_claude_extract_text_picks_last_text_block() -> None:
             {"type": "text", "text": "final answer"},
         ]
     }
+    assert _extract_text(msg) == "final answer"
+
+
+def test_claude_extract_text_ignores_trailing_whitespace_text_block() -> None:
+    """AF-05 — formatting-only blocks cannot erase productive content."""
+    msg = {
+        "content": [
+            {"type": "text", "text": "final answer"},
+            {"type": "tool_use", "name": "Edit"},
+            {"type": "text", "text": " \n\t"},
+        ]
+    }
+
     assert _extract_text(msg) == "final answer"
 
 
@@ -2178,6 +2193,129 @@ async def test_codex_completion_turn_failed_emits_failure_event(
     assert events[-1]["payload"]["reason"] == (
         "turn_failed: codex app-server closed stdout (rc=1)"
     )
+
+
+@pytest.mark.asyncio
+async def test_codex_corrupt_stream_closes_reaps_and_later_turn_fails_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict] = []
+
+    async def capture(event: dict) -> None:
+        events.append(event)
+
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=capture)
+    )
+    proc = _FakeSubprocess(
+        stdout_lines=[b"not-json\n"] * MALFORMED_LINE_LIMIT,
+        returncode=None,  # type: ignore[arg-type]
+    )
+    backend._process = proc  # type: ignore[assignment]
+    backend._thread_id = "thread-1"
+    terminated: list[_FakeSubprocess] = []
+    logged: list[tuple[str, dict]] = []
+
+    async def fake_terminate_process_tree(process):  # noqa: ANN001
+        terminated.append(process)
+        process.returncode = -15
+        return -15
+
+    monkeypatch.setattr(
+        codex_module, "terminate_process_tree", fake_terminate_process_tree
+    )
+    monkeypatch.setattr(
+        codex_module.log,
+        "error",
+        lambda event, **fields: logged.append((event, fields)),
+    )
+
+    await backend._stdout_reader()
+
+    assert backend._closed is True
+    assert terminated == [proc]
+    assert logged[-1][0] == "codex_stream_corrupt"
+    assert logged[-1][1]["malformed_line_limit"] == MALFORMED_LINE_LIMIT
+    with pytest.raises(ResponseError, match="client is closed"):
+        await asyncio.wait_for(
+            backend.run_turn(prompt="later", is_continuation=True), timeout=0.05
+        )
+    assert EVENT_TURN_COMPLETED not in [event["event"] for event in events]
+
+
+@pytest.mark.asyncio
+async def test_codex_corrupt_stream_failed_reap_is_retried_by_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AF-09 — stream closure and process teardown have separate lifecycles."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _FakeSubprocess(
+        stdout_lines=[b"not-json\n"] * MALFORMED_LINE_LIMIT,
+        returncode=None,  # type: ignore[arg-type]
+    )
+    backend._process = proc  # type: ignore[assignment]
+    attempts: list[_FakeSubprocess] = []
+
+    async def flaky_terminate_process_tree(process):  # noqa: ANN001
+        attempts.append(process)
+        if len(attempts) == 1:
+            raise RuntimeError("first reap failed")
+        process.returncode = -15
+        return -15
+
+    monkeypatch.setattr(
+        codex_module, "terminate_process_tree", flaky_terminate_process_tree
+    )
+
+    with pytest.raises(RuntimeError, match="first reap failed"):
+        await backend._stdout_reader()
+    assert backend._closed is True
+    assert proc.returncode is None
+
+    await backend.stop()
+
+    assert attempts == [proc, proc]
+    assert proc.returncode == -15
+
+
+@pytest.mark.asyncio
+async def test_codex_valid_json_resets_malformed_line_streak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    malformed_run = [b"not-json\n"] * (MALFORMED_LINE_LIMIT - 1)
+    proc = _FakeSubprocess(
+        stdout_lines=[*malformed_run, b"{}\n", *malformed_run],
+        returncode=0,
+    )
+    backend._process = proc  # type: ignore[assignment]
+    terminated: list[_FakeSubprocess] = []
+
+    async def fake_terminate_process_tree(process):  # noqa: ANN001
+        terminated.append(process)
+        return process.returncode
+
+    monkeypatch.setattr(
+        codex_module, "terminate_process_tree", fake_terminate_process_tree
+    )
+
+    await backend._stdout_reader()
+
+    assert backend._closed is False
+    assert terminated == []
 
 
 # ---- Codex terminal-status raising -------------------------------------

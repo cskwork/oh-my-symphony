@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import textwrap
 import time
@@ -497,6 +498,200 @@ def test_fetch_states_by_ids(tmp_path):
     assert out[0].priority is None
 
 
+def test_legacy_temp_files_are_ignored_by_every_board_read(tmp_path):
+    root = tmp_path / "board"
+    _write(root, "LIVE-1.md", "---\nid: LIVE-1\ntitle: live\nstate: Todo\n---\n")
+    _write(
+        root,
+        ".tmp-duplicate.md",
+        "---\nid: LIVE-1\ntitle: stale copy\nstate: Todo\n---\n",
+    )
+    _write(
+        root,
+        ".tmp-ghost.md",
+        "---\nid: GHOST-1\ntitle: ghost\nstate: Todo\n---\n",
+    )
+    fbt = FileBoardTracker(_tracker(root))
+
+    assert [issue.identifier for issue in fbt.fetch_candidate_issues()] == ["LIVE-1"]
+    assert [
+        (issue.identifier, issue.state)
+        for issue in fbt.fetch_issue_states_by_ids(["LIVE-1", "GHOST-1"])
+    ] == [("LIVE-1", "Todo")]
+    assert fbt.fetch_issue_full_by_id("GHOST-1") is None
+    assert fbt.find_path("GHOST-1") is None
+    assert fbt.next_identifier("LIVE") == "LIVE-2"
+
+
+def test_stale_tracker_temp_is_swept_on_startup_with_warning(tmp_path, monkeypatch):
+    root = tmp_path / "board"
+    stale = _write(
+        root,
+        ".tmp-symphony-ticket-abcdefgh.tmp",
+        "---\nid: STALE-1\ntitle: stale\nstate: Todo\n---\n",
+    )
+    stale_legacy = _write(
+        root,
+        ".tmp-legacy-ticket.md",
+        "---\nid: LEGACY-1\ntitle: legacy\nstate: Todo\n---\n",
+    )
+    fresh = _write(
+        root,
+        ".tmp-symphony-ticket-ijklmnop.tmp",
+        "---\nid: FRESH-1\ntitle: fresh\nstate: Todo\n---\n",
+    )
+    old = time.time() - 3600
+    os.utime(stale, (old, old))
+    os.utime(stale_legacy, (old, old))
+    warnings: list[tuple[str, dict[str, object]]] = []
+
+    class _Log:
+        def warning(self, message: str, **fields: object) -> None:
+            warnings.append((message, fields))
+
+    monkeypatch.setattr(file_tracker_module, "log", _Log(), raising=False)
+
+    FileBoardTracker(_tracker(root))
+
+    assert not stale.exists()
+    assert not stale_legacy.exists()
+    assert fresh.exists()
+    assert len(warnings) == 2
+    assert {entry[0] for entry in warnings} == {"stale_tracker_temp_swept"}
+    assert {entry[1]["path"] for entry in warnings} == {
+        str(stale),
+        str(stale_legacy),
+    }
+    assert all(float(entry[1]["age_seconds"]) >= 3600 for entry in warnings)
+
+
+def test_stale_temp_sweep_preserves_operator_owned_tmp_files(tmp_path):
+    """AF-06 — startup only owns exact tracker temp-file shapes."""
+    root = tmp_path / "board"
+    tracker_temp = _write(
+        root, ".tmp-symphony-ticket-def456yz.tmp", "tracker temp"
+    )
+    unowned_legacy_shape = _write(root, ".tmp-abc123xy.md", "ownership unknown")
+    operator_note = _write(root, ".tmp-operator-notes", "do not delete")
+    operator_note_with_suffix = _write(
+        root, ".tmp-operator-notes.txt", "do not delete txt"
+    )
+    operator_markdown = _write(root, ".tmp-operator.md", "do not delete either")
+    old = time.time() - 3600
+    for path in (
+        tracker_temp,
+        unowned_legacy_shape,
+        operator_note,
+        operator_note_with_suffix,
+        operator_markdown,
+    ):
+        os.utime(path, (old, old))
+
+    FileBoardTracker(_tracker(root))
+
+    assert not tracker_temp.exists()
+    assert unowned_legacy_shape.read_text(encoding="utf-8") == "ownership unknown"
+    assert operator_note.read_text(encoding="utf-8") == "do not delete"
+    assert operator_note_with_suffix.read_text(encoding="utf-8") == "do not delete txt"
+    assert operator_markdown.read_text(encoding="utf-8") == "do not delete either"
+
+
+def test_atomic_write_temp_does_not_match_board_glob(tmp_path, monkeypatch):
+    path = tmp_path / "board" / "SAFE-1.md"
+    original_replace = file_tracker_module.os.replace
+    temp_paths: list[Path] = []
+
+    def recording_replace(source: str, destination: Path) -> None:
+        temp_paths.append(Path(source))
+        original_replace(source, destination)
+
+    monkeypatch.setattr(file_tracker_module.os, "replace", recording_replace)
+
+    write_ticket_atomic(path, {"id": "SAFE-1", "title": "safe", "state": "Todo"}, "")
+
+    assert len(temp_paths) == 1
+    assert temp_paths[0].suffix != ".md"
+    assert temp_paths[0] not in path.parent.glob("*.md")
+
+
+def test_parse_failures_warn_in_scan_and_find_path(tmp_path, monkeypatch):
+    root = tmp_path / "board"
+    valid = _write(root, "GOOD-1.md", "---\nid: GOOD-1\ntitle: good\nstate: Todo\n---\n")
+    broken = _write(root, "BROKEN-1.md", "---\nid: BROKEN-1\nstate: Todo\n")
+    warnings: list[tuple[str, dict[str, object]]] = []
+
+    def record_warning(message: str, **fields: object) -> None:
+        warnings.append((message, fields))
+
+    monkeypatch.setattr(file_tracker_module.log, "warning", record_warning)
+    fbt = FileBoardTracker(_tracker(root))
+
+    assert [issue.identifier for issue in fbt.fetch_candidate_issues()] == ["GOOD-1"]
+    assert fbt.find_path("MISSING-1") is None
+
+    parse_warnings = [entry for entry in warnings if entry[0] == "ticket_parse_skipped"]
+    assert len(parse_warnings) == 2
+    assert {entry[1]["path"] for entry in parse_warnings} == {str(broken)}
+    assert all(entry[1]["error"] for entry in parse_warnings)
+    assert valid.exists()
+
+
+def test_duplicate_frontmatter_ids_collapse_deterministically_with_warning(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "board"
+    kept = _write(
+        root,
+        "a-copy.md",
+        "---\nid: DUP-1\ntitle: first\nstate: Todo\n---\n",
+    )
+    skipped = _write(
+        root,
+        "z-copy.md",
+        "---\nid: DUP-1\ntitle: second\nstate: Todo\n---\n",
+    )
+    warnings: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        file_tracker_module.log,
+        "warning",
+        lambda message, **fields: warnings.append((message, fields)),
+    )
+    fbt = FileBoardTracker(_tracker(root))
+
+    issues = fbt.fetch_candidate_issues()
+
+    assert [(issue.identifier, issue.title) for issue in issues] == [("DUP-1", "first")]
+    duplicate_warnings = [
+        entry for entry in warnings if entry[0] == "duplicate_ticket_id_skipped"
+    ]
+    assert duplicate_warnings == [
+        (
+            "duplicate_ticket_id_skipped",
+            {
+                "identifier": "DUP-1",
+                "kept_path": str(kept),
+                "skipped_path": str(skipped),
+            },
+        )
+    ]
+
+
+def test_create_rejects_identifier_found_under_noncanonical_filename(tmp_path):
+    root = tmp_path / "board"
+    existing = _write(
+        root,
+        "copied-ticket.md",
+        "---\nid: DUP-2\ntitle: copy\nstate: Todo\n---\n",
+    )
+    fbt = FileBoardTracker(_tracker(root))
+
+    with pytest.raises(SymphonyError, match="ticket already exists"):
+        fbt.create(identifier="DUP-2", title="new")
+
+    assert fbt.find_path("DUP-2") == existing
+    assert not (root / "DUP-2.md").exists()
+
+
 def test_create_and_transition_round_trip(tmp_path):
     root = tmp_path / "board"
     fbt = FileBoardTracker(_tracker(root))
@@ -893,6 +1088,61 @@ def test_append_note_preserves_concurrent_writes(tmp_path, monkeypatch):
     for index in range(8):
         assert f"## Note {index}" in body
         assert f"body {index}" in body
+
+
+@pytest.mark.parametrize("mutation", ["append", "update"])
+def test_delete_serializes_with_ticket_mutations(tmp_path, monkeypatch, mutation):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="X-DELETE-RACE", title="original", state="Review")
+    issue = issue_from_file(path)
+    assert issue is not None
+
+    original_write = file_tracker_module.write_ticket_atomic
+    write_entered = threading.Event()
+    release_write = threading.Event()
+    delete_done = threading.Event()
+    errors: list[BaseException] = []
+
+    def blocking_write(candidate: Path, front: dict[str, object], body: str) -> None:
+        if candidate == path:
+            write_entered.set()
+            if not release_write.wait(timeout=5):
+                raise TimeoutError("test did not release ticket write")
+        original_write(candidate, front, body)
+
+    def mutate_ticket() -> None:
+        try:
+            if mutation == "append":
+                fbt.append_note(issue, "Concurrent", "append body")
+            else:
+                fbt.update_fields(issue.identifier, title="updated")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def delete_ticket() -> None:
+        try:
+            fbt.delete(issue.identifier)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            delete_done.set()
+
+    monkeypatch.setattr(file_tracker_module, "write_ticket_atomic", blocking_write)
+    mutation_thread = threading.Thread(target=mutate_ticket)
+    mutation_thread.start()
+    assert write_entered.wait(timeout=5)
+
+    delete_thread = threading.Thread(target=delete_ticket)
+    delete_thread.start()
+    delete_finished_while_mutating = delete_done.wait(timeout=0.5)
+    release_write.set()
+    mutation_thread.join(timeout=5)
+    delete_thread.join(timeout=5)
+
+    assert not delete_finished_while_mutating
+    assert errors == []
+    assert not path.exists()
 
 
 def test_append_note_reapplies_when_updated_at_moves_before_write(

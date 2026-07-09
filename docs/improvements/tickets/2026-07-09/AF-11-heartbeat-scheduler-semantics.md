@@ -50,3 +50,9 @@ a CI-active flag that dispatch honors while `require_idle_board` is set.
 
 The ImprovementScheduler extraction itself (07-07 P1-1); changing default
 interval/timeout values; the improvement runner's internal logic.
+
+## Resolution — 2026-07-10
+
+Resolved using the repository's lifetime-until-manual-reset cap semantics.
+The cap warns once per latch, lease contention postpones a full interval, and
+idle-board scheduling includes terminal persistence and CI/worker exclusion.

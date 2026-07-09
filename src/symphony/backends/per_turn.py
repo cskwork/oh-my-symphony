@@ -194,6 +194,17 @@ class PerTurnCliBackend(BaseAgentBackend):
             if rc != 0:
                 await self._fail_turn(rc)
             stdout_text = (stdout or b"").decode("utf-8", errors="replace").strip()
+            if not stdout_text:
+                reason = f"{self._agent_name} exited successfully with empty stdout"
+                await self._emit(
+                    EVENT_TURN_FAILED,
+                    {
+                        "reason": reason,
+                        "exit_code": rc,
+                        "stderr_tail": list(self._stderr_tail),
+                    },
+                )
+                raise TurnFailed(reason)
             return await self._complete_turn(stdout_text, rc)
         except asyncio.CancelledError:
             await self._reap(proc)

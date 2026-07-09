@@ -85,6 +85,13 @@ def test_begin_run_and_abort_run_round_trip() -> None:
     assert state.abort_run("A") is None
 
 
+def test_dispatch_state_does_not_retain_completed_ids() -> None:
+    """AF-15 — completed ids have no consumer and must not accumulate."""
+    state = DispatchState()
+
+    assert not hasattr(state, "completed")
+
+
 @pytest.mark.asyncio
 async def test_entry_owned_by_requires_task_identity() -> None:
     state = DispatchState()
@@ -178,3 +185,83 @@ async def test_drain_background_tasks_cancels_stragglers(
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_stop_bounds_cancellation_resistant_worker_drain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AF-08 — a worker that ignores cancellation cannot hold stop open."""
+    from pathlib import Path as _P
+
+    import symphony.orchestrator.core as core_module
+    from symphony.orchestrator import Orchestrator
+    from symphony.orchestrator.run_registry import RunRegistry
+    from symphony.workflow.state import WorkflowState
+
+    orch = Orchestrator(WorkflowState(_P("/tmp/no.md")))
+    registry_path = tmp_path / "state.db"
+    registry = RunRegistry(registry_path)
+    issue = _issue("A")
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws",
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+    )
+    assert run_id
+    orch._run_registry = registry
+    release = asyncio.Event()
+    pause_event = asyncio.Event()
+    pause_seen_before_cancel: list[bool] = []
+    orch._pause_events["A"] = pause_event
+
+    async def _resist_cancel() -> None:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pause_seen_before_cancel.append(pause_event.is_set())
+                continue
+
+    worker = asyncio.create_task(_resist_cancel())
+    await asyncio.sleep(0)
+    entry = _entry("A", worker)
+    entry.run_id = run_id
+    orch._dispatch_state.begin_run("A", entry)
+    monkeypatch.setattr(core_module, "STALL_FORCE_EJECT_GRACE_S", 0.05)
+
+    stop_task = asyncio.create_task(orch.stop())
+    try:
+        done, _pending = await asyncio.wait({stop_task}, timeout=0.2)
+        assert stop_task in done, "stop exceeded the worker-drain bound"
+    finally:
+        release.set()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+
+    assert orch._running == {}
+    assert pause_seen_before_cancel == [True]
+    reopened = RunRegistry(registry_path)
+    try:
+        assert reopened.get_run(run_id).status == "shutdown_abandoned"
+        assert reopened.has_active_lease(issue.id) is False
+    finally:
+        reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_clears_issue_debug_state() -> None:
+    """AF-15 — in-process stop/restart must not retain ticket diagnostics."""
+    from pathlib import Path as _P
+
+    from symphony.orchestrator import Orchestrator, _IssueDebug
+    from symphony.workflow.state import WorkflowState
+
+    orch = Orchestrator(WorkflowState(_P("/tmp/no.md")))
+    orch._issue_debug["A"] = _IssueDebug(last_error="old run")
+
+    await orch.stop()
+
+    assert orch._issue_debug == {}

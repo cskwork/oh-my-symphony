@@ -41,3 +41,12 @@ sweep that deletes stale board-root `.tmp-*.md` older than a safety margin.
 ## Non-goals
 
 Duplicate frontmatter ids across real files (AF-12); CAS write-path changes.
+
+## Resolution — 2026-07-10
+
+Resolved by giving new atomic writes the owned
+`.tmp-symphony-ticket-<random>.tmp` marker and filtering legacy `.tmp-*.md`
+files from every board read. Startup only sweeps safety-aged marker-owned
+temps or legacy `.tmp-*.md` files that parse as required Symphony ticket
+artifacts; unrelated operator `.tmp-*` files are preserved. Focused tracker
+tests cover scans, writes, selective cleanup, and identifier allocation.

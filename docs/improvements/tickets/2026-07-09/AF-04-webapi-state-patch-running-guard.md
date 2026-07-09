@@ -45,3 +45,10 @@ allowed.
 
 Board-file locking semantics (AF-12); TUI-side guards; changing the
 reconcile terminal branch itself.
+
+## Resolution — 2026-07-10
+
+Resolved by rejecting only a running ticket's actual state change before any
+field is written. Running metadata and same-state edits remain allowed, and
+idle state changes retain their existing behavior. Evidence:
+`tests/test_webapi.py` focused PATCH regressions.
