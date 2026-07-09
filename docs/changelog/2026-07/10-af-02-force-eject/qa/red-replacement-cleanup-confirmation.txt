@@ -1,0 +1,19 @@
+Command:
+env PYTHONPATH=src /Users/danny/Documents/PARA/Resource/symphony-multi-agent/.venv/bin/python -m pytest -q tests/test_orchestrator_phase_transition.py::test_replacement_stop_failure_stays_unconfirmed_after_old_final_stop
+
+Result: RED (exit 1)
+
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_replacement_stop_failure_stays_unconfirmed_after_old_final_stop _____
+
+>       assert o._running[issue.id].agent_pgid == 22222
+E       AssertionError: assert None == 22222
+
+Captured lifecycle log:
+worker_turn_started issue_id=iss-1 identifier=MT-1 turn=1
+worker_turn_completed issue_id=iss-1 identifier=MT-1 turn=1
+phase_transition_new_stop_failed issue_id=iss-1 identifier=MT-1 error="replacement stop failed after closing"
+worker_finally_entered issue_id=iss-1 outcome=phase_transition_error error="replacement initialization failed"
+
+Summary: 1 failed in 0.17s

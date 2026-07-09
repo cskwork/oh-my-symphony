@@ -17,8 +17,10 @@ from typing import Any
 import pytest
 
 import symphony.orchestrator.core as core_mod
+from symphony.errors import TurnFailed
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator, RunningEntry
+from symphony.orchestrator.run_registry import RunRegistry
 from symphony.workflow import (
     AgentConfig,
     ClaudeConfig,
@@ -47,6 +49,12 @@ class _FakeBackend:
 
     init_id: int
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    process_pid: int | None = None
+
+    @property
+    def pid(self) -> int | None:
+        """Expose the fake backend's current persistent or per-turn process."""
+        return self.process_pid
 
     async def start(self) -> None:
         self.calls.append(("start", {}))
@@ -572,6 +580,147 @@ def test_phase_transition_stops_new_backend_when_rebuild_start_session_fails(
     ]
 
 
+def test_phase_transition_stop_failure_retains_old_backend_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=2)
+    issue = _make_issue(state="In Progress")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    o._running[issue.id].agent_pgid = 11111
+    old_client = _FakeBackend(init_id=0, process_pid=11111)
+    replacements = _install_fake_backend(monkeypatch)
+
+    async def _stop_failed() -> None:
+        old_client.calls.append(("stop", {}))
+        raise RuntimeError("old backend stop failed")
+
+    monkeypatch.setattr(old_client, "stop", _stop_failed)
+
+    async def _exercise() -> None:
+        with pytest.raises(RuntimeError, match="old backend stop failed"):
+            await o._rebuild_backend_for_phase(
+                issue=issue,
+                running_issue_id=issue.id,
+                cfg=cfg,
+                workspace_path=tmp_path,
+                attempt=None,
+                doc_language="en",
+                old_client=old_client,
+                is_rewind=False,
+            )
+
+    asyncio.run(_exercise())
+
+    assert o._running[issue.id].agent_pgid == 11111
+    assert replacements == []
+
+
+def test_phase_stop_failure_stays_unconfirmed_after_idempotent_final_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=2)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    registry = RunRegistry(tmp_path / "state.db")
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+    )
+    assert run_id
+    o._run_registry = registry
+    o._running[issue.id].run_id = run_id
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+    stop_state = {"closed": False}
+
+    async def _start(self_inst: _FakeBackend) -> None:
+        self_inst.process_pid = 11111
+        self_inst.calls.append(("start", {}))
+
+    async def _stop_once_then_noop(self_inst: _FakeBackend) -> None:
+        self_inst.calls.append(("stop", {}))
+        if stop_state["closed"]:
+            return
+        stop_state["closed"] = True
+        raise RuntimeError("old backend stop failed after closing")
+
+    async def _keep_entry(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    monkeypatch.setattr(_FakeBackend, "start", _start)
+    monkeypatch.setattr(_FakeBackend, "stop", _stop_once_then_noop)
+    monkeypatch.setattr(o, "_on_worker_exit", _keep_entry)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert len(instances) == 1
+    assert [name for name, _ in instances[0].calls].count("stop") == 2
+    assert o._running[issue.id].agent_pgid == 11111
+    assert registry.get_run(run_id).backend_agent_pid == 11111
+
+
+def test_replacement_stop_failure_stays_unconfirmed_after_old_final_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=2)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    registry = RunRegistry(tmp_path / "state.db")
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+    )
+    assert run_id
+    o._run_registry = registry
+    o._running[issue.id].run_id = run_id
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+    replacement_closed = {"value": False}
+
+    async def _start(self_inst: _FakeBackend) -> None:
+        self_inst.process_pid = 11111 if self_inst.init_id == 0 else 22222
+        self_inst.calls.append(("start", {}))
+
+    async def _initialize(self_inst: _FakeBackend) -> None:
+        self_inst.calls.append(("initialize", {}))
+        if self_inst.init_id == 1:
+            raise RuntimeError("replacement initialization failed")
+
+    async def _stop(self_inst: _FakeBackend) -> None:
+        self_inst.calls.append(("stop", {}))
+        if self_inst.init_id == 0:
+            self_inst.process_pid = None
+            return
+        replacement_closed["value"] = True
+        raise RuntimeError("replacement stop failed after closing")
+
+    async def _keep_entry(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    monkeypatch.setattr(_FakeBackend, "start", _start)
+    monkeypatch.setattr(_FakeBackend, "initialize", _initialize)
+    monkeypatch.setattr(_FakeBackend, "stop", _stop)
+    monkeypatch.setattr(o, "_on_worker_exit", _keep_entry)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert len(instances) == 2
+    assert [name for name, _ in instances[0].calls].count("stop") == 2
+    assert replacement_closed["value"] is True
+    assert not [call for call in instances[1].calls if call[0] == "run_turn"]
+    assert o._running[issue.id].agent_pgid == 22222
+    assert registry.get_run(run_id).backend_agent_pid == 22222
+
+
 def test_same_phase_does_not_restart_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -596,6 +745,272 @@ def test_same_phase_does_not_restart_backend(
     # Only the single `finally`-block stop is observed.
     stops = [c for c in inst.calls if c[0] == "stop"]
     assert len(stops) == 1
+
+
+def test_next_turn_clears_stale_per_turn_agent_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=3)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    observed_pids: list[int | None] = []
+
+    async def _capture_pid(self_inst, *, prompt, is_continuation):  # noqa: ANN001
+        self_inst.calls.append(
+            ("run_turn", {"prompt": prompt, "is_continuation": is_continuation})
+        )
+        running = o._running[issue.id]
+        observed_pids.append(running.agent_pgid)
+        if len(observed_pids) == 1:
+            running.agent_pgid = 11111
+
+    monkeypatch.setattr(_FakeBackend, "run_turn", _capture_pid)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["Todo", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert observed_pids == [None, None]
+
+
+def test_completed_per_turn_pid_is_cleared_before_after_run_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=1)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    after_run_entered = asyncio.Event()
+    release_after_run = asyncio.Event()
+
+    async def _record_completed_pid(
+        self_inst, *, prompt, is_continuation  # noqa: ANN001
+    ) -> None:
+        self_inst.calls.append(
+            ("run_turn", {"prompt": prompt, "is_continuation": is_continuation})
+        )
+        o._running[issue.id].agent_pgid = 11111
+
+    async def _block_after_run(path: Path) -> None:
+        del path
+        after_run_entered.set()
+        await release_after_run.wait()
+
+    monkeypatch.setattr(_FakeBackend, "run_turn", _record_completed_pid)
+    fake_ws = o._workspace_manager
+    assert isinstance(fake_ws, _FakeWorkspaceManager)
+    monkeypatch.setattr(fake_ws, "after_run_best_effort", _block_after_run)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["Done"])
+
+    async def _exercise() -> None:
+        worker = asyncio.create_task(
+            o._run_agent_attempt(issue, attempt=None, cfg=cfg)
+        )
+        await asyncio.wait_for(after_run_entered.wait(), timeout=1)
+        try:
+            assert o._running[issue.id].agent_pgid is None
+        finally:
+            release_after_run.set()
+        await worker
+
+    asyncio.run(_exercise())
+
+
+def test_completed_per_turn_pid_is_cleared_from_run_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=1)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    registry = RunRegistry(tmp_path / "state.db")
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="claude",
+    )
+    assert run_id
+    o._run_registry = registry
+    o._running[issue.id].run_id = run_id
+    after_run_entered = asyncio.Event()
+    release_after_run = asyncio.Event()
+
+    async def _publish_pid(
+        self_inst: _FakeBackend, *, prompt: str, is_continuation: bool
+    ) -> None:
+        self_inst.calls.append(
+            ("run_turn", {"prompt": prompt, "is_continuation": is_continuation})
+        )
+        await o._on_codex_event(issue.id, {"event": "turn_started", "agent_pid": 11111})
+
+    async def _block_after_run(path: Path) -> None:
+        del path
+        after_run_entered.set()
+        await release_after_run.wait()
+
+    async def _keep_entry(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    monkeypatch.setattr(_FakeBackend, "run_turn", _publish_pid)
+    monkeypatch.setattr(o, "_on_worker_exit", _keep_entry)
+    fake_ws = o._workspace_manager
+    assert isinstance(fake_ws, _FakeWorkspaceManager)
+    monkeypatch.setattr(fake_ws, "after_run_best_effort", _block_after_run)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["Done"])
+
+    async def _exercise() -> None:
+        worker = asyncio.create_task(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+        await asyncio.wait_for(after_run_entered.wait(), timeout=1)
+        try:
+            assert o._running[issue.id].agent_pgid is None
+            assert registry.get_run(run_id).backend_agent_pid is None
+        finally:
+            release_after_run.set()
+        await worker
+
+    asyncio.run(_exercise())
+
+
+def test_failed_per_turn_clears_pid_before_failed_final_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=1)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    registry = RunRegistry(tmp_path / "state.db")
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="claude",
+    )
+    assert run_id
+    o._run_registry = registry
+    o._running[issue.id].run_id = run_id
+
+    async def _publish_pid_then_fail(
+        self_inst: _FakeBackend, *, prompt: str, is_continuation: bool
+    ) -> None:
+        self_inst.calls.append(
+            ("run_turn", {"prompt": prompt, "is_continuation": is_continuation})
+        )
+        await o._on_codex_event(issue.id, {"event": "turn_started", "agent_pid": 22222})
+        raise TurnFailed("turn failed")
+
+    async def _stop_failed(self_inst: _FakeBackend) -> None:
+        self_inst.calls.append(("stop", {}))
+        raise RuntimeError("cleanup failed")
+
+    async def _keep_entry(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    monkeypatch.setattr(_FakeBackend, "run_turn", _publish_pid_then_fail)
+    monkeypatch.setattr(_FakeBackend, "stop", _stop_failed)
+    monkeypatch.setattr(o, "_on_worker_exit", _keep_entry)
+    _install_fake_backend(monkeypatch)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert o._running[issue.id].agent_pgid is None
+    assert registry.get_run(run_id).backend_agent_pid is None
+
+
+def test_start_failure_records_late_pid_when_cleanup_is_unconfirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=1)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    registry = RunRegistry(tmp_path / "state.db")
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+    )
+    assert run_id
+    o._run_registry = registry
+    o._running[issue.id].run_id = run_id
+
+    async def _publish_pid_then_fail(self_inst: _FakeBackend) -> None:
+        self_inst.process_pid = 33333
+        self_inst.calls.append(("start", {}))
+        raise RuntimeError("late start failure")
+
+    async def _stop_failed(self_inst: _FakeBackend) -> None:
+        self_inst.calls.append(("stop", {}))
+        raise RuntimeError("cleanup failed")
+
+    async def _keep_entry(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    monkeypatch.setattr(_FakeBackend, "start", _publish_pid_then_fail)
+    monkeypatch.setattr(_FakeBackend, "stop", _stop_failed)
+    monkeypatch.setattr(o, "_on_worker_exit", _keep_entry)
+    _install_fake_backend(monkeypatch)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert o._running[issue.id].agent_pgid == 33333
+    assert registry.get_run(run_id).backend_agent_pid == 33333
+
+
+def test_persistent_backend_pid_is_registered_before_each_initialize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=2)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    observed_initialize_pids: list[int | None] = []
+    explicit_heartbeat_pids: list[int] = []
+
+    async def _start(self_inst: _FakeBackend) -> None:
+        self_inst.process_pid = (11111, 22222)[self_inst.init_id]
+        self_inst.calls.append(("start", {}))
+
+    async def _initialize(self_inst: _FakeBackend) -> None:
+        self_inst.calls.append(("initialize", {}))
+        observed_initialize_pids.append(o._running[issue.id].agent_pgid)
+
+    def _heartbeat(
+        issue_id: str,
+        entry: RunningEntry,
+        *,
+        progress: datetime | None = None,
+        backend_agent_pid: int | None = None,
+    ) -> bool:
+        del issue_id, entry, progress
+        if backend_agent_pid is not None:
+            explicit_heartbeat_pids.append(backend_agent_pid)
+        return True
+
+    monkeypatch.setattr(_FakeBackend, "start", _start)
+    monkeypatch.setattr(_FakeBackend, "initialize", _initialize)
+    monkeypatch.setattr(o, "_heartbeat_run_lease", _heartbeat)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert observed_initialize_pids == [11111, 22222]
+    assert explicit_heartbeat_pids == [
+        11111,  # initial start finally
+        11111,  # first run_turn boundary
+        11111,  # first run_turn finally
+        22222,  # rebuilt start finally
+        22222,  # second run_turn boundary
+        22222,  # second run_turn finally
+    ]
 
 
 def test_worker_cleanup_uses_registered_running_issue_id(

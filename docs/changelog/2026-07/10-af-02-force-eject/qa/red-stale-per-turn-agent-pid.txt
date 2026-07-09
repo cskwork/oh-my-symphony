@@ -1,0 +1,10 @@
+Command:
+env PYTHONPATH=src python -m pytest -q tests/test_orchestrator_phase_transition.py -k next_turn_clears_stale_per_turn_agent_pid
+
+Result: FAIL (expected RED)
+
+tests/test_orchestrator_phase_transition.py::test_next_turn_clears_stale_per_turn_agent_pid
+E       assert [None, 11111] == [None, None]
+E       At index 1 diff: 11111 != None
+
+1 failed, 31 deselected in 0.19s

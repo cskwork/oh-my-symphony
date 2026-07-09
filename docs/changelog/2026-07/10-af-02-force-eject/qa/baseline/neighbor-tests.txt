@@ -1,0 +1,16 @@
+Before product-code changes, branch codex/supergoal-af-02 at bf4ba63.
+
+$ python -m pytest -q tests/test_run_registry.py tests/test_orchestrator_dispatch.py -k 'backend_agent_pid or force_eject'
+...                                                                      [100%]
+3 passed, 166 deselected in 0.63s
+exit: 0
+
+$ python -m pytest -q tests/test_backend_contract.py tests/test_orchestrator_dispatch.py -k 'agent_pid or full_lifecycle'
+.......                                                                  [100%]
+7 passed, 175 deselected in 0.45s
+exit: 0
+
+Baseline meaning: current Codex-named entry storage, existing force-eject/retry behavior,
+run-registry pid persistence, and shared backend lifecycle tests are green before AF-02.
+The ticket-specific non-Codex backend-neutral field and backend-kind log assertions do not
+exist yet; their RED proof is captured separately by the builder.

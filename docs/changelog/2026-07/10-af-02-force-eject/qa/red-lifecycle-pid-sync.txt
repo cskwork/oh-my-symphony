@@ -1,0 +1,142 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+________ test_completed_per_turn_pid_is_cleared_before_after_run_blocks ________
+
+tmp_path = PosixPath('/private/var/folders/lp/p1cqpv0549zdwkvkg6tzpp7h0000gn/T/pytest-of-danny/pytest-29/test_completed_per_turn_pid_is0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106f34b90>
+
+    def test_completed_per_turn_pid_is_cleared_before_after_run_blocks(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg = _make_config(max_turns=1)
+        issue = _make_issue(state="Todo")
+        o = _orch(tmp_path)
+        _seed_running_entry(o, issue, tmp_path)
+        after_run_entered = asyncio.Event()
+        release_after_run = asyncio.Event()
+
+        async def _record_completed_pid(
+            self_inst, *, prompt, is_continuation  # noqa: ANN001
+        ) -> None:
+            self_inst.calls.append(
+                ("run_turn", {"prompt": prompt, "is_continuation": is_continuation})
+            )
+            o._running[issue.id].agent_pgid = 11111
+
+        async def _block_after_run(path: Path) -> None:
+            del path
+            after_run_entered.set()
+            await release_after_run.wait()
+
+        monkeypatch.setattr(_FakeBackend, "run_turn", _record_completed_pid)
+        fake_ws = o._workspace_manager
+        assert isinstance(fake_ws, _FakeWorkspaceManager)
+        monkeypatch.setattr(fake_ws, "after_run_best_effort", _block_after_run)
+        _install_fake_backend(monkeypatch)
+        _install_state_sequence(monkeypatch, ["Done"])
+
+        async def _exercise() -> None:
+            worker = asyncio.create_task(
+                o._run_agent_attempt(issue, attempt=None, cfg=cfg)
+            )
+            await asyncio.wait_for(after_run_entered.wait(), timeout=1)
+            try:
+                assert o._running[issue.id].agent_pgid is None
+            finally:
+                release_after_run.set()
+            await worker
+
+>       asyncio.run(_exercise())
+
+tests/test_orchestrator_phase_transition.py:675:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/opt/anaconda3/lib/python3.12/asyncio/runners.py:194: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/asyncio/base_events.py:687: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    async def _exercise() -> None:
+        worker = asyncio.create_task(
+            o._run_agent_attempt(issue, attempt=None, cfg=cfg)
+        )
+        await asyncio.wait_for(after_run_entered.wait(), timeout=1)
+        try:
+>           assert o._running[issue.id].agent_pgid is None
+E           AssertionError: assert 11111 is None
+E            +  where 11111 = RunningEntry(issue=Issue(id='iss-1', identifier='MT-1', title='phase transition fixture', description='\n## Plan\n- bu...en_budget=False, token_budget_cap=0, consecutive_empty_turns=0, hit_empty_response_loop=False, current_turn_message='').agent_pgid
+
+tests/test_orchestrator_phase_transition.py:670: AssertionError
+----------------------------- Captured stderr call -----------------------------
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_turn_started" issue_id=iss-1 identifier=MT-1 turn=1 max_turns=1 is_continuation=false
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_turn_completed" issue_id=iss-1 identifier=MT-1 turn=1 input_tokens=0 cache_input_tokens=0 output_tokens=0 total_tokens=0
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_finally_entered" issue_id=iss-1 outcome=normal error=null
+_______ test_persistent_backend_pid_is_registered_before_each_initialize _______
+
+tmp_path = PosixPath('/private/var/folders/lp/p1cqpv0549zdwkvkg6tzpp7h0000gn/T/pytest-of-danny/pytest-29/test_persistent_backend_pid_is0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106f618e0>
+
+    def test_persistent_backend_pid_is_registered_before_each_initialize(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg = _make_config(max_turns=2)
+        issue = _make_issue(state="Todo")
+        o = _orch(tmp_path)
+        _seed_running_entry(o, issue, tmp_path)
+        observed_initialize_pids: list[int | None] = []
+        explicit_heartbeat_pids: list[int] = []
+
+        async def _start(self_inst: _FakeBackend) -> None:
+            self_inst.process_pid = (11111, 22222)[self_inst.init_id]
+            self_inst.calls.append(("start", {}))
+
+        async def _initialize(self_inst: _FakeBackend) -> None:
+            self_inst.calls.append(("initialize", {}))
+            observed_initialize_pids.append(o._running[issue.id].agent_pgid)
+
+        def _heartbeat(
+            issue_id: str,
+            entry: RunningEntry,
+            *,
+            progress: datetime | None = None,
+            backend_agent_pid: int | None = None,
+        ) -> bool:
+            del issue_id, entry, progress
+            if backend_agent_pid is not None:
+                explicit_heartbeat_pids.append(backend_agent_pid)
+            return True
+
+        monkeypatch.setattr(_FakeBackend, "start", _start)
+        monkeypatch.setattr(_FakeBackend, "initialize", _initialize)
+        monkeypatch.setattr(o, "_heartbeat_run_lease", _heartbeat)
+        _install_fake_backend(monkeypatch)
+        _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+        asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+>       assert observed_initialize_pids == [11111, 22222]
+E       assert [None, 11111] == [11111, 22222]
+E
+E         At index 0 diff: None != 11111
+E         Use -v to get more diff
+
+tests/test_orchestrator_phase_transition.py:716: AssertionError
+----------------------------- Captured stderr call -----------------------------
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_turn_started" issue_id=iss-1 identifier=MT-1 turn=1 max_turns=2 is_continuation=false
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_turn_completed" issue_id=iss-1 identifier=MT-1 turn=1 input_tokens=0 cache_input_tokens=0 output_tokens=0 total_tokens=0
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_phase_transition" issue_id=iss-1 identifier=MT-1 from_state=todo to_state="in progress" turn=2 attempt=null is_rewind=false workspace=/private/var/folders/lp/p1cqpv0549zdwkvkg6tzpp7h0000gn/T/pytest-of-danny/pytest-29/test_persistent_backend_pid_is0
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_turn_started" issue_id=iss-1 identifier=MT-1 turn=2 max_turns=2 is_continuation=false
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_turn_completed" issue_id=iss-1 identifier=MT-1 turn=2 input_tokens=0 cache_input_tokens=0 output_tokens=0 total_tokens=0
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_finally_entered" issue_id=iss-1 outcome=normal error=null
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_exit_entered" issue_id=iss-1 reason=normal running_keys_before_pop=["iss-1"]
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_exit_pop" issue_id=iss-1 reason=normal popped=true running_keys_after_pop=[]
+ts=2026-07-09T19:50:52Z level=INFO logger=symphony message="worker_exit" issue_id=iss-1 issue_identifier=MT-1 reason=normal error=null
+=========================== short test summary info ============================
+FAILED tests/test_orchestrator_phase_transition.py::test_completed_per_turn_pid_is_cleared_before_after_run_blocks
+FAILED tests/test_orchestrator_phase_transition.py::test_persistent_backend_pid_is_registered_before_each_initialize
+2 failed, 32 deselected in 0.30s

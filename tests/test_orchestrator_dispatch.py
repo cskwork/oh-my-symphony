@@ -619,7 +619,9 @@ def test_orchestrator_dispatch_prioritizes_ticket_registration_order():
     assert ordered == ["OLV-061", "OLV-131"]
 
 
-def test_reconcile_force_ejects_zombie_after_grace(monkeypatch: pytest.MonkeyPatch):
+def test_reconcile_force_ejects_claude_process_group_after_grace(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Worker that didn't die from cancel must lose its slot after grace.
 
     Reproduces the OLV-003 zombie pattern: a worker stuck on a
@@ -631,10 +633,16 @@ def test_reconcile_force_ejects_zombie_after_grace(monkeypatch: pytest.MonkeyPat
     zombie = _issue("MT-1", state="Todo")
     now = datetime.now(timezone.utc)
     killed: list[int] = []
+    warnings: list[tuple[str, dict[str, object]]] = []
     monkeypatch.setattr(
         core_module,
         "kill_process_group",
         lambda pid: killed.append(pid) or True,
+    )
+    monkeypatch.setattr(
+        core_module.log,
+        "warning",
+        lambda event, **fields: warnings.append((event, fields)),
     )
 
     async def _run() -> None:
@@ -647,8 +655,9 @@ def test_reconcile_force_ejects_zombie_after_grace(monkeypatch: pytest.MonkeyPat
             retry_attempt=None,
             worker_task=None,  # type: ignore[arg-type]
             workspace_path=Path("/tmp"),
+            agent_kind="claude",
             cancelled_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 5),
-            codex_app_server_pid=4242,
+            agent_pgid=4242,
         )
         orch._running[zombie.id] = entry
         orch._claimed.add(zombie.id)
@@ -666,6 +675,62 @@ def test_reconcile_force_ejects_zombie_after_grace(monkeypatch: pytest.MonkeyPat
     assert zombie.id in orch._retry, "force-eject must schedule a retry"
     assert orch._retry[zombie.id].error == "force_ejected_zombie"
     assert killed == [4242], "force-eject must kill the recorded process group"
+    assert warnings == [
+        (
+            "force_eject_killed_process_group",
+            {
+                "issue_id": zombie.id,
+                "identifier": zombie.identifier,
+                "agent_kind": "claude",
+                "pid": 4242,
+                "killed": True,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize("agent_pgid", [None, True, 0, -1])
+def test_reconcile_force_eject_without_safe_pgid_releases_slot_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    agent_pgid: int | None,
+):
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    zombie = _issue("MT-1", state="Todo")
+    now = datetime.now(timezone.utc)
+    killed: list[int] = []
+    monkeypatch.setattr(
+        core_module,
+        "kill_process_group",
+        lambda pid: killed.append(pid) or True,
+    )
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        entry = RunningEntry(
+            issue=zombie,
+            started_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S * 4),
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=Path("/tmp"),
+            agent_kind="claude",
+            cancelled_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 5),
+            agent_pgid=agent_pgid,
+        )
+        orch._running[zombie.id] = entry
+        orch._claimed.add(zombie.id)
+
+        await orch._reconcile_running(cfg)
+        for retry in list(orch._retry.values()):
+            retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+    assert zombie.id not in orch._running, "zombie slot should be freed"
+    assert zombie.id not in orch._claimed, "claim should be released"
+    assert zombie.id in orch._retry, "missing pid must still schedule a retry"
+    assert orch._retry[zombie.id].error == "force_ejected_zombie"
+    assert killed == [], "missing or unsafe pid must not trigger an unscoped kill"
 
 
 class _AF01StubWorkspace:
@@ -1838,9 +1903,102 @@ def test_on_codex_event_records_backend_agent_pid():
             },
         )
 
-        assert entry.codex_app_server_pid == 4242
+        assert entry.agent_pgid == 4242
 
     asyncio.run(_run())
+
+
+def test_on_codex_event_accepts_legacy_codex_app_server_pid():
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp"),
+    )
+    orch._running[issue.id] = entry
+
+    asyncio.run(
+        orch._on_codex_event(
+            issue.id,
+            {"event": "other_message", "codex_app_server_pid": 11111},
+        )
+    )
+
+    assert entry.agent_pgid == 11111
+
+
+def test_on_codex_event_prefers_normalized_agent_pid_over_legacy_pid():
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp"),
+    )
+    orch._running[issue.id] = entry
+
+    asyncio.run(
+        orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "agent_pid": 22222,
+                "codex_app_server_pid": 11111,
+            },
+        )
+    )
+
+    assert entry.agent_pgid == 22222
+
+
+@pytest.mark.parametrize("malformed_pid", [True, 0, -1])
+def test_on_codex_event_rejects_unsafe_normalized_pid_without_legacy_fallback(
+    tmp_path: Path,
+    malformed_pid: int,
+):
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    orch = _orch()
+    orch._run_registry = registry
+    issue = _issue("MT-UNSAFE-PID", state="In Progress")
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="claude",
+    )
+    assert run_id is not None
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=tmp_path,
+        run_id=run_id,
+    )
+    orch._running[issue.id] = entry
+
+    try:
+        asyncio.run(
+            orch._on_codex_event(
+                issue.id,
+                {
+                    "event": "other_message",
+                    "agent_pid": malformed_pid,
+                    "codex_app_server_pid": 11111,
+                },
+            )
+        )
+
+        assert entry.agent_pgid is None
+        assert registry.get_run(run_id).backend_agent_pid is None
+    finally:
+        registry.close()
 
 
 def test_on_codex_event_records_approval_denial_last_error():

@@ -1,0 +1,48 @@
+$ env PYTHONPATH=src python -m pytest -q --tb=short tests/test_backend_contract.py -k turn_spawn_events_publish_distinct_pids_immediately
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+_ TestClaudeBackendContract.test_turn_spawn_events_publish_distinct_pids_immediately _
+tests/test_backend_contract.py:193: in test_turn_spawn_events_publish_distinct_pids_immediately
+    assert len(spawn_events) == index, (
+E   AssertionError: turn_started must publish the live child pid before output
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestGeminiBackendContract.test_turn_spawn_events_publish_distinct_pids_immediately _
+tests/test_backend_contract.py:193: in test_turn_spawn_events_publish_distinct_pids_immediately
+    assert len(spawn_events) == index, (
+E   AssertionError: turn_started must publish the live child pid before output
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestAgyBackendContract.test_turn_spawn_events_publish_distinct_pids_immediately _
+tests/test_backend_contract.py:193: in test_turn_spawn_events_publish_distinct_pids_immediately
+    assert len(spawn_events) == index, (
+E   AssertionError: turn_started must publish the live child pid before output
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestKiroBackendContract.test_turn_spawn_events_publish_distinct_pids_immediately _
+tests/test_backend_contract.py:193: in test_turn_spawn_events_publish_distinct_pids_immediately
+    assert len(spawn_events) == index, (
+E   AssertionError: turn_started must publish the live child pid before output
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestOpenCodeBackendContract.test_turn_spawn_events_publish_distinct_pids_immediately _
+tests/test_backend_contract.py:193: in test_turn_spawn_events_publish_distinct_pids_immediately
+    assert len(spawn_events) == index, (
+E   AssertionError: turn_started must publish the live child pid before output
+E   assert 0 == 1
+E    +  where 0 = len([])
+_ TestPiBackendContract.test_turn_spawn_events_publish_distinct_pids_immediately _
+tests/test_backend_contract.py:193: in test_turn_spawn_events_publish_distinct_pids_immediately
+    assert len(spawn_events) == index, (
+E   AssertionError: turn_started must publish the live child pid before output
+E   assert 0 == 1
+E    +  where 0 = len([])
+=========================== short test summary info ============================
+FAILED tests/test_backend_contract.py::TestClaudeBackendContract::test_turn_spawn_events_publish_distinct_pids_immediately
+FAILED tests/test_backend_contract.py::TestGeminiBackendContract::test_turn_spawn_events_publish_distinct_pids_immediately
+FAILED tests/test_backend_contract.py::TestAgyBackendContract::test_turn_spawn_events_publish_distinct_pids_immediately
+FAILED tests/test_backend_contract.py::TestKiroBackendContract::test_turn_spawn_events_publish_distinct_pids_immediately
+FAILED tests/test_backend_contract.py::TestOpenCodeBackendContract::test_turn_spawn_events_publish_distinct_pids_immediately
+FAILED tests/test_backend_contract.py::TestPiBackendContract::test_turn_spawn_events_publish_distinct_pids_immediately
+6 failed, 26 deselected in 0.88s
+exit: 1

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "mode": "LEGACY",
+  "intent_gate": {
+    "intent": "Implement the checked-in AF-02 backend-neutral force-eject process-group contract.",
+    "confidence": "high",
+    "mode": "LEGACY",
+    "capability_refs": ["supergoal", "codebase-memory", "writing-plans"],
+    "uncertainty": "None; current dev already transports non-Codex agent_pid values, and the exact internal field footprint is mapped."
+  },
+  "branches": {
+    "source_base_branch": "dev",
+    "target_integration_branch": "dev",
+    "run_branch": "codex/supergoal-af-02",
+    "worktree_path": "/private/tmp/symphony-supergoal-af-02",
+    "refs_verified": true
+  },
+  "plan_approval": "auto",
+  "completion_promise": {
+    "promised_outcome": "All backend process groups are killed on force-eject when recorded, with missing-pid retry behavior preserved.",
+    "required_proof": [
+      "red-first non-Codex regression test",
+      "all-backend contract coverage",
+      "focused neighbor regression checks",
+      "ruff",
+      "pyright",
+      "full coverage suite"
+    ],
+    "stop_condition": "Every GOAL.md criterion is checked and the commit gate passes, or the iteration cap records a concrete blocker.",
+    "max_iterations": 8,
+    "status": "complete"
+  },
+  "phase": "Done",
+  "iteration": 7,
+  "unresolved_gates": [],
+  "regression_ledger": [
+    "Resolved in iteration 6: 14 lifecycle/contract/dispatch tests exposed direct pid reads against legacy backend doubles without that attribute; the shared normalizer restored compatibility.",
+    "Resolved in iteration 7: boolean, zero, and negative pid/pgid inputs could reach ownership or kill boundaries; only positive non-boolean integers are now accepted.",
+    "Final exact verification: compatibility selector 14 passed; full suite 1312 passed, 2 skipped, 83.26% coverage."
+  ],
+  "blockers": [],
+  "last_proof_command": "env PYTHONPATH=src /opt/anaconda3/bin/python -m pytest -q --cov=src/symphony --cov-report=term --cov-fail-under=80",
+  "next_action": "Supergoal commit gate passed; await user acceptance before commit/merge.",
+  "forced_reflection": {
+    "required_when_iteration_cap_hit": true,
+    "what_keeps_failing": "",
+    "likely_root_cause": "",
+    "unproven_requirement": "",
+    "regressed_previously_green": "",
+    "smallest_next_action": ""
+  },
+  "updated_at": "2026-07-10T05:51:49+09:00"
+}

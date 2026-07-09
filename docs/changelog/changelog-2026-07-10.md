@@ -61,3 +61,71 @@ two-stage eject timing.
 Process note: build by local subagent; full-spec/edge-case improve passes and the adversarial
 review ran on Codex CLI (user-directed); exact verification (full suite in the worktree run path,
 `PYTHONPATH=<worktree>/src`) by the conductor.
+
+## AF-02 — Force-eject kills all backend process groups (P0, BUILD)
+
+Ticket: docs/improvements/tickets/2026-07-09/AF-02-force-eject-kills-all-backends.md
+Branch: codex/supergoal-af-02
+
+### What
+
+Force-eject now owns a backend-neutral `agent_pgid`, kills it for every backend kind, and logs the
+backend kind with the kill result. Per-turn backends publish a normalized pid event immediately
+after each spawn, while Codex exposes its persistent app-server pid. Legacy
+`codex_app_server_pid` input remains accepted, with normalized `agent_pid` taking precedence.
+
+Process ownership now follows the complete backend lifecycle in memory and in the run registry:
+
+- `RunRegistry.clear_backend_agent_pid` explicitly clears ownership; ordinary `heartbeat(None)`
+  keeps its existing lease-only, preserve-pid meaning.
+- One orchestrator helper synchronizes non-null pids through the established heartbeat path and
+  clears persisted ownership explicitly for `None`.
+- Start and turn boundaries synchronize in `finally`, so late start failures/cancellation and
+  successful or failed per-turn completion cannot leave stale service-force-visible ownership.
+- Confirmed phase/final/new-client stops clear ownership. A failed old-phase stop aborts the
+  replacement and retains the last pid. Failed old or replacement cleanup remains unconfirmed
+  across a later idempotent final stop, so neither path can erase its force-eject target.
+
+### Why (decisions and rejected alternatives)
+
+- **Confirmed teardown is required before replacement.** Swallowing an old `stop()` failure and
+  erasing its PGID could run two backends for one issue while discarding the only force-eject
+  target. The transition now logs and re-raises; only the successful-stop branch clears.
+- **Explicit registry clear over sentinel heartbeat behavior.** Changing `heartbeat(None)` was
+  rejected because callers rely on it to refresh a lease without mutating process ownership. A
+  named operation makes destructive ownership change intentional and testable without a schema
+  migration.
+- **Lifecycle synchronization over event-only recording.** Events remain the immediate spawn
+  signal, but start/turn `finally` boundaries cover pre-event failures, cancellation, and the
+  post-child interval where orchestrator hooks may block.
+- **No reaping expansion.** If a normal stop raises, ownership is deliberately retained because
+  termination is unconfirmed. `safe_proc_wait`, AF-10 startup reclaim/kill, and unrelated process
+  reaping remain outside AF-02.
+
+Iteration-4 RED proved five ownership failures while two event compatibility controls passed.
+GREEN evidence: 7 focused tests, 13 RunRegistry tests, 38 phase-transition tests, and 26 combined
+AF-02 contract tests passed; full Ruff and changed-source Pyright passed. Full-suite exact
+verification remains the fresh verifier's gate.
+
+Iteration-5 RED exposed two idempotent-stop ownership losses: final cleanup erased an old pid after
+the first stop marked closed and raised, and a failed replacement cleanup lost its new pid because
+the caller still referenced the old backend. GREEN evidence: all three stop-confirmation
+regressions passed, the phase-transition module passed 40 tests, and the combined AF-02 selector
+passed 28; focused/full Ruff and `git diff --check` passed.
+
+Iteration-6 exact verification exposed a compatibility assumption in six lifecycle reads: older
+backend doubles without `pid` exited before their intended orchestration behavior. One normalizer now
+treats an absent or non-integer pid as no live child without weakening the backend protocol. All 14
+prior failures, 260 relevant neighbor tests, and 28 combined AF-02 tests pass; full Ruff, Pyright,
+and `git diff --check` are clean. The fresh verifier still owns the final full-coverage gate.
+
+Iteration-7 adversarial review found a process-group safety edge: Python booleans are integers, and
+zero/negative values are not valid child process-group leaders. The shared normalizer now accepts
+only positive, non-boolean integers at backend-property reads and event ingestion, and the final
+force-eject boundary repeats the check as defense in depth. A present invalid normalized key is
+ignored rather than falling back to legacy input. RED failed six unsafe cases; GREEN passed 11
+focused controls, 34 combined AF-02 tests, and 266 affected-module tests. Full Ruff, Pyright, and
+`git diff --check` pass; fresh exact verification remains the completion gate.
+
+Non-goals honored: AF-01 task-identity changes preserved; no schema, startup reclaim, signal,
+`safe_proc_wait`, or unrelated reaping changes.

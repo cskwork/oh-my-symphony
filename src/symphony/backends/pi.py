@@ -58,6 +58,7 @@ from . import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
+    EVENT_TURN_STARTED,
     MALFORMED_LINE_LIMIT,
     POST_STREAM_REAP_TIMEOUT_S,
     BackendInit,
@@ -198,6 +199,7 @@ class PiBackend(BaseAgentBackend):
             raise ResponseError("backend closed during spawn")
         self._active_proc = proc
         try:
+            await self._emit(EVENT_TURN_STARTED, {})
             assert proc.stdin is not None and proc.stdout is not None
             try:
                 # Pi documents stdin as appended to the `-p` argument. Since

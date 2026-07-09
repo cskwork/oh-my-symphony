@@ -209,6 +209,16 @@ def _update_state_turn_counter(debug: _IssueDebug, state: str) -> int:
     return debug.state_turn_count
 
 
+def _normalize_agent_pid(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _backend_agent_pid(backend: AgentBackend) -> int | None:
+    return _normalize_agent_pid(getattr(backend, "pid", None))
+
+
 def _initial_improvement_status() -> dict[str, Any]:
     """Runtime half of the heartbeat status. Config-derived fields
     (enabled/interval_ms/max_turns/agent_kind) are refreshed each tick from
@@ -859,7 +869,7 @@ class Orchestrator:
                 issue_id=issue_id,
                 run_id=entry.run_id,
                 progress_at=progress,
-                backend_agent_pid=backend_agent_pid or entry.codex_app_server_pid,
+                backend_agent_pid=backend_agent_pid or entry.agent_pgid,
             ),
             True,
         )
@@ -898,6 +908,33 @@ class Orchestrator:
             issue_identifier=entry.issue.identifier,
         )
         return False
+
+    def _sync_backend_agent_pid(
+        self, issue_id: str, backend_agent_pid: int | None
+    ) -> None:
+        """Keep in-memory and persisted backend ownership in lockstep."""
+        entry = self._running.get(issue_id)
+        if entry is None:
+            return
+        entry.agent_pgid = backend_agent_pid
+        if backend_agent_pid is not None:
+            self._heartbeat_run_lease(
+                issue_id,
+                entry,
+                backend_agent_pid=backend_agent_pid,
+            )
+            return
+        registry = self._run_registry
+        if registry is None or not entry.run_id:
+            return
+        self._registry_guard(
+            "clear_backend_agent_pid",
+            lambda: registry.clear_backend_agent_pid(
+                issue_id=issue_id,
+                run_id=entry.run_id,
+            ),
+            True,
+        )
 
     def _heartbeat_running_leases(self) -> None:
         """Per-tick lease refresh; a conflicting holder stops our worker.
@@ -3413,7 +3450,15 @@ class Orchestrator:
             # backend subprocess inherits os.environ at fork time.
             self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=False)
             try:
-                await client.start()
+                self._sync_backend_agent_pid(
+                    running_issue_id, _backend_agent_pid(client)
+                )
+                try:
+                    await client.start()
+                finally:
+                    self._sync_backend_agent_pid(
+                        running_issue_id, _backend_agent_pid(client)
+                    )
                 await client.initialize()
 
                 turn_number = 1
@@ -3790,6 +3835,9 @@ class Orchestrator:
                             outcome = "before_run_error"
                             error = str(exc)
                             return
+                    self._sync_backend_agent_pid(
+                        running_issue_id, _backend_agent_pid(client)
+                    )
                     after_run_pending = True
                     try:
                         await client.run_turn(prompt=prompt, is_continuation=is_continuation)
@@ -3797,6 +3845,10 @@ class Orchestrator:
                         outcome = "turn_error"
                         error = str(exc)
                         return
+                    finally:
+                        self._sync_backend_agent_pid(
+                            running_issue_id, _backend_agent_pid(client)
+                        )
 
                     # Synchronous log on the worker's hot path — the
                     # listener-side `agent_turn_completed` log fires from
@@ -3899,6 +3951,17 @@ class Orchestrator:
                         identifier=issue.identifier,
                         error=str(stop_exc),
                     )
+                else:
+                    running = self._running.get(running_issue_id)
+                    if running is not None and running.backend_cleanup_unconfirmed:
+                        log.warning(
+                            "worker_final_stop_cleanup_unconfirmed",
+                            issue_id=issue.id,
+                            identifier=issue.identifier,
+                            pid=running.agent_pgid,
+                        )
+                    else:
+                        self._sync_backend_agent_pid(running_issue_id, None)
                 if after_run_pending:
                     await self._workspace_manager.after_run_best_effort(workspace.path)
         except SymphonyError as exc:
@@ -3981,19 +4044,21 @@ class Orchestrator:
         keeping that here would couple this helper to the running-state
         dict and hurt testability.
         """
-        # Defensive: a failing old-stop must not block the transition.
-        # The new client we are about to build replaces the reference, so
-        # any stuck resources in the old backend are someone else's
-        # problem (the listener-side reaper or the OS).
         try:
             await old_client.stop()
         except Exception as stop_exc:
+            running = self._running.get(running_issue_id)
+            if running is not None:
+                running.backend_cleanup_unconfirmed = True
             log.warning(
                 "phase_transition_old_stop_failed",
                 issue_id=issue.id,
                 identifier=issue.identifier,
                 error=str(stop_exc),
             )
+            raise
+        else:
+            self._sync_backend_agent_pid(running_issue_id, None)
         tools: list[Any] = []
         if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
             tools.append(linear_graphql_tool())
@@ -4013,7 +4078,15 @@ class Orchestrator:
         # set it to the JSON of the latest finding rows.
         self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=is_rewind)
         try:
-            await new_client.start()
+            self._sync_backend_agent_pid(
+                running_issue_id, _backend_agent_pid(new_client)
+            )
+            try:
+                await new_client.start()
+            finally:
+                self._sync_backend_agent_pid(
+                    running_issue_id, _backend_agent_pid(new_client)
+                )
             await new_client.initialize()
             skill_context = await asyncio.to_thread(
                 render_skill_block, cfg.workflow_path.parent, issue.skills
@@ -4044,12 +4117,17 @@ class Orchestrator:
             try:
                 await new_client.stop()
             except Exception as stop_exc:
+                running = self._running.get(running_issue_id)
+                if running is not None:
+                    running.backend_cleanup_unconfirmed = True
                 log.warning(
                     "phase_transition_new_stop_failed",
                     issue_id=issue.id,
                     identifier=issue.identifier,
                     error=str(stop_exc),
                 )
+            else:
+                self._sync_backend_agent_pid(running_issue_id, None)
             raise
         return new_client, first_prompt
 
@@ -4340,10 +4418,14 @@ class Orchestrator:
                 entry.last_codex_timestamp = datetime.now(timezone.utc)
         else:
             entry.last_codex_timestamp = datetime.now(timezone.utc)
-        pid = event.get("codex_app_server_pid") or event.get("agent_pid")
-        if isinstance(pid, int):
-            entry.codex_app_server_pid = pid
-            self._heartbeat_run_lease(issue_id, entry, backend_agent_pid=pid)
+        raw_pid = (
+            event.get("agent_pid")
+            if "agent_pid" in event
+            else event.get("codex_app_server_pid")
+        )
+        pid = _normalize_agent_pid(raw_pid)
+        if pid is not None:
+            self._sync_backend_agent_pid(issue_id, pid)
         payload = event.get("payload") or {}
         if isinstance(payload, dict):
             msg = self._preview_from_payload(payload)
@@ -5072,13 +5154,15 @@ class Orchestrator:
         """
         self._running.pop(issue_id, None)
         self._claimed.discard(issue_id)
-        if entry.codex_app_server_pid is not None:
-            killed = kill_process_group(entry.codex_app_server_pid)
+        agent_pgid = _normalize_agent_pid(entry.agent_pgid)
+        if agent_pgid is not None:
+            killed = kill_process_group(agent_pgid)
             log.warning(
                 "force_eject_killed_process_group",
                 issue_id=issue_id,
                 identifier=entry.issue.identifier,
-                pid=entry.codex_app_server_pid,
+                agent_kind=self._entry_agent_kind(entry),
+                pid=agent_pgid,
                 killed=killed,
             )
         self._finish_run_lease(issue_id, entry, "force_ejected_zombie")

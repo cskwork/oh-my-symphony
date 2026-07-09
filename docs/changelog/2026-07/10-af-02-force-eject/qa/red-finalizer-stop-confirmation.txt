@@ -1,0 +1,15 @@
+Command:
+env PYTHONPATH=src python -m pytest -q tests/test_orchestrator_phase_transition.py -k phase_stop_failure_stays_unconfirmed_after_idempotent_final_stop
+
+Result: RED — 1 failed, 38 deselected in 0.19s; exit 1.
+
+Failure:
+test_phase_stop_failure_stays_unconfirmed_after_idempotent_final_stop
+assert o._running[issue.id].agent_pgid == 11111
+E   AssertionError: assert None == 11111
+
+The real `_run_agent_attempt` path called the old backend's `stop()` at the
+phase transition. That first call marked the backend closed and raised. The
+outer finalizer retried `stop()`; the idempotent closed-path returned without
+proving process termination, yet the finalizer cleared both in-memory and
+persisted ownership.

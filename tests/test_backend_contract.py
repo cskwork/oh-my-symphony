@@ -8,7 +8,8 @@ Asserts the `AgentBackend` lifecycle contract documented in
     start -> initialize -> start_session -> run_turn* -> stop
 
 and the MUST-emit normalized events: `session_started` before the first
-turn outcome, `turn_completed` / `turn_failed` per turn outcome, plus the
+turn outcome, `turn_started` with the live child pid immediately after every
+per-turn spawn, `turn_completed` / `turn_failed` per turn outcome, plus the
 shared event envelope every adapter emits through `_emit`.
 
 Each concrete adapter subclasses `PerTurnBackendContract` and only supplies
@@ -17,31 +18,36 @@ cannot pass this suite must not ship; an upstream schema drift that breaks
 parsing (cf. the opencode `run --format json` incident) turns these tests
 red instead of silently emptying responses.
 
-Codex is deliberately absent from the lifecycle matrix: it is the second
-lifecycle family (persistent app-server, JSON-RPC over stdio) and keeps its
-own suite in `test_backends*.py`. It still appears in the protocol check.
+Codex is deliberately absent from the per-turn lifecycle matrix: it is the
+second lifecycle family (persistent app-server, JSON-RPC over stdio) and keeps
+its own suite in `test_backends*.py`. This module checks its protocol and one
+live persistent-process event without changing its spawn/reaping contract.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import symphony.backends.claude_code as claude_module
+import symphony.backends.codex as codex_module
 import symphony.backends.per_turn as per_turn_module
 import symphony.backends.pi as pi_module
 from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
+    EVENT_TURN_STARTED,
     AgentBackend,
     BackendInit,
     build_backend,
 )
 from symphony.errors import ResponseError, TurnFailed
 from tests.test_backends import (
+    _BlockingStream,
     _FakeSubprocess,
     _install_subprocess_double,
     _make_cfg,
@@ -73,6 +79,32 @@ def test_every_backend_kind_satisfies_protocol(kind: str, tmp_path: Path) -> Non
 
 async def _async_noop(event: dict[str, Any]) -> None:
     del event
+
+
+@pytest.mark.asyncio
+async def test_codex_live_event_exposes_agent_pid(tmp_path: Path) -> None:
+    """The persistent Codex lifecycle must publish its owned process group too."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    events: list[dict[str, Any]] = []
+
+    async def on_event(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    backend = codex_module.CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=on_event)
+    )
+    backend._process = _FakeSubprocess()  # type: ignore[assignment]
+
+    await backend._handle_notification(
+        {
+            "method": codex_module.NOTIF_ITEM_COMPLETED,
+            "params": {"item": {"type": "agentMessage", "text": "working"}},
+        }
+    )
+
+    assert events[-1]["agent_pid"] == _FakeSubprocess.pid
 
 
 class PerTurnBackendContract:
@@ -128,9 +160,54 @@ class PerTurnBackendContract:
         assert EVENT_SESSION_STARTED in names
         assert EVENT_TURN_COMPLETED in names
         assert names.index(EVENT_SESSION_STARTED) < names.index(EVENT_TURN_COMPLETED)
+        turn_completed = next(
+            event for event in events if event["event"] == EVENT_TURN_COMPLETED
+        )
+        assert turn_completed["agent_pid"] == _FakeSubprocess.pid
         for event in events:
             assert EVENT_ENVELOPE_KEYS <= event.keys()
             assert isinstance(event["payload"], dict)
+
+    async def test_turn_spawn_events_publish_distinct_pids_immediately(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events: list[dict[str, Any]] = []
+        processes = [_FakeSubprocess(), _FakeSubprocess()]
+        processes[0].pid = 11111
+        processes[1].pid = 22222
+        for process in processes:
+            process.stdout = _BlockingStream()
+            process.stderr = _BlockingStream()
+        _install_subprocess_double(monkeypatch, self.module, processes.copy())
+        backend = self._make_backend(tmp_path, events)
+
+        for index, expected_pid in enumerate((11111, 22222), start=1):
+            task = asyncio.create_task(
+                backend.run_turn(prompt=f"turn {index}", is_continuation=index > 1)
+            )
+            try:
+                for _ in range(100):
+                    spawn_events = [
+                        event
+                        for event in events
+                        if event["event"] == EVENT_TURN_STARTED
+                    ]
+                    if len(spawn_events) == index:
+                        break
+                    await asyncio.sleep(0.001)
+                assert len(spawn_events) == index, (
+                    "turn_started must publish the live child pid before output"
+                )
+                assert spawn_events[-1]["agent_pid"] == expected_pid
+                assert EVENT_TURN_COMPLETED not in [
+                    event["event"] for event in events
+                ]
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+        assert [event["agent_pid"] for event in spawn_events] == [11111, 22222]
 
     async def test_nonzero_exit_emits_turn_failed_and_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

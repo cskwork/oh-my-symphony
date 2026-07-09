@@ -1,0 +1,92 @@
+$ python -m pytest -q tests/test_orchestrator_dispatch.py -k force_eject
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_reconcile_force_ejects_claude_process_group_after_grace _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x110078c20>
+
+    def test_reconcile_force_ejects_claude_process_group_after_grace(
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Worker that didn't die from cancel must lose its slot after grace.
+
+        Reproduces the OLV-003 zombie pattern: a worker stuck on a
+        non-cancellable await still holds its slot 17 minutes after the stall
+        timeout fires. Without force-eject, every other ticket starves.
+        """
+        cfg = _make_config(max_concurrent=1)
+        orch = _orch()
+        zombie = _issue("MT-1", state="Todo")
+        now = datetime.now(timezone.utc)
+        killed: list[int] = []
+        warnings: list[tuple[str, dict[str, object]]] = []
+        monkeypatch.setattr(
+            core_module,
+            "kill_process_group",
+            lambda pid: killed.append(pid) or True,
+        )
+        monkeypatch.setattr(
+            core_module.log,
+            "warning",
+            lambda event, **fields: warnings.append((event, fields)),
+        )
+
+        async def _run() -> None:
+            # `_schedule_retry` reads `self._loop` to compute the timer's
+            # absolute due-time, so wire the running loop in like `start()` does.
+            orch._loop = asyncio.get_running_loop()
+            entry = RunningEntry(
+                issue=zombie,
+                started_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S * 4),
+                retry_attempt=None,
+                worker_task=None,  # type: ignore[arg-type]
+                workspace_path=Path("/tmp"),
+                agent_kind="claude",
+                cancelled_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 5),
+                agent_pgid=4242,
+            )
+            orch._running[zombie.id] = entry
+            orch._claimed.add(zombie.id)
+
+            await orch._reconcile_running(cfg)
+            # Cancel the retry timer the eject just scheduled so it doesn't
+            # fire after the test loop closes.
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+>       asyncio.run(_run())
+
+tests/test_orchestrator_dispatch.py:670:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/opt/anaconda3/lib/python3.12/asyncio/runners.py:194: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/asyncio/base_events.py:687: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    async def _run() -> None:
+        # `_schedule_retry` reads `self._loop` to compute the timer's
+        # absolute due-time, so wire the running loop in like `start()` does.
+        orch._loop = asyncio.get_running_loop()
+>       entry = RunningEntry(
+            issue=zombie,
+            started_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S * 4),
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=Path("/tmp"),
+            agent_kind="claude",
+            cancelled_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 5),
+            agent_pgid=4242,
+        )
+E       TypeError: RunningEntry.__init__() got an unexpected keyword argument 'agent_pgid'
+
+tests/test_orchestrator_dispatch.py:651: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_orchestrator_dispatch.py::test_reconcile_force_ejects_claude_process_group_after_grace
+1 failed, 156 deselected in 0.70s
+exit: 1

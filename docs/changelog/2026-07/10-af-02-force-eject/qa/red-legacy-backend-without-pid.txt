@@ -1,0 +1,12 @@
+RED — legacy backend double without pid
+
+Command:
+env PYTHONPATH=src /Users/danny/Documents/PARA/Resource/symphony-multi-agent/.venv/bin/python -m pytest -q tests/test_agent_lifecycle_e2e.py::test_full_todo_to_done_pipeline_rebuilds_backend_per_phase
+
+Result:
+1 failed in 0.12s
+
+Expected failure evidence:
+AttributeError: '_FakeBackend' object has no attribute 'pid'
+src/symphony/orchestrator/core.py:3443 reads client.pid directly before start.
+The orchestrator exits after one backend, so the test observes 1 instance instead of 4.

@@ -81,7 +81,11 @@ class RunningEntry:
     # 2026-05-17 reproduced this on the old long pipeline; the same hazard
     # applies to Todo -> In Progress -> Verify transitions.
     state_at_turn_start: str = ""
-    codex_app_server_pid: int | None = None
+    agent_pgid: int | None = None
+    # A backend stop raised after teardown began. Some drivers become closed
+    # before the failing await, so a later idempotent stop cannot confirm that
+    # this process group exited and must not erase its force-eject target.
+    backend_cleanup_unconfirmed: bool = False
     last_error: str | None = None
     # Set when a lease heartbeat found a conflicting active holder and
     # re-acquisition failed. The worker is being stopped; the flag keeps the

@@ -43,6 +43,7 @@ from . import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
+    EVENT_TURN_STARTED,
     MALFORMED_LINE_LIMIT,
     POST_STREAM_REAP_TIMEOUT_S,
     BackendInit,
@@ -188,6 +189,7 @@ class ClaudeCodeBackend(BaseAgentBackend):
             raise ResponseError("backend closed during spawn")
         self._active_proc = proc
         try:
+            await self._emit(EVENT_TURN_STARTED, {})
             assert proc.stdin is not None and proc.stdout is not None
             try:
                 proc.stdin.write(prompt.encode("utf-8"))

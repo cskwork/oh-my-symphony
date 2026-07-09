@@ -14,9 +14,11 @@ per turn — Claude uses `claude -p --output-format stream-json`, Gemini uses
 and Pi uses `pi --mode json -p ""`.
 
 Normalized event vocabulary is shared across backends (see `events.py` style
-constants below). The orchestrator only consumes these normalized event names
-plus an `AgentEvent`-shaped dict, so it never sees backend-specific protocol
-details.
+constants below). Per-turn backends emit `turn_started` immediately after
+publishing each live child so the orchestrator can replace the process-group
+identifier before any CLI output. The orchestrator only consumes these
+normalized event names plus an `AgentEvent`-shaped dict, so it never sees
+backend-specific protocol details.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from ..workflow import ServiceConfig
 # Normalized event vocabulary — every backend emits these strings only.
 EVENT_SESSION_STARTED = "session_started"
 EVENT_STARTUP_FAILED = "startup_failed"
+EVENT_TURN_STARTED = "turn_started"
 EVENT_TURN_COMPLETED = "turn_completed"
 EVENT_TURN_FAILED = "turn_failed"
 EVENT_TURN_CANCELLED = "turn_cancelled"
@@ -105,6 +108,7 @@ class AgentBackend(Protocol):
 
     Backends MUST emit normalized events through `on_event` for at least:
     - `session_started` once a session id is known,
+    - `turn_started` with `agent_pid` once each per-turn child is live,
     - `turn_completed` / `turn_failed` / `turn_cancelled` per turn outcome.
 
     Token + rate-limit telemetry is reported by the latest_* properties so the

@@ -210,6 +210,26 @@ class RunRegistry:
         cur = self._connect().execute(sql, args)
         return cur.rowcount > 0
 
+    def clear_backend_agent_pid(
+        self,
+        *,
+        issue_id: str,
+        run_id: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Clear process ownership without overloading heartbeat(None)."""
+        now = _utc(now)
+        expires = now + self._lease_ttl
+        cur = self._connect().execute(
+            """
+            UPDATE runs
+            SET updated_at = ?, lease_expires_at = ?, backend_agent_pid = NULL
+            WHERE issue_id = ? AND run_id = ? AND status = 'active'
+            """,
+            (_iso(now), _iso(expires), issue_id, run_id),
+        )
+        return cur.rowcount > 0
+
     def complete_run(
         self,
         *,

@@ -1,0 +1,15 @@
+Command:
+env PYTHONPATH=src python -m pytest -q tests/test_run_registry.py tests/test_orchestrator_phase_transition.py tests/test_orchestrator_dispatch.py -k 'clear_backend_agent_pid_is_explicit or stop_failure_retains_old_backend_ownership or completed_per_turn_pid_is_cleared_from_run_registry or failed_per_turn_clears_pid_before_failed_final_stop or start_failure_records_late_pid_when_cleanup_is_unconfirmed or legacy_codex_app_server_pid or prefers_normalized_agent_pid'
+
+Result before iteration-4 source changes:
+5 failed, 2 passed, 211 deselected in 3.16s (exit 1)
+
+Failures:
+- RunRegistry had no explicit clear_backend_agent_pid operation.
+- A failed old-backend stop was swallowed, ownership was erased, and a replacement was built.
+- Successful and failed per-turn completion cleared only RunningEntry; persisted backend_agent_pid remained 11111/22222.
+- A start() that exposed pid 33333 and then raised never synchronized that pid before failed cleanup.
+
+Compatibility controls passed:
+- legacy-only codex_app_server_pid ingestion
+- normalized agent_pid precedence over the legacy key

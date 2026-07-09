@@ -74,6 +74,42 @@ def test_run_registry_heartbeat_persists_backend_agent_pid(tmp_path: Path) -> No
     assert registry.get_run(run_id).backend_agent_pid == 4242
 
 
+def test_run_registry_clear_backend_agent_pid_is_explicit(tmp_path: Path) -> None:
+    registry = RunRegistry(tmp_path / "state.db", lease_ttl=timedelta(seconds=60))
+    now = datetime(2026, 7, 2, 1, 0, tzinfo=timezone.utc)
+    issue = _issue()
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="opencode",
+        now=now,
+    )
+    assert run_id
+    assert registry.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=1),
+        backend_agent_pid=4242,
+    )
+
+    # A normal heartbeat with no pid deliberately preserves ownership.
+    assert registry.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=2),
+    )
+    assert registry.get_run(run_id).backend_agent_pid == 4242
+
+    assert registry.clear_backend_agent_pid(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=3),
+    )
+    assert registry.get_run(run_id).backend_agent_pid is None
+
+
 def test_run_registry_expires_stale_lease_before_reclaim(tmp_path: Path) -> None:
     registry = RunRegistry(tmp_path / "state.db", lease_ttl=timedelta(seconds=30))
     now = datetime(2026, 7, 2, 1, 0, tzinfo=timezone.utc)

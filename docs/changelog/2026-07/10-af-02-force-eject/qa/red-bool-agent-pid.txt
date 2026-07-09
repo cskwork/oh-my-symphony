@@ -1,0 +1,9 @@
+Command:
+env PYTHONPATH=src /opt/anaconda3/bin/python -m pytest -q tests/test_orchestrator_dispatch.py -k 'unsafe_normalized_pid or without_safe_pgid'
+
+Result: RED — 6 failed, 1 passed, 166 deselected in 0.82s.
+
+- Stored `agent_pgid=True`, `0`, and `-1` each reached `kill_process_group`.
+- Normalized event `agent_pid=True` and `-1` were recorded directly.
+- Normalized event `agent_pid=0` silently fell back to legacy pid `11111`.
+- The `None` missing-pid control passed.

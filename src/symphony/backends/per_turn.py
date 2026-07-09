@@ -33,6 +33,7 @@ from ..workspace import validate_agent_cwd
 from . import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_FAILED,
+    EVENT_TURN_STARTED,
     BackendInit,
     BaseAgentBackend,
     TurnResult,
@@ -180,6 +181,7 @@ class PerTurnCliBackend(BaseAgentBackend):
         self._active_proc = proc
         watchers = self._start_watchers(proc)
         try:
+            await self._emit(EVENT_TURN_STARTED, {})
             if stdin_payload is not None:
                 await self._write_prompt(proc, stdin_payload)
             stdout, stderr, rc = await self._collect(proc)
