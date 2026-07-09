@@ -89,6 +89,30 @@ class DispatchState:
             return None
         return entry
 
+    def entry_foreign_to(self, issue_id: str, task: asyncio.Task[None]) -> bool:
+        """True when a running entry exists under `issue_id` but isn't `task`'s.
+
+        Distinct from `entry_owned_by`, which also returns "not owned" when
+        there is no entry at all — that ambiguity is fine for the
+        done-callback (nothing to clean up either way), but the worker exit
+        path (AF-01) must tell "no entry" (legitimate no-op) apart from
+        "wrong owner" (a stale zombie whose exit must not touch the fresh
+        entry that replaced it).
+
+        `entry.worker_task is None` is treated as owned (not foreign): many
+        callers — tests and other internal call sites — drive
+        `_run_agent_attempt`/`_on_worker_exit_impl` directly against a
+        hand-installed entry that never went through `_dispatch`, so its
+        `worker_task` is never set. Only a *populated* `worker_task` that
+        disagrees with `task` is a genuine identity conflict.
+        """
+        entry = self.running.get(issue_id)
+        return (
+            entry is not None
+            and entry.worker_task is not None
+            and entry.worker_task is not task
+        )
+
     def prune_claims_not_in(self, keep: set[str]) -> set[str]:
         """G1 — drop claims with no in-flight owner; returns the pruned ids.
 

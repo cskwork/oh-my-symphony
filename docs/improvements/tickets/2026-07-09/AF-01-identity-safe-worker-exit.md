@@ -1,6 +1,7 @@
 # AF-01 — Identity-safe worker exit path
 
 Route: DEBUG | Severity: P0 | Confidence: CONFIRMED | Blocked by: none
+Status: DONE 2026-07-10 — shipped on dev (branch debug/af-01-identity-safe-worker-exit); RED-first race tests + full suite 1286 passed / 2 skipped (baseline 1279 + 7 new)
 Unblocks: cleaner test scaffolding for AF-02, AF-07, AF-08
 
 This is the root cause of the residual `finished_without_cleanup` /
@@ -62,17 +63,17 @@ Make the pop the single identity-checked mutation point:
 
 ## Acceptance checks
 
-- [ ] RED first: new test in `tests/test_orchestrator_dispatch.py` — a real
+- [x] RED first: new test in `tests/test_orchestrator_dispatch.py` — a real
   awaitable zombie task in `_running` is force-ejected, the retry installs a
   fresh entry under the same id, then the zombie's await resolves; assert the
   fresh entry is untouched, still in `_running`, and its worker uninterrupted.
   This test MUST fail on current `main`.
-- [ ] WHEN a stale worker's `finally` runs after re-dispatch THEN the live
+- [x] WHEN a stale worker's `finally` runs after re-dispatch THEN the live
   entry's `exit_started_at` stays `None` and no `_on_worker_exit` side effects
   (lease finish, retry schedule, `_completed` add) apply to the live run.
-- [ ] WHEN `_on_worker_exit_impl` raises after the pop THEN the done-callback
+- [x] WHEN `_on_worker_exit_impl` raises after the pop THEN the done-callback
   logs the exception (no "Task exception was never retrieved" warning).
-- [ ] Existing suite green: `python -m pytest -q` (1279 baseline), especially
+- [x] Existing suite green: `python -m pytest -q` (1279 baseline), especially
   `test_orchestrator_dispatch.py`, `test_orchestrator_reconcile.py`,
   `test_agent_lifecycle_e2e.py`.
 

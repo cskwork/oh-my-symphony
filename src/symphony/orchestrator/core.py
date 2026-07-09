@@ -3277,9 +3277,33 @@ class Orchestrator:
         timer can fire inside that yield to install a fresh entry under the
         same key. A stale callback that pops it would log a phantom
         `worker_task_finished_without_cleanup` and eject the live worker.
+
+        AF-01 secondary defect: `task.exception()` is fetched unconditionally
+        up front, before the `entry is None` early return. A raising
+        `_on_worker_exit_impl` pops the entry and then fails, so by the time
+        this callback runs there is nothing left to find via
+        `entry_owned_by` even though the task truly ended errored — without
+        retrieving it here, that exception is silently dropped and surfaces
+        only as asyncio's "Task exception was never retrieved" warning.
         """
+        cancelled_before_start = task.cancelled()
+        exc: BaseException | None = None
+        if not cancelled_before_start:
+            try:
+                exc = task.exception()
+            except asyncio.CancelledError:
+                cancelled_before_start = True
+
         entry = self._dispatch_state.entry_owned_by(issue_id, task)
         if entry is None:
+            if exc is not None:
+                log.error(
+                    "worker_task_errored_after_cleanup",
+                    issue_id=issue_id,
+                    task_name=task.get_name(),
+                    error=str(exc),
+                    exc_type=type(exc).__name__,
+                )
             return
         if entry.exit_started_at is not None:
             log.info(
@@ -3289,22 +3313,13 @@ class Orchestrator:
                 exit_started_at=entry.exit_started_at.isoformat(),
             )
             return
-        exc_repr: str | None = None
-        if task.cancelled():
+        if cancelled_before_start:
             reason = "worker_task_cancelled_before_start"
             error = "asyncio task was cancelled before worker cleanup ran"
         else:
-            try:
-                exc = task.exception()
-            except asyncio.CancelledError:
-                reason = "worker_task_cancelled_before_start"
-                error = "asyncio task was cancelled before worker cleanup ran"
-                exc = None
-            else:
-                reason = "worker_task_finished_without_cleanup"
-                error = str(exc) if exc is not None else "worker task completed without exit cleanup"
-            if exc is not None:
-                exc_repr = f"{type(exc).__name__}: {exc!r}"
+            reason = "worker_task_finished_without_cleanup"
+            error = str(exc) if exc is not None else "worker task completed without exit cleanup"
+        exc_repr = f"{type(exc).__name__}: {exc!r}" if exc is not None else None
         # Diagnostic fields for hunting the leftover path that leaves an
         # entry in `_running` after the worker task is `done`. If this
         # branch ever fires, these surface (a) which coroutine the task
@@ -3330,7 +3345,7 @@ class Orchestrator:
             ),
         )
         self._spawn_supervised(
-            self._on_worker_exit(issue_id, reason, error),
+            self._on_worker_exit(issue_id, reason, error, owning_task=task),
             name=f"symphony-worker-exit-{issue_id}",
         )
 
@@ -3912,12 +3927,39 @@ class Orchestrator:
                 outcome=outcome,
                 error=error,
             )
+            # AF-01 — a force-ejected zombie's `finally` can run after a
+            # retry already installed a fresh entry under this issue id
+            # (the zombie task is never cancelled by force-eject, only its
+            # bookkeeping is dropped). Only the task that actually owns the
+            # current entry may stamp `exit_started_at` or enter
+            # `_on_worker_exit`; a foreign owner must not touch either.
+            # The handler keeps its own identity check as the single guard
+            # around the eventual pop.
+            # `entry.worker_task is None` counts as owned — many existing
+            # tests drive this coroutine directly against a hand-installed
+            # entry that never went through `_dispatch`.
+            owning_task = asyncio.current_task()
             entry = self._running.get(running_issue_id)
-            if entry is not None:
-                entry.exit_started_at = datetime.now(timezone.utc)
-            await asyncio.shield(
-                self._on_worker_exit(running_issue_id, outcome, error)
+            stale_entry = (
+                entry is not None
+                and owning_task is not None
+                and self._dispatch_state.entry_foreign_to(
+                    running_issue_id, owning_task
+                )
             )
+            if stale_entry:
+                log.warning(
+                    "worker_finally_stale_entry",
+                    issue_id=running_issue_id,
+                    reason=outcome,
+                )
+            elif entry is not None:
+                entry.exit_started_at = datetime.now(timezone.utc)
+                await asyncio.shield(
+                    self._on_worker_exit(
+                        running_issue_id, outcome, error, owning_task=owning_task
+                    )
+                )
 
     async def _rebuild_backend_for_phase(
         self,
@@ -4624,7 +4666,14 @@ class Orchestrator:
     # worker exit handling (§16.6)
     # ------------------------------------------------------------------
 
-    async def _on_worker_exit(self, issue_id: str, reason: str, error: str | None) -> None:
+    async def _on_worker_exit(
+        self,
+        issue_id: str,
+        reason: str,
+        error: str | None,
+        *,
+        owning_task: asyncio.Task[None] | None = None,
+    ) -> None:
         # Treat the whole exit handler as in-flight. From the moment a worker
         # leaves `_running` until its terminal-state persist (or retry enqueue)
         # finishes, the ticket must stay ineligible: the `await`s inside the
@@ -4634,13 +4683,36 @@ class Orchestrator:
         # dispatch-double-dispatch-race-2026-06-28.md.
         self._terminal_persist_pending.add(issue_id)
         try:
-            await self._on_worker_exit_impl(issue_id, reason, error)
+            await self._on_worker_exit_impl(
+                issue_id, reason, error, owning_task=owning_task
+            )
         finally:
             self._terminal_persist_pending.discard(issue_id)
 
     async def _on_worker_exit_impl(
-        self, issue_id: str, reason: str, error: str | None
+        self,
+        issue_id: str,
+        reason: str,
+        error: str | None,
+        *,
+        owning_task: asyncio.Task[None] | None = None,
     ) -> None:
+        # AF-01 — identity gate before the pop. `owning_task` is only passed
+        # by the two real callers (the worker's own `finally` and
+        # `_on_worker_task_done`); direct-call test sites and other internal
+        # callers omit it, which is treated as "no check" (pre-AF-01
+        # behavior) rather than "owned by nobody" — many existing tests
+        # exercise this method against entries with `worker_task=None`.
+        if owning_task is not None and (
+            self._running.get(issue_id) is None
+            or self._dispatch_state.entry_foreign_to(issue_id, owning_task)
+        ):
+            log.warning(
+                "worker_exit_stale_task",
+                issue_id=issue_id,
+                reason=reason,
+            )
+            return
         # INFO-level entry marker — pairs with `worker_finally_entered`.
         # If `worker_finally_entered` is in the log but this is missing,
         # the outer finally's `await self._on_worker_exit(...)` was
@@ -4988,9 +5060,15 @@ class Orchestrator:
         """Forcibly free a worker slot when cancellation didn't propagate.
 
         Pops the entry from `_running` / `_claimed` and queues a backoff
-        retry. The original `worker_task` stays cancelled — if it ever
-        unblocks, its `finally` chain hits `_on_worker_exit`, which is a
-        no-op on a missing entry, so this is race-safe.
+        retry. Note this never calls `task.cancel()` on `entry.worker_task`
+        — only the bookkeeping is dropped, so the original worker can still
+        be running (parked on a non-cancellable await) when the retry
+        installs a fresh entry under this same issue id. That is race-safe
+        (AF-01) not because the stale task's exit is a no-op — a fresh entry
+        may well exist by the time it unblocks — but because the worker's
+        own `finally` and `_on_worker_exit_impl` both gate on task identity
+        (`entry_foreign_to`) before touching `_running`, so a foreign exit
+        skips the live replacement entry instead of ejecting it.
         """
         self._running.pop(issue_id, None)
         self._claimed.discard(issue_id)

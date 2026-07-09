@@ -16,6 +16,7 @@ from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
 )
+from symphony.errors import TurnFailed
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import (
     STALL_FORCE_EJECT_GRACE_S,
@@ -665,6 +666,494 @@ def test_reconcile_force_ejects_zombie_after_grace(monkeypatch: pytest.MonkeyPat
     assert zombie.id in orch._retry, "force-eject must schedule a retry"
     assert orch._retry[zombie.id].error == "force_ejected_zombie"
     assert killed == [4242], "force-eject must kill the recorded process group"
+
+
+class _AF01StubWorkspace:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+
+class _AF01StubWorkspaceManager:
+    """Minimal workspace manager so `_run_agent_attempt` can run for real."""
+
+    def path_for(self, identifier: str) -> Path:
+        return Path("/tmp/ws-fake") / identifier
+
+    async def create_or_reuse(self, identifier):
+        return _AF01StubWorkspace(self.path_for(identifier))
+
+    async def before_run(self, path):
+        return None
+
+    async def after_run_best_effort(self, path):
+        return None
+
+    async def remove_best_effort(self, path):
+        return None
+
+
+def test_stale_zombie_finally_does_not_eject_fresh_replacement_entry(monkeypatch):
+    """AF-01 — a force-ejected zombie's `finally` must not touch a fresh
+    replacement entry a retry installed under the same issue id.
+
+    Reproduces the interleaving from docs/improvements/tickets/2026-07-09/
+    AF-01-identity-safe-worker-exit.md: worker A stalls and is force-ejected
+    (bookkeeping only — `_force_eject_zombie` never cancels the task, so a
+    worker wedged on a non-cancellable await keeps running), a retry
+    installs fresh entry B under the same issue id, and only then does A's
+    blocked await resolve. A's `finally` must recognize the entry under its
+    issue id no longer belongs to it and leave B untouched.
+    """
+    cfg = _make_config(max_concurrent=5)
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+
+    release_a = asyncio.Event()
+    entered_run_turn: list[asyncio.Event] = [asyncio.Event(), asyncio.Event()]
+    calls = {"n": 0}
+
+    class _Backend:
+        async def start(self):
+            return None
+
+        async def initialize(self):
+            return None
+
+        async def start_session(self, *, initial_prompt, issue_title):
+            return "thread-1"
+
+        async def run_turn(self, *, prompt, is_continuation):
+            index = calls["n"]
+            calls["n"] += 1
+            entered_run_turn[index].set()
+            if index == 0:
+                # Worker A: parked mid-turn like a backend that ignores
+                # cancellation — matches `_force_eject_zombie`, which frees
+                # the slot without ever calling `task.cancel()`.
+                await release_a.wait()
+                raise RuntimeError("zombie backend surfaced after re-dispatch")
+            # Worker B: stays "running" through the assertions below.
+            await asyncio.Event().wait()
+
+        async def stop(self):
+            return None
+
+    monkeypatch.setattr(core_module, "build_backend", lambda _init: _Backend())
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_record_agent_kind",
+        staticmethod(lambda _cfg, _identifier, _agent_kind: None),
+    )
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workspace_manager = _AF01StubWorkspaceManager()  # type: ignore[assignment]
+
+        # 1. Dispatch worker A and let it reach `run_turn`, where it parks.
+        orch._dispatch(issue, cfg, attempt=None)
+        entry_a = orch._running[issue.id]
+        worker_a = entry_a.worker_task
+        assert worker_a is not None
+        await asyncio.wait_for(entered_run_turn[0].wait(), timeout=5)
+
+        worker_b: asyncio.Task[None] | None = None
+        try:
+            # 2. Force-eject A: bookkeeping only, `worker_a` keeps running,
+            # still parked on `release_a`.
+            orch._force_eject_zombie(issue.id, entry_a, cfg)
+            assert issue.id not in orch._running
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+            orch._retry.clear()
+
+            # 3. Retry re-dispatches: fresh entry B installs under the
+            # same issue id while A is still parked.
+            orch._dispatch(issue, cfg, attempt=1)
+            entry_b = orch._running[issue.id]
+            worker_b = entry_b.worker_task
+            assert worker_b is not None
+            assert worker_b is not worker_a
+            await asyncio.wait_for(entered_run_turn[1].wait(), timeout=5)
+
+            # 4. Release A's blocked await — its `finally` now runs while a
+            # foreign (stale) entry sits under its issue id.
+            release_a.set()
+            for _ in range(50):
+                if worker_a.done():
+                    break
+                await asyncio.sleep(0)
+            assert worker_a.done(), "zombie worker never reached its finally"
+
+            # B must be untouched: still in `_running` under the same
+            # entry, `exit_started_at` never stamped by the stale worker,
+            # and its own worker task still alive.
+            assert orch._running.get(issue.id) is entry_b, (
+                "stale zombie's finally ejected the live replacement entry"
+            )
+            assert entry_b.exit_started_at is None, (
+                "stale zombie's finally stamped exit_started_at on the live entry"
+            )
+            assert not worker_b.done(), (
+                "stale zombie's finally side-effected the live worker"
+            )
+        finally:
+            if worker_b is not None and not worker_b.done():
+                worker_b.cancel()
+                try:
+                    await worker_b
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if not worker_a.done():
+                worker_a.cancel()
+            try:
+                await worker_a
+            except (asyncio.CancelledError, Exception):
+                pass
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_stale_zombie_finally_skips_worker_exit_handler(monkeypatch):
+    """AF-01 ownership is checked before entering `_on_worker_exit`."""
+    cfg = _make_config(max_concurrent=5)
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+
+    entered_workspace_create = asyncio.Event()
+    release_workspace_create = asyncio.Event()
+    exit_owners: list[asyncio.Task[None] | None] = []
+    warnings: list[dict] = []
+
+    monkeypatch.setattr(
+        core_module.log,
+        "warning",
+        lambda message, **fields: warnings.append({"message": message, **fields}),
+    )
+
+    class _BlockingWorkspaceManager:
+        async def create_or_reuse(self, identifier):
+            entered_workspace_create.set()
+            await release_workspace_create.wait()
+            raise RuntimeError("zombie workspace create resumed")
+
+    async def _capture_exit(issue_id, reason, error, *, owning_task=None):
+        exit_owners.append(owning_task)
+
+    async def _park() -> None:
+        await asyncio.Event().wait()
+
+    async def _run() -> None:
+        orch._workspace_manager = _BlockingWorkspaceManager()  # type: ignore[assignment]
+        monkeypatch.setattr(orch, "_on_worker_exit", _capture_exit)
+
+        entry_a = _install_running_entry(orch, issue)
+        worker_a = asyncio.create_task(orch._run_agent_attempt(issue, None, cfg))
+        entry_a.worker_task = worker_a
+        await asyncio.wait_for(entered_workspace_create.wait(), timeout=5)
+
+        worker_b = asyncio.create_task(_park())
+        entry_b = RunningEntry(
+            issue=issue,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=1,
+            worker_task=worker_b,
+            workspace_path=Path("/tmp/ws-fresh"),
+        )
+        orch._running[issue.id] = entry_b
+
+        try:
+            release_workspace_create.set()
+            await worker_a
+
+            assert exit_owners == [], (
+                "a stale worker must not enter the live run's exit handler"
+            )
+            assert orch._running.get(issue.id) is entry_b
+            assert entry_b.exit_started_at is None
+        finally:
+            worker_b.cancel()
+            try:
+                await worker_b
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(_run())
+
+    assert {
+        "message": "worker_finally_stale_entry",
+        "issue_id": issue.id,
+        "reason": "error",
+    } in warnings
+
+
+def test_worker_exit_rechecks_identity_after_finally_gate(monkeypatch):
+    """AF-01 closes the yield between the finally gate and the guarded pop."""
+    cfg = _make_config(max_concurrent=5)
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+
+    entered_workspace_create = asyncio.Event()
+    release_workspace_create = asyncio.Event()
+    entered_exit_impl = asyncio.Event()
+    release_exit_impl = asyncio.Event()
+    warnings: list[dict] = []
+
+    monkeypatch.setattr(
+        core_module.log,
+        "warning",
+        lambda message, **fields: warnings.append({"message": message, **fields}),
+    )
+
+    class _BlockingWorkspaceManager:
+        async def create_or_reuse(self, identifier):
+            entered_workspace_create.set()
+            await release_workspace_create.wait()
+            raise RuntimeError("worker A reached finally")
+
+    async def _park() -> None:
+        await asyncio.Event().wait()
+
+    async def _run() -> None:
+        orch._workspace_manager = _BlockingWorkspaceManager()  # type: ignore[assignment]
+        original_exit_impl = orch._on_worker_exit_impl
+
+        async def _delayed_exit_impl(issue_id, reason, error, *, owning_task=None):
+            entered_exit_impl.set()
+            await release_exit_impl.wait()
+            await original_exit_impl(
+                issue_id, reason, error, owning_task=owning_task
+            )
+
+        monkeypatch.setattr(orch, "_on_worker_exit_impl", _delayed_exit_impl)
+
+        entry_a = _install_running_entry(orch, issue)
+        worker_a = asyncio.create_task(orch._run_agent_attempt(issue, None, cfg))
+        entry_a.worker_task = worker_a
+        await asyncio.wait_for(entered_workspace_create.wait(), timeout=5)
+
+        release_workspace_create.set()
+        await asyncio.wait_for(entered_exit_impl.wait(), timeout=5)
+        assert entry_a.exit_started_at is not None
+
+        worker_b = asyncio.create_task(_park())
+        entry_b = RunningEntry(
+            issue=issue,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=1,
+            worker_task=worker_b,
+            workspace_path=Path("/tmp/ws-fresh"),
+        )
+        orch._running[issue.id] = entry_b
+
+        try:
+            release_exit_impl.set()
+            await worker_a
+
+            assert orch._running.get(issue.id) is entry_b
+            assert entry_b.exit_started_at is None
+            assert not worker_b.done()
+            assert issue.id not in orch._completed
+            assert issue.id not in orch._retry
+        finally:
+            worker_b.cancel()
+            try:
+                await worker_b
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(_run())
+
+    assert {
+        "message": "worker_exit_stale_task",
+        "issue_id": issue.id,
+        "reason": "error",
+    } in warnings
+
+
+def test_cancelled_worker_finally_passes_its_task_identity_through_shield(monkeypatch):
+    """A delivered cancellation does not erase the worker's ownership token."""
+    cfg = _make_config(max_concurrent=5)
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+
+    entered_workspace_create = asyncio.Event()
+    exit_owners: list[asyncio.Task[None] | None] = []
+
+    class _BlockingWorkspaceManager:
+        def path_for(self, identifier):
+            return Path("/tmp/ws-fake") / identifier
+
+        async def create_or_reuse(self, identifier):
+            entered_workspace_create.set()
+            await asyncio.Event().wait()
+
+    async def _capture_exit(issue_id, reason, error, *, owning_task=None):
+        exit_owners.append(owning_task)
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_record_agent_kind",
+        staticmethod(lambda _cfg, _identifier, _agent_kind: None),
+    )
+    monkeypatch.setattr(orch, "_on_worker_exit", _capture_exit)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workspace_manager = _BlockingWorkspaceManager()  # type: ignore[assignment]
+
+        orch._dispatch(issue, cfg, attempt=None)
+        entry = orch._running[issue.id]
+        worker = entry.worker_task
+        assert worker is not None
+        await asyncio.wait_for(entered_workspace_create.wait(), timeout=5)
+
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+        await asyncio.sleep(0)
+
+        assert entry.exit_started_at is not None
+        assert exit_owners == [worker]
+
+    asyncio.run(_run())
+
+
+def test_orphaned_worker_finally_skips_worker_exit_handler(monkeypatch):
+    """AF-01 ownership gate treats a missing entry as already cleaned up."""
+    cfg = _make_config(max_concurrent=5)
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+    exit_owners: list[asyncio.Task[None] | None] = []
+
+    async def _capture_exit(issue_id, reason, error, *, owning_task=None):
+        exit_owners.append(owning_task)
+
+    async def _run() -> None:
+        orch._workspace_manager = _AF01StubWorkspaceManager()  # type: ignore[assignment]
+        monkeypatch.setattr(orch, "_on_worker_exit", _capture_exit)
+        await orch._run_agent_attempt(issue, None, cfg)
+
+    asyncio.run(_run())
+
+    assert exit_owners == [], "a worker with no owned entry has nothing to clean up"
+
+
+def test_worker_exit_impl_missing_entry_is_identity_noop(monkeypatch):
+    """AF-01 owning-task exits cannot mutate state without an owned entry."""
+    orch = _orch()
+    issue_id = "id-MT-1"
+    released_at = datetime.now(timezone.utc)
+    warnings: list[dict] = []
+
+    monkeypatch.setattr(
+        core_module.log,
+        "warning",
+        lambda message, **fields: warnings.append({"message": message, **fields}),
+    )
+
+    async def _run() -> None:
+        owning_task = asyncio.current_task()
+        assert owning_task is not None
+        pause_event = asyncio.Event()
+        orch._claim_released_at[issue_id] = released_at
+        orch._pause_events[issue_id] = pause_event
+
+        await orch._on_worker_exit_impl(
+            issue_id, "error", "stale", owning_task=owning_task
+        )
+
+        assert orch._claim_released_at[issue_id] is released_at
+        assert orch._pause_events[issue_id] is pause_event
+        assert not pause_event.is_set()
+
+    asyncio.run(_run())
+
+    assert warnings == [
+        {
+            "message": "worker_exit_stale_task",
+            "issue_id": issue_id,
+            "reason": "error",
+        }
+    ]
+
+
+def test_worker_task_done_logs_exception_from_stale_pop_race(monkeypatch):
+    """AF-01 secondary defect — `_on_worker_task_done` must retrieve and log
+    `task.exception()` before its `entry is None` early return.
+
+    If `_on_worker_exit_impl` pops the entry and then raises, the worker
+    task ends errored. The old code returned as soon as `entry_owned_by`
+    found nothing (the entry was already popped), so `task.exception()` was
+    never called — surfacing only as asyncio's "Task exception was never
+    retrieved" warning, with no structured log to find it by.
+    """
+    cfg = _make_config(max_concurrent=5)
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+
+    class _Backend:
+        async def start(self):
+            return None
+
+        async def initialize(self):
+            return None
+
+        async def start_session(self, *, initial_prompt, issue_title):
+            return "thread-1"
+
+        async def run_turn(self, *, prompt, is_continuation):
+            raise TurnFailed("boom")
+
+        async def stop(self):
+            return None
+
+    monkeypatch.setattr(core_module, "build_backend", lambda _init: _Backend())
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_record_agent_kind",
+        staticmethod(lambda _cfg, _identifier, _agent_kind: None),
+    )
+
+    errors: list[dict] = []
+    monkeypatch.setattr(
+        core_module.log,
+        "error",
+        lambda message, **fields: errors.append({"message": message, **fields}),
+    )
+
+    async def _boom_exit(issue_id, reason, error, *, owning_task=None):
+        # Stand-in for `_on_worker_exit_impl` popping the entry and then
+        # raising (e.g. a downstream persist failure) before the
+        # done-callback ever runs.
+        orch._running.pop(issue_id, None)
+        raise RuntimeError("worker_exit_impl_boom")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workspace_manager = _AF01StubWorkspaceManager()  # type: ignore[assignment]
+        monkeypatch.setattr(orch, "_on_worker_exit", _boom_exit)
+
+        orch._dispatch(issue, cfg, attempt=None)
+        task = orch._running[issue.id].worker_task
+        assert task is not None
+
+        # `asyncio.wait` observes completion without touching
+        # `task.exception()` itself — retrieving it here would mask
+        # whether production code ever did.
+        await asyncio.wait({task})
+        # Done-callbacks are scheduled via `call_soon`; yield twice so
+        # `_on_worker_task_done` has actually run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(_run())
+
+    assert any(e["message"] == "worker_task_errored_after_cleanup" for e in errors), (
+        "_on_worker_task_done must retrieve+log task.exception() even when "
+        "the entry was already popped by the raising _on_worker_exit"
+    )
 
 
 def test_persisted_lease_blocks_fresh_orchestrator_dispatch(tmp_path, monkeypatch):
