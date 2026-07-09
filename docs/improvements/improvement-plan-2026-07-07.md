@@ -1,5 +1,10 @@
 # Improvement plan — 2026-07-07
 
+> Reliability track split out 2026-07-09: the agent-flow bug audit and its
+> 16 tickets live in
+> [`improvement-plan-2026-07-09.md`](./improvement-plan-2026-07-09.md).
+> Notably it root-causes P2-2 below (see ticket AF-01).
+
 Status update and continuation of
 [`architecture-improvement-plan-2026-07-05.md`](./architecture-improvement-plan-2026-07-05.md)
 (the umbrella). That document holds the rationale and literature; this one
@@ -116,12 +121,12 @@ Also closed since the umbrella was written (previously tracked as open gaps):
 - **P2-1 File-size breaches** (split when next touched, not proactively):
   `tui/app.py` 1115, `backends/codex.py` 1021, `service.py` 986,
   `trackers/file.py` 919, `webapi.py` 905.
-- **P2-2 Residual `finished_without_cleanup` race.** The orphan-path guard
-  and diagnostic marker are in place (`core.py:3316`, `:3903`) but the race
-  that pops `_running` mid-flight was never root-caused. When it next fires,
-  the marker pairing identifies the window; consider a targeted
-  characterization test around exit-vs-callback ordering instead of hunting
-  cold.
+- **P2-2 Residual `finished_without_cleanup` race.** ROOT-CAUSED 2026-07-09:
+  a force-ejected zombie's `finally` operates on the retry-installed
+  replacement entry because neither the `finally` nor the `_running` pop
+  verifies task identity. Fix tracked as
+  [AF-01](./tickets/2026-07-09/AF-01-identity-safe-worker-exit.md) in the
+  07-09 reliability plan.
 - **P2-3 Public-repo doc audit.** The repo is heading public: re-verify
   README / llm-wiki / launcher claims against `v0.12.0` behavior (every
   example must run from a fresh clone).
