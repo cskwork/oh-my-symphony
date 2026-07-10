@@ -71,7 +71,13 @@ def _bind_port(
 ) -> CheckResult:
     name = f"server.port={port}"
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    # Match asyncio's TCP listener: POSIX servers may replace TIME_WAIT
+    # sockets, while Windows keeps its exclusive default semantics.
+    sock.setsockopt(
+        socket.SOL_SOCKET,
+        socket.SO_REUSEADDR,
+        0 if _IS_WIN32 else 1,
+    )
     try:
         sock.bind((host, port))
     except OSError as exc:

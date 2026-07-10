@@ -90,3 +90,23 @@
 - Rejected: change Symphony's auto-merge implementation. It already runs from
   the host target checkout and is not affected; the observed failure came from
   an unsupported merge direction inside the overlay workspace.
+
+## Doctor ignores closed POSIX sockets in TIME_WAIT
+
+- Problem: `symphony service stop` could finish its graceful process drain,
+  leaving no listener, while an immediate Doctor check still failed the HTTP
+  port for roughly 30 seconds. The probe explicitly disabled `SO_REUSEADDR`,
+  so POSIX TCP connections in `TIME_WAIT` looked like a live port conflict.
+- Decision: make Doctor's POSIX probe use `SO_REUSEADDR`, matching the asyncio
+  TCP server it is validating. Preserve the existing Windows setting because
+  Windows assigns different address-reuse semantics to that socket option.
+- Why: Doctor should answer whether Symphony can start now. The real POSIX
+  server can replace its own `TIME_WAIT` sockets, while a live listener still
+  rejects the probe without `SO_REUSEPORT`.
+- Rejected: wait for bindability in `service stop`. The managed processes and
+  listener are already gone; waiting on kernel TCP bookkeeping adds downtime
+  without making startup safer.
+- Rejected: skip Doctor during restart. That would hide genuine port conflicts
+  from another live process instead of correcting the probe's semantics.
+- Rejected: force-kill the service. A stronger signal cannot remove kernel
+  `TIME_WAIT` state and would bypass graceful worker and server cleanup.

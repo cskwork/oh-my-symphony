@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import socket
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
+
+import pytest
 
 from symphony import service as service_module
 from symphony.service import ServiceRecord, save_record
@@ -275,6 +278,36 @@ def test_port_fail_when_already_bound(tmp_path: Path) -> None:
         assert f"127.0.0.1:{bound_port}" in result.message
     finally:
         sock.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX TIME_WAIT semantics")
+def test_port_passes_when_only_time_wait_remains(tmp_path: Path) -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    bound_port = listener.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", bound_port))
+    accepted, _ = listener.accept()
+    try:
+        accepted.shutdown(socket.SHUT_WR)
+        assert client.recv(1) == b""
+    finally:
+        accepted.close()
+        client.close()
+        listener.close()
+
+    cfg = _build_cfg(
+        tmp_path,
+        f"""
+        tracker: {{ kind: file, board_root: ./kanban }}
+        agent: {{ kind: codex }}
+        codex: {{ command: codex app-server }}
+        server: {{ port: {bound_port} }}
+        """,
+    )
+
+    assert check_port(cfg).status == "pass"
 
 
 def test_port_fail_names_this_workflow_service_when_record_matches(
