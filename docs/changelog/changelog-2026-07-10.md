@@ -322,3 +322,13 @@ Rejected alternatives:
 
 Evidence: RED on the three new regressions pre-fix; full suite
 1371 passed / 5 skipped post-fix; prompt-anchor suite untouched and green.
+
+### Follow-up: evidence-cell examples in the Verify prompts
+
+Run #3 of the E2E loop showed the remaining contract rewinds are true
+positives (source anchors like `README.md:13,21,36` and bare prose in
+pass-result rows) — three different agent sessions violated the stated rule
+somewhere despite it being explicit. Added one valid/invalid example pair to
+the Verify stage prompts (file and linear variants) since examples raise
+first-pass compliance where rules alone do not; the prompt-anchor suite is
+unchanged and green.
