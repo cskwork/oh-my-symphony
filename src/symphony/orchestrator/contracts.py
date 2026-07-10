@@ -30,10 +30,16 @@ consistency — NOT a regex re-implementation of what a section "should
 say" (the :19-24 rationale still holds: prose shape is not re-encoded
 here). Concretely:
 
-- `_cited_paths_exist` confirms every evidence path the model cited
-  (AC Scorecard `evidence path` cells, Security Audit `path:line` cells)
-  actually exists under `docs_root`. A cited-but-absent file is a
-  fabricated citation — a hard rewind, not a matter of prose.
+- `_cited_path_failures` confirms every evidence artifact the model
+  cited (AC Scorecard evidence cells, Security Audit evidence cells)
+  actually exists under `docs_root`. A cell may cite one or more
+  artifacts via backtick spans — qualifiers and trailing prose around
+  them are tolerated, e.g. "`qa/x.log` (README grep block)" — and
+  every cited `qa/...`/`work/...` artifact must exist; a cited-but-absent
+  file is a fabricated citation — a hard rewind, not a matter of prose.
+  `## Security Audit` rows whose result is `n/a` need no evidence and
+  are skipped; `## AC Scorecard` rows are always validated regardless
+  of result.
 - A `fail` verdict row in `## Security Audit` paired with a clean
   `## Review` (instead of `## Review Findings`) is self-contradictory:
   the reviewer flagged a failure yet signalled "clean". Hard rewind.
@@ -136,6 +142,15 @@ _SECURITY_FAIL_TOKENS = frozenset({"fail", "failed", "critical"})
 # Evidence cells that name no real artefact — never treated as a cited path.
 _PATH_PLACEHOLDERS = frozenset({"", "n/a", "na", "none", "-", "--", "tbd", "—"})
 _EVIDENCE_ARTIFACT_PREFIXES = ("qa/", "work/")
+
+# `## Security Audit` result tokens meaning "no proof required" -- rows with
+# one of these need no evidence citation at all. `## AC Scorecard` rows are
+# never exempt this way (see `_security_row_skips_evidence`).
+_NA_RESULT_TOKENS = frozenset({"n/a", "na"})
+
+# Matches a single Markdown inline-code span, e.g. the two spans in
+# "`qa/a.log`, `qa/b.log` (`test_name`)".
+_INLINE_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 
 
 def evaluate_contract(
@@ -394,60 +409,119 @@ def _scorecard_all_pass(body: str) -> tuple[bool, list[str]]:
 def _cited_path_failures(
     body: str, docs_root: Path | None, identifier: str
 ) -> list[ContractFailure]:
-    """Return structured failures for invalid or absent evidence paths.
+    """Return structured failures for invalid or absent evidence citations.
 
     Collects the evidence column of `## AC Scorecard` and `## Security Audit`.
-    Evidence paths must point under `docs/<identifier>/qa/` or
-    `docs/<identifier>/work/`; source anchors belong inside those artefacts.
+    A cell may cite one or more artifacts via backtick spans; every cited
+    artifact must resolve under `docs/<identifier>/qa/` or
+    `docs/<identifier>/work/` and exist on disk. Source anchors/prose
+    belong inside those artefacts, not the table cell. `## Security Audit`
+    rows whose result is `n/a` require no evidence and are skipped;
+    `## AC Scorecard` rows are always validated regardless of result.
     """
     if docs_root is None or not identifier:
         return []
-    failures: list[ContractFailure] = []
     expected_shape = _expected_evidence_shape(identifier)
+    failures: list[ContractFailure] = []
     for heading in (_QA_SCORECARD, _VERIFY_REQUIRED_AUDIT):
         for row in _parse_markdown_table_rows(body, heading):
-            if not row.cells:
-                continue
-            cell = row.cells[-1]
-            cited = _extract_cited_path(cell)
-            if cited is None:
-                failures.append(
-                    ContractFailure(
-                        contract="Verify",
-                        section=heading,
-                        row=row.row,
-                        found=cell,
-                        expected=expected_shape,
-                    )
+            failures.extend(
+                _row_evidence_failures(
+                    heading, row, docs_root, identifier, expected_shape
                 )
-                continue
-            artifact_path = _normalise_ticket_artifact_path(cited, identifier)
-            if artifact_path is None:
-                failures.append(
-                    ContractFailure(
-                        contract="Verify",
-                        section=heading,
-                        row=row.row,
-                        found=cell,
-                        expected=expected_shape,
-                    )
-                )
-                continue
-            candidate = docs_root / identifier / artifact_path
-            if not candidate.exists():
-                failures.append(
-                    ContractFailure(
-                        contract="Verify",
-                        section=heading,
-                        row=row.row,
-                        found=cited,
-                        expected=(
-                            f"existing durable artifact under docs/{identifier} "
-                            "as `qa/...` or `work/...`"
-                        ),
-                    )
-                )
+            )
     return failures
+
+
+def _row_evidence_failures(
+    heading: str,
+    row: MarkdownTableRow,
+    docs_root: Path,
+    identifier: str,
+    expected_shape: str,
+) -> list[ContractFailure]:
+    """Validate one table row's evidence citation(s); see `_cited_path_failures`."""
+    if not row.cells:
+        return []
+    if heading == _VERIFY_REQUIRED_AUDIT and _security_row_skips_evidence(row.cells):
+        return []
+    cell = row.cells[-1]
+    citations = _cited_artifact_candidates(cell, identifier)
+    if not citations:
+        return [
+            ContractFailure(
+                contract="Verify",
+                section=heading,
+                row=row.row,
+                found=cell,
+                expected=expected_shape,
+            )
+        ]
+    failures: list[ContractFailure] = []
+    for cited, artifact_path in citations:
+        if (docs_root / identifier / artifact_path).exists():
+            continue
+        failures.append(
+            ContractFailure(
+                contract="Verify",
+                section=heading,
+                row=row.row,
+                found=cited,
+                expected=(
+                    f"existing durable artifact under docs/{identifier} "
+                    "as `qa/...` or `work/...`"
+                ),
+            )
+        )
+    return failures
+
+
+def _security_row_skips_evidence(cells: tuple[str, ...]) -> bool:
+    """True when a `## Security Audit` row's result column is `n/a`.
+
+    The audit table is `check | verdict | evidence`; result is `cells[-2]`.
+    A row that needs no proof carries no evidence citation to validate.
+    """
+    if len(cells) < 2:
+        return False
+    return _normalize_cell(cells[-2]) in _NA_RESULT_TOKENS
+
+
+def _cited_artifact_candidates(cell: str, identifier: str) -> list[tuple[str, str]]:
+    """Resolve an evidence cell to `(cited form, artifact-relative path)` pairs.
+
+    Prefers inline-code spans, so qualifier/multi-citation cells like
+    "`qa/x.log` (README grep block)" or "`qa/a.log`, `qa/b.log` (`test_name`)"
+    cite each backticked path independently; spans that are not path-shaped
+    (e.g. a bare test name) are dropped as prose, not treated as citations.
+    Falls back to whole-cell extraction via `_extract_cited_path` when the
+    cell has no backtick spans at all, preserving prior behaviour for bare
+    cells such as `qa/evidence.md`.
+    """
+    span_paths = _extract_cited_path_spans(cell)
+    raw_candidates = [_extract_cited_path(cell)] if span_paths is None else span_paths
+    resolved: list[tuple[str, str]] = []
+    for cited in raw_candidates:
+        if cited is None:
+            continue
+        artifact_path = _normalise_ticket_artifact_path(cited, identifier)
+        if artifact_path is not None:
+            resolved.append((cited, artifact_path))
+    return resolved
+
+
+def _extract_cited_path_spans(cell: str) -> list[str] | None:
+    """Extract path-shaped citations from inline-code spans in `cell`.
+
+    Returns None when `cell` has no backtick spans at all, signalling the
+    caller should fall back to whole-cell extraction. When spans exist,
+    returns the ones that clean up to a path shape via `_extract_cited_path`;
+    non-path spans are dropped, not treated as citations.
+    """
+    spans = _INLINE_CODE_SPAN_RE.findall(cell)
+    if not spans:
+        return None
+    return [path for span in spans if (path := _extract_cited_path(span)) is not None]
 
 
 def _normalise_ticket_artifact_path(cited: str, identifier: str) -> str | None:

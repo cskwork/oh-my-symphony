@@ -289,3 +289,36 @@ Rejected alternatives:
 Evidence: RED failures `test_commit_workspace_on_done_squashes_onto_merged_
 lineage` and `..._noops_when_fully_merged_and_clean` on pre-fix code; full
 suite 1366 passed / 5 skipped post-fix.
+
+## Verify-contract evidence false positives (live E2E finding)
+
+Two independent opencode Verify agents across two E2E runs were rewound by
+the stage contract for evidence cells that satisfy the shipped prompt's
+stated rules (`docs/symphony-prompts/file/stages/verify.md` lines 8 and 23):
+
+- A cell citing an existing artifact with a trailing qualifier
+  (`` `qa/manual-acceptance.log` (README grep block)``) failed because the
+  validator treated the whole cell as one path, gluing the qualifier onto
+  the existence check.
+- Security Audit rows with an `n/a` result and a prose reason failed even
+  though the prompt requires artifacts only "when a row needs proof".
+
+Fix in `contracts.py` `_cited_path_failures`: prefer inline-code-span
+extraction (each backticked path validated independently, every cited
+`qa/`/`work/` artifact must exist, at least one required; qualifier prose
+tolerated), falling back to the previous whole-cell parse when a cell has
+no spans; skip evidence validation for Security Audit rows whose result is
+`n/a` (AC Scorecard rows are never exempt).
+
+Rejected alternatives:
+
+- Relaxing the "no prose in cells" prompt rule instead: the strictness is
+  useful guidance; only enforcement of the two false-positive shapes was
+  wrong.
+- Accepting any cell that mentions a path anywhere (no existence check):
+  fabricated citations must keep hard-rewinding.
+- Exempting `n/a` AC Scorecard rows too: acceptance criteria always need
+  proof.
+
+Evidence: RED on the three new regressions pre-fix; full suite
+1371 passed / 5 skipped post-fix; prompt-anchor suite untouched and green.

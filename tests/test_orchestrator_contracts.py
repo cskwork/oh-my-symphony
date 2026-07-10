@@ -384,6 +384,132 @@ def test_contract_failure_note_round_trips_backticked_evidence_scope(
     ]
 
 
+def test_verify_accepts_backticked_artifact_with_trailing_qualifier(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    (docs_root / "SMA-1" / "qa" / "manual-acceptance.log").write_text("ok")
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | "
+        "`qa/manual-acceptance.log` (README grep block) |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_verify_accepts_multiple_cited_artifacts_when_all_exist(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    qa = docs_root / "SMA-1" / "qa"
+    (qa / "manual-run.log").write_text("ok")
+    (qa / "pytest.log").write_text("ok")
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | "
+        "`qa/manual-run.log`, `qa/pytest.log` "
+        "(`test_add_then_list_shows_item_with_index`) |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is True
+    assert result.missing == []
+
+
+def test_verify_rejects_multi_citation_when_any_artifact_missing(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    (docs_root / "SMA-1" / "qa" / "manual-run.log").write_text("ok")
+    # qa/pytest.log intentionally NOT created.
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | pass | "
+        "`qa/manual-run.log`, `qa/pytest.log` "
+        "(`test_add_then_list_shows_item_with_index`) |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is False
+    assert any("qa/pytest.log" in item for item in result.missing)
+
+
+def test_verify_skips_security_audit_evidence_for_na_result_rows(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body()
+    body = body.replace(
+        "| rate-limit | pass | qa/security.md |",
+        "| rate-limit | n/a | No network/API resource exposed. |",
+    )
+    body = body.replace(
+        "| authz | pass | qa/security.md |",
+        "| authz | pass | validated via manual review |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is False
+    assert not any(
+        "No network/API resource exposed." in item for item in result.missing
+    )
+    assert any("validated via manual review" in item for item in result.missing)
+
+
+def test_verify_ac_scorecard_na_result_still_requires_evidence(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body().replace(
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| version bumped | pytest | n/a | - |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is False
+    assert result.failures
+    assert result.failures[0].section == "## AC Scorecard"
+    assert result.failures[0].found == "-"
+
+
 def test_verify_bug_repro_not_closed_rewinds(tmp_path: Path) -> None:
     docs_root = tmp_path / "docs"
     (docs_root / "SMA-1" / "reproduce").mkdir(parents=True)
