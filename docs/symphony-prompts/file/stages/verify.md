@@ -27,6 +27,7 @@ Verify has three jobs: review, QA, and merge preflight/merge. Goal for this lane
 8. Merge Gate:
    - Resolve target in order: `agent.auto_merge_target_branch`, `agent.feature_base_branch`, current host branch.
    - Run `git merge-tree --write-tree <target-branch> symphony/{{ issue.identifier }}` from the host repo. Save output to `docs/{{ issue.identifier }}/qa/merge-tree.log`.
+   - Do not merge the target branch into the ticket workspace. File-board workspaces replace tracked `kanban/` with a host-backed overlay; even with clean `git status`, a checkout-producing merge can reject those live board files as local changes. Run target integration from the host repo. Conflict-repair RCA that must update the feature branch uses a separate clean temporary worktree without host-linked roots.
    - Do not use `git status -uno --porcelain` as merge proof. Dirty host worktree is a separate safety check, not committed-branch conflict proof.
    - If committed target/branch merge conflicts exist: set state to `Blocked`, append `## Merge Failure` with exact command, target branch, and conflicted paths, then stop.
    - If clean: check whether host dirty tracked files overlap `git diff --name-only <target-branch>..symphony/{{ issue.identifier }}`. Block only on actual overlap or workspace-only path changes.

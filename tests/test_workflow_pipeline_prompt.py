@@ -59,6 +59,7 @@ VERIFY_RULES = (
     "Evidence cells must cite files under `docs/DEMO-1/` as `qa/...` or `work/...`",
     "## QA Failure",
     "git merge-tree --write-tree",
+    "Do not merge the target branch into the ticket workspace",
     "## Merge Status",
     "Set state to `Learn`",
 )

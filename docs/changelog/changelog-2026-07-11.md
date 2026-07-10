@@ -67,3 +67,26 @@
   would be broader than fixing scheduler eligibility.
 - Rejected: add a fixed sleep after Done. Timing cannot prove auto-merge has
   completed and would leave the same race on slower repositories.
+
+## File-board merge commands avoid the ticket overlay
+
+- Problem: a file-board ticket workspace can report clean status while its
+  tracked `kanban/` index entries are deliberately hidden and the worktree path
+  is a symlink to the live host board. Running `git merge <target>` there makes
+  Git protect those live files with `would be overwritten by merge`.
+- Decision: make the Verify prompt explicitly forbid merging the target branch
+  into the ticket workspace. Target integration stays in the host repo; an RCA
+  that must update the feature branch uses a clean temporary worktree without
+  host-linked roots.
+- Why: the host board overlay models tracker state, not branch content. Keeping
+  checkout-producing Git operations away from it preserves live ticket writes
+  while the existing host-side merge gate retains committed-history proof.
+- Rejected: clear `skip-worktree` or replace the symlink before merging. Both
+  expose or overwrite live tracker files and can stage workflow plumbing on the
+  feature branch.
+- Rejected: teach the setup hook to silently rewrite the workspace index to the
+  target branch. That creates staged differences against the feature HEAD and
+  still cannot make a merge safely traverse a symlinked tracked directory.
+- Rejected: change Symphony's auto-merge implementation. It already runs from
+  the host target checkout and is not affected; the observed failure came from
+  an unsupported merge direction inside the overlay workspace.
