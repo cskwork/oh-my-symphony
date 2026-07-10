@@ -242,10 +242,12 @@ codex:
   # backend auto-injects `-c sandbox_workspace_write.writable_roots=[...]`
   # for direct `codex ...` commands and exports the resolved targets via
   # `$SYMPHONY_CODEX_WRITABLE_ROOTS` (os.pathsep-joined) for wrapper
-  # scripts to forward themselves. If blocked-write loops still appear,
-  # fall back to `danger-full-access` (trusted local dev only).
+  # scripts to forward themselves. The tagged turn policy retains workspace
+  # confinement while allowing package-registry downloads; use the string
+  # shorthand `workspace-write` for offline-only workers. Reserve
+  # `danger-full-access` for a proven OS-capability blocker.
   thread_sandbox: workspace-write
-  turn_sandbox_policy: workspace-write
+  turn_sandbox_policy: {type: workspaceWrite, networkAccess: true}
 
 claude:
   # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` extends Claude

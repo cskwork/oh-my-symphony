@@ -247,11 +247,13 @@ codex:
   #   so writes through them succeed without widening the sandbox. Wrapper
   #   scripts can read `$SYMPHONY_CODEX_WRITABLE_ROOTS` (os.pathsep-joined)
   #   and pass the same override to codex themselves.
-  #   If you still see "쓰기 불가" / blocked-write loops, fall back to
-  #   `danger-full-access` (trusted local dev only — git branch isolation
-  #   still scopes the blast radius).
+  #   Codex v2 denies network by default under the string shorthand. The
+  #   tagged turn policy below keeps workspace confinement while allowing
+  #   package-registry downloads. Use `turn_sandbox_policy: workspace-write`
+  #   instead for offline-only workers. Reserve `danger-full-access` for a
+  #   proven OS-capability blocker, not registry access.
   thread_sandbox: workspace-write
-  turn_sandbox_policy: workspace-write
+  turn_sandbox_policy: {type: workspaceWrite, networkAccess: true}
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000

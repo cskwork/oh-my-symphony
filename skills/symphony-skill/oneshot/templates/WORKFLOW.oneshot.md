@@ -58,10 +58,12 @@ codex:
   # `workspace-write` is safe by default. The codex backend auto-detects
   # host-repo symlinks in the workspace and injects them into
   # `sandbox_workspace_write.writable_roots` (or exports them as
-  # `$SYMPHONY_CODEX_WRITABLE_ROOTS` for wrapper scripts). Fall back to
-  # `danger-full-access` only if blocked-write loops persist.
+  # `$SYMPHONY_CODEX_WRITABLE_ROOTS` for wrapper scripts). The tagged turn
+  # policy keeps that confinement while allowing package-registry downloads.
+  # Use the string shorthand for offline-only work; reserve
+  # `danger-full-access` for a proven OS-capability blocker.
   thread_sandbox: workspace-write
-  turn_sandbox_policy: workspace-write
+  turn_sandbox_policy: {type: workspaceWrite, networkAccess: true}
 
 server:
   port: __ONESHOT_PORT__

@@ -91,6 +91,30 @@ and sandbox settings still come from the matching global backend block in
 `WORKFLOW.md`. When creating a ticket from the file-board CLI, use
 `symphony board new TASK-001 "title" --agent-kind codex`.
 
+### Codex workspace sandbox and package registries
+
+Keep the thread sandbox confined to the worker workspace. When a Codex worker
+must install dependencies from package registries, enable network only on the
+v2 turn policy:
+
+```yaml
+codex:
+  thread_sandbox: workspace-write
+  turn_sandbox_policy: {type: workspaceWrite, networkAccess: true}
+```
+
+The string shorthand `turn_sandbox_policy: workspace-write` remains valid, but
+its v2 payload defaults to no network access. A registry download failure does
+not require `danger-full-access`; the tagged policy preserves filesystem
+confinement while enabling network for the turn. Use `danger-full-access` only
+after proving that an OS capability outside workspace and network permissions
+is required, such as a browser runtime blocked by the platform sandbox.
+
+Symphony passes tagged policy dictionaries through to Codex and still merges
+auto-detected symlink and git-worktree paths into `writableRoots`. Do not put
+the tagged object under `thread_sandbox`; Codex thread start expects the
+kebab-case string there.
+
 ## Prompt files
 
 Preferred current shape:

@@ -105,6 +105,30 @@ def _load(name: str):
     return build_service_config(load_workflow(REPO_ROOT / name))
 
 
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_shipped_workflows_allow_registry_access_without_full_sandbox(
+    workflow: str,
+) -> None:
+    cfg = _load(workflow)
+
+    assert cfg.codex.thread_sandbox == "workspace-write"
+    assert cfg.codex.turn_sandbox_policy == {
+        "type": "workspaceWrite",
+        "networkAccess": True,
+    }
+
+
+def test_workflow_docs_explain_registry_network_policy() -> None:
+    docs = (
+        REPO_ROOT / "skills" / "symphony-skill" / "reference" / "workflow-config.md"
+    ).read_text(encoding="utf-8")
+    normalized_docs = " ".join(docs.split())
+
+    assert "turn_sandbox_policy: {type: workspaceWrite, networkAccess: true}" in docs
+    assert "package registries" in docs
+    assert "does not require `danger-full-access`" in normalized_docs
+
+
 def _issue(state: str, **overrides) -> Issue:
     base = dict(
         id="DEMO-1",

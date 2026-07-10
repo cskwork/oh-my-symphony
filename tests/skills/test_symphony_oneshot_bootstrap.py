@@ -119,6 +119,16 @@ def test_plan_lane_requires_self_contained_ticket_descriptions() -> None:
     assert "Read .oneshot/vault/plan.md §BUILD-1 for the spec." not in workflow
 
 
+def test_oneshot_codex_allows_registry_access_without_full_sandbox() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "thread_sandbox: workspace-write" in workflow
+    assert (
+        "turn_sandbox_policy: {type: workspaceWrite, networkAccess: true}" in workflow
+    )
+    assert "turn_sandbox_policy: danger-full-access" not in workflow
+
+
 @pytest.mark.skipif(
     shutil.which("symphony") is not None,
     reason="symphony CLI present — covered by the hermetic-run test instead",
