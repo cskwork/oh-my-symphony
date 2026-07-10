@@ -5786,8 +5786,15 @@ class Orchestrator:
                 return
             last_seen = entry.last_codex_timestamp
             last_event_age = (now - last_seen).total_seconds() if last_seen else None
+            last_progress = entry.last_progress_timestamp
+            last_progress_age = (
+                (now - last_progress).total_seconds() if last_progress else None
+            )
             terminal_age = (now - entry.terminal_seen_at).total_seconds()
-            if terminal_age < recent_grace_s:
+            if terminal_age < recent_grace_s or (
+                last_progress_age is not None
+                and last_progress_age < recent_grace_s
+            ):
                 log.info(
                     "reconcile_skip_active_worker",
                     issue_id=issue.id,
@@ -5796,6 +5803,11 @@ class Orchestrator:
                     last_event_age_s=(
                         round(last_event_age, 1)
                         if last_event_age is not None
+                        else None
+                    ),
+                    last_progress_age_s=(
+                        round(last_progress_age, 1)
+                        if last_progress_age is not None
                         else None
                     ),
                     terminal_age_s=round(terminal_age, 1),
@@ -5809,6 +5821,11 @@ class Orchestrator:
                 last_event_age_s=(
                     round(last_event_age, 1)
                     if last_event_age is not None
+                    else None
+                ),
+                last_progress_age_s=(
+                    round(last_progress_age, 1)
+                    if last_progress_age is not None
                     else None
                 ),
                 terminal_age_s=round(terminal_age, 1),

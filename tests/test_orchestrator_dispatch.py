@@ -4384,7 +4384,7 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
 
 
 def test_reconcile_terminal_grace_expires_despite_recent_heartbeat(monkeypatch):
-    """Backend keepalives must not extend terminal cleanup forever."""
+    """Real progress extends terminal grace; backend keepalives do not."""
     cfg = _make_config(
         max_concurrent=1,
         active_states=("In Progress", "Verify", "Learn"),
@@ -4452,12 +4452,22 @@ def test_reconcile_terminal_grace_expires_despite_recent_heartbeat(monkeypatch):
             assert worker_task.cancelled() is False
             assert entry.terminal_seen_at is not None
 
-            # Simulate OpenCode's periodic liveness event after the terminal
-            # state has already had its one bounded natural-exit window.
+            # Real model progress after the terminal transition must extend
+            # the natural-exit window so Learn can finish its history gate.
             entry.terminal_seen_at = datetime.now(timezone.utc) - timedelta(
                 seconds=61
             )
             entry.last_codex_timestamp = datetime.now(timezone.utc)
+            entry.last_progress_timestamp = entry.last_codex_timestamp
+
+            await orch._reconcile_running(cfg)
+
+            assert calls == []
+            assert worker_task.cancelled() is False
+
+            # A later keepalive updates only the UI activity clock. With no
+            # recent model progress, terminal cleanup must still complete.
+            entry.last_progress_timestamp = entry.terminal_seen_at
 
             await orch._reconcile_running(cfg)
 

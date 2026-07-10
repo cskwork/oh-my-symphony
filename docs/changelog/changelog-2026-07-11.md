@@ -128,3 +128,25 @@
   can interpret that unambiguously without destructive tracker edits.
 - Rejected: accept any non-empty third cell as passing. That would silence the
   warning while losing the actual `pass`/`fail` safety signal.
+
+## Terminal cleanup respects genuine agent progress
+
+- Problem: after a worker moved its ticket to Done, reconciliation cancelled
+  it once the fixed 60-second terminal window elapsed even though the model had
+  produced genuine output 2.6 seconds earlier. The cancellation interrupted
+  Learn's final history commit and push, then freed the dependent ticket to
+  dispatch against an incompletely published target branch.
+- Decision: expire terminal cleanup only when both the terminal-state age and
+  the agent's genuine-progress age exceed the grace window. Keep UI/liveness
+  events separate: a backend keepalive still cannot extend terminal cleanup.
+- Why: `last_progress_timestamp` already filters Claude tool-result echoes and
+  backend-specific keepalives, while tracking assistant output and lifecycle
+  progress. It is the existing semantic signal for an agent that is still
+  advancing its terminal work.
+- Rejected: increase the fixed terminal grace. Any timeout can still interrupt
+  a slower final history gate, and it adds needless latency for real zombies.
+- Rejected: use `last_codex_timestamp`. That clock includes non-progress
+  keepalives and would let a chatty dead worker occupy a slot indefinitely.
+- Rejected: rely only on prompt ordering so Done is written last. External
+  tracker transitions and imperfect workers can still expose a terminal state
+  before the process has drained; the runtime must preserve active work.

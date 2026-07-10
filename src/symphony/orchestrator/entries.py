@@ -103,8 +103,8 @@ class RunningEntry:
     # callback is only a fallback for workers that never reached this point.
     exit_started_at: datetime | None = None
     # First reconcile tick that observed this running ticket in a terminal
-    # tracker state. Terminal cleanup grace is measured from this timestamp,
-    # not from backend keepalives, so chatty CLIs cannot hold a slot forever
+    # tracker state. Genuine model progress may extend the cleanup grace;
+    # backend keepalives cannot, so chatty CLIs do not hold a slot forever
     # after the board already says the work is terminal.
     terminal_seen_at: datetime | None = None
     # Set when reconcile already snapshotted/removed this workspace after a
