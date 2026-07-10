@@ -302,6 +302,38 @@ def test_todo_with_done_blocker_eligible():
     assert orch._should_dispatch(issue, cfg) is True
 
 
+def test_todo_with_done_blocker_waits_for_worker_finalization():
+    cfg = _make_config()
+    orch = _orch()
+    upstream = _issue("MT-9", state="Done")
+    downstream = _issue(
+        "MT-10",
+        blocked_by=(BlockerRef(id="stale-id", identifier="MT-9", state="Done"),),
+    )
+    orch._running[upstream.id] = RunningEntry(
+        issue=upstream,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp"),
+    )
+
+    assert orch._should_dispatch(downstream, cfg) is False
+
+    orch._running.pop(upstream.id)
+    orch._terminal_persist_pending.add(upstream.id)
+    downstream = replace(
+        downstream,
+        blocked_by=(
+            BlockerRef(id=upstream.id, identifier="MT-9", state="Done"),
+        ),
+    )
+    assert orch._should_dispatch(downstream, cfg) is False
+
+    orch._terminal_persist_pending.discard(upstream.id)
+    assert orch._should_dispatch(downstream, cfg) is True
+
+
 def test_todo_with_blocked_terminal_blocker_remains_blocked():
     cfg = _make_config(terminal_states=("Done", "Cancelled", "Blocked"))
     orch = _orch()

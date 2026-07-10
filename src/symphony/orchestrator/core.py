@@ -59,7 +59,7 @@ from ..continuous_improvement import (
     default_improvement_runner,
     lease_path_for,
 )
-from ..issue import Issue, normalize_state
+from ..issue import BlockerRef, Issue, normalize_state
 from ..logging import get_logger
 from ..prompt import build_continuation_prompt, build_first_turn_prompt
 from ..skills import render_skill_block
@@ -2767,12 +2767,22 @@ class Orchestrator:
             if current_in_state >= per_state_cap:
                 return False
         # Blockers apply to every active state; downstream work must wait
-        # if an upstream dependency regresses or is unknown.
+        # if an upstream dependency regresses, is unknown, or still has a
+        # worker/finalizer that can change the shared base branch.
         if issue.blocked_by:
             for blocker in issue.blocked_by:
+                if self._blocker_is_in_flight(blocker):
+                    return False
                 if not _blocker_dependency_is_resolved(blocker.state, cfg):
                     return False
         return True
+
+    def _blocker_is_in_flight(self, blocker: BlockerRef) -> bool:
+        """Keep dependents idle until the upstream run is fully finalized."""
+        keys = {key for key in (blocker.id, blocker.identifier) if key}
+        if keys & self._in_flight_ids():
+            return True
+        return any(entry.issue.identifier in keys for entry in self._running.values())
 
     def _available_slots(self, cfg: ServiceConfig) -> int:
         # The retry-counts-against-the-budget rule lives on DispatchState

@@ -46,3 +46,24 @@
   force-push could overwrite concurrent remote work, while rollback would hide
   the recoverable terminal snapshot; blocking the ticket exposes the failure
   without destructive Git operations.
+
+## Dependency dispatch waits for terminal finalization
+
+- Problem: a ticket's board state can become Done before its worker exits and
+  before terminal auto-commit/auto-merge finishes. Eligibility trusted Done
+  alone, so a dependent workspace could branch from the old target SHA while
+  the upstream worker was still changing that branch.
+- Decision: treat a resolved blocker as unresolved while its ticket identity is
+  present in the orchestrator's in-flight lifecycle. Match both tracker IDs and
+  human identifiers so file, Linear, and Jira boards share the same guard.
+- Why: Done is the business-state signal; worker/finalizer drain is the
+  repository-consistency signal. A dependent needs both before it can safely
+  choose a base commit.
+- Rejected: delay every dispatch while any worker is finalizing. Independent
+  tickets can safely run concurrently; the guard belongs on the declared
+  dependency edge only.
+- Rejected: move the Done transition to the exit handler. Stage transitions are
+  tracker-owned and may come from external operators; changing that contract
+  would be broader than fixing scheduler eligibility.
+- Rejected: add a fixed sleep after Done. Timing cannot prove auto-merge has
+  completed and would leave the same race on slower repositories.
