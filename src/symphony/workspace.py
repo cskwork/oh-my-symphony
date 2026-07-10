@@ -572,7 +572,13 @@ async def commit_workspace_on_done(
     # single commit with the ticket subject. When no base is recorded
     # (legacy workspaces, non-worktree setups), fall back to a plain
     # commit-on-top — preserves correctness without forcing operators to
-    # re-bootstrap.
+    # re-bootstrap. If the Verify stage already merged the branch into the
+    # recorded `symphony.mergetargetbranch` (a `--no-ff` merge), the base
+    # advances to the merge base with that target so the squash lands on
+    # the merged tip instead of resetting past it — otherwise the branch
+    # is rewritten onto an orphan lineage and the post-Done fallback merge
+    # computes its merge base at the stale fork point, guaranteeing
+    # add/add conflicts on anything both sides touched after the merge.
     # `git add -A .` (note the explicit pathspec) scopes the snapshot to the
     # workspace path. Without the `.`, `git add -A` walks the entire
     # enclosing repo and would sweep in unrelated host-side changes when the
@@ -585,6 +591,17 @@ async def commit_workspace_on_done(
         '  git init -q || exit 41\n'
         'fi\n'
         'BASE="$(git config --get symphony.basesha 2>/dev/null || true)"\n'
+        'TARGET="$(git config --get symphony.mergetargetbranch 2>/dev/null || true)"\n'
+        '# Already-merged branch: advance BASE to the merge base with the\n'
+        '# recorded target so the squash below preserves the merged lineage\n'
+        '# instead of resetting onto the pre-merge fork point (see comment\n'
+        '# above this script). Never-merged branches leave BASE untouched.\n'
+        'if [ -n "$BASE" ] && [ -n "$TARGET" ] && git rev-parse --verify --quiet "${TARGET}^{commit}" >/dev/null 2>&1; then\n'
+        '  MB="$(git merge-base HEAD "$TARGET" 2>/dev/null || true)"\n'
+        '  if [ -n "$MB" ] && [ "$MB" != "$BASE" ] && git merge-base --is-ancestor "$BASE" "$MB" 2>/dev/null; then\n'
+        '    BASE="$MB"\n'
+        '  fi\n'
+        'fi\n'
         'ADD_PATHS=(.)\n'
         'while IFS= read -r exclude_path; do\n'
         '  [ -n "$exclude_path" ] && ADD_PATHS+=(":(exclude)$exclude_path")\n'

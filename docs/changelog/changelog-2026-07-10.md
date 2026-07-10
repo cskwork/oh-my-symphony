@@ -256,3 +256,36 @@ recorded in the vault QA: the AF-04 guard-vs-dispatch concurrency window and
 AF-10 pid-reuse identity (no birth-identity check on persisted pids). With
 AF-01 (4de380f) and AF-02 (793813a) this closes the 2026-07-09 reliability
 audit — all 16 tickets resolved.
+
+## Done-squash orphan lineage (live E2E finding)
+
+A disposable opencode file-board E2E surfaced a defect in
+`commit_workspace_on_done`: the one-commit-per-ticket squash always
+soft-reset to the recorded `symphony.basesha` fork point. When Verify had
+already merged the branch (`--no-ff`), the squash rewrote the branch onto an
+orphan lineage, so the post-Done fallback merge computed its merge base at
+the stale fork point and hit guaranteed add/add conflicts (observed live on
+the dated changelog file), demoting a successfully merged Done ticket to
+Blocked and opening an RCA. The startup auto-commit path re-fired the same
+reset on the preserved workspace, compounding it.
+
+Fix: advance the squash base to `merge-base(HEAD, symphony.mergetargetbranch)`
+when that merge base descends from the recorded fork point. Never-merged
+branches keep the exact previous behavior (merge base == fork point); a
+fully merged, clean workspace now no-ops instead of minting an orphan
+snapshot commit.
+
+Rejected alternatives:
+
+- Running the fallback merge before the squash: reorders the Done
+  finalization pipeline across reconcile and startup paths — much wider
+  blast radius for the same effect.
+- Making the fallback merge tolerate conflicts (`-X ours`/`theirs`): silently
+  drops one side's work instead of surfacing it.
+- Skipping the post-Done fallback when Verify already merged: strands
+  genuinely unmerged Learn-stage residue (wiki/changelog write-back) on the
+  branch.
+
+Evidence: RED failures `test_commit_workspace_on_done_squashes_onto_merged_
+lineage` and `..._noops_when_fully_merged_and_clean` on pre-fix code; full
+suite 1366 passed / 5 skipped post-fix.

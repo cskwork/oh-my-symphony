@@ -1012,6 +1012,147 @@ async def test_commit_workspace_on_done_squashes_to_recorded_base(
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
+async def test_commit_workspace_on_done_squashes_onto_merged_lineage(
+    tmp_path, monkeypatch
+):
+    """When the ticket branch was already merged into the recorded merge
+    target (Verify stage's `--no-ff` merge), the squash must land ON the
+    merged tip, not reset all the way back to the original fork point.
+    Resetting to the fork point rewrites the branch onto an orphan
+    lineage: the post-Done fallback merge then computes a merge base at
+    the fork point and hits guaranteed add/add conflicts on any file both
+    sides touched after the merge (observed live: docs/changelog conflict
+    demoted a healthy Done ticket to Blocked)."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "seed.txt").write_text("base")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base commit")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _git(repo, "switch", "-c", "symphony/T-1")
+    (repo / "app.txt").write_text("app work")
+    (repo / "changelog.md").write_text("- did app work\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: app work")
+    c1_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _git(repo, "switch", "main")
+    _git(repo, "merge", "--no-ff", "-m", "Merge symphony/T-1", "symphony/T-1")
+    _git(repo, "switch", "symphony/T-1")
+
+    (repo / "changelog.md").write_text("- did app work\n- learn notes\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wip: learn notes")
+    (repo / "leftover.txt").write_text("uncommitted leftover")
+
+    _git(repo, "config", "symphony.basesha", base_sha)
+    _git(repo, "config", "symphony.mergetargetbranch", "main")
+
+    await commit_workspace_on_done(repo, identifier="T-1", title="merged lineage")
+
+    head_parent = _git(repo, "rev-parse", "HEAD^").stdout.strip()
+    assert head_parent == c1_sha, (
+        "squash must sit on the merged tip (C1), not reset past the merge "
+        "back to the original fork point"
+    )
+    merge_base = _git(repo, "merge-base", "main", "HEAD").stdout.strip()
+    assert merge_base == c1_sha
+    subject = _git(repo, "log", "-1", "--format=%s").stdout.strip()
+    assert subject == "T-1: merged lineage"
+    files = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    for fname in ("changelog.md", "leftover.txt"):
+        assert fname in files, f"{fname} missing from squashed commit"
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_noops_when_fully_merged_and_clean(
+    tmp_path, monkeypatch
+):
+    """Once the ticket branch is fully merged into the recorded target and
+    the worktree is clean, there is nothing left to snapshot — the helper
+    must no-op rather than resetting past the merge and minting an orphan
+    commit that duplicates work already on the target branch."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "seed.txt").write_text("base")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base commit")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _git(repo, "switch", "-c", "symphony/T-2")
+    (repo / "app.txt").write_text("app work")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feat: app work")
+    c1_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _git(repo, "switch", "main")
+    _git(repo, "merge", "--no-ff", "-m", "Merge symphony/T-2", "symphony/T-2")
+    _git(repo, "switch", "symphony/T-2")
+
+    _git(repo, "config", "symphony.basesha", base_sha)
+    _git(repo, "config", "symphony.mergetargetbranch", "main")
+
+    pre_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    pre_log = _git(repo, "log", "--format=%s").stdout.strip()
+    assert pre_head == c1_sha
+
+    await commit_workspace_on_done(repo, identifier="T-2", title="already merged")
+
+    post_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    post_log = _git(repo, "log", "--format=%s").stdout.strip()
+    assert post_head == pre_head, "must no-op, not mint an orphan commit"
+    assert post_log == pre_log
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_keeps_base_when_target_recorded_but_never_merged(
+    tmp_path, monkeypatch
+):
+    """A recorded merge target that hasn't actually received the branch yet
+    (Verify never ran, or ran and failed) must not change base selection —
+    today's plain fork-point squash stays exactly as before."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "seed.txt").write_text("base")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base commit")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _git(repo, "switch", "-c", "symphony/T-3")
+    (repo / "turn1.txt").write_text("t1")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wip: turn 1")
+    (repo / "turn2.txt").write_text("t2")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wip: turn 2")
+    (repo / "leftover.txt").write_text("uncommitted leftover")
+
+    _git(repo, "config", "symphony.basesha", base_sha)
+    _git(repo, "config", "symphony.mergetargetbranch", "main")
+
+    await commit_workspace_on_done(repo, identifier="T-3", title="never merged")
+
+    post_count = _git(repo, "rev-list", "--count", "HEAD").stdout.strip()
+    assert post_count == "2", f"expected base + 1 ticket commit, got {post_count}"
+    log = _git(repo, "log", "--format=%s").stdout.strip().splitlines()
+    assert log[0] == "T-3: never merged"
+    assert log[1] == "base commit"
+    files = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    for fname in ("seed.txt", "turn1.txt", "turn2.txt", "leftover.txt"):
+        assert fname in files, f"{fname} missing from squashed commit"
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
 async def test_commit_workspace_on_done_refuses_protected_root_deletion(
     tmp_path, monkeypatch
 ):
