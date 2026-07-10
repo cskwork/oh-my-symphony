@@ -343,6 +343,18 @@ def _parse_markdown_table(body: str, heading: str) -> list[list[str]]:
     return [list(row.cells) for row in _parse_markdown_table_rows(body, heading)]
 
 
+def _markdown_table_header(body: str, heading: str) -> tuple[str, ...]:
+    """Return normalized header cells for the table under `heading`."""
+    section = _section_body_text(body, heading)
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            return tuple(
+                _normalize_cell(cell) for cell in stripped.strip("|").split("|")
+            )
+    return ()
+
+
 def _parse_markdown_table_rows(body: str, heading: str) -> list[MarkdownTableRow]:
     """Parse table data rows under `heading`, preserving data-row numbers."""
     section = _section_body_text(body, heading)
@@ -388,17 +400,21 @@ def _security_has_fail_verdict(body: str) -> bool:
 def _scorecard_all_pass(body: str) -> tuple[bool, list[str]]:
     """Inspect the `## AC Scorecard` `result` column.
 
-    The scorecard is `signal | source | result | evidence path`; the
-    result is the third column. A cell that is not a pass token (fail,
-    error, empty, anything else) is collected as a problem. Returns
-    `(all_pass, problems)` where `problems` are human-readable advisories.
+    Column names determine where `signal` and `result` live; the legacy
+    `signal | source | result | evidence` positions remain the fallback.
+    A cell that is not a pass token (fail, error, empty, anything else) is
+    collected as a problem. Returns `(all_pass, problems)` where `problems`
+    are human-readable advisories.
     """
     problems: list[str] = []
+    header = _markdown_table_header(body, _QA_SCORECARD)
+    signal_index = header.index("signal") if "signal" in header else 0
+    result_index = header.index("result") if "result" in header else 2
     for row in _parse_markdown_table(body, _QA_SCORECARD):
-        if len(row) < 3:
+        if len(row) <= max(signal_index, result_index):
             continue
-        signal = row[0].strip() or "(unnamed signal)"
-        result = _normalize_cell(row[2])
+        signal = row[signal_index].strip() or "(unnamed signal)"
+        result = _normalize_cell(row[result_index])
         if result in _SCORECARD_PASS_TOKENS:
             continue
         shown = result or "empty"

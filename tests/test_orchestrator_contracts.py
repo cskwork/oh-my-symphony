@@ -139,6 +139,34 @@ def test_verify_contract_passes_with_review_qa_scorecard_and_merge(
     assert result.missing == []
 
 
+def test_verify_contract_reads_scorecard_result_by_header(tmp_path: Path) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body().replace(
+        "| signal | source | result | evidence |\n"
+        "| --- | --- | --- | --- |\n"
+        "| version bumped | pytest | pass | qa/version.log |",
+        "| Acceptance criterion | Signal | Source | Result | Evidence |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| schema deploys | Database schema | migrate deploy + generate | "
+        "pass | qa/version.log |\n"
+        "| fixtures load | Seed data | test:schema + psql | pass | "
+        "qa/version.log |\n"
+        "| constraints hold | Schema tests | test:schema | pass | "
+        "qa/version.log |",
+    )
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is True
+    assert result.warnings == []
+
+
 def test_verify_contract_normalizes_docs_prefixed_evidence_path(
     tmp_path: Path,
 ) -> None:

@@ -110,3 +110,21 @@
   from another live process instead of correcting the probe's semantics.
 - Rejected: force-kill the service. A stronger signal cannot remove kernel
   `TIME_WAIT` state and would bypass graceful worker and server cleanup.
+
+## AC Scorecard validation follows named columns
+
+- Problem: Verify treated the third AC Scorecard cell as `result`. A valid
+  five-column scorecard headed `Acceptance criterion | Signal | Source |
+  Result | Evidence` therefore reported source commands such as `test:schema`
+  as failing results even when every named Result cell was `pass`.
+- Decision: resolve the `signal` and `result` positions from the table header,
+  while retaining the legacy first/third-column positions when either heading
+  is absent.
+- Why: the header is the scorecard's schema. Reading named columns lets prompts
+  add useful context columns without changing the meaning of QA evidence, and
+  the fallback preserves existing minimally headed tickets.
+- Rejected: mandate and rewrite one fixed four-column table shape. Existing
+  tickets already carry richer acceptance-criterion context, and validation
+  can interpret that unambiguously without destructive tracker edits.
+- Rejected: accept any non-empty third cell as passing. That would silence the
+  warning while losing the actual `pass`/`fail` safety signal.
