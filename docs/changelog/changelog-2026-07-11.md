@@ -22,3 +22,27 @@
 - Rejected: change the repository's live `WORKFLOW.md`. Its Codex workers use
   full access for a separately proven macOS Chromium bootstrap limitation, not
   for package downloads.
+
+## Terminal auto-merge upstream proof
+
+- Problem: a worker could push during Learn, then write late evidence before
+  exiting Done. The terminal fallback correctly committed and auto-merged that
+  evidence, but stopped at the local target branch, leaving the ticket Done
+  while its configured upstream was behind.
+- Decision: after creating the terminal merge commit, push the target branch
+  to its configured upstream and verify the remote ref equals the local target
+  SHA. A rejected push or mismatched read-back fails the existing merge gate,
+  which moves the ticket to Blocked and preserves the workspace.
+- Why: the target branch models the dependency history other tickets trust.
+  Done is safe only when that complete terminal history is confirmed at the
+  shared upstream; local-only workflows remain unchanged when no upstream is
+  configured.
+- Rejected: suppress terminal fallback commits after Learn. Late QA evidence
+  is valid work and silently discarding it would restore the original data-loss
+  risk that fallback commits prevent.
+- Rejected: rely on the worker's Learn-stage push. It happens before the exit
+  fallback and therefore cannot publish files written afterward.
+- Rejected: force-push or roll back the local merge after a failed push. A
+  force-push could overwrite concurrent remote work, while rollback would hide
+  the recoverable terminal snapshot; blocking the ticket exposes the failure
+  without destructive Git operations.

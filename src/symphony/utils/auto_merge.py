@@ -13,6 +13,7 @@ Safety contract: this is best-effort.
 - Branch does not exist       -> skip, log `auto_merge_skipped_missing_branch`
 - Nothing to apply after excl -> skip, log `auto_merge_nothing_to_apply`
 - Excluded root changed       -> block, log `auto_merge_blocked_excluded_paths`
+- Target push/verification    -> block when a configured upstream is not exact
 - Any other git error         -> log `auto_merge_failed` and return
 
 The caller never sees an exception. Instead, the result reports whether
@@ -48,6 +49,8 @@ _RC_NOTHING_TO_APPLY = 43
 _RC_BLOCKED_EXCLUDED = 44
 _RC_FAIL_GIT = 50
 _RC_FAIL_COMMIT = 51
+_RC_FAIL_PUSH = 52
+_RC_FAIL_REMOTE_VERIFY = 53
 
 
 @dataclass(frozen=True)
@@ -106,9 +109,7 @@ async def auto_merge_on_done_best_effort(
     try:
         result = await asyncio.to_thread(_do_run)
     except subprocess.TimeoutExpired:
-        log.warning(
-            "auto_merge_timeout", path=str(workflow_dir), identifier=identifier
-        )
+        log.warning("auto_merge_timeout", path=str(workflow_dir), identifier=identifier)
         return AutoMergeResult(False, "timeout")
     except Exception as exc:
         log.warning(
@@ -162,7 +163,12 @@ async def auto_merge_on_done_best_effort(
             stdout=stdout[:400],
         )
         return AutoMergeResult(False, "excluded_paths", stdout)
-    elif rc in (_RC_FAIL_GIT, _RC_FAIL_COMMIT):
+    elif rc in (
+        _RC_FAIL_GIT,
+        _RC_FAIL_COMMIT,
+        _RC_FAIL_PUSH,
+        _RC_FAIL_REMOTE_VERIFY,
+    ):
         log.warning(
             "auto_merge_failed",
             path=str(workflow_dir),
@@ -171,7 +177,11 @@ async def auto_merge_on_done_best_effort(
             stdout=stdout[:400],
             stderr=stderr[:400],
         )
-        status = "commit_failed" if rc == _RC_FAIL_COMMIT else "git_failed"
+        status = {
+            _RC_FAIL_COMMIT: "commit_failed",
+            _RC_FAIL_PUSH: "push_failed",
+            _RC_FAIL_REMOTE_VERIFY: "remote_verify_failed",
+        }.get(rc, "git_failed")
         detail = "\n".join(part for part in (stdout, stderr) if part)
         return AutoMergeResult(False, status, detail)
     else:
@@ -214,6 +224,7 @@ def _build_script(
             "  fi\n"
             "done\n"
         )
+    upstream_sync = _build_upstream_sync_block()
     return (
         "set -uo pipefail\n"
         f"BRANCH={shlex.quote(branch)}\n"
@@ -269,18 +280,39 @@ def _build_script(
         '  echo "SKIP: nothing differs"; exit 43\n'
         "fi\n"
         'SHA="$(git rev-parse --short "$BRANCH")"\n'
-        'git -c user.email=symphony@local -c user.name=symphony merge '
+        "git -c user.email=symphony@local -c user.name=symphony merge "
         '--no-ff --no-commit "$BRANCH" || '
         '{ echo "FAIL: merge failed"; git merge --abort >/dev/null 2>&1 || true; exit 50; }\n'
-        + capture_block +
-        "if git diff --cached --quiet; then\n"
+        + capture_block
+        + "if git diff --cached --quiet; then\n"
         '  echo "SKIP: nothing staged after merge"; '
-        'git merge --abort >/dev/null 2>&1 || true; exit 43\n'
+        "git merge --abort >/dev/null 2>&1 || true; exit 43\n"
         "fi\n"
         "git -c user.email=symphony@local -c user.name=symphony commit "
         '-m "merge: ${IDENT} from ${BRANCH} (${SHA})" '
         '-m "${TITLE}" '
         '-m "Source: ${BRANCH} ${SHA}" '
         '|| { echo "FAIL: commit failed"; git merge --abort >/dev/null 2>&1 || true; exit 51; }\n'
-        'echo "OK: ${BRANCH} (${SHA}) merged to ${TARGET}"\n'
+        + upstream_sync
+        + 'echo "OK: ${BRANCH} (${SHA}) merged to ${TARGET}"\n'
+    )
+
+
+def _build_upstream_sync_block() -> str:
+    """Push and verify a terminal merge when the target tracks an upstream."""
+    return (
+        'REMOTE="$(git config --get "branch.${TARGET}.remote" || true)"\n'
+        'MERGE_REF="$(git config --get "branch.${TARGET}.merge" || true)"\n'
+        'if [ -n "$REMOTE" ] && [ -n "$MERGE_REF" ]; then\n'
+        '  if ! git push "$REMOTE" "$TARGET:$MERGE_REF"; then\n'
+        '    echo "FAIL: push $TARGET to $REMOTE/$MERGE_REF"; exit 52\n'
+        "  fi\n"
+        '  LOCAL_SHA="$(git rev-parse "$TARGET")"\n'
+        '  REMOTE_SHA="$(git ls-remote "$REMOTE" "$MERGE_REF" '
+        "| awk 'NR == 1 { print $1 }')\"\n"
+        '  if [ -z "$REMOTE_SHA" ] || [ "$REMOTE_SHA" != "$LOCAL_SHA" ]; then\n'
+        '    echo "FAIL: upstream $REMOTE/$MERGE_REF is not $LOCAL_SHA"; exit 53\n'
+        "  fi\n"
+        '  echo "OK: verified $TARGET at $REMOTE/$MERGE_REF ($LOCAL_SHA)"\n'
+        "fi\n"
     )
