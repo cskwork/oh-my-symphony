@@ -21,21 +21,26 @@
     "required_proof": ["ticket-focused red-green tests", "full pytest", "ruff", "pyright", "Codex generated schema", "adversarial diff review"],
     "stop_condition": "All GOAL criteria checked and commit gate passes, or a concrete requirement-level blocker is reported.",
     "max_iterations": 8,
-    "status": "open"
+    "status": "fulfilled"
   },
-  "phase": "Review",
-  "iteration": 2,
+  "phase": "Done",
+  "iteration": 3,
   "unresolved_gates": [],
   "regression_ledger": [
     {
       "criterion": "clean baseline",
       "command": "pytest -q; ruff check src tests; pyright src",
       "result": "1286 passed, 2 skipped; lint clean; 0 type errors"
+    },
+    {
+      "criterion": "exact verification closure on dev@ee64bad",
+      "command": "/opt/anaconda3/bin/python -m pytest -q; -m ruff check src tests; -m pyright src",
+      "result": "1363 passed, 5 skipped in 89.45s; lint clean; 0 type errors"
     }
   ],
   "blockers": [],
-  "last_proof_command": ".venv/bin/pytest -q <owned nine-module regression set>",
-  "next_action": "Run mandatory fresh full-spec improver, edge-case improver, adversarial reviewer, and exact verifier roles.",
+  "last_proof_command": "/opt/anaconda3/bin/python -m pytest -q",
+  "next_action": "",
   "forced_reflection": {
     "required_when_iteration_cap_hit": true,
     "what_keeps_failing": "",
@@ -44,5 +49,5 @@
     "regressed_previously_green": "",
     "smallest_next_action": ""
   },
-  "updated_at": "2026-07-09T20:59:57Z"
+  "updated_at": "2026-07-10T09:55:09Z"
 }

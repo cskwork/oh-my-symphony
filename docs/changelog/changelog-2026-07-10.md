@@ -244,3 +244,15 @@ Evidence: `docs/changelog/2026-07/10-af-03-16-reliability/builder-orchestrator.m
 - AF-05: ignore trailing whitespace-only Claude text blocks while preserving
   the original last meaningful block. Concatenating every text block was
   rejected because it would mix tool narration into the completion preview.
+
+## AF-03..AF-16 — exact verification closure
+
+The `10-af-03-16-reliability` run vault is closed: all 16 GOAL criteria are
+ticked after re-verification on `dev@ee64bad` — `python -m pytest -q`
+1363 passed / 5 skipped (89s), `ruff check src tests` clean, `pyright src`
+0 errors. The four adversarial findings (AF-06/08/09/10) were confirmed fixed
+in HEAD and their six regressions re-run green in isolation. Residual risks
+recorded in the vault QA: the AF-04 guard-vs-dispatch concurrency window and
+AF-10 pid-reuse identity (no birth-identity check on persisted pids). With
+AF-01 (4de380f) and AF-02 (793813a) this closes the 2026-07-09 reliability
+audit — all 16 tickets resolved.

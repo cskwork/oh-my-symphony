@@ -41,3 +41,10 @@ be updated at each turn spawn.
 
 Exit-path identity checks (AF-01); startup-time reclaim kills (AF-10);
 changing `safe_proc_wait` reaping.
+
+## Resolution — 2026-07-10
+
+Resolved on dev (793813a): every backend records its child process group on
+the running entry and force-eject kills any recorded group, logging per
+backend; entries without a recorded pid keep the slot-free/retry behavior.
+Run evidence: `docs/changelog/2026-07/10-af-02-force-eject/`.

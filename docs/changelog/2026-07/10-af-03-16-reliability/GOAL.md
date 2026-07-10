@@ -28,22 +28,22 @@ Decisions grounded in existing repository contracts:
 
 Each item is falsifiable and names its verification method.
 
-- [ ] AF-03 resumed workers receive a fresh stall window and later genuine stalls still cancel - verify: focused resume/reconcile tests in `tests/test_orchestrator_dispatch.py`.
-- [ ] AF-04 running-ticket state PATCH returns 409 without mutation while non-state and idle state PATCHes retain current behavior - verify: focused `tests/test_webapi.py` cases.
-- [ ] AF-05 productive plain/Gemini/Claude completions expose non-empty previews, silent exit-0 turns fail, and true three-turn empty loops still trip G2 - verify: backend contract and dispatch tests.
-- [ ] AF-06 scans ignore legacy board-root `.tmp-*.md`, atomic writes cannot surface matching temps, and startup removes stale orphans without affecting identifier allocation - verify: focused file-tracker tests.
-- [ ] AF-07 cancelled paused zombies still eject; Part A isolates per-entry errors and schedules retry despite process/lease cleanup failure - verify: focused reconcile tests.
-- [ ] AF-08 `stop()` bounds cancellation-resistant worker drain, force-ejects remaining processes, and preserves prompt-cancel ordering - verify: focused orchestrator stop tests with a test timeout.
-- [ ] AF-09 corrupt Codex stdout closes the backend, fails later turns quickly, reaps the subprocess, and continues tolerating sparse malformed lines - verify: focused Codex backend tests.
-- [ ] AF-10 dead-owner lease reclaim kills any recorded live backend process group before the row becomes redispatchable, while old rows without a pid remain compatible - verify: run-registry recovery tests.
-- [ ] AF-11 lifetime cap warns once, lease contention postpones one interval, and `require_idle_board` prevents CI/worker overlap including terminal-persist work - verify: continuous-improvement scheduler tests.
-- [ ] AF-12 parse failures warn, running ids missing from refresh enter a visible degraded state, duplicate ids collapse/reject, and delete is serialized with mutation - verify: tracker, reconcile, and web API tests.
-- [ ] AF-13 custom and Korean backward active-state transitions consume rewind budget and default pipeline behavior is unchanged - verify: phase-transition and dispatch tests.
-- [ ] AF-14 research note records current and historical Codex token-usage shapes and closes the unreachable last-only branch without speculative production code - verify: generated-schema command and diff review.
-- [ ] AF-15 completed/debug dispatch state no longer grows without bound and `stop()` clears retained diagnostic state - verify: `tests/test_dispatch_state.py` plus stop assertions.
-- [ ] AF-16 first and continuation prompts use one lifetime turn numerator/denominator basis and prompt anchor semantics remain deliberate - verify: prompt pipeline tests and anchor diff review.
-- [ ] All ticket non-goals remain untouched and every changed hunk maps to AF-03..AF-16 - verify: adversarial diff review and `Backward-trace: clean`.
-- [ ] Repository verification is green - verify: `python -m pytest -q`, `ruff check src tests`, and `pyright src`.
+- [x] AF-03 resumed workers receive a fresh stall window and later genuine stalls still cancel - verify: focused resume/reconcile tests in `tests/test_orchestrator_dispatch.py`.
+- [x] AF-04 running-ticket state PATCH returns 409 without mutation while non-state and idle state PATCHes retain current behavior - verify: focused `tests/test_webapi.py` cases.
+- [x] AF-05 productive plain/Gemini/Claude completions expose non-empty previews, silent exit-0 turns fail, and true three-turn empty loops still trip G2 - verify: backend contract and dispatch tests.
+- [x] AF-06 scans ignore legacy board-root `.tmp-*.md`, atomic writes cannot surface matching temps, and startup removes stale orphans without affecting identifier allocation - verify: focused file-tracker tests.
+- [x] AF-07 cancelled paused zombies still eject; Part A isolates per-entry errors and schedules retry despite process/lease cleanup failure - verify: focused reconcile tests.
+- [x] AF-08 `stop()` bounds cancellation-resistant worker drain, force-ejects remaining processes, and preserves prompt-cancel ordering - verify: focused orchestrator stop tests with a test timeout.
+- [x] AF-09 corrupt Codex stdout closes the backend, fails later turns quickly, reaps the subprocess, and continues tolerating sparse malformed lines - verify: focused Codex backend tests.
+- [x] AF-10 dead-owner lease reclaim kills any recorded live backend process group before the row becomes redispatchable, while old rows without a pid remain compatible - verify: run-registry recovery tests.
+- [x] AF-11 lifetime cap warns once, lease contention postpones one interval, and `require_idle_board` prevents CI/worker overlap including terminal-persist work - verify: continuous-improvement scheduler tests.
+- [x] AF-12 parse failures warn, running ids missing from refresh enter a visible degraded state, duplicate ids collapse/reject, and delete is serialized with mutation - verify: tracker, reconcile, and web API tests.
+- [x] AF-13 custom and Korean backward active-state transitions consume rewind budget and default pipeline behavior is unchanged - verify: phase-transition and dispatch tests.
+- [x] AF-14 research note records current and historical Codex token-usage shapes and closes the unreachable last-only branch without speculative production code - verify: generated-schema command and diff review.
+- [x] AF-15 completed/debug dispatch state no longer grows without bound and `stop()` clears retained diagnostic state - verify: `tests/test_dispatch_state.py` plus stop assertions.
+- [x] AF-16 first and continuation prompts use one lifetime turn numerator/denominator basis and prompt anchor semantics remain deliberate - verify: prompt pipeline tests and anchor diff review.
+- [x] All ticket non-goals remain untouched and every changed hunk maps to AF-03..AF-16 - verify: adversarial diff review and `Backward-trace: clean`.
+- [x] Repository verification is green - verify: `python -m pytest -q`, `ruff check src tests`, and `pyright src`.
 
 ## Decision Gates
 

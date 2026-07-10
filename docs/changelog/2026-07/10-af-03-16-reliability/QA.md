@@ -1,6 +1,6 @@
 # QA - AF-03 through AF-16 reliability
 
-- Verdict: PARTIAL
+- Verdict: PASS
 
 ## Before
 
@@ -10,12 +10,12 @@
 
 ## Results
 
-- [ ] Focused red-green regressions prove every reachable AF ticket.
-- [ ] Full repository tests, lint, and type checks pass.
-- [ ] Mandatory full-spec, edge-case, and adversarial reviews have no open grounded finding.
-- [ ] Every diff hunk maps to AF-03..AF-16 or the required run evidence.
+- [x] Focused red-green regressions prove every reachable AF ticket - evidence: all 36 GOAL-named regressions exist in `tests/` and pass inside the full suite; the six correction-iteration-3 regressions were re-run in isolation on `dev@ee64bad` (`6 passed in 0.77s`).
+- [x] Full repository tests, lint, and type checks pass - evidence on `dev@ee64bad` (2026-07-10): `python -m pytest -q` `1363 passed, 5 skipped in 89.45s`; `python -m ruff check src tests` `All checks passed!`; `python -m pyright src` `0 errors, 0 warnings, 0 informations`.
+- [x] Mandatory full-spec, edge-case, and adversarial reviews have no open grounded finding - evidence: `review-full-spec.md` traces all 16 criteria as covered; `review-edge-cases.md` fixed its two gaps red-green; the four `review-adversarial.md` findings (AF-06/08/09/10) were closed red-green in `correction-iteration-3.md`, and the fixes were spot-verified present at `dev@ee64bad` (`reclaiming` fence, `shutdown_abandoned` lease finalize, marker-scoped temp sweep, closed-state-independent `stop()` reap).
+- [x] Every diff hunk maps to AF-03..AF-16 or the required run evidence - evidence: the `ee64bad` 52-file diff contains only AF-scoped source modules traced in the full-spec criterion table, their tests, ticket/changelog/run-vault docs, and the AF-16 `max_total_turns` workflow-example documentation.
 
-Backward-trace: pending
+Backward-trace: clean
 
 ## Commands
 
@@ -41,5 +41,10 @@ DB: SQLite run-registry tests use isolated temporary files; no production data.
 
 ## Residual Risk
 
-- Not proven: implementation and exact verification are pending.
-- Follow-up: none until the role loop completes.
+- AF-04: the running-state guard and the tracker mutation are separate operations; no regression covers a dispatch that begins between the guard check and `update_fields`. Recorded by the adversarial review as an unpromoted risk pending an explicit concurrency decision.
+- AF-10: recovery persists only a numeric pid/process-group id with no process birth-identity check, so PID reuse could signal an unrelated process group. No deterministic reproduction was established.
+- Follow-up: the post-deploy file-board smoke listed under Reproduction Fidelity remains the release-time confirmation plan.
+
+## Closure
+
+- Exact verification completed 2026-07-10 on `dev@ee64bad` with `/opt/anaconda3/bin/python -m pytest -q`, `-m ruff check src tests`, and `-m pyright src`; all `GOAL.md` criteria ticked.

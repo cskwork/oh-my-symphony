@@ -121,12 +121,15 @@ web API and orchestrator. Details in each sweep's "Checked clean" list
 
 ## Frontier
 
-**AF-01** — unblocked, P0, CONFIRMED, closes the oldest open reliability
-mystery (07-07 P2-2), and its identity-safe exit primitive simplifies testing
-for AF-02/AF-07/AF-08. One ticket per session; after it closes, re-run the
-full suite plus `tests/test_orchestrator_dispatch.py -k zombie` and recompute
-the frontier here (expected next: AF-02, then AF-03/AF-04/AF-05 in any order —
-they are independent).
+**Closed 2026-07-10.** All 16 tickets are resolved: AF-01 (dev 4de380f),
+AF-02 (dev 793813a), AF-03..AF-16 (dev ee64bad; AF-14 closed by research —
+the Codex 0.130/0.144 protocol schemas make a `last`-only tokenUsage
+unreachable). Each closed ticket carries red-green evidence in its ticket
+file and run vault. Exact-verification closure on `dev@ee64bad`:
+`python -m pytest -q` 1363 passed / 5 skipped, ruff clean, pyright 0 errors.
+Residual risks (AF-04 guard-vs-dispatch window, AF-10 pid-reuse identity) are
+recorded in `docs/changelog/2026-07/10-af-03-16-reliability/QA.md`; the
+reliability track is complete.
 
 ## Global rules (unchanged)
 
