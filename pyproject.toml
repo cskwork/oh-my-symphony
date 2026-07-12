@@ -38,8 +38,40 @@ symphony = "symphony.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools]
+include-package-data = false
+
 [tool.setuptools.package-data]
-symphony = ["web/static/*", "web/static/*/*"]
+symphony = [
+    "web/static/*",
+    "factory/templates/*.md",
+    "factory/templates/docs/symphony-prompts/file/*.md",
+    "factory/templates/docs/symphony-prompts/file/stages/*.md",
+    "factory/templates/scripts/*.sh",
+    "factory/templates/wayfinder/*.md",
+    "factory/bundled_skills/*.md",
+    "factory/bundled_skills/*.json",
+    "factory/bundled_skills/third_party_licenses/*.txt",
+    "factory/bundled_skills/*/*.md",
+    "factory/bundled_skills/*/LICENSE",
+    "factory/bundled_skills/*/pyproject.toml",
+    "factory/bundled_skills/*/agents/*.md",
+    "factory/bundled_skills/*/reference/*.md",
+    "factory/bundled_skills/*/scripts/*.sh",
+    "factory/bundled_skills/*/templates/*.md",
+    "factory/bundled_skills/*/templates/*.sh",
+    "factory/bundled_skills/*/templates/*.mjs",
+    "factory/bundled_skills/*/templates/*.json",
+    "factory/bundled_skills/*/templates/*.html",
+    "factory/bundled_skills/*/templates/*.js",
+    "factory/bundled_skills/*/templates/*/*",
+    "factory/bundled_skills/*/templates/*/.env.example",
+    "factory/bundled_skills/*/templates/*/*/*",
+    "factory/bundled_skills/*/templates/*/*/*/*",
+    "factory/bundled_skills/*/superqa_tui/*.py",
+    "factory/bundled_skills/*/superqa_tui/*.js",
+    "factory/bundled_skills/*/superqa_tui/*.tcss",
+]
 
 [tool.ruff]
 target-version = "py312"

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "repo": "<repo-name>",
+  "defaultLanguage": "en",
+  "knowledgePath": ".domain-agent",
+  "refreshPolicy": {
+    "mode": "light-on-stale-or-triggered",
+    "staleAfterDays": 5,
+    "fullReviewAfterDays": 30
+  },
+  "createdAt": "<iso-date>",
+  "lastUpdated": "<iso-date>"
+}

@@ -1,0 +1,72 @@
+#body {
+    height: 1fr;
+}
+
+#left {
+    width: 42%;
+    min-width: 40;
+    border-right: solid $panel;
+    padding: 0 1;
+}
+
+#right {
+    width: 58%;
+    padding: 0 1;
+}
+
+.pane-title {
+    color: $accent;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+#scenario-table {
+    height: 1fr;
+}
+
+#log {
+    height: 2fr;
+    border: round $panel;
+}
+
+#runs-table {
+    height: 1fr;
+}
+
+#hint {
+    color: $text-muted;
+    height: 1;
+}
+
+AskScreen {
+    align: center middle;
+}
+
+#ask-box {
+    width: 64;
+    max-height: 80%;
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#ask-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+.ask-label {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#ask-buttons {
+    margin-top: 1;
+    height: 3;
+    align-horizontal: right;
+}
+
+#ask-buttons Button {
+    margin-left: 1;
+}

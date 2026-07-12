@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -548,6 +548,93 @@ def test_contract_fails_when_disk_missing_sections(
         "Contract guard did not rewind the ticket back to In Progress after a "
         f"failed contract. Final state was {final_front['state']!r}."
     )
+
+
+_FACTORY_VERIFY_BODY = """## Acceptance criteria
+
+- verified
+
+## Verification
+
+| criterion | command | result |
+| --- | --- | --- |
+| verified | `python -m unittest -q` | pass |
+"""
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_state", "has_failure"),
+    [
+        ("## QA Failure\n\nmissing proof", "Verify", True),
+        (_FACTORY_VERIFY_BODY, "Done", False),
+    ],
+)
+def test_factory_verify_to_done_enforces_contract_before_terminal_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+    expected_state: str,
+    has_failure: bool,
+) -> None:
+    board_root = tmp_path / "board"
+    ticket_path = _write_initial_ticket(board_root, state="Verify", body=body)
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("Ready", "Build", "Verify"),
+        max_turns=1,
+    )
+    cfg.raw["contract_profile"] = "factory"
+    _install_file_tracker_backend(
+        monkeypatch,
+        ticket_path=ticket_path,
+        transitions=[("Done", body)],
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    orchestrator = _orch(workspace_path)
+    issue = _make_issue_from_disk("Verify", body)
+    _seed_running_entry(orchestrator, issue, workspace_path)
+
+    asyncio.run(orchestrator._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert final_front["state"] == expected_state
+    assert _has_contract_failure_heading(final_body) is has_failure
+
+
+def test_token_cap_does_not_accept_unproven_factory_stage_advance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_root = tmp_path / "board"
+    body = "## Implementation\n\ncode exists"
+    ticket_path = _write_initial_ticket(board_root, state="Verify", body=body)
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("Ready", "Build", "Verify"),
+    )
+    cfg.raw["contract_profile"] = "factory"
+    cfg = replace(
+        cfg,
+        agent=replace(cfg.agent, budget_exhausted_state="Blocked"),
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    orchestrator = _orch(workspace_path)
+    monkeypatch.setattr(orchestrator._workflow_state, "current", lambda: cfg)
+    issue = _make_issue_from_disk("Build", body)
+    _seed_running_entry(orchestrator, issue, workspace_path)
+    entry = orchestrator._running[issue.id]
+    entry.hit_token_budget = True
+    entry.token_budget_cap = 400_000
+    entry.codex_state_total_tokens = 412_607
+    entry.state_at_turn_start = "build"
+
+    asyncio.run(orchestrator._on_worker_exit_impl(issue.id, "normal", None))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert final_front["state"] == "Blocked"
+    assert _has_contract_failure_heading(final_body)
+    assert "## Budget Exceeded" in final_body
 
 
 def test_qa_scorecard_fail_warns_without_rewind(

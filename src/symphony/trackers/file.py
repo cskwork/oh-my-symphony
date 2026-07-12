@@ -827,6 +827,7 @@ class FileBoardTracker:
         description: str = "",
         agent_kind: str | None = None,
         skills: list[str] | None = None,
+        blocked_by: list[str] | None = None,
     ) -> tuple[str, Path]:
         with _exclusive_lock(self._allocator_lock_path()):
             last_error: Exception | None = None
@@ -842,6 +843,7 @@ class FileBoardTracker:
                         description=description,
                         agent_kind=agent_kind,
                         skills=skills,
+                        blocked_by=blocked_by,
                     )
                 except SymphonyError as exc:
                     last_error = exc
@@ -860,6 +862,7 @@ class FileBoardTracker:
         description: str = "",
         agent_kind: str | None = None,
         skills: list[str] | None = None,
+        blocked_by: list[str] | None = None,
     ) -> Path:
         path = self._root / f"{identifier}.md"
         with _exclusive_lock(self._ticket_lock_path(identifier)):
@@ -873,6 +876,7 @@ class FileBoardTracker:
                 labels=labels,
                 agent_kind=agent_kind,
                 skills=skills,
+                blocked_by=blocked_by,
             )
             write_ticket_atomic(path, front, description)
             return path
@@ -887,6 +891,7 @@ class FileBoardTracker:
         labels: list[str] | None,
         agent_kind: str | None,
         skills: list[str] | None,
+        blocked_by: list[str] | None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         front: dict[str, Any] = {
@@ -904,6 +909,9 @@ class FileBoardTracker:
         normalized_skills = normalize_skill_names(list(skills or []))
         if normalized_skills:
             front["skills"] = list(normalized_skills)
+        blockers = list(dict.fromkeys(item.strip() for item in blocked_by or [] if item.strip()))
+        if blockers:
+            front["blocked_by"] = blockers
         return front
 
     def update_fields(

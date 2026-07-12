@@ -51,6 +51,7 @@ class _FakeBackend:
     init_id: int
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     process_pid: int | None = None
+    on_event: Any | None = None
 
     @property
     def pid(self) -> int | None:
@@ -87,6 +88,9 @@ class _FakeBackend:
 
     async def stop(self) -> None:
         self.calls.append(("stop", {}))
+
+    def is_progress_event(self, payload: dict[str, Any]) -> bool:
+        return payload.get("type") == "assistant"
 
 
 class _FakeWorkspace:
@@ -286,7 +290,7 @@ def _install_fake_backend(monkeypatch: pytest.MonkeyPatch) -> list[_FakeBackend]
     instances: list[_FakeBackend] = []
 
     def _factory(init: Any) -> _FakeBackend:
-        backend = _FakeBackend(init_id=len(instances))
+        backend = _FakeBackend(init_id=len(instances), on_event=init.on_event)
         backend.calls.append(("factory", {"agent_kind": init.cfg.agent.kind}))
         instances.append(backend)
         return backend
@@ -1220,6 +1224,97 @@ def test_phase_transition_resets_token_high_water_marks(
     assert snap["codex_input_tokens"] == 5_000
     assert snap["codex_output_tokens"] == 3_000
     assert snap["codex_total_tokens"] == 8_000
+
+
+def test_phase_transition_resets_token_budget_before_new_session_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Usage emitted by ``start_session`` belongs only to the new phase."""
+    cfg = _make_config(max_turns=5)
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_total_tokens=120_000,
+            max_total_tokens_by_state={
+                "in progress": 300_000,
+                "verify": 120_000,
+            },
+        ),
+    )
+    issue = _make_issue(state="In Progress")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    entry = o._running[issue.id]
+    entry.codex_input_tokens = 276_150
+    entry.codex_total_tokens = 276_150
+    entry.codex_state_input_tokens = 276_150
+    entry.codex_state_total_tokens = 276_150
+    entry.last_reported_input_tokens = 276_150
+    entry.last_reported_total_tokens = 276_150
+    entry.last_ema_state_total_tokens = 276_150
+    entry.stats_input_tokens = 276_150
+    entry.stats_total_tokens = 276_150
+    entry.token_attention_total_tokens = 276_150
+    entry.hit_token_budget = True
+    entry.token_budget_cap = 300_000
+    entry.state_at_turn_start = "in progress"
+
+    captured: dict[str, Any] = {}
+
+    async def _emit_usage_on_start(
+        self_inst, *, initial_prompt, issue_title  # noqa: ANN001
+    ) -> None:
+        self_inst.calls.append(
+            (
+                "start_session",
+                {"initial_prompt": initial_prompt, "issue_title": issue_title},
+            )
+        )
+        if self_inst.init_id != 1:
+            return
+        await self_inst.on_event(
+            {
+                "event": "other_message",
+                "payload": {"type": "assistant"},
+                "usage": {
+                    "input_tokens": 10_000,
+                    "output_tokens": 0,
+                    "total_tokens": 10_000,
+                },
+            }
+        )
+        captured["during_start"] = {
+            "state_total": entry.codex_state_total_tokens,
+            "lifetime_total": entry.codex_total_tokens,
+            "last_reported_total": entry.last_reported_total_tokens,
+            "last_ema_state_total": entry.last_ema_state_total_tokens,
+            "stats_total": entry.stats_total_tokens,
+            "token_attention_total": entry.token_attention_total_tokens,
+            "hit_token_budget": entry.hit_token_budget,
+            "token_budget_cap": entry.token_budget_cap,
+            "cancelled_at": entry.cancelled_at,
+            "state_at_turn_start": entry.state_at_turn_start,
+        }
+
+    monkeypatch.setattr(_FakeBackend, "start_session", _emit_usage_on_start)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["Verify", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert captured["during_start"] == {
+        "state_total": 10_000,
+        "lifetime_total": 286_150,
+        "last_reported_total": 10_000,
+        "last_ema_state_total": 0,
+        "stats_total": 276_150,
+        "token_attention_total": 276_150,
+        "hit_token_budget": False,
+        "token_budget_cap": 0,
+        "cancelled_at": None,
+        "state_at_turn_start": "verify",
+    }
 
 
 # ---------------------------------------------------------------------------

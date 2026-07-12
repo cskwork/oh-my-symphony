@@ -10,7 +10,23 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Post-v0.11.0 changes will be listed here.
+### Added
+
+- `symphony factory init|sync|start` for the beginner Wayfinder -> Symphony ->
+  Supergoal file-board path, with package-owned templates and Doctor-gated
+  managed startup.
+- Strict, graph-validated Wayfinder synchronization with stable provenance,
+  dependency mapping, explicit skill overlays, and no post-dispatch rewrites.
+- A factory-specific stage contract for `Build` evidence and independent
+  `Verify` evidence.
+
+### Changed
+
+- `symphony board new --skills` attaches ticket-local skills. Workflow-aware
+  ticket creation defaults to the first configured active state; raw `--root`
+  creation remains `Todo`.
+- The documented beginner default is the factory CLI. Existing workflow files,
+  prompts, lane defaults, and production contracts remain compatible.
 
 ## [0.11.0] - 2026-07-05 - OpenCode terminal cleanup
 

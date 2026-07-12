@@ -146,6 +146,182 @@ def test_should_dispatch_basic():
     assert orch._should_dispatch(issue, cfg) is True
 
 
+def test_factory_ticket_prompt_path_is_workspace_local(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    host_board = tmp_path / "host/kanban"
+    host_board.mkdir(parents=True)
+    (host_board / "TASK-1.md").write_text("ticket\n", encoding="utf-8")
+    workspace.mkdir()
+    (workspace / "kanban").symlink_to(host_board, target_is_directory=True)
+
+    cfg = replace(
+        _make_config(tracker_kind="file"),
+        tracker=replace(_make_config(tracker_kind="file").tracker, board_root=host_board),
+        raw={"contract_profile": "factory"},
+    )
+    orch = _orch()
+
+    assert orch._ticket_prompt_path(cfg, _issue("TASK-1"), workspace) == (
+        "kanban/TASK-1.md"
+    )
+
+
+def test_factory_ticket_prompt_path_falls_back_when_local_board_is_not_shared(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    local_ticket = workspace / "kanban/TASK-1.md"
+    local_ticket.parent.mkdir(parents=True)
+    local_ticket.write_text("stale local ticket\n", encoding="utf-8")
+    host_ticket = tmp_path / "host/kanban/TASK-1.md"
+    host_ticket.parent.mkdir(parents=True)
+    host_ticket.write_text("live host ticket\n", encoding="utf-8")
+
+    cfg = replace(
+        _make_config(tracker_kind="file"),
+        tracker=replace(
+            _make_config(tracker_kind="file").tracker,
+            board_root=host_ticket.parent,
+        ),
+        raw={"contract_profile": "factory"},
+    )
+    orch = _orch()
+
+    assert orch._ticket_prompt_path(cfg, _issue("TASK-1"), workspace) == str(host_ticket)
+
+
+def test_factory_ticket_prompt_path_is_none_without_local_ticket(
+    tmp_path: Path,
+) -> None:
+    cfg = replace(
+        _make_config(tracker_kind="file"),
+        raw={"contract_profile": "factory"},
+    )
+    orch = _orch()
+
+    assert orch._ticket_prompt_path(cfg, _issue("TASK-1"), tmp_path) is None
+
+
+def test_advanced_ticket_prompt_path_keeps_tracker_path(tmp_path: Path) -> None:
+    host_ticket = tmp_path / "host/kanban/TASK-1.md"
+
+    class _Tracker:
+        def find_path(self, _identifier: str) -> Path:
+            return host_ticket
+
+    cfg = replace(
+        _make_config(tracker_kind="file"),
+        raw={"contract_profile": "advanced"},
+    )
+    orch = _orch()
+    orch._tracker = _Tracker()
+
+    assert orch._ticket_prompt_path(cfg, _issue("TASK-1"), tmp_path / "workspace") == str(
+        host_ticket
+    )
+
+
+def _run_factory_ready_tick(
+    monkeypatch: pytest.MonkeyPatch,
+    issue: Issue,
+    *,
+    profile: str = "factory",
+    max_concurrent: int = 0,
+    transition_error: Exception | None = None,
+    stale_tracker_error: str | None = None,
+) -> tuple[Orchestrator, list[tuple[str, str]], list[str]]:
+    cfg = replace(
+        _make_config(
+            max_concurrent=max_concurrent,
+            active_states=("Ready", "Build", "Verify"),
+            terminal_states=("Done", "Blocked"),
+        ),
+        raw={"contract_profile": profile},
+    )
+    orch = _orch()
+    if stale_tracker_error is not None:
+        orch._record_tracker_error(issue.id, stale_tracker_error)
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    moved: list[tuple[str, str]] = []
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg: ServiceConfig) -> list[Issue]:
+        return [issue]
+
+    async def _archive(_cfg: ServiceConfig) -> None:
+        return None
+
+    async def _noop(_cfg: ServiceConfig) -> None:
+        return None
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_auto_reopen_sources_from_resolved_rcas", _noop)
+    monkeypatch.setattr(orch, "_auto_recover_blocked_sources", _noop)
+    def _move(_cfg, candidate, target) -> None:
+        if transition_error is not None:
+            raise transition_error
+        moved.append((candidate.identifier, target))
+
+    monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
+    monkeypatch.setattr(
+        orch,
+        "_dispatch",
+        lambda candidate, _cfg, *, attempt, attempt_kind=None: dispatched.append(
+            candidate.identifier
+        ),
+    )
+    asyncio.run(orch._on_tick())
+    return orch, moved, dispatched
+
+
+def test_factory_ready_promotes_to_build_without_worker_or_slot(monkeypatch):
+    issue = _issue("FACTORY-1", state="Ready")
+    promoted, moved, dispatched = _run_factory_ready_tick(
+        monkeypatch, issue, stale_tracker_error="stale tracker failure"
+    )
+
+    assert moved == [("FACTORY-1", "Build")]
+    assert dispatched == []
+    assert promoted._running == {}
+    assert promoted._issue_debug[issue.id].tracker_error is None
+
+
+def test_factory_ready_with_unresolved_dependency_stays_ready(monkeypatch):
+    blocker = BlockerRef(id="id-FACTORY-0", identifier="FACTORY-0", state="Build")
+    issue = _issue("FACTORY-1", state="Ready", blocked_by=(blocker,))
+
+    _, moved, dispatched = _run_factory_ready_tick(monkeypatch, issue)
+
+    assert moved == []
+    assert dispatched == []
+    assert issue.state == "Ready"
+
+
+def test_non_factory_ready_keeps_normal_dispatch_behavior(monkeypatch):
+    issue = _issue("ADVANCED-1", state="Ready")
+
+    _, moved, dispatched = _run_factory_ready_tick(
+        monkeypatch, issue, profile="advanced", max_concurrent=1
+    )
+
+    assert moved == []
+    assert dispatched == ["ADVANCED-1"]
+
+
+def test_factory_ready_transition_failure_records_error_and_does_not_dispatch(
+    monkeypatch,
+):
+    issue = _issue("FACTORY-FAIL", state="Ready")
+    orch, _, dispatched = _run_factory_ready_tick(
+        monkeypatch, issue, transition_error=RuntimeError("board is read-only")
+    )
+
+    assert dispatched == []
+    assert issue.state == "Ready"
+    assert orch._issue_debug[issue.id].tracker_error == "board is read-only"
+
+
 def test_auto_triage_actionable_file_todo_moves_to_in_progress_without_dispatch(monkeypatch):
     cfg = _make_config(tracker_kind="file", active_states=("Todo", "In Progress", "Verify"))
     issue = _issue(
@@ -3314,6 +3490,67 @@ def test_max_total_tokens_by_state_overrides_global_cap(monkeypatch):
     asyncio.run(_run())
 
 
+def test_token_cap_stays_with_turn_start_state_after_mid_turn_board_move(
+    monkeypatch,
+):
+    """A Build turn is not charged against Verify merely because the card moved."""
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_capped = _replace_agent_field(
+        base_cfg,
+        max_total_tokens=120_000,
+        max_total_tokens_by_state={
+            "in progress": 300_000,
+            "verify": 120_000,
+        },
+    )
+    orch = _orch()
+    issue = _issue("MT-MID-TURN", state="Verify")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg_capped  # type: ignore[assignment]
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+                state_at_turn_start="in progress",
+            )
+            orch._running[issue.id] = entry
+
+            await orch._on_codex_event(
+                issue.id,
+                {
+                    "event": "other_message",
+                    "payload": {"type": "assistant"},
+                    "usage": {
+                        "input_tokens": 130_000,
+                        "output_tokens": 0,
+                        "total_tokens": 130_000,
+                    },
+                },
+            )
+
+            assert entry.codex_state_total_tokens == 130_000
+            assert entry.cancelled_at is None
+            assert entry.hit_token_budget is False
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
 def test_max_total_tokens_by_state_uses_state_local_total(monkeypatch):
     """State budgets reset on phase transition while lifetime totals remain visible."""
     base_cfg = _make_config(max_concurrent=1)
@@ -4373,6 +4610,106 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
             await orch._on_worker_exit(issue.id, reason="normal", error=None)
             assert calls == expected, "worker exit must not repeat reconcile cleanup"
             assert orch._retry == {}, "terminal reconcile must not schedule continuation"
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_factory_reconcile_rewinds_invalid_terminal_before_cleanup(monkeypatch):
+    """A stale factory worker cannot bypass Verify by parking the card at Done."""
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("Ready", "Build", "Verify"),
+        terminal_states=("Done", "Blocked"),
+        tracker_kind="file",
+    )
+    cfg = replace(
+        cfg,
+        raw={"contract_profile": "factory"},
+        agent=replace(
+            cfg.agent,
+            auto_commit_on_done=True,
+            auto_merge_on_done=True,
+        ),
+    )
+    orch = _orch()
+    source = _issue("FACTORY-RC", state="Verify")
+    invalid_done = replace(
+        source,
+        state="Done",
+        description="## Acceptance criteria\n\n- Product behavior is proven.\n",
+    )
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=source,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp/ws-factory-contract"),
+            )
+            entry.state_at_turn_start = "verify"
+            entry.terminal_seen_at = datetime.now(timezone.utc).replace(year=2000)
+            orch._running[source.id] = entry
+            state = {"value": "Done"}
+            notes: list[str] = []
+            cleanup: list[str] = []
+
+            monkeypatch.setattr(
+                orch,
+                "_tracker_call_states_by_ids",
+                lambda _cfg, _ids: [replace(invalid_done, state=state["value"])],
+            )
+            monkeypatch.setattr(
+                orch,
+                "_tracker_call_fetch_issue_full_by_id",
+                lambda _cfg, _id: replace(invalid_done, state=state["value"]),
+            )
+            monkeypatch.setattr(
+                orch,
+                "_tracker_call_append_note",
+                lambda _cfg, _issue, heading, _body: notes.append(heading),
+            )
+            monkeypatch.setattr(
+                orch,
+                "_tracker_call_update_state",
+                lambda _cfg, _issue, target: state.update(value=target),
+            )
+
+            async def _capture_commit(*_args, **_kwargs):
+                cleanup.append("commit")
+
+            async def _capture_merge(*_args, **_kwargs):
+                cleanup.append("merge")
+                return True
+
+            class _StubWS:
+                async def remove(self, _path):
+                    cleanup.append("remove")
+
+            monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
+            monkeypatch.setattr(orch, "_auto_merge_done_gate_or_block", _capture_merge)
+            orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+            await orch._reconcile_running(cfg)
+
+            assert state["value"] == "Verify"
+            assert notes == ["Contract Failure"]
+            assert cleanup == []
+            assert not worker_task.cancelled()
+            assert entry.issue.state == "Verify"
         finally:
             worker_task.cancel()
             try:

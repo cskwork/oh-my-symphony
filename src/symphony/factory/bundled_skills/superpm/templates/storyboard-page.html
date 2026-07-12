@@ -1,0 +1,402 @@
+<!doctype html>
+<!-- ════════════════════════════════════════════════════════════════════
+     superpm · 스토리보드 화면설계서 — 한 화면(1 페이지) 자체완결 템플릿
+     외부 CSS/JS 의존 0. 그대로 브라우저에서 열면 아래 "로그인" 예시가 렌더됩니다.
+     한 화면(또는 한 상태)당 파일 하나. 파일명: sb-NN-<slug>.html (예: sb-01-login.html)
+
+     기본 탑재 기능(상단 바·화면 캡션):
+       · 화면 목차(.sb-toc) — 전체 화면 그룹별 점프, 현재=current
+       · 글자 크기(가/가/가) · 콜아웃 번호 진하기 슬라이더 — localStorage 저장
+       · 화면 확대/축소(휠·＋－·맞춤·드래그·더블클릭) · 원본 보기(전체화면 팝업 뷰어)
+       · 이전/다음 pager
+     Mode A(이미지/Figma 스크린샷): .sb-stage 안에 <img class="sb-screen-img">, 콜아웃은 .sb-cue.pin
+     Mode B(와이어프레임): .sb-stage 안에 wf-* div, 콜아웃은 .sb-mark + .sb-cue
+     채우는 법: 1) {{...}} 교체  2) .sb-toc 목록 교체(현재=current)  3) .sb-stage 안 화면 교체
+       4) 오른쪽 표를 cue 번호와 1:1로
+     storyboard-spec 스킬이 설치돼 있으면 이 파일 대신 그쪽의 풍부한 렌더로 위임.
+     ──────────────────────────────────────────────────────────────────── -->
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{{SCREEN_ID}} {{TITLE}} · 스토리보드 화면설계서</title>
+<style>
+  :root{
+    --sb-primary:#2f6fed; --sb-primary-strong:#1b3b86; --sb-cue:#e5484d;
+    --sb-ink:#1d2330; --sb-mut:#6b7280; --sb-line:#e3e8f0; --sb-bg:#f5f7fb;
+    --sb-ev:#2f6fed; --sb-dt:#0a8f5b; --sb-ex:#e5484d; --sb-st:#8257e5;
+    --sb-fz:1;            /* 읽기 텍스트 배율 (글자 크기 컨트롤) */
+    --sb-cue-op:1;        /* 콜아웃 번호 불투명도 (번호 진하기 슬라이더) */
+  }
+  *{box-sizing:border-box}
+  body.sb-body{margin:0;background:var(--sb-bg);color:var(--sb-ink);
+    font:15px/1.6 -apple-system,"Segoe UI",Roboto,"Noto Sans KR",sans-serif}
+
+  /* 상단 바 + 컨트롤 */
+  .sb-nav{position:sticky;top:0;z-index:30;display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+    row-gap:8px;padding:9px 16px;background:#13203b;color:#cfe0f2}
+  .sb-nav .sb-back{color:#9fc1ef;text-decoration:none;font-weight:600}
+  .sb-nav .sb-nav-code{font-weight:700;color:#fff}
+  .sb-nav .sb-nav-title{color:#cfe0f2}
+  .sb-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+  .sb-ctl{display:inline-flex;align-items:center;gap:10px}
+  .sb-fontctl{display:inline-flex;gap:1px;background:rgba(255,255,255,.12);border-radius:9px;padding:2px}
+  .sb-fontctl button{border:0;cursor:pointer;background:transparent;color:#eaf2fb;font-weight:800;
+    line-height:1;padding:5px 9px;border-radius:7px;font-family:inherit}
+  .sb-fontctl button.lg{font-size:15px}.sb-fontctl button.sm{font-size:11px}
+  .sb-fontctl button:hover{background:rgba(255,255,255,.2)}
+  .sb-opctl{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.12);
+    border-radius:9px;padding:3px 10px}
+  .sb-opctl .ico{font-size:14px;color:#fff;line-height:1}
+  .sb-opctl .lab{font-size:11px;color:#cfe0f2;font-weight:700;white-space:nowrap}
+  .sb-opctl input[type=range]{width:78px;accent-color:#7fb3f2}
+  .sb-pager{display:inline-flex;gap:6px}
+  .sb-pager a,.sb-pager .pg{font-size:12px;font-weight:700;color:#cfe0f2;text-decoration:none;
+    padding:5px 9px;border-radius:7px;background:rgba(255,255,255,.1)}
+  .sb-pager a:hover{background:rgba(255,255,255,.22);color:#fff}
+  .sb-pager .pg{opacity:.5}
+
+  /* 레이아웃: 좌측 목차 + 본문 */
+  .sb-layout{display:grid;grid-template-columns:248px minmax(0,1fr);align-items:start}
+  .sb-main{min-width:0;padding:20px 24px 60px}
+  .sb-toc{position:sticky;top:42px;align-self:start;max-height:calc(100vh - 42px);overflow:auto;
+    padding:14px 10px 30px;background:#fff;border-right:1px solid var(--sb-line)}
+  .sb-toc .cap{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--sb-mut);padding:0 8px 8px}
+  .sb-toc .g{font-size:11px;font-weight:800;color:var(--sb-mut);text-transform:uppercase;
+    letter-spacing:.04em;margin:14px 8px 5px}.sb-toc .g:first-of-type{margin-top:2px}
+  .sb-toc a.t,.sb-toc span.t{display:flex;gap:7px;align-items:baseline;padding:6px 9px;border-radius:7px;
+    text-decoration:none;color:#44506a;font-size:12.5px;line-height:1.34}
+  .sb-toc a.t .c,.sb-toc span.t .c{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+    font-weight:800;color:var(--sb-mut);flex:none}
+  .sb-toc a.t:hover{background:#f0f5fb;color:var(--sb-ink)}
+  .sb-toc a.t.current{background:var(--sb-primary);color:#fff}
+  .sb-toc a.t.current .c{color:#cfe0f2}
+  .sb-toc span.t.plan{color:#9aa3b2}.sb-toc span.t.plan .c{color:#b9c0cc}
+
+  .sb-head h1{margin:.2em 0 .15em;font-size:24px}
+  .sb-eyebrow{margin:0;color:var(--sb-primary-strong);font-weight:700;
+    font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+  .sb-head>p{margin:.2em 0;color:var(--sb-mut)}
+  .sb-meta{display:flex;flex-wrap:wrap;gap:8px 24px;margin:14px 0 0;padding:0}
+  .sb-meta div{display:flex;gap:8px;align-items:baseline}
+  .sb-meta dt{margin:0;color:var(--sb-mut);font-size:12px}
+  .sb-meta dd{margin:0;font-weight:600}
+  .sb-split{display:grid;grid-template-columns:minmax(280px,430px) 1fr;gap:22px;
+    align-items:start;margin-top:20px}
+  .sb-pane{background:#fff;border:1px solid var(--sb-line);border-radius:14px;
+    box-shadow:0 1px 3px rgba(20,40,80,.05);overflow:hidden}
+  .sb-cap{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#eef3fb;
+    border-bottom:1px solid var(--sb-line);font-weight:700;font-size:13px;color:var(--sb-primary-strong)}
+  .sb-cap-en{color:var(--sb-mut);font-weight:500}
+  .sb-screen-sticky{position:sticky;top:54px}
+  .sb-screen{padding:16px}
+  .sb-shot,.sb-screen-img{display:block;width:100%;height:auto;border-radius:6px;background:#fff;
+    -webkit-user-select:none;user-select:none;-webkit-user-drag:none}
+
+  /* 확대/축소 뷰포트: .sb-zoom 가 클립, .sb-stage 가 transform(scale+translate) */
+  .sb-zoom{position:relative;overflow:hidden;border-radius:8px;background:#fff;cursor:grab;touch-action:none}
+  .sb-zoom.zoomed{cursor:grab}.sb-zoom.dragging{cursor:grabbing}
+  .sb-stage{position:relative;transform-origin:0 0;display:block}
+  .sb-zoomctl{margin-left:auto;display:inline-flex;align-items:center;gap:2px;text-transform:none}
+  .sb-zoomctl button{border:1px solid var(--sb-line);background:#fff;color:var(--sb-primary-strong);
+    cursor:pointer;font-weight:800;line-height:1;width:24px;height:24px;border-radius:6px;
+    font-family:inherit;font-size:14px}
+  .sb-zoomctl button.wide{width:auto;padding:0 9px;font-size:11px;font-weight:700}
+  .sb-zoomctl button:hover{background:#eef5fc}
+  .sb-zoomctl .zlvl{font-size:11px;font-weight:700;color:var(--sb-mut);min-width:38px;text-align:center;
+    font-family:ui-monospace,Menlo,monospace}
+  .sb-zoomctl a{font-size:11px;font-weight:700;color:var(--sb-primary);text-decoration:none;padding:0 6px}
+  .sb-zoomctl a:hover{text-decoration:underline}
+
+  /* 콜아웃 번호 ─ 마킹할 요소에 sb-mark, 그 자식으로 sb-cue (Mode B) / .pin (Mode A 이미지) */
+  .sb-mark{position:relative;outline:1.5px dashed rgba(47,111,237,.5);outline-offset:2px}
+  .sb-cue{position:absolute;z-index:5;top:-11px;left:-11px;min-width:21px;height:21px;
+    padding:0 5px;display:inline-flex;align-items:center;justify-content:center;
+    background:var(--sb-cue);color:#fff;border:2px solid #fff;border-radius:999px;
+    font-size:12px;font-weight:700;line-height:1;box-shadow:0 1px 3px rgba(0,0,0,.35);
+    opacity:var(--sb-cue-op)}
+  .sb-cue.r{left:auto;right:-11px}
+  .sb-cue.pin{top:auto;left:auto;transform:translate(-50%,-50%)}   /* 이미지 위 % 좌표 핀 */
+
+  /* 우측 설명표 (글자 크기 컨트롤로 배율) */
+  .sb-notes{width:100%;border-collapse:collapse;font-size:calc(13.5px * var(--sb-fz))}
+  .sb-notes th,.sb-notes td{border-bottom:1px solid var(--sb-line);padding:9px 12px;
+    text-align:left;vertical-align:top}
+  .sb-notes thead th{background:#f7f9fd;color:var(--sb-mut);font-size:calc(12px * var(--sb-fz));font-weight:700}
+  .sb-notes .c-no{width:40px}.sb-notes .c-area{width:88px}.sb-notes .c-el{width:170px}
+  .sb-num{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
+    background:var(--sb-cue);color:#fff;border-radius:999px;font-weight:700;font-size:12px}
+  .sb-el{display:block;font-weight:600}
+  .sb-id{display:block;color:var(--sb-mut);font-size:11.5px;font-family:ui-monospace,Menlo,monospace}
+  .sb-notes td p{margin:0 0 6px}
+  .sb-notes .data{display:block;margin-top:3px;color:#374151}
+  .tag{display:inline-block;min-width:38px;margin-right:6px;padding:1px 7px;border-radius:6px;
+    color:#fff;font-size:11px;font-weight:700;text-align:center}
+  .tag.ev{background:var(--sb-ev)}.tag.dt{background:var(--sb-dt)}
+  .tag.ex{background:var(--sb-ex)}.tag.st{background:var(--sb-st)}
+
+  /* 와이어프레임 프리미티브 (Mode B) ─ 실제 앱 CSS 없이 저해상 화면을 그린다 */
+  .wf{display:flex;flex-direction:column;gap:14px;max-width:340px;margin:0 auto;padding:6px}
+  .wf-bar{display:flex;align-items:center;justify-content:space-between;
+    padding:10px 12px;background:#eef1f6;border:1px solid var(--sb-line);border-radius:8px;
+    font-weight:700;color:#475569}
+  .wf-title{font-size:20px;font-weight:800;margin:2px 0}
+  .wf-sub{color:var(--sb-mut);font-size:13px}
+  .wf-field{display:flex;flex-direction:column;gap:5px}
+  .wf-field>span{font-size:12px;color:#475569;font-weight:600}
+  .wf-input{height:40px;border:1px solid #c6cede;border-radius:8px;background:#fbfcfe;
+    display:flex;align-items:center;padding:0 12px;color:#9aa3b2;font-size:13px}
+  .wf-btn{height:42px;border-radius:8px;border:1px solid #c6cede;background:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;color:#475569}
+  .wf-btn.primary{background:var(--sb-primary);border-color:var(--sb-primary);color:#fff}
+  .wf-link{text-align:center;color:var(--sb-primary);font-size:13px;font-weight:600}
+
+  .sb-foot-note{margin-top:22px;padding:12px 16px;background:#fff;border:1px solid var(--sb-line);
+    border-radius:12px;font-size:13px;color:#374151}
+  .sb-foot{margin-top:14px;color:var(--sb-mut);font-size:12px}
+
+  /* 원본 보기 — 전체화면 팝업 뷰어(라이트박스). 화면(.sb-stage)을 복제해 크게 보고 휠/드래그 확대 */
+  .sb-lb{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;background:rgba(10,18,30,.92)}
+  .sb-lb[hidden]{display:none}
+  .sb-lb-bar{display:flex;align-items:center;gap:14px;padding:10px 16px;color:#dce7f5}
+  .sb-lb-bar .t{font-size:13px;font-weight:700}
+  .sb-lb-bar .sb-zoomctl{margin-left:auto}
+  .sb-lb-bar .sb-zoomctl button{background:rgba(255,255,255,.12);border-color:transparent;color:#fff}
+  .sb-lb-bar .sb-zoomctl .zlvl{color:#cfe0f2}
+  .sb-lb-x{background:rgba(255,255,255,.14);color:#fff;border:0;width:32px;height:32px;border-radius:8px;
+    font-size:14px;cursor:pointer}.sb-lb-x:hover{background:rgba(255,255,255,.26)}
+  .sb-lb-zoom{flex:1;position:relative;overflow:hidden;cursor:grab;touch-action:none}
+  .sb-lb-zoom.dragging{cursor:grabbing}
+  .sb-lb-zoom .sb-stage{position:absolute;top:0;left:0;transform-origin:0 0;background:#fff;
+    padding:18px;border-radius:8px}
+
+  @media(max-width:1040px){
+    .sb-layout{grid-template-columns:1fr}
+    .sb-toc{position:static;max-height:230px;border-right:0;border-bottom:1px solid var(--sb-line)}
+  }
+  @media(max-width:760px){.sb-split{grid-template-columns:1fr}.sb-screen-sticky{position:static}}
+</style>
+</head>
+<body class="sb-body">
+  <nav class="sb-nav">
+    <a class="sb-back" href="./index.html">← 보드로</a>
+    <span class="sb-nav-code">{{SCREEN_ID}}</span>
+    <span class="sb-nav-title">{{TITLE}}</span>
+    <span class="sb-right">
+      <div class="sb-ctl">
+        <div class="sb-fontctl" role="group" aria-label="글자 크기">
+          <button class="sm" data-fz="dec" title="글자 작게">가</button>
+          <button data-fz="reset" title="기본 글자 크기">가</button>
+          <button class="lg" data-fz="inc" title="글자 크게">가</button>
+        </div>
+        <label class="sb-opctl" title="콜아웃 번호 진하기 — 화면 가림 조절">
+          <span class="ico">①</span><span class="lab">번호 진하기</span>
+          <input type="range" min="20" max="100" step="5" data-op aria-label="콜아웃 번호 진하기" />
+        </label>
+      </div>
+      <span class="sb-pager"><span class="pg" title="이전 화면">‹ 이전</span><a href="./sb-02-home.html" title="다음 화면">다음 ›</a></span>
+    </span>
+  </nav>
+
+  <div class="sb-layout">
+    <!-- ╔═ 화면 목차(TOC) — 전체 화면을 그룹별로. 페이지마다 동일하게 복제, current만 이동 ═╗ -->
+    <aside class="sb-toc" aria-label="화면 목차">
+      <div class="cap">화면 목차</div>
+      <div class="g">{{GROUP_TITLE}}</div>
+      <a class="t current" href="./sb-01-login.html"><span class="c">sb-01</span><span class="n">로그인</span></a>
+      <a class="t" href="./sb-02-home.html"><span class="c">sb-02</span><span class="n">홈</span></a>
+      <span class="t plan"><span class="c">sb-03</span><span class="n">비밀번호 재설정</span></span>
+    </aside>
+
+    <main class="sb-main">
+      <header class="sb-head">
+        <p class="sb-eyebrow">스토리보드 화면설계서 · {{ST_NO}}</p>
+        <h1>{{TITLE}}</h1>
+        <p>{{ONE_LINE_PURPOSE}}</p>
+        <dl class="sb-meta">
+          <div><dt>화면 ID</dt><dd>{{SCREEN_ID}}</dd></div>
+          <div><dt>모드</dt><dd>{{MODE}}</dd></div>
+          <div><dt>상태</dt><dd>{{STATE}}</dd></div>
+          <div><dt>선행</dt><dd>{{PREV_SCREEN}}</dd></div>
+          <div><dt>후행</dt><dd>{{NEXT_SCREEN}}</dd></div>
+        </dl>
+      </header>
+
+      <div class="sb-split">
+        <!-- ╔═ 왼쪽: 화면 (확대/축소 + 원본 보기) ════════════════════════╗
+             .sb-stage 안을 실제 화면으로 교체.
+               · Mode A(이미지): <img class="sb-screen-img" src="..."> + <span class="sb-cue pin" style="left:%;top:%">N</span>
+               · Mode B(와이어프레임): wf-* div + sb-mark/sb-cue (아래 예시)
+             ⚠ <table>/<tr> 직속 자식으로 <span class="sb-cue"> 금지 → div.sb-mark로 감싸고 그 자식에
+             ╚════════════════════════════════════════════════════════════╝ -->
+        <section class="sb-pane sb-screen-sticky">
+          <div class="sb-cap">화면 <span class="sb-cap-en">/ Screen</span>
+            <span class="sb-zoomctl">
+              <button data-z="out" title="축소" aria-label="축소">−</button><span class="zlvl">100%</span>
+              <button data-z="in" title="확대" aria-label="확대">+</button>
+              <button class="wide" data-z="fit" title="원래대로">맞춤</button>
+              <a href="#" data-lb-stage title="원본 보기 (전체화면 팝업)">원본 보기</a>
+            </span>
+          </div>
+          <div class="sb-screen">
+            <div class="sb-zoom" title="휠/버튼 확대 · 드래그 이동 · 더블클릭 원래대로">
+              <div class="sb-stage">
+                <!-- ▼▼▼ EXAMPLE(로그인) — 여기부터 교체 ▼▼▼ -->
+                <div class="wf">
+                  <div class="wf-bar">서비스 로고</div>
+                  <div class="wf-title">로그인</div>
+                  <div class="wf-sub">계정으로 계속하기</div>
+                  <label class="wf-field sb-mark"><span class="sb-cue">1</span><span>이메일</span><span class="wf-input">name@example.com</span></label>
+                  <label class="wf-field sb-mark"><span class="sb-cue">2</span><span>비밀번호</span><span class="wf-input">••••••••</span></label>
+                  <div class="wf-btn primary sb-mark"><span class="sb-cue r">3</span>로그인</div>
+                  <div class="wf-link sb-mark"><span class="sb-cue">4</span>비밀번호 찾기</div>
+                </div>
+                <!-- ▲▲▲ EXAMPLE 끝 ▲▲▲ -->
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ╔═ 오른쪽: 요소별 설명표 = 기능명세 ══════════════════════════╗
+             왼쪽 cue 번호와 1:1. tag: ev 이벤트 · dt 데이터 · ex 예외 · st 상태
+             ╚════════════════════════════════════════════════════════════╝ -->
+        <section class="sb-pane">
+          <div class="sb-cap">화면 설명 <span class="sb-cap-en">/ Description · 기능명세</span></div>
+          <table class="sb-notes">
+            <thead>
+              <tr><th class="c-no">No</th><th class="c-area">구역</th><th class="c-el">요소 / ID</th><th>설명 · 동작 · 데이터 · 예외</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="c-no"><span class="sb-num">1</span></td><td>폼</td>
+                <td><span class="sb-el">이메일 입력</span><span class="sb-id">#email</span></td>
+                <td><p>계정 이메일을 입력한다.</p>
+                  <span class="data"><span class="tag dt">데이터</span> email:string · RFC 5322 형식 검증</span>
+                  <span class="data"><span class="tag ex">예외</span> 형식 불일치 시 "올바른 이메일을 입력하세요"</span></td>
+              </tr>
+              <tr>
+                <td class="c-no"><span class="sb-num">2</span></td><td>폼</td>
+                <td><span class="sb-el">비밀번호 입력</span><span class="sb-id">#password</span></td>
+                <td><p>비밀번호를 입력한다. 기본 마스킹.</p>
+                  <span class="data"><span class="tag dt">데이터</span> password:string · 최소 8자</span>
+                  <span class="data"><span class="tag ex">예외</span> 8자 미만이면 제출 버튼 비활성</span></td>
+              </tr>
+              <tr>
+                <td class="c-no"><span class="sb-num">3</span></td><td>폼</td>
+                <td><span class="sb-el">로그인 버튼</span><span class="sb-id">#submit</span></td>
+                <td><p>자격증명을 검증하고 세션을 생성한다.</p>
+                  <span class="data"><span class="tag ev">이벤트</span> click → POST /sessions {email, password}</span>
+                  <span class="data"><span class="tag st">상태</span> 두 필드 유효 시 활성 · 요청 중 로딩</span>
+                  <span class="data"><span class="tag ex">예외</span> 401 → "이메일 또는 비밀번호가 올바르지 않습니다"</span></td>
+              </tr>
+              <tr>
+                <td class="c-no"><span class="sb-num">4</span></td><td>폼</td>
+                <td><span class="sb-el">비밀번호 찾기</span><span class="sb-id">a[href="/reset"]</span></td>
+                <td><p>비밀번호 재설정 화면으로 이동한다.</p>
+                  <span class="data"><span class="tag ev">이벤트</span> click → 화면 sb-03</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div class="sb-foot-note"><strong>관련 상세 명세:</strong> {{RELATED_LINKS}}</div>
+      <p class="sb-foot">스토리보드 화면설계서 {{ST_NO}} · {{TITLE}} (기준 {{SOURCE_REFERENCE}})</p>
+    </main>
+  </div>
+
+  <!-- 원본 보기 팝업 뷰어(페이지당 1개). data-lb-stage 가 가리키는 .sb-stage 를 복제해 띄운다. -->
+  <div class="sb-lb" id="sbLb" hidden>
+    <div class="sb-lb-bar">
+      <span class="t" id="sbLbTitle">원본 보기</span>
+      <span class="sb-zoomctl">
+        <button data-z="out" aria-label="축소">−</button><span class="zlvl">100%</span>
+        <button data-z="in" aria-label="확대">+</button><button class="wide" data-z="fit">맞춤</button>
+      </span>
+      <button class="sb-lb-x" data-lbclose aria-label="닫기">✕</button>
+    </div>
+    <div class="sb-lb-zoom" id="sbLbZoom"><div class="sb-stage" id="sbLbStage"></div></div>
+  </div>
+
+  <!-- 글자 크기 + 콜아웃 번호 진하기 (localStorage 저장, 다른 탭과 동기화) -->
+  <script>
+  (function(){var r=document.documentElement,FZ='sbFz',OP='sbCueOp',S=[1,1.12,1.26,1.42];
+  function cl(i){i=parseInt(i,10)||0;return Math.max(0,Math.min(S.length-1,i));}
+  function gF(){try{return cl(localStorage.getItem(FZ))}catch(e){return 0}}
+  function gO(){try{var v=parseInt(localStorage.getItem(OP),10);return(v>=20&&v<=100)?v:100}catch(e){return 100}}
+  function aF(i){r.style.setProperty('--sb-fz',S[cl(i)]);}
+  function aO(v){r.style.setProperty('--sb-cue-op',(v/100).toFixed(2));}
+  aF(gF());aO(gO());
+  function wire(){var fi=gF();
+    document.querySelectorAll('[data-fz]').forEach(function(b){b.addEventListener('click',function(){
+      var a=b.dataset.fz;fi=a==='inc'?cl(fi+1):a==='dec'?cl(fi-1):0;aF(fi);try{localStorage.setItem(FZ,fi)}catch(e){}});});
+    var s=document.querySelector('[data-op]');
+    if(s){s.value=gO();s.addEventListener('input',function(){aO(s.value);try{localStorage.setItem(OP,s.value)}catch(e){}});}}
+  if(document.readyState!=='loading')wire();else document.addEventListener('DOMContentLoaded',wire);
+  window.addEventListener('storage',function(e){if(e.key===FZ)aF(gF());
+    if(e.key===OP){aO(gO());var s=document.querySelector('[data-op]');if(s)s.value=gO();}});})();
+  </script>
+
+  <!-- 화면 확대/축소: 휠(커서 기준) · ＋－·맞춤 버튼 · 드래그 이동 · 더블클릭 원래대로 -->
+  <script>
+  (function(){function init(box){var stage=box.querySelector('.sb-stage');if(!stage)return;
+    var pane=box.closest('.sb-pane')||box.parentNode,z=1,tx=0,ty=0,MIN=1,MAX=6,drag=false,sx=0,sy=0,btx=0,bty=0,
+        lbl=pane.querySelector('.zlvl');
+    function clamp(){var r=box.getBoundingClientRect(),w=stage.offsetWidth*z,h=stage.offsetHeight*z;
+      tx=Math.max(Math.min(0,r.width-w),Math.min(0,tx));ty=Math.max(Math.min(0,r.height-h),Math.min(0,ty));}
+    function apply(){clamp();stage.style.transform='translate('+tx+'px,'+ty+'px) scale('+z+')';
+      box.classList.toggle('zoomed',z>1);if(lbl)lbl.textContent=Math.round(z*100)+'%';}
+    function zoomAt(cx,cy,nz){nz=Math.max(MIN,Math.min(MAX,nz));var r=box.getBoundingClientRect(),
+      ox=cx-r.left,oy=cy-r.top;tx=ox-(ox-tx)*(nz/z);ty=oy-(oy-ty)*(nz/z);z=nz;apply();}
+    function reset(){z=1;tx=0;ty=0;apply();}
+    box.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,z*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+    box.addEventListener('pointerdown',function(e){if(z<=1)return;drag=true;box.classList.add('dragging');
+      sx=e.clientX;sy=e.clientY;btx=tx;bty=ty;try{box.setPointerCapture(e.pointerId)}catch(_){}});
+    box.addEventListener('pointermove',function(e){if(!drag)return;tx=btx+(e.clientX-sx);ty=bty+(e.clientY-sy);apply();});
+    function end(){drag=false;box.classList.remove('dragging');}
+    box.addEventListener('pointerup',end);box.addEventListener('pointercancel',end);
+    box.addEventListener('dblclick',function(e){e.preventDefault();reset();});
+    pane.querySelectorAll('.sb-zoomctl [data-z]').forEach(function(b){b.addEventListener('click',function(){
+      var r=box.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,a=b.dataset.z;
+      if(a==='in')zoomAt(cx,cy,z*1.3);else if(a==='out')zoomAt(cx,cy,z/1.3);else reset();});});
+    apply();}
+  function boot(){document.querySelectorAll('.sb-screen .sb-zoom').forEach(init);}
+  if(document.readyState!=='loading')boot();else document.addEventListener('DOMContentLoaded',boot);})();
+  </script>
+
+  <!-- 원본 보기: .sb-stage 복제 → 전체화면 뷰어. 휠/버튼/드래그 확대, Esc/✕/배경 닫기 -->
+  <script>
+  (function(){var lb=document.getElementById('sbLb');if(!lb)return;
+  var zoom=document.getElementById('sbLbZoom'),stage=document.getElementById('sbLbStage'),
+      title=document.getElementById('sbLbTitle'),lvl=lb.querySelector('.zlvl');
+  var z=1,fit=1,tx=0,ty=0,drag=false,sx=0,sy=0,btx=0,bty=0;
+  function apply(){stage.style.transform='translate('+tx+'px,'+ty+'px) scale('+z+')';if(lvl)lvl.textContent=Math.round(z/fit*100)+'%';}
+  function fitNow(){var r=zoom.getBoundingClientRect(),w=stage.offsetWidth||1,h=stage.offsetHeight||1;
+    fit=Math.min(r.width/w,r.height/h)||1;z=fit;tx=(r.width-w*z)/2;ty=(r.height-h*z)/2;apply();}
+  function open(sel,t){var src=document.querySelector(sel||'.sb-screen .sb-stage');
+    stage.innerHTML=src?src.innerHTML:'';title.textContent=t||'원본 보기';lb.hidden=false;requestAnimationFrame(fitNow);}
+  function close(){lb.hidden=true;stage.innerHTML='';}
+  function zoomAt(cx,cy,nz){var mn=fit*0.5,mx=Math.max(1,fit)*8;nz=Math.max(mn,Math.min(mx,nz));
+    var r=zoom.getBoundingClientRect(),ox=cx-r.left,oy=cy-r.top;tx=ox-(ox-tx)*(nz/z);ty=oy-(oy-ty)*(nz/z);z=nz;apply();}
+  document.querySelectorAll('[data-lb-stage]').forEach(function(b){b.addEventListener('click',function(e){
+    e.preventDefault();open(b.getAttribute('data-lb-stage'),b.getAttribute('data-title'));});});
+  lb.querySelectorAll('[data-lbclose]').forEach(function(b){b.addEventListener('click',close);});
+  lb.addEventListener('click',function(e){if(e.target===lb)close();});
+  document.addEventListener('keydown',function(e){if(!lb.hidden&&e.key==='Escape')close();});
+  zoom.addEventListener('wheel',function(e){e.preventDefault();zoomAt(e.clientX,e.clientY,z*(e.deltaY<0?1.15:1/1.15));},{passive:false});
+  zoom.addEventListener('pointerdown',function(e){drag=true;zoom.classList.add('dragging');
+    sx=e.clientX;sy=e.clientY;btx=tx;bty=ty;try{zoom.setPointerCapture(e.pointerId)}catch(_){}});
+  zoom.addEventListener('pointermove',function(e){if(!drag)return;tx=btx+(e.clientX-sx);ty=bty+(e.clientY-sy);apply();});
+  function end(){drag=false;zoom.classList.remove('dragging');}
+  zoom.addEventListener('pointerup',end);zoom.addEventListener('pointercancel',end);
+  lb.querySelectorAll('.sb-zoomctl [data-z]').forEach(function(b){b.addEventListener('click',function(){
+    var r=zoom.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,a=b.dataset.z;
+    if(a==='in')zoomAt(cx,cy,z*1.3);else if(a==='out')zoomAt(cx,cy,z/1.3);else fitNow();});});
+  window.addEventListener('resize',function(){if(!lb.hidden)fitNow();});})();
+  </script>
+
+  <!-- 목차에서 현재 화면이 보이도록 스크롤 -->
+  <script>(function(){var c=document.querySelector(".sb-toc a.t.current"),t=document.querySelector(".sb-toc");if(c&&t)t.scrollTop=c.offsetTop-t.clientHeight/2+20;})();</script>
+</body>
+</html>

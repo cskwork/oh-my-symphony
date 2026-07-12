@@ -52,6 +52,7 @@ here). Concretely:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -133,11 +134,21 @@ _QA_SCORECARD = "## AC Scorecard"
 _LEARN_REQUIRED = ("## Wiki Updates",)
 _LEARN_COMPLETION_OPTIONS = ("## As-Is -> To-Be Report", "## Human Review")
 _DONE_REQUIRED = ("## As-Is -> To-Be Report", "## Merge Status")
+_FACTORY_BUILD_REQUIRED = (
+    "## Implementation",
+    "## Full Spec Review",
+    "## Edge Case Review",
+    "## Adversarial Review",
+    "## Test Evidence",
+)
 
 # Result/verdict cells that count as "not a clean pass". Compared
 # case-insensitively after stripping whitespace and surrounding backticks.
 _SCORECARD_PASS_TOKENS = frozenset({"pass", "passed", "ok", "green", "✅"})
 _SECURITY_FAIL_TOKENS = frozenset({"fail", "failed", "critical"})
+_FACTORY_EVIDENCE_PLACEHOLDERS = frozenset(
+    {"", "n/a", "na", "none", "not run", "tbd", "-", "--", "—"}
+)
 
 # Evidence cells that name no real artefact — never treated as a cited path.
 _PATH_PLACEHOLDERS = frozenset({"", "n/a", "na", "none", "-", "--", "tbd", "—"})
@@ -151,6 +162,11 @@ _NA_RESULT_TOKENS = frozenset({"n/a", "na"})
 # Matches a single Markdown inline-code span, e.g. the two spans in
 # "`qa/a.log`, `qa/b.log` (`test_name`)".
 _INLINE_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+_FACTORY_CRITERION_ITEM_RE = re.compile(
+    r"^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(?P<text>\S(?:.*\S)?)\s*$"
+)
+_MARKDOWN_INLINE_LINK_RE = re.compile(r"!?\[([^\]]+)]\([^)]+\)")
+_MARKDOWN_REFERENCE_LINK_RE = re.compile(r"!?\[([^\]]+)]\[[^\]]*]")
 
 
 def evaluate_contract(
@@ -159,6 +175,7 @@ def evaluate_contract(
     identifier: str,
     *,
     docs_root: Path | None = None,
+    profile: str = "advanced",
 ) -> ContractResult:
     """Evaluate the producing stage's contract against the ticket body.
 
@@ -168,6 +185,15 @@ def evaluate_contract(
     """
     state = (producing_state or "").strip().lower()
     body = ticket_body or ""
+
+    if profile == "factory":
+        if state == "build":
+            return _build_result(
+                producing_state,
+                _missing_sections(body, _FACTORY_BUILD_REQUIRED),
+            )
+        if state == "verify":
+            return _evaluate_factory_verify_contract(producing_state, body)
 
     if state == "in progress":
         return _evaluate_in_progress_contract(
@@ -184,6 +210,132 @@ def evaluate_contract(
         return _evaluate_done_contract(producing_state, body, identifier, docs_root)
 
     return ContractResult(passed=True)
+
+
+def _evaluate_factory_verify_contract(
+    producing_state: str, body: str
+) -> ContractResult:
+    acceptance_heading = "## Acceptance criteria"
+    heading = "## Verification"
+    missing = _missing_sections(body, (acceptance_heading, heading))
+    acceptance_criteria = _factory_acceptance_criteria(body, acceptance_heading)
+    if acceptance_heading not in missing and not acceptance_criteria:
+        missing.append(
+            "## Acceptance criteria must contain at least one bullet or numbered item"
+        )
+    if heading in missing:
+        return _build_result(producing_state, missing)
+
+    required = ("criterion", "command", "result")
+    header = _markdown_table_header(body, heading)
+    if not all(name in header for name in required):
+        missing.append("## Verification table with `criterion | command | result`")
+        return _build_result(producing_state, missing)
+
+    rows = _parse_markdown_table_rows(body, heading)
+    if not rows:
+        missing.append("## Verification table must contain at least one evidence row")
+        return _build_result(producing_state, missing)
+
+    indexes = {name: header.index(name) for name in required}
+    verification_criteria: list[str] = []
+    for row in rows:
+        if len(row.cells) <= max(indexes.values()):
+            missing.append(f"## Verification row {row.row} is incomplete")
+            continue
+        criterion_cell = row.cells[indexes["criterion"]]
+        criterion = _normalize_cell(criterion_cell)
+        command = _normalize_cell(row.cells[indexes["command"]])
+        result = _normalize_cell(row.cells[indexes["result"]])
+        if criterion in _FACTORY_EVIDENCE_PLACEHOLDERS:
+            missing.append(f"## Verification row {row.row} criterion is missing")
+        else:
+            normalized = _normalize_factory_criterion(criterion_cell)
+            if normalized:
+                verification_criteria.append(normalized)
+        if command in _FACTORY_EVIDENCE_PLACEHOLDERS:
+            missing.append(
+                f"## Verification row {row.row} command must name the exact relevant proof"
+            )
+        if result != "pass":
+            missing.append(
+                f"## Verification row {row.row} result is not exactly `pass`: "
+                f"`{result or 'empty'}`"
+            )
+    missing.extend(
+        _missing_factory_acceptance_rows(acceptance_criteria, verification_criteria)
+    )
+    return _build_result(producing_state, missing)
+
+
+def _factory_acceptance_criteria(body: str, heading: str) -> list[tuple[str, str]]:
+    """Return declared list items as ``(display, normalized)`` pairs."""
+    criteria: list[tuple[str, str]] = []
+    current: list[str] = []
+
+    def append_current() -> None:
+        if not current:
+            return
+        display = " ".join(current)
+        normalized = _normalize_factory_criterion(display)
+        if normalized:
+            criteria.append((display, normalized))
+
+    for line in _section_body_text(body, heading).splitlines():
+        match = _FACTORY_CRITERION_ITEM_RE.match(line)
+        if match:
+            append_current()
+            current = [match.group("text").strip()]
+            continue
+        if current and line[:1].isspace() and line.strip():
+            current.append(line.strip())
+            continue
+        append_current()
+        current = []
+    append_current()
+    return criteria
+
+
+def _normalize_factory_criterion(value: str) -> str:
+    """Normalize presentational Markdown while preserving criterion wording."""
+    text = unicodedata.normalize("NFKC", value)
+    text = _MARKDOWN_INLINE_LINK_RE.sub(r"\1", text)
+    text = _MARKDOWN_REFERENCE_LINK_RE.sub(r"\1", text)
+    text = _INLINE_CODE_SPAN_RE.sub(r"\1", text)
+    for pattern in (
+        r"\*\*(.+?)\*\*",
+        r"__(.+?)__",
+        r"~~(.+?)~~",
+        r"(?<!\w)\*([^*\n]+)\*(?!\w)",
+        r"(?<!\w)_([^_\n]+)_(?!\w)",
+    ):
+        text = re.sub(pattern, r"\1", text)
+    text = re.sub(r"\\([\\`*_{}\[\]()#+.!~-])", r"\1", text)
+    return " ".join(text.casefold().split())
+
+
+def _missing_factory_acceptance_rows(
+    acceptance_criteria: list[tuple[str, str]], verification_criteria: list[str]
+) -> list[str]:
+    """Require one distinct Verification row per declared criterion."""
+    available: dict[str, int] = {}
+    for criterion in verification_criteria:
+        available[criterion] = available.get(criterion, 0) + 1
+
+    missing: list[str] = []
+    for display, normalized in acceptance_criteria:
+        if available.get(normalized, 0) > 0:
+            available[normalized] -= 1
+            continue
+        missing.append(
+            f"acceptance criterion lacks a distinct Verification row: `{display}`"
+        )
+    for normalized, count in available.items():
+        for _ in range(count):
+            missing.append(
+                f"Verification has undeclared criterion: `{normalized}`"
+            )
+    return missing
 
 
 def _evaluate_in_progress_contract(

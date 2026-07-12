@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{PROJECT_NAME}} - superpm workspace</title>
+<!--
+  superpm 통합 워크스페이스 - canvas builder (기능명세 / 유저플로우 / 와이어프레임)
+  ============================================================================
+  - Self-contained: zero external CSS/JS. Double-click to open in any browser (works offline).
+  - Data-driven: the JSON in the script tag with id ssot IS the SSOT. Fill it and every tab,
+    the flow diagram, the spec cards, the live wireframes, and the validation panel render.
+  - 유저플로우  -> SVG node/edge diagram, auto-layout + zoom/pan + node drag.
+  - 기능명세    -> card canvas (FEAT groups + SPEC cards), zoom/pan, with a table toggle.
+  - 와이어프레임 -> each screen.preview rendered LIVE in an iframe (real working UI), callouts
+                   overlaid on its data-callout elements, prev/next paging.
+  - Contract: identifiers / rules / codes follow reference/model.md (SPEC-NN, FLOW-NN, R2/R3/R4,
+    ORPHAN_NODE / UNMAPPED_SCREEN / ORPHAN_CALLOUT / MISSING_EXCEPTION ...). Validation runs live.
+  - 앱 셸: DATA.brand + DATA.nav[{id,label,icon,target}] + screen.device("web"|"mobile") + screen.nav(active id).
+           web+nav 화면은 좌측 메뉴 앱 셸(실제 사이트처럼)로, mobile/no-nav 화면(팝업·학생·모바일)은 전체화면으로 렌더.
+  - 유저플로우: 시작점 BFS 최초방문 깊이로 좌->우 자동 배치(사이클/실패-back-edge 안전) + 초기 fit-to-view(노드 안 가림).
+  - To fill: replace {{PROJECT_NAME}} / {{SNAPSHOT_ID}} and swap the example ssot JSON.
+-->
+<style>
+  :root{
+    --p:#2d6cdf; --ink:#1a1f29; --mut:#6b7280; --line:#e5e7eb; --bg:#f3f5f8; --panel:#fff;
+    --cue:#e5484d; --ev:#2563eb; --dt:#16a34a; --ex:#dc2626; --st:#7c3aed; --warn:#d97706;
+    --n-page:#2d6cdf; --n-action:#16a34a; --n-decision:#7c3aed; --n-term:#6b7280;
+    --fz:1;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
+    color:var(--ink);background:var(--bg);font-size:calc(15px*var(--fz));line-height:1.55;height:100vh;overflow:hidden}
+  a{color:var(--p)}
+  .app{display:grid;grid-template-columns:212px 1fr 280px;height:100vh}
+  /* sidebar */
+  .side{background:#0f1729;color:#cbd5e1;display:flex;flex-direction:column;padding:16px 12px;gap:6px}
+  .side .brand{color:#fff;font-weight:700;font-size:1.02em;padding:4px 8px 12px}
+  .side .snap{color:#64748b;font-size:.72em;padding:0 8px 12px;word-break:break-all}
+  .side .tab{display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:8px;cursor:pointer;
+    color:#cbd5e1;font-size:.92em;border:1px solid transparent}
+  .side .tab:hover{background:#1e293b}
+  .side .tab[aria-selected="true"]{background:var(--p);color:#fff}
+  .side .tab .dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:.7}
+  .side .step{color:#475569;font-size:.68em;text-transform:uppercase;letter-spacing:.06em;padding:14px 8px 4px}
+  .side .spacer{flex:1}
+  .side button.act{background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:8px;
+    padding:9px;cursor:pointer;font-size:.85em;width:100%}
+  .side button.act:hover{background:#334155}
+  .fzbar{display:flex;align-items:center;gap:8px;padding:6px 10px 10px}
+  .fzbar input{flex:1;accent-color:var(--p)}
+  .fzbar .a{font-size:12px;color:#64748b} .fzbar .b{font-size:19px;color:#cbd5e1}
+  /* stage */
+  .stage{position:relative;overflow:hidden;display:flex;flex-direction:column;background:var(--bg)}
+  .bar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line)}
+  .bar h2{font-size:.98em}
+  .bar .hint{color:var(--mut);font-size:.78em}
+  .bar .right{margin-left:auto;display:flex;gap:6px}
+  .bar button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 10px;cursor:pointer;font-size:.82em;color:var(--mut)}
+  .bar button:hover{border-color:var(--p);color:var(--p)}
+  .bar button[aria-pressed="true"]{background:var(--p);color:#fff;border-color:var(--p)}
+  .view{flex:1;position:relative;overflow:hidden}
+  .view[hidden]{display:none}
+  /* canvas (flow + spec share) */
+  .canvas{position:absolute;inset:0;overflow:hidden;cursor:grab;
+    background:radial-gradient(circle,#dfe4ea 1px,transparent 1px);background-size:22px 22px}
+  .canvas:active{cursor:grabbing}
+  svg.flow{position:absolute;inset:0;width:100%;height:100%}
+  .flow .lane{fill:#eef2f8;stroke:#e2e8f1;stroke-width:1;opacity:.7}
+  .flow .lane.alt{fill:#f6f4ef}
+  .flow .laneLabel{fill:#8a97a8;font-size:12.5px;font-weight:700;letter-spacing:.03em}
+  .flow .edge{fill:none;stroke:#9aa4b2;stroke-width:1.6}
+  .flow .elabel .elbg{fill:#fff;stroke:#dbe2ea;stroke-width:1;opacity:.96}
+  .flow .elabel .eltx{fill:#475569;font-size:11px;font-weight:600}
+  .flow .edge.back{stroke:#f59e0b;stroke-dasharray:5 4}
+  .flow .elabel.back .elbg{stroke:#f6c66b}
+  .flow .elabel.back .eltx{fill:#b45309}
+  .flow .node,.flow .edge,.flow .elabel{transition:opacity .12s}
+  .flow .node.dim,.flow .edge.dim,.flow .elabel.dim{opacity:.1}
+  .flow .node.hl rect{stroke-width:2.5}
+  .flow .edge.hl{stroke-width:2.6}
+  .node{cursor:grab}
+  .node rect{rx:9;stroke-width:1.5;fill:#fff}
+  .node.sel rect{stroke-width:3}
+  .node.page rect{stroke:var(--n-page)} .node.action rect{stroke:var(--n-action)}
+  .node.decision rect{stroke:var(--n-decision)} .node.start rect,.node.end rect{stroke:var(--n-term)}
+  .node .ty{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em}
+  .node.page .ty{fill:var(--n-page)} .node.action .ty{fill:var(--n-action)}
+  .node.decision .ty{fill:var(--n-decision)} .node.start .ty,.node.end .ty{fill:var(--n-term)}
+  .node .lb{fill:var(--ink);font-size:12.5px;font-weight:600}
+  .node .sp{fill:var(--mut);font-size:10px;font-family:ui-monospace,monospace}
+  /* spec card canvas */
+  .cardvp{position:absolute;inset:0;transform-origin:0 0}
+  .feat-col{position:absolute;width:228px}
+  .feat-head{font-size:.78em;font-weight:700;color:var(--p);padding:4px 6px;margin-bottom:8px;
+    border-bottom:2px solid var(--p)}
+  .card{background:#fff;border:1px solid var(--line);border-left:3px solid var(--p);border-radius:10px;
+    padding:11px 12px;margin-bottom:12px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+  .card.sel{outline:2px solid var(--p);outline-offset:1px}
+  .card .cid{font-family:ui-monospace,monospace;font-size:.78em;color:var(--p)}
+  .card .ct{font-weight:600;font-size:.92em;margin:2px 0 7px}
+  .card .kv{font-size:.78em;margin:3px 0;color:var(--ink)}
+  .card .kv b{display:inline-block;min-width:30px;font-size:.92em;font-weight:600}
+  .tag{display:inline-block;font-size:.7em;padding:1px 5px;border-radius:4px;color:#fff;margin-right:4px}
+  .tag.ev{background:var(--ev)} .tag.dt{background:var(--dt)} .tag.ex{background:var(--ex)} .tag.st{background:var(--st)}
+  /* spec table (toggle) */
+  .spectable{position:absolute;inset:0;overflow:auto;padding:18px;background:var(--bg)}
+  table.notes{width:100%;border-collapse:collapse;font-size:.88em;background:#fff}
+  .notes th,.notes td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  .notes th{background:#fafbfc;font-weight:600}
+  .notes .c-no{width:30px;text-align:center;color:var(--mut)}
+  .cid{font-family:ui-monospace,monospace}
+  /* wireframe */
+  .wire{position:absolute;inset:0;display:flex;flex-direction:column}
+  .wire-top{display:flex;align-items:center;gap:8px;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line)}
+  .wire-top select{padding:6px 8px;border:1px solid var(--line);border-radius:7px;font-size:.85em}
+  .wire-top .st{font-size:.76em;color:var(--mut)}
+  .wire-body{flex:1;display:grid;grid-template-columns:1fr 360px;gap:0;overflow:hidden}
+  .wire-stage{position:relative;overflow:auto;padding:26px;display:flex;justify-content:center;align-items:flex-start;background:#eef1f5}
+  .device{background:#fff;box-shadow:0 8px 30px rgba(15,23,42,.16);overflow:hidden;border:1px solid var(--line);transition:width .2s}
+  .device.mobile{width:380px;border-radius:20px}
+  .device.web{width:940px;max-width:100%;border-radius:10px}
+  .device .chrome{display:none}
+  .device.web .chrome{display:flex;gap:6px;padding:9px 12px;background:#f1f3f5;border-bottom:1px solid var(--line)}
+  .device.web .chrome i{width:10px;height:10px;border-radius:50%;background:#cbd5e1}
+  .wire-frame{width:100%;height:560px;border:0;display:block}
+  .wire-spec{border-left:1px solid var(--line);background:#fff;overflow:auto;padding:14px}
+  .wire-spec .cap{font-size:.72em;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin-bottom:8px}
+  .wire-spec table{width:100%;border-collapse:collapse;font-size:.82em}
+  .wire-spec td{border:1px solid var(--line);padding:6px 8px;vertical-align:top}
+  /* validation panel */
+  .panel{background:var(--panel);border-left:1px solid var(--line);padding:14px;overflow:auto}
+  .panel .cap{font-size:.72em;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:2px 0 10px}
+  .blocker{border:1px solid var(--line);border-left:3px solid var(--ex);border-radius:7px;padding:8px 10px;margin-bottom:8px;font-size:.8em}
+  .blocker.gap{border-left-color:var(--warn)}
+  .blocker .code{font-family:ui-monospace,monospace;font-weight:700;color:var(--ex);font-size:.9em}
+  .blocker.gap .code{color:var(--warn)}
+  .blocker a{cursor:pointer}
+  .ok{color:var(--dt);font-size:.84em;padding:6px 2px}
+  .legend{margin-top:14px;border-top:1px solid var(--line);padding-top:10px;font-size:.74em;color:var(--mut)}
+  .legend span{display:inline-flex;align-items:center;gap:5px;margin-right:10px}
+  .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .ver{font-size:.72em;color:var(--mut);margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand">{{PROJECT_NAME}}</div>
+    <div class="snap" id="snap"></div>
+    <div class="step">설계 산출물</div>
+    <div class="tab" data-tab="spec" aria-selected="true"><span class="dot"></span>기능명세</div>
+    <div class="tab" data-tab="flow"><span class="dot"></span>유저플로우</div>
+    <div class="tab" data-tab="wire"><span class="dot"></span>와이어프레임</div>
+    <div class="spacer"></div>
+    <div class="fzbar"><span class="a">가</span><input type="range" id="fzRange" min="85" max="135" step="5" value="100" title="글자 크기"><span class="b">가</span></div>
+    <button class="act" id="exportBtn">⤓ SSOT JSON 내보내기</button>
+  </nav>
+
+  <section class="stage">
+    <div class="bar">
+      <h2 id="title">기능명세</h2>
+      <span class="hint" id="hint"></span>
+      <select id="modSel" title="모듈(섹션) 필터" style="margin-left:10px;font-size:12px;padding:5px 8px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#0f172a;cursor:pointer;display:none"></select>
+      <div class="right" id="tools"></div>
+    </div>
+
+    <!-- 기능명세: card canvas + table toggle -->
+    <div class="view" data-tab="spec">
+      <div class="canvas" id="specCanvas"><div class="cardvp" id="specVp"></div></div>
+      <div class="spectable" id="specTable" hidden>
+        <table class="notes"><thead><tr><th class="c-no">No</th><th>SPEC</th><th>입력</th><th>출력</th><th>규칙</th><th>예외</th></tr></thead><tbody id="specBody"></tbody></table>
+      </div>
+    </div>
+
+    <!-- 유저플로우: SVG node/edge canvas -->
+    <div class="view" data-tab="flow" hidden>
+      <div class="canvas" id="flowCanvas">
+        <svg class="flow" id="flowSvg">
+          <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#9aa4b2"/></marker>
+          <marker id="arrow-back" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#f59e0b"/></marker></defs>
+          <g id="flowVp"><g id="lanes"></g><g id="edges"></g><g id="nodes"></g></g>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 와이어프레임: live iframe + spec -->
+    <div class="view" data-tab="wire" hidden>
+      <div class="wire">
+        <div class="wire-top">
+          <select id="wireSel"></select>
+          <span class="st" id="wireState"></span>
+          <button class="act" id="vpToggle" style="width:auto;padding:6px 10px;background:#fff;color:var(--mut);border:1px solid var(--line)">웹 보기</button>
+          <button class="act" id="cueToggle" style="width:auto;padding:6px 10px;background:#fff;color:var(--mut);border:1px solid var(--line)" aria-pressed="true">콜아웃 표시</button>
+          <span style="margin-left:auto"></span>
+          <button class="act" id="wirePrev" style="width:auto;padding:6px 10px;background:#fff;color:var(--mut);border:1px solid var(--line)">‹ 이전</button>
+          <button class="act" id="wireNext" style="width:auto;padding:6px 10px;background:#fff;color:var(--mut);border:1px solid var(--line)">다음 ›</button>
+        </div>
+        <div class="wire-body">
+          <div class="wire-stage"><div class="device mobile" id="device"><div class="chrome"><i></i><i></i><i></i></div><iframe class="wire-frame" id="wireFrame"></iframe></div></div>
+          <div class="wire-spec"><div class="cap">요소별 명세 (→ SPEC)</div><table><tbody id="wireRows"></tbody></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div id="nodeSpec"></div>
+    <div class="cap">검증 / Blockers (model.md)</div>
+    <div id="blockers"></div>
+    <div class="legend">
+      <span><i style="background:var(--n-page)"></i>page</span>
+      <span><i style="background:var(--n-action)"></i>action</span>
+      <span><i style="background:var(--n-decision)"></i>decision</span>
+    </div>
+    <div class="ver">snapshot: <span id="snapVer"></span><br>SPEC = single source of truth</div>
+  </aside>
+</div>
+
+<script id="ssot" type="application/json">
+{
+  "snapshotId": "{{SNAPSHOT_ID}}",
+  "brand": "My App", "navUser": "사용자",
+  "nav": [{"id":"home","label":"홈","icon":"⌂","target":"SCREEN-02"}, {"id":"set","label":"설정","icon":"⚙"}],
+  "features": [
+    {"id":"FEAT-01","title":"인증","priority":"P0"},
+    {"id":"FEAT-02","title":"홈","priority":"P1"}
+  ],
+  "specs": [
+    {"id":"SPEC-01","featureId":"FEAT-01","title":"이메일 입력","input":"email:string","output":"검증된 이메일","businessRule":"RFC 5322 형식","exception":"형식 오류 인라인 경고"},
+    {"id":"SPEC-02","featureId":"FEAT-01","title":"비밀번호 입력","input":"password:string","output":"마스킹 값","businessRule":"최소 8자","exception":"8자 미만 제출 비활성"},
+    {"id":"SPEC-03","featureId":"FEAT-01","title":"자격 검증","input":"email, password","output":"session token","businessRule":"서버 인증 후 세션 발급","exception":"불일치 401, 5회 초과 잠금"},
+    {"id":"SPEC-05","featureId":"FEAT-02","title":"홈 대시보드","input":"session","output":"사용자 요약","businessRule":"로그인 사용자만","exception":"세션 만료 시 로그인 이동"},
+    {"id":"SPEC-06","featureId":"FEAT-01","title":"비밀번호 재설정","input":"email:string","output":"재설정 메일 발송","businessRule":"가입 이메일만 발송","exception":"미가입 이메일도 동일 응답(보안)"}
+  ],
+  "flow": {
+    "nodes": [
+      {"id":"FLOW-00","type":"start","label":"진입","linkedSpecIds":[]},
+      {"id":"FLOW-01","type":"page","label":"로그인","linkedSpecIds":["SPEC-01","SPEC-02"]},
+      {"id":"FLOW-02","type":"action","label":"로그인 클릭","linkedSpecIds":["SPEC-03"]},
+      {"id":"FLOW-03","type":"decision","label":"자격 검증","linkedSpecIds":["SPEC-03"]},
+      {"id":"FLOW-04","type":"page","label":"홈","linkedSpecIds":["SPEC-05"]},
+      {"id":"FLOW-05","type":"page","label":"비밀번호 찾기","linkedSpecIds":["SPEC-06"]},
+      {"id":"FLOW-09","type":"end","label":"종료","linkedSpecIds":[]}
+    ],
+    "edges": [
+      {"from":"FLOW-00","to":"FLOW-01"},
+      {"from":"FLOW-01","to":"FLOW-02"},
+      {"from":"FLOW-02","to":"FLOW-03"},
+      {"from":"FLOW-03","to":"FLOW-04","condition":"성공"},
+      {"from":"FLOW-03","to":"FLOW-01","condition":"실패"},
+      {"from":"FLOW-01","to":"FLOW-05","condition":"비밀번호 찾기"},
+      {"from":"FLOW-05","to":"FLOW-01","condition":"돌아가기"},
+      {"from":"FLOW-04","to":"FLOW-09"}
+    ]
+  },
+  "screens": [
+    {"id":"SCREEN-01","flowNodeId":"FLOW-01","title":"로그인","state":"normal","prev":null,"next":"SCREEN-02",
+     "preview":"<div class='scr'><h1>로그인</h1><p class='sub'>계정에 접속하세요</p><label class='f'>이메일<input type='email' data-callout='1' placeholder='you@example.com'></label><label class='f'>비밀번호<input type='password' data-callout='2' placeholder='********'></label><button class='btn' data-callout='3' data-nav='SCREEN-02'>로그인</button><a class='link' data-nav='SCREEN-03'>비밀번호 찾기</a></div>",
+     "elements":[
+       {"calloutNo":1,"area":"폼","selector":"#email","behavior":"입력 → RFC 검증","dataContract":"email:string","exception":"형식 오류 인라인 경고","linkedSpecId":"SPEC-01"},
+       {"calloutNo":2,"area":"폼","selector":"#password","behavior":"입력 → 길이 검증","dataContract":"password:string","exception":"8자 미만 제출 비활성","linkedSpecId":"SPEC-02"},
+       {"calloutNo":3,"area":"폼","selector":"#submit","behavior":"클릭 → POST /sessions","dataContract":"{email,password} → token","exception":"401 시 오류 메시지","linkedSpecId":"SPEC-03"}
+     ]},
+    {"id":"SCREEN-02","flowNodeId":"FLOW-04","title":"홈","state":"normal","prev":"SCREEN-01","next":null,"device":"web","nav":"home",
+     "preview":"<div class='scr'><header class='top' data-callout='1'><strong>대시보드</strong><span class='av'>U</span></header><div class='card'>오늘의 요약<br><small>최근 7일 활동</small></div><div class='card'>알림 3건</div><button class='btn' data-nav='SCREEN-01'>로그아웃</button></div>",
+     "elements":[
+       {"calloutNo":1,"area":"헤더","selector":".summary","behavior":"세션으로 요약 로드","dataContract":"session → summary","exception":"만료 시 로그인 이동","linkedSpecId":"SPEC-05"}
+     ]},
+    {"id":"SCREEN-03","flowNodeId":"FLOW-05","title":"비밀번호 찾기","state":"normal","prev":"SCREEN-01","next":null,
+     "preview":"<div class='scr'><h1>비밀번호 찾기</h1><p class='sub'>가입한 이메일로 재설정 링크를 보냅니다</p><label class='f'>이메일<input type='email' data-callout='1' placeholder='you@example.com'></label><button class='btn' data-callout='2' data-nav='SCREEN-01'>재설정 링크 전송</button><a class='link' data-nav='SCREEN-01'>로그인으로 돌아가기</a></div>",
+     "elements":[
+       {"calloutNo":1,"area":"폼","selector":"#reset-email","behavior":"입력 → 이메일 검증","dataContract":"email:string","exception":"미가입도 동일 응답(보안)","linkedSpecId":"SPEC-06"},
+       {"calloutNo":2,"area":"폼","selector":"#reset-submit","behavior":"클릭 → POST /password/reset","dataContract":"{email} → 202","exception":"레이트리밋 초과 시 429","linkedSpecId":"SPEC-06"}
+     ]}
+  ]
+}
+</script>
+
+<script>
+var $ = function(s,r){ return (r||document).querySelector(s); };
+var $$ = function(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
+var SVGNS = 'http://www.w3.org/2000/svg';
+/* ---------- SSOT 소스: 모듈 분리(window.SSOT) 우선, 없으면 인라인 #ssot(단일 파일) ---------- */
+var FULL = window.SSOT || (function(){ var n=$('#ssot'); return n?JSON.parse(n.textContent):{brand:'',navUser:'',snapshotId:'',nav:[],modules:[],features:[],specs:[],screens:[],flow:{nodes:[],edges:[]}}; })();
+FULL.modules=FULL.modules||[]; FULL.features=FULL.features||[]; FULL.specs=FULL.specs||[]; FULL.screens=FULL.screens||[]; FULL.flow=FULL.flow||{nodes:[],edges:[]};
+(function(){
+  FULL.modules.sort(function(a,b){ return (a.order||99)-(b.order||99); });
+  var morder={}; FULL.modules.forEach(function(m,i){ morder[m.id]=i; });
+  function mo(x){ return morder[x]==null?99:morder[x]; }
+  function byMod(a){ return a.slice().sort(function(x,y){ return mo(x.moduleId)-mo(y.moduleId); }); }
+  FULL.features=byMod(FULL.features); FULL.specs=byMod(FULL.specs); FULL.screens=byMod(FULL.screens); FULL.flow.nodes=byMod(FULL.flow.nodes);
+  var hub=FULL.flow.nodes.filter(function(n){ return n.hub; })[0];
+  if(hub){ FULL.flow.nodes.forEach(function(n){ if(n.entry && n.id!==hub.id){
+    var ex=FULL.flow.edges.some(function(e){ return e.from===hub.id && e.to===n.id; });
+    if(!ex) FULL.flow.edges.push({from:hub.id,to:n.id,condition:n.entryLabel||''}); }}); }
+})();
+var curMod='all', DATA;
+function applyMod(){
+  if(curMod==='all' || !FULL.modules.some(function(m){ return m.id===curMod; })){ curMod='all'; DATA=FULL; return; }
+  var nodes=FULL.flow.nodes.filter(function(n){ return n.moduleId===curMod; }), nid={};
+  nodes.forEach(function(n){ nid[n.id]=1; });
+  DATA={ brand:FULL.brand, navUser:FULL.navUser, snapshotId:FULL.snapshotId, nav:FULL.nav, modules:FULL.modules,
+    features:FULL.features.filter(function(f){ return f.moduleId===curMod; }),
+    specs:FULL.specs.filter(function(x){ return x.moduleId===curMod; }),
+    screens:FULL.screens.filter(function(x){ return x.moduleId===curMod; }),
+    flow:{ nodes:nodes, edges:FULL.flow.edges.filter(function(e){ return nid[e.from]&&nid[e.to]; }) } };
+}
+applyMod();
+function rerender(){ applyMod(); wireIdx=0; flowDrawn=false;
+  drawSpec(); renderWireSel(); showScreen(); validate();
+  setTab(st.tab && TITLES[st.tab] ? st.tab : 'spec'); }
+var st = (function(){ try{ return JSON.parse(localStorage.getItem('wsState'))||{}; }catch(e){ return {}; } })();
+function save(){ localStorage.setItem('wsState', JSON.stringify(st)); }
+function esc(v){ return (v==null?'':String(v)).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+var TITLES = {spec:'기능명세', flow:'유저플로우', wire:'와이어프레임'};
+var HINTS = {spec:'FEAT 그룹별 SPEC 카드 · 휠 줌, 드래그 이동', flow:'노드 클릭 → 우측 명세 · 드래그로 정렬(기억됨) · 휠 줌', wire:'실제 작동 UI · 버튼 클릭으로 화면 이동 · 웹/모바일 전환'};
+
+/* ---------- tabs ---------- */
+function setTab(t){
+  st.tab=t; save();
+  $$('.side .tab').forEach(function(b){ b.setAttribute('aria-selected', b.dataset.tab===t); });
+  $$('.stage .view').forEach(function(v){ v.hidden = v.dataset.tab!==t; });
+  $('#title').textContent = TITLES[t]; $('#hint').textContent = HINTS[t];
+  $('#tools').innerHTML = '';
+  if(t==='spec'){ addTool('표 보기', toggleSpecTable, specTableOn); addTool('맞춤', function(){ specPZ && specPZ.reset(); }); }
+  if(t==='flow'){ addTool('맞춤', function(){ fitFlow(); }); addTool('자동정렬', function(){ autoArrange(); }, flowArrange==='module'); }
+  if(t==='flow' && !flowDrawn){ drawFlow(); flowDrawn=true; }
+}
+function addTool(label, fn, pressed){ var b=document.createElement('button'); b.textContent=label;
+  if(pressed) b.setAttribute('aria-pressed','true'); b.onclick=function(){ fn(b); }; $('#tools').appendChild(b); }
+$$('.side .tab').forEach(function(b){ b.onclick=function(){ setTab(b.dataset.tab); }; });
+
+/* ---------- pan / zoom ---------- */
+function panzoom(host, vp, isSvg){
+  var s=1,tx=0,ty=0;
+  function apply(){ if(isSvg) vp.setAttribute('transform','translate('+tx+','+ty+') scale('+s+')');
+    else vp.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')'; }
+  host.addEventListener('wheel',function(e){ e.preventDefault();
+    var d=e.deltaY<0?1.1:1/1.1, ns=Math.min(2.4,Math.max(0.3,s*d));
+    var r=host.getBoundingClientRect(), cx=e.clientX-r.left, cy=e.clientY-r.top;
+    tx=cx-(cx-tx)*(ns/s); ty=cy-(cy-ty)*(ns/s); s=ns; apply();
+  },{passive:false});
+  var pan=false,px,py;
+  host.addEventListener('pointerdown',function(e){ if(e.target.closest('.node,.card'))return;
+    pan=true; px=e.clientX-tx; py=e.clientY-ty; });
+  window.addEventListener('pointermove',function(e){ if(!pan)return; tx=e.clientX-px; ty=e.clientY-py; apply(); });
+  window.addEventListener('pointerup',function(){ pan=false; });
+  apply();
+  return {reset:function(){ s=1;tx=0;ty=0;apply(); }, scale:function(){ return s; }, set:function(ns,nx,ny){ s=ns;tx=nx;ty=ny;apply(); }};
+}
+
+/* ---------- 기능명세: card canvas + table ---------- */
+var specPZ, specTableOn=false, specDrawn=false;
+function specsOf(fid){ return DATA.specs.filter(function(s){ return s.featureId===fid; }); }
+function drawSpec(){
+  var vp=$('#specVp'); vp.innerHTML='';
+  var feats = DATA.features && DATA.features.length ? DATA.features
+            : [{id:'_',title:'기능명세'}];
+  feats.forEach(function(f,fi){
+    var col=document.createElement('div'); col.className='feat-col'; col.style.left=(36+fi*256)+'px'; col.style.top='28px';
+    col.innerHTML='<div class="feat-head">'+esc(f.id!=='_'?f.id+' · '+f.title:f.title)+'</div>';
+    var list = f.id==='_' ? DATA.specs : specsOf(f.id);
+    list.forEach(function(sp){
+      var c=document.createElement('div'); c.className='card'; c.id='card-'+sp.id; c.style.cursor='pointer';
+      c.innerHTML='<div class="cid">'+esc(sp.id)+'</div><div class="ct">'+esc(sp.title)+'</div>'+
+        '<div class="kv"><b>입력</b> '+esc(sp.input)+'</div>'+
+        '<div class="kv"><b>출력</b> '+esc(sp.output)+'</div>'+
+        '<div class="kv"><span class="tag ev">규칙</span>'+esc(sp.businessRule)+'</div>'+
+        '<div class="kv"><span class="tag ex">예외</span>'+esc(sp.exception)+'</div>';
+      c.onclick=(function(id){ return function(){ $$('#specVp .card').forEach(function(x){ x.classList.remove('sel'); }); this.classList.add('sel'); showSpecById(id); }; })(sp.id);
+      col.appendChild(c);
+    });
+    vp.appendChild(col);
+  });
+  // table
+  var tb=$('#specBody'); tb.innerHTML='';
+  DATA.specs.forEach(function(s,i){ var tr=document.createElement('tr'); tr.id='row-'+s.id;
+    tr.innerHTML='<td class="c-no">'+(i+1)+'</td><td><span class="cid" style="color:var(--p)">'+esc(s.id)+'</span><br>'+esc(s.title)+'</td>'+
+      '<td>'+esc(s.input)+'</td><td>'+esc(s.output)+'</td><td>'+esc(s.businessRule)+'</td><td>'+esc(s.exception)+'</td>';
+    tb.appendChild(tr); });
+  if(!specPZ) specPZ = panzoom($('#specCanvas'), $('#specVp'), false);
+}
+function toggleSpecTable(btn){ specTableOn=!specTableOn;
+  $('#specTable').hidden=!specTableOn; $('#specCanvas').hidden=specTableOn;
+  if(btn) btn.setAttribute('aria-pressed', specTableOn); }
+
+/* ---------- 유저플로우: SVG node/edge ---------- */
+var flowPZ, flowDrawn=false, NPOS={}, NW=148, NH=58, ADJ={}, flowDragging=false;
+var flowArrange=(st.flowArrange==='default')?'default':'module', LANES=[];
+function layout(){
+  if(flowArrange==='module' && curMod==='all'){ layoutByModule(); return; }
+  LANES=[];
+  var nodes=DATA.flow.nodes, edges=DATA.flow.edges, adj={}, indeg={};
+  nodes.forEach(function(n){ adj[n.id]=[]; indeg[n.id]=0; });
+  edges.forEach(function(e){ if(adj[e.from]){ adj[e.from].push(e.to); if(indeg[e.to]!=null) indeg[e.to]++; } });
+  // 깊이 = 시작점에서 BFS 최초방문 거리 (사이클/역방향 엣지에 안전 - 실패·재시도 back-edge는 레이어링서 무시, 곡선으로 표시)
+  var roots=nodes.filter(function(n){ return n.type==='start' || indeg[n.id]===0; }).map(function(n){ return n.id; });
+  if(!roots.length) roots=[nodes[0].id];
+  var depth={}, q=roots.slice(); roots.forEach(function(r){ depth[r]=0; });
+  while(q.length){ var id=q.shift(); (adj[id]||[]).forEach(function(t){ if(depth[t]==null){ depth[t]=depth[id]+1; q.push(t); } }); }
+  var md=0; Object.keys(depth).forEach(function(k){ if(depth[k]>md) md=depth[k]; });
+  nodes.forEach(function(n){ if(depth[n.id]==null) depth[n.id]=md+1; });
+  var byd={}, maxc=0; nodes.forEach(function(n){ (byd[depth[n.id]]=byd[depth[n.id]]||[]).push(n.id); });
+  Object.keys(byd).forEach(function(d){ if(byd[d].length>maxc) maxc=byd[d].length; });
+  NPOS={}; var COLW=300, ROWH=120, midY=maxc*ROWH/2;
+  Object.keys(byd).forEach(function(d){ var c=byd[d], off=midY-c.length*ROWH/2;
+    c.forEach(function(id,i){ NPOS[id]={x:64+(+d)*COLW, y:40+off+i*ROWH}; }); });
+  var sp=st.flowPos||{}; Object.keys(sp).forEach(function(id){ if(NPOS[id]) NPOS[id]=sp[id]; });
+}
+/* 모듈별 스윔레인: x=전역 BFS 깊이(플로우 진행), y=모듈 레인(가로 밴드) */
+function layoutByModule(){
+  var nodes=DATA.flow.nodes, edges=DATA.flow.edges, adj={}, indeg={};
+  nodes.forEach(function(n){ adj[n.id]=[]; indeg[n.id]=0; });
+  edges.forEach(function(e){ if(adj[e.from]){ adj[e.from].push(e.to); if(indeg[e.to]!=null) indeg[e.to]++; } });
+  var roots=nodes.filter(function(n){ return n.type==='start' || indeg[n.id]===0; }).map(function(n){ return n.id; });
+  if(!roots.length) roots=[nodes[0].id];
+  var depth={}, q=roots.slice(); roots.forEach(function(r){ depth[r]=0; });
+  while(q.length){ var id=q.shift(); (adj[id]||[]).forEach(function(t){ if(depth[t]==null){ depth[t]=depth[id]+1; q.push(t); } }); }
+  var md=0; Object.keys(depth).forEach(function(k){ if(depth[k]>md) md=depth[k]; });
+  nodes.forEach(function(n){ if(depth[n.id]==null) depth[n.id]=md+1; });
+  var morder={}, mlabel={}; (FULL.modules||[]).forEach(function(m,i){ morder[m.id]=i; mlabel[m.id]=m.label||m.id; });
+  function mo(x){ return morder[x]==null?99:morder[x]; }
+  var lanes={}, laneOrder=[];
+  nodes.forEach(function(n){ var mid=n.moduleId||'_'; if(!lanes[mid]){ lanes[mid]=[]; laneOrder.push(mid); } lanes[mid].push(n); });
+  laneOrder.sort(function(a,b){ return mo(a)-mo(b); });
+  NPOS={}; LANES=[]; var COLW=300, ROWH=104, LANEGAP=58, top=46;
+  laneOrder.forEach(function(mid){
+    var byd={}, rows=0; lanes[mid].forEach(function(n){ (byd[depth[n.id]]=byd[depth[n.id]]||[]).push(n.id); });
+    Object.keys(byd).forEach(function(d){ if(byd[d].length>rows) rows=byd[d].length; });
+    Object.keys(byd).forEach(function(d){ byd[d].forEach(function(id,i){ NPOS[id]={x:64+(+d)*COLW, y:top+i*ROWH}; }); });
+    LANES.push({ label:(mlabel[mid]||(mid==='_'?'기타':mid)), top:top, height:rows*ROWH });
+    top += rows*ROWH + LANEGAP;
+  });
+  var sp=st.flowPos||{}; Object.keys(sp).forEach(function(id){ if(NPOS[id]) NPOS[id]=sp[id]; });
+}
+function drawLanes(){
+  var lg=$('#lanes'); if(!lg) return; lg.innerHTML='';
+  if(flowArrange!=='module' || curMod!=='all' || !LANES.length) return;
+  var minx=Infinity, maxx=-Infinity;
+  DATA.flow.nodes.forEach(function(n){ var p=NPOS[n.id]; if(p){ if(p.x<minx)minx=p.x; if(p.x+NW>maxx)maxx=p.x+NW; } });
+  if(!isFinite(minx)) return;
+  var x=minx-34, w=(maxx-minx)+68;
+  LANES.forEach(function(L,i){
+    var r=document.createElementNS(SVGNS,'rect'); r.setAttribute('class','lane'+(i%2?' alt':''));
+    r.setAttribute('x',x); r.setAttribute('y',L.top-30); r.setAttribute('width',w); r.setAttribute('height',L.height+16); r.setAttribute('rx',14);
+    lg.appendChild(r);
+    var t=document.createElementNS(SVGNS,'text'); t.setAttribute('class','laneLabel');
+    t.setAttribute('x',x+16); t.setAttribute('y',L.top-12); t.textContent=L.label;
+    lg.appendChild(t);
+  });
+}
+/* 자동정렬: 수동 드래그 위치를 버리고 모듈별로 재배치 */
+function autoArrange(){
+  flowArrange='module'; st.flowArrange='module'; st.flowPos={}; save();
+  drawFlow();
+  $$('#tools button').forEach(function(b){ if(b.textContent==='자동정렬') b.setAttribute('aria-pressed','true'); });
+}
+function edgePath(a,b,sp,tp){
+  sp=(sp==null)?0.5:sp; tp=(tp==null)?0.5:tp;        // 출발/도착 포트(노드 변에서 0~1 위치)
+  if(b.x < a.x){ // back-edge: 하단으로 휘는 곡선, 포트는 x로 분산
+    var bx1=a.x+NW*sp, bx2=b.x+NW*tp, by1=a.y+NH, by2=b.y+NH, dip=42+Math.abs(by2-by1)*0.25;
+    return 'M'+bx1+','+by1+' C'+bx1+','+(by1+dip)+' '+bx2+','+(by2+dip)+' '+bx2+','+by2;
+  }
+  var x1=a.x+NW, y1=a.y+NH*sp, x2=b.x, y2=b.y+NH*tp, mx=(x1+x2)/2;
+  return 'M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2;
+}
+function labelPos(a,b,sp,tp){
+  sp=(sp==null)?0.5:sp; tp=(tp==null)?0.5:tp;
+  if(b.x < a.x){ var dip=42+Math.abs(b.y-a.y)*0.25;
+    return { x:(a.x+NW*sp+b.x+NW*tp)/2, y:(a.y+b.y)/2+NH+dip*0.72 }; } // 하단 곡선 중점
+  return { x:(a.x+b.x+NW)/2, y:(a.y+b.y)/2+NH*(sp+tp)/2 };             // forward 곡선 중점
+}
+function placeLabel(lg,a,b,sp,tp){
+  var lp=labelPos(a,b,sp,tp), t=lg.querySelector('text'), r=lg.querySelector('rect');
+  t.setAttribute('x',lp.x); t.setAttribute('y',lp.y);
+  var w=0; try{ w=t.getBBox().width; }catch(e){}
+  if(!w) w=(t.textContent||'').length*9.5; // hidden 상태 fallback
+  var rw=w+16, rh=18;
+  r.setAttribute('x',lp.x-rw/2); r.setAttribute('y',lp.y-rh/2);
+  r.setAttribute('width',rw); r.setAttribute('height',rh); r.setAttribute('rx',9);
+}
+function focusNode(id){            // hover: 연결된 노드/엣지/라벨만 강조, 나머지 흐림
+  if(!ADJ[id]) return;
+  var keep={}; keep[id]=1; Object.keys(ADJ[id]).forEach(function(k){ keep[k]=1; });
+  $$('#nodes .node').forEach(function(g){ var on=!!keep[g.dataset.id]; g.classList.toggle('hl',on); g.classList.toggle('dim',!on); });
+  $$('#edges path').forEach(function(p){ var on=(p.dataset.from===id||p.dataset.to===id); p.classList.toggle('hl',on); p.classList.toggle('dim',!on); });
+  $$('#edges .elabel').forEach(function(l){ var on=(l.dataset.from===id||l.dataset.to===id); l.classList.toggle('hl',on); l.classList.toggle('dim',!on); });
+}
+function clearFocus(){ $$('#nodes .node,#edges path,#edges .elabel').forEach(function(el){ el.classList.remove('hl','dim'); }); }
+function fitText(el, maxw){              // SVG text엔 ellipsis가 없어 직접 자른다
+  if(!el || !el.getComputedTextLength) return;
+  var L=el.getComputedTextLength();
+  if(!L || L<=maxw) return;             // 0=미렌더 또는 이미 맞음 -> 원본 유지
+  var s=el.textContent;
+  while(s.length>1){
+    s=s.slice(0,-1); el.textContent=s+'…';
+    if(el.getComputedTextLength()<=maxw) break;
+  }
+}
+function drawFlow(){
+  if(!DATA.flow.nodes.length){ var nn=$('#nodes'),ee=$('#edges'),ll=$('#lanes'); if(nn)nn.innerHTML=''; if(ee)ee.innerHTML=''; if(ll)ll.innerHTML=''; return; }
+  layout(); drawLanes();
+  var ng=$('#nodes'), eg=$('#edges'); ng.innerHTML=''; eg.innerHTML='';
+  var valid=DATA.flow.edges.filter(function(e){ return NPOS[e.from]&&NPOS[e.to]; });
+  ADJ={}; DATA.flow.nodes.forEach(function(n){ ADJ[n.id]={}; });
+  var outP={}, inP={};   // 노드별 출발/도착 엣지 -> 포트 분산
+  valid.forEach(function(e){ if(ADJ[e.from])ADJ[e.from][e.to]=1; if(ADJ[e.to])ADJ[e.to][e.from]=1;
+    (outP[e.from]=outP[e.from]||[]).push(e); (inP[e.to]=inP[e.to]||[]).push(e); });
+  Object.keys(outP).forEach(function(id){ var ar=outP[id]; ar.sort(function(x,y){return NPOS[x.to].y-NPOS[y.to].y;}); ar.forEach(function(e,i){ e._sp=(i+1)/(ar.length+1); }); });
+  Object.keys(inP).forEach(function(id){ var ar=inP[id]; ar.sort(function(x,y){return NPOS[x.from].y-NPOS[y.from].y;}); ar.forEach(function(e,i){ e._tp=(i+1)/(ar.length+1); }); });
+  valid.forEach(function(e){
+    var a=NPOS[e.from], b=NPOS[e.to], back=b.x<a.x, sp=e._sp==null?0.5:e._sp, tp=e._tp==null?0.5:e._tp;
+    var p=document.createElementNS(SVGNS,'path'); p.setAttribute('class','edge'+(back?' back':''));
+    p.setAttribute('marker-end', back?'url(#arrow-back)':'url(#arrow)'); p.setAttribute('d', edgePath(a,b,sp,tp));
+    p.dataset.from=e.from; p.dataset.to=e.to; p.dataset.sp=sp; p.dataset.tp=tp; eg.appendChild(p);
+    if(e.condition){
+      var lg=document.createElementNS(SVGNS,'g'); lg.setAttribute('class','elabel'+(back?' back':'')); lg.dataset.from=e.from; lg.dataset.to=e.to; lg.dataset.sp=sp; lg.dataset.tp=tp;
+      var lr=document.createElementNS(SVGNS,'rect'); lr.setAttribute('class','elbg');
+      var lt=document.createElementNS(SVGNS,'text'); lt.setAttribute('class','eltx');
+      lt.setAttribute('text-anchor','middle'); lt.setAttribute('dominant-baseline','central'); lt.textContent=e.condition;
+      lg.appendChild(lr); lg.appendChild(lt); eg.appendChild(lg); placeLabel(lg,a,b,sp,tp); }
+  });
+  DATA.flow.nodes.forEach(function(n){
+    var p=NPOS[n.id]; var g=document.createElementNS(SVGNS,'g'); g.setAttribute('class','node '+n.type);
+    g.setAttribute('transform','translate('+p.x+','+p.y+')'); g.dataset.id=n.id;
+    var specs=(n.linkedSpecIds||[]).join(' ');
+    g.innerHTML='<rect width="'+NW+'" height="'+NH+'"></rect>'+
+      '<text class="ty" x="12" y="18">'+n.type+'</text>'+
+      '<text class="lb" x="12" y="36">'+esc(n.label)+'</text>'+
+      (specs?'<text class="sp" x="12" y="50">'+esc(specs)+'</text>':'');
+    ng.appendChild(g);
+    if(specs){ fitText(g.querySelector('.sp'), NW-24); } // 박스 안에서만 유지, 넘치면 끝을 …
+    g.addEventListener('pointerenter',function(){ if(!flowDragging) focusNode(n.id); });
+    g.addEventListener('pointerleave',function(){ if(!flowDragging) clearFocus(); });
+    enableDrag(g,n);
+  });
+  if(!flowPZ) flowPZ = panzoom($('#flowCanvas'), $('#flowVp'), true);
+  fitFlow();
+}
+function fitFlow(){ if(!flowPZ) return;
+  var xs=[],ys=[]; DATA.flow.nodes.forEach(function(n){ var p=NPOS[n.id]; if(p){ xs.push(p.x,p.x+NW); ys.push(p.y,p.y+NH); } });
+  if(!xs.length) return;
+  if(!xs.length) return;
+  var minx=Math.min.apply(null,xs),maxx=Math.max.apply(null,xs),miny=Math.min.apply(null,ys),maxy=Math.max.apply(null,ys);
+  var r=$('#flowCanvas').getBoundingClientRect(), pad=46;
+  var s=Math.min(r.width/(maxx-minx+pad*2), r.height/(maxy-miny+pad*2), 1.1);
+  flowPZ.set(s, (r.width-(maxx+minx)*s)/2, (r.height-(maxy+miny)*s)/2);
+}
+function enableDrag(g,n){
+  var dragging=false,moved=false,ox,oy;
+  g.addEventListener('pointerdown',function(e){ e.stopPropagation(); dragging=true; moved=false; flowDragging=true; clearFocus();
+    var sc=flowPZ?flowPZ.scale():1; ox=e.clientX/sc-NPOS[n.id].x; oy=e.clientY/sc-NPOS[n.id].y; g.setPointerCapture(e.pointerId);
+    $$('#nodes .node').forEach(function(x){ x.classList.remove('sel'); }); g.classList.add('sel'); showNodeSpec(n); });
+  g.addEventListener('pointermove',function(e){ if(!dragging)return; moved=true; var sc=flowPZ?flowPZ.scale():1;
+    NPOS[n.id]={x:e.clientX/sc-ox, y:e.clientY/sc-oy}; g.setAttribute('transform','translate('+NPOS[n.id].x+','+NPOS[n.id].y+')'); redrawEdges(); });
+  g.addEventListener('pointerup',function(){ dragging=false; flowDragging=false; if(moved){ st.flowPos=NPOS; save(); } });
+}
+function redrawEdges(){
+  $$('#edges path').forEach(function(p){ var a=NPOS[p.dataset.from], b=NPOS[p.dataset.to]; if(a&&b) p.setAttribute('d',edgePath(a,b,+p.dataset.sp,+p.dataset.tp)); });
+  $$('#edges .elabel').forEach(function(lg){ var a=NPOS[lg.dataset.from], b=NPOS[lg.dataset.to]; if(a&&b) placeLabel(lg,a,b,+lg.dataset.sp,+lg.dataset.tp); });
+}
+function specCardHTML(s){ return '<div class="card" style="position:static;margin-bottom:8px"><div class="cid">'+esc(s.id)+'</div><div class="ct">'+esc(s.title)+'</div>'+
+  '<div class="kv"><b>입력</b> '+esc(s.input)+'</div><div class="kv"><b>출력</b> '+esc(s.output)+'</div>'+
+  '<div class="kv"><span class="tag ev">규칙</span>'+esc(s.businessRule)+'</div>'+
+  '<div class="kv"><span class="tag ex">예외</span>'+esc(s.exception)+'</div></div>'; }
+function screenIdxForSpec(specId){ var idx=-1; DATA.screens.forEach(function(s,k){ if(idx<0 && (s.elements||[]).some(function(e){ return e.linkedSpecId===specId; })) idx=k; }); return idx; }
+function renderSpecPanel(label, specs, wi){
+  var host=$('#nodeSpec');
+  var head='<div class="cap" style="display:flex;justify-content:space-between;align-items:center">'+esc(label)+' <a id="nsClose" style="cursor:pointer;color:var(--mut)">✕</a></div>';
+  var nav = (wi>=0 && DATA.screens[wi]) ? '<button id="toWire" style="width:100%;margin-bottom:10px;padding:9px;background:var(--p);color:#fff;border:0;border-radius:8px;cursor:pointer;font-size:.86em">'+esc(DATA.screens[wi].id)+' · '+esc(DATA.screens[wi].title)+' 와이어프레임 열기 →</button>' : '';
+  var body = specs.length ? specs.map(specCardHTML).join('') : '<div style="font-size:.82em;color:var(--mut);margin-bottom:12px">연결된 SPEC 없음</div>';
+  host.innerHTML=head+nav+body;
+  var x=$('#nsClose'); if(x) x.onclick=function(){ host.innerHTML=''; };
+  if(wi>=0){ var w=$('#toWire'); if(w) w.onclick=function(){ wireIdx=wi; setTab('wire'); showScreen(); }; }
+}
+function showNodeSpec(n){
+  var sid={}; DATA.specs.forEach(function(s){ sid[s.id]=s; });
+  var specs=(n.linkedSpecIds||[]).map(function(id){ return sid[id]; }).filter(Boolean);
+  var wi=-1; DATA.screens.forEach(function(s,k){ if(wi<0 && s.flowNodeId===n.id) wi=k; });
+  renderSpecPanel(n.id+' · '+n.label, specs, wi);
+}
+function showSpecById(specId){
+  var sid={}; DATA.specs.forEach(function(s){ sid[s.id]=s; }); var s=sid[specId]; if(!s) return;
+  renderSpecPanel(s.id+' · '+s.title, [s], screenIdxForSpec(specId));
+}
+
+/* ---------- 와이어프레임: live iframe ---------- */
+var WIRECSS = "<style>*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Noto Sans KR',sans-serif}"+
+  "body{padding:0;background:#eef1f5;color:#1a1f29;font-size:15px}.scr{display:flex;flex-direction:column;gap:14px;padding:22px;background:#fff;min-height:100%}"+
+  "h1{font-size:22px}.sub{color:#6b7280;font-size:14px;margin-top:-8px}.f{display:flex;flex-direction:column;gap:6px;font-size:13px;color:#374151}"+
+  "input,select{padding:11px;border:1px solid #d1d5db;border-radius:9px;font-size:14px;background:#fff}.btn{padding:11px 16px;background:#2d6cdf;color:#fff;border:0;border-radius:9px;font-size:14px;cursor:pointer}.btn.ghost{background:#fff;color:#2d6cdf;border:1px solid #2d6cdf}"+
+  ".link{color:#2d6cdf;font-size:13px;text-decoration:none}.top{display:flex;justify-content:space-between;align-items:center;padding:6px 2px}"+
+  ".av{width:34px;height:34px;border-radius:50%;background:#2d6cdf;color:#fff;display:flex;align-items:center;justify-content:center}"+
+  ".card{padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #e5e7eb;padding:8px 10px;text-align:left}th{background:#f8fafc;font-weight:600}.row{display:flex;gap:10px;align-items:center}.row>*{flex:1}"+
+  ".wf{display:grid;grid-template-columns:184px 1fr;min-height:100vh}"+
+  ".wf-side{background:#0f1b2e;color:#cbd5e1;display:flex;flex-direction:column;padding:14px 10px;gap:3px}"+
+  ".wf-brand{color:#fff;font-weight:700;font-size:14px;padding:6px 8px 14px;display:flex;align-items:center;gap:8px}.wf-brand .bi{width:24px;height:24px;border-radius:7px;background:#2d6cdf;display:flex;align-items:center;justify-content:center;font-size:13px}"+
+  ".wf-side a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#cbd5e1;text-decoration:none;font-size:13px;cursor:pointer}.wf-side a:hover{background:#1e2b44}.wf-side a.on{background:#2d6cdf;color:#fff;font-weight:600}.wf-side .ic{width:16px;text-align:center;opacity:.85}.wf-side .sep{height:1px;background:#1e2b44;margin:8px 6px}.wf-side .grow{flex:1}.wf-side .me{font-size:12px;color:#7c8aa3;padding:9px 12px;border-top:1px solid #1e2b44;margin-top:6px}"+
+  ".wf-main{display:flex;flex-direction:column;min-width:0;background:#eef1f5}.wf-top{display:flex;align-items:center;gap:8px;padding:11px 20px;background:#fff;border-bottom:1px solid #e5e7eb;font-size:12px;color:#9aa4b2}.wf-top b{color:#1a1f29;font-size:15px}.wf-content{padding:18px;overflow:auto}.wf-content .scr{border-radius:12px;border:1px solid #e5e7eb}"+
+  ".sb-cue{position:absolute;left:-10px;top:-10px;width:20px;height:20px;border-radius:50%;background:#e5484d;color:#fff;border:2px solid #fff;font-size:11px;display:flex;align-items:center;justify-content:center;z-index:9}[data-nav]{cursor:pointer}[data-nav]:hover{outline:2px solid #2d6cdf;outline-offset:2px}</style>";
+var wireIdx=0, cueOn = st.cueOn!==false;
+function renderWireSel(){ var sel=$('#wireSel'); sel.innerHTML='';
+  var byId={}; (DATA.modules||[]).forEach(function(m){ byId[m.id]=m; });
+  var order=[], seen={};
+  DATA.screens.forEach(function(sc,i){ var mid=sc.moduleId||'_'; if(!seen[mid]){ seen[mid]=[]; order.push(mid); } seen[mid].push(i); });
+  var useGroups=order.length>1;
+  order.forEach(function(mid){ var parent=sel;
+    if(useGroups){ var og=document.createElement('optgroup'); og.label=(byId[mid]?byId[mid].label:mid); sel.appendChild(og); parent=og; }
+    seen[mid].forEach(function(i){ var sc=DATA.screens[i]; var o=document.createElement('option'); o.value=i; o.textContent=sc.id+' · '+sc.title; parent.appendChild(o); }); });
+  sel.value=wireIdx; sel.onchange=function(){ wireIdx=+sel.value; showScreen(); };
+  $('#wirePrev').onclick=function(){ if(wireIdx>0){ wireIdx--; showScreen(); } };
+  $('#wireNext').onclick=function(){ if(wireIdx<DATA.screens.length-1){ wireIdx++; showScreen(); } };
+  $('#cueToggle').onclick=function(){ cueOn=!cueOn; st.cueOn=cueOn; save(); $('#cueToggle').setAttribute('aria-pressed',cueOn); paintCues(); };
+  $('#cueToggle').setAttribute('aria-pressed',cueOn);
+}
+function shellHTML(sc){
+  var brand=DATA.brand||'App';
+  var items=(DATA.nav||[]).map(function(n){
+    return '<a class="'+(n.id===sc.nav?'on':'')+'"'+(n.target?' data-nav="'+n.target+'"':'')+'><span class="ic">'+esc(n.icon||'•')+'</span>'+esc(n.label)+'</a>';
+  }).join('');
+  var inner = sc.preview || '<div class="scr"><p>미리보기(preview) 미정의</p></div>';
+  return '<div class="wf"><nav class="wf-side"><div class="wf-brand"><span class="bi">▦</span>'+esc(brand)+'</div>'+
+    items+'<div class="grow"></div><div class="me">'+esc(DATA.navUser||'사용자')+'</div></nav>'+
+    '<div class="wf-main"><div class="wf-top">'+esc(brand)+' <span>›</span> <b>'+esc(sc.title)+'</b></div>'+
+    '<div class="wf-content">'+inner+'</div></div></div>';
+}
+function showScreen(){
+  var f=$('#wireFrame');
+  if(!DATA.screens.length){ if(f) f.srcdoc=WIRECSS+'<div class="scr" style="padding:24px;color:#888">화면이 없습니다.</div>'; var wr=$('#wireRows'); if(wr) wr.innerHTML=''; return; }
+  if(wireIdx>=DATA.screens.length) wireIdx=0;
+  var sc=DATA.screens[wireIdx];
+  if(sc.device){ vpMode=sc.device; applyVp(); }
+  $('#wireSel').value=wireIdx; $('#wireState').textContent='['+(sc.state||'normal')+']';
+  var useShell = DATA.nav && DATA.nav.length && sc.nav;
+  f.srcdoc = WIRECSS + (useShell ? shellHTML(sc) : (sc.preview||'<div class="scr"><p>미리보기(preview) 미정의</p></div>'));
+  f.onload=function(){ paintCues(); wireNav(f); };
+  var rows=$('#wireRows'); rows.innerHTML='';
+  (sc.elements||[]).forEach(function(e){
+    rows.innerHTML+='<tr><td style="width:26px;text-align:center;color:var(--mut)">'+e.calloutNo+'</td>'+
+      '<td><b>'+esc(e.area)+'</b> <small>'+esc(e.selector)+'</small><br>'+
+      '<span class="tag ev">동작</span>'+esc(e.behavior)+'<br><span class="tag dt">데이터</span>'+esc(e.dataContract)+
+      '<br><span class="tag ex">예외</span>'+esc(e.exception)+
+      (e.linkedSpecId?' <a class="cid" style="color:var(--p);cursor:pointer" data-spec="'+e.linkedSpecId+'">'+e.linkedSpecId+'</a>':'')+'</td></tr>';
+  });
+  $$('#wireRows [data-spec]').forEach(function(a){ a.onclick=function(){ showSpecById(a.getAttribute('data-spec')); }; });
+}
+function paintCues(){
+  var f=$('#wireFrame'); var doc=f.contentDocument; if(!doc) return;
+  $$('.sb-cue',doc).forEach(function(n){ n.remove(); });
+  if(!cueOn) return; var sc=DATA.screens[wireIdx]; if(!sc) return;
+  (sc.elements||[]).forEach(function(e){ var el=doc.querySelector('[data-callout="'+e.calloutNo+'"]'); if(!el) return;
+    var cs=doc.defaultView.getComputedStyle(el); if(cs.position==='static') el.style.position='relative';
+    el.style.outline='1px dashed #e5484d'; el.style.outlineOffset='2px';
+    var b=doc.createElement('span'); b.className='sb-cue'; b.textContent=e.calloutNo; el.appendChild(b); });
+}
+function wireNav(f){
+  var doc=f.contentDocument; if(!doc) return;
+  doc.addEventListener('click', function(e){
+    var nav=e.target.closest && e.target.closest('[data-nav]');
+    if(nav){ e.preventDefault(); var id=nav.getAttribute('data-nav'), idx=-1;
+      DATA.screens.forEach(function(s,i){ if(s.id===id) idx=i; });
+      if(idx>=0){ wireIdx=idx; showScreen(); } return; }
+    var cue=e.target.closest && e.target.closest('[data-callout]');
+    if(cue){ var no=+cue.getAttribute('data-callout'); var sc=DATA.screens[wireIdx];
+      var el=(sc.elements||[]).filter(function(x){ return x.calloutNo===no; })[0];
+      if(el && el.linkedSpecId) showSpecById(el.linkedSpecId); }
+  });
+}
+
+/* ---------- validation (model.md codes, live) ---------- */
+function validate(){
+  var out=$('#blockers'); out.innerHTML=''; var sid={}; DATA.specs.forEach(function(s){ sid[s.id]=s; });
+  var risks=[];
+  DATA.flow.nodes.forEach(function(n){
+    if(['page','action','decision'].indexOf(n.type)>=0 && !(n.linkedSpecIds||[]).length)
+      risks.push(['ORPHAN_NODE','blocker', n.id+' '+n.label+' 가 SPEC 미연결', 'flow']);
+    (n.linkedSpecIds||[]).forEach(function(id){ if(!sid[id]) risks.push(['ORPHAN_NODE','blocker', n.id+' 가 없는 '+id+' 참조','flow']); });
+  });
+  var snodes={}; DATA.screens.forEach(function(s){ snodes[s.flowNodeId]=true; });
+  DATA.flow.nodes.filter(function(n){ return n.type==='page'; }).forEach(function(n){
+    if(!snodes[n.id]) risks.push(['UNMAPPED_SCREEN','blocker','page '+n.id+' 에 화면 없음','flow']); });
+  var coveredExc={};
+  DATA.screens.forEach(function(sc){
+    (sc.elements||[]).forEach(function(e){
+      if(!e.linkedSpecId || !sid[e.linkedSpecId]) risks.push(['ORPHAN_CALLOUT','blocker', sc.id+' 콜아웃 '+e.calloutNo+' SPEC 미연결','wire']);
+      else if(e.exception && String(e.exception).trim()) coveredExc[e.linkedSpecId]=true;
+    });
+    var nos=(sc.elements||[]).map(function(e){ return e.calloutNo; }).sort(function(a,b){ return a-b; });
+    nos.forEach(function(no,i){ if(no!==i+1) risks.push(['MISSING_CALLOUT','gap', sc.id+' 콜아웃 번호 불연속','wire']); });
+  });
+  DATA.specs.forEach(function(s){ if(s.exception && String(s.exception).trim() && !coveredExc[s.id])
+    risks.push(['MISSING_EXCEPTION','gap', s.id+' 예외가 화면 상태로 표현 안 됨','spec']); });
+  if(!risks.length){ out.innerHTML='<div class="ok">✓ 검증 통과 — 끊긴 링크 없음</div>'; return; }
+  risks.forEach(function(r){ var d=document.createElement('div'); d.className='blocker '+(r[1]==='gap'?'gap':'');
+    d.innerHTML='<span class="code">'+r[0]+'</span> <a>'+esc(r[2])+'</a>';
+    d.querySelector('a').onclick=function(){ setTab(r[3]); }; out.appendChild(d); });
+}
+
+$('#exportBtn').onclick=function(){ var blob=new Blob([JSON.stringify(FULL,null,2)],{type:'application/json'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(FULL.snapshotId||'workspace')+'.json'; a.click(); };
+
+/* ---------- init ---------- */
+var vpMode = st.vpMode==='mobile' ? 'mobile' : 'web';
+function applyVp(){ var d=$('#device'); if(d) d.className='device '+vpMode; var b=$('#vpToggle'); if(b) b.textContent=(vpMode==='mobile'?'웹 보기':'모바일 보기'); }
+$('#vpToggle').onclick=function(){ vpMode=(vpMode==='mobile'?'web':'mobile'); st.vpMode=vpMode; save(); applyVp(); };
+var fz = st.fz || 100;
+function applyFz(){ document.documentElement.style.setProperty('--fz', fz/100); var r=$('#fzRange'); if(r) r.value=fz; }
+$('#fzRange').addEventListener('input', function(){ fz=+this.value; st.fz=fz; save(); applyFz(); });
+$('#snap').textContent='snapshot · '+(DATA.snapshotId||'');
+$('#snapVer').textContent=DATA.snapshotId||'-';
+curMod=(st.mod && FULL.modules.some(function(m){return m.id===st.mod;}))?st.mod:'all'; applyMod();
+(function(){ var sel=$('#modSel'); if(!sel) return;
+  if(FULL.modules.length>1){ sel.style.display='';
+    var oa=document.createElement('option'); oa.value='all'; oa.textContent='전체 ('+FULL.screens.length+'화면)'; sel.appendChild(oa);
+    FULL.modules.forEach(function(m){ var c=FULL.screens.filter(function(x){return x.moduleId===m.id;}).length;
+      var op=document.createElement('option'); op.value=m.id; op.textContent=m.label+' ('+c+')'; sel.appendChild(op); });
+    sel.value=curMod; sel.onchange=function(){ curMod=this.value; st.mod=curMod; save(); rerender(); };
+  } else { sel.style.display='none'; } })();
+drawSpec(); renderWireSel(); showScreen(); validate(); applyVp(); applyFz();
+setTab(st.tab && TITLES[st.tab] ? st.tab : 'spec');
+</script>
+</body>
+</html>

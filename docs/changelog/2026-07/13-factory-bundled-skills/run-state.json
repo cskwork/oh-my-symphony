@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "mode": "LEGACY",
+  "intent_gate": {
+    "intent": "Bundle the four standard factory skill runtimes so Oh My Symphony is the only required skill download",
+    "confidence": "high",
+    "mode": "LEGACY",
+    "capability_refs": ["supergoal", "symphony-skill:BOOTSTRAP"],
+    "uncertainty": "The minimal runtime closure must remain sufficient for factory prompts and wheel installs"
+  },
+  "branches": {
+    "source_base_branch": "feat/autonomous-dev-factory",
+    "target_integration_branch": "dev",
+    "run_branch": "feat/autonomous-dev-factory",
+    "worktree_path": "/private/tmp/symphony-autonomous-factory",
+    "refs_verified": true
+  },
+  "plan_approval": "user",
+  "completion_promise": {
+    "promised_outcome": "A clean Oh My Symphony package initializes and syncs the four standard factory skills without global skill installs",
+    "required_proof": ["isolated-HOME tests", "wheel content and install smoke", "factory regression suite", "lint and diff checks"],
+    "stop_condition": "All GOAL criteria checked or a concrete blocker is recorded",
+    "max_iterations": 8,
+    "status": "open"
+  },
+  "phase": "Build",
+  "iteration": 3,
+  "unresolved_gates": [],
+  "regression_ledger": [],
+  "blockers": [],
+  "last_proof_command": "env HOME=/private/tmp/symphony-empty-home PYTHONPATH=src /Users/danny/Documents/PARA/Resource/symphony-multi-agent/.venv/bin/python -m symphony.cli factory init /private/tmp/symphony-factory-before",
+  "next_action": "Relaunch implementer with the latest R-LOOP section",
+  "forced_reflection": {
+    "required_when_iteration_cap_hit": true,
+    "what_keeps_failing": "",
+    "likely_root_cause": "",
+    "unproven_requirement": "",
+    "regressed_previously_green": "",
+    "smallest_next_action": ""
+  },
+  "updated_at": "2026-07-13T00:00:00Z"
+}

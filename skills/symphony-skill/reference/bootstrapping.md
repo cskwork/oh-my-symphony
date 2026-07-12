@@ -3,6 +3,11 @@
 Use this when introducing Symphony to a repo that does not already carry the
 standard operator bundle.
 
+For a new file-board project, prefer `symphony factory init <target>`. It ships
+the smaller `Ready -> Build -> Verify -> Done` profile and copies its prompts,
+worktree script, Wayfinder starter, and board directory from package-owned
+assets. The manual bundle below is the advanced production profile.
+
 ## Copy the full operator bundle
 
 From inside the `oh-my-symphony` checkout:

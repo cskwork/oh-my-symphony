@@ -1,0 +1,6 @@
+[
+  { "el": "body text on canvas", "fg": "#2f3133", "bg": "#faf9f6", "size": "body" },
+  { "el": "muted caption", "fg": "#5b5e62", "bg": "#faf9f6", "size": "normal" },
+  { "el": "CTA label on accent", "fg": "#ffffff", "bg": "#1f6f5c", "size": "normal" },
+  { "el": "display heading", "fg": "#1a1c1e", "bg": "#faf9f6", "size": "large" }
+]

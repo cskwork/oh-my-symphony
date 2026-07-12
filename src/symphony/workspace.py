@@ -510,12 +510,14 @@ def _truncate(value: str, limit: int = 400) -> str:
     return value[:limit] + "...(truncated)"
 
 
-def _coerce_output_bytes(value: bytes | str | None) -> bytes:
+def _coerce_output_bytes(
+    value: bytes | bytearray | memoryview | str | None,
+) -> bytes:
     if value is None:
         return b""
-    if isinstance(value, bytes):
-        return value
-    return value.encode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace")
+    return bytes(value)
 
 
 async def commit_workspace_on_done(
@@ -602,11 +604,25 @@ async def commit_workspace_on_done(
         '    BASE="$MB"\n'
         '  fi\n'
         'fi\n'
-        'ADD_PATHS=(.)\n'
+        '# Keep an empty sentinel: Bash 3.2 + `set -u` treats expansion of an\n'
+        '# empty declared array as an unbound variable. Loop bodies skip it.\n'
+        'EXCLUDE_PATHS=("")\n'
         'while IFS= read -r exclude_path; do\n'
-        '  [ -n "$exclude_path" ] && ADD_PATHS+=(":(exclude)$exclude_path")\n'
+        '  [ -n "$exclude_path" ] && EXCLUDE_PATHS+=("$exclude_path")\n'
         'done < <(git config --get-all symphony.autocommitExclude 2>/dev/null || true)\n'
-        'git add -A -- "${ADD_PATHS[@]}" || exit 42\n'
+        '# Do not pass ignored exclusions as negative pathspecs to `git add`:\n'
+        '# an ignored symlink replacing a tracked directory makes Git reject\n'
+        '# that explicit path. Stage the workspace, then restore exclusions in\n'
+        '# the index from HEAD. The explicit `.` still prevents host leakage.\n'
+        'git add -A -- . || exit 42\n'
+        'for exclude_path in "${EXCLUDE_PATHS[@]}"; do\n'
+        '  [ -n "$exclude_path" ] || continue\n'
+        '  if git rev-parse --verify HEAD >/dev/null 2>&1; then\n'
+        '    git reset -q HEAD -- "$exclude_path" || exit 42\n'
+        '  else\n'
+        '    git rm -r -q --cached --ignore-unmatch -- "$exclude_path" || exit 42\n'
+        '  fi\n'
+        'done\n'
         'HAS_STAGED=1\n'
         'git diff --cached --quiet -- . && HAS_STAGED=0\n'
         'HAS_NEW_COMMITS=0\n'
@@ -625,6 +641,17 @@ async def commit_workspace_on_done(
         '  # currently-staged changes into one. --soft preserves the index\n'
         '  # and working tree so the final `git commit` captures everything.\n'
         '  git reset --soft "$BASE" || exit 44\n'
+        'fi\n'
+        '# A soft reset stages the complete commit range, including excluded\n'
+        '# paths an agent may have committed. Restore those paths once more\n'
+        '# against the selected squash base before committing.\n'
+        'for exclude_path in "${EXCLUDE_PATHS[@]}"; do\n'
+        '  [ -n "$exclude_path" ] || continue\n'
+        '  git reset -q HEAD -- "$exclude_path" || exit 42\n'
+        'done\n'
+        'if git diff --cached --quiet -- .; then\n'
+        '  echo "auto_commit: nothing to commit"\n'
+        '  exit 0\n'
         'fi\n'
         'DELETE_COUNT="$(git diff --cached --name-only --diff-filter=D -- . | wc -l | tr -d "[:space:]")"\n'
         'PROTECTED_DELETE="$(git diff --cached --name-only --diff-filter=D -- '
