@@ -181,7 +181,7 @@ def test_factory_init_supports_agent_alias_and_prints_wayfinder_prompt(
     assert ticket.skills == ("supergoal",)
 
 
-def test_skill_source_requires_the_runtime_files_used_by_the_overlay(
+def test_standard_skill_source_prefers_bundle_over_incomplete_local_copy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     skill = tmp_path / "skills/superqa"
@@ -189,8 +189,10 @@ def test_skill_source_requires_the_runtime_files_used_by_the_overlay(
     (skill / "SKILL.md").write_text("# SuperQA\n", encoding="utf-8")
     monkeypatch.setattr(factory_cli, "_SKILL_SEARCH_ROOTS", (tmp_path / "skills",))
 
-    with pytest.raises(FileNotFoundError, match="reference/agent-qa.md"):
-        factory_cli._skill_sources({"superqa"})
+    source = factory_cli._skill_sources({"superqa"})["superqa"]
+
+    assert "bundled_skills/superqa" in str(source)
+    assert source.joinpath("reference", "agent-qa.md").is_file()
 
 
 def test_factory_init_does_not_require_optional_overlay_skills(
@@ -451,6 +453,86 @@ browser: true
 
     assert factory_cli.main(["sync", str(target)]) == 1
     assert not list((target / "kanban").glob("*.md"))
+
+
+def test_factory_sync_installs_path_safe_custom_skill_from_local_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    skill_root = tmp_path / "installed"
+    custom = skill_root / "custom-check"
+    custom.mkdir(parents=True)
+    (custom / "SKILL.md").write_text("# Custom check\n", encoding="utf-8")
+    monkeypatch.setattr(factory_cli, "_SKILL_SEARCH_ROOTS", (skill_root,))
+    target = tmp_path / "project"
+    assert factory_cli.main(["init", str(target)]) == 0
+    ticket = target / "wayfinder/tickets/custom.md"
+    ticket.parent.mkdir(parents=True)
+    ticket.write_text(
+        """---
+id: custom
+title: Run the custom check
+route: LEGACY
+blocked_by: []
+skills: [custom-check]
+---
+
+## Acceptance criteria
+
+- The check runs.
+
+## Proof commands
+
+- `pytest`
+
+## Non-goals
+
+- None.
+""",
+        encoding="utf-8",
+    )
+
+    assert factory_cli.main(["sync", str(target)]) == 0
+
+    assert (target / "skills/custom-check/SKILL.md").is_file()
+    assert list((target / "kanban").glob("*.md"))
+
+
+def test_factory_sync_force_recovers_an_incomplete_generated_skill(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "project"
+    assert factory_cli.main(["init", str(target)]) == 0
+    (target / "wayfinder/tickets").mkdir(parents=True)
+    (target / "wayfinder/tickets/check.md").write_text(
+        """---
+id: check
+title: Check recovery
+route: LEGACY
+blocked_by: []
+skills: []
+---
+
+## Acceptance criteria
+
+- Recovery succeeds.
+
+## Proof commands
+
+- `pytest`
+
+## Non-goals
+
+- None.
+""",
+        encoding="utf-8",
+    )
+    broken = target / "skills/supergoal/reference/wayfinder.md"
+    broken.unlink()
+
+    assert factory_cli.main(["sync", str(target)]) == 1
+    assert factory_cli.main(["sync", str(target), "--force"]) == 0
+
+    assert broken.is_file()
 
 
 def test_top_level_cli_routes_factory(monkeypatch: pytest.MonkeyPatch) -> None:

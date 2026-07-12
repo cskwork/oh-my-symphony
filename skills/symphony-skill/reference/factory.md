@@ -26,6 +26,18 @@ and its blocker edges by default, uses source provenance for idempotency, and
 never rewrites a ticket after it leaves `Ready`. Use `--frontier-only` when an
 operator deliberately wants to import only the currently actionable frontier.
 
+The package owns pinned runtime copies of `supergoal`, `superdesign`,
+`superpm`, and `superqa`; init and sync copy them into the project before
+falling back to home-directory search for a nonstandard custom skill. Project
+copies remain operator-customizable. Bundling the skills does not install
+their browser runtimes. Superdesign gates require Node.js 18+,
+`@playwright/cli` (`npm install -g @playwright/cli@latest`),
+`playwright-cli install --skills`, and system Chrome or
+`npx playwright install chromium`. SuperQA browser runs require `textual`,
+`playwright`, `pyyaml`, and `pillow`, followed by
+`python -m playwright install chromium`. First-time dependency or browser
+installation may require network access.
+
 `Ready` is a machine-owned dependency gate, not an agent stage. Sync validates
 scope, acceptance checks, proof, and route; Symphony leaves unresolved
 dependencies visible in `Ready` and promotes actionable tickets to `Build`

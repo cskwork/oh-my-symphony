@@ -1,0 +1,96 @@
+<!doctype html>
+<!-- ════════════════════════════════════════════════════════════════════
+     superpm · 화면설계서 보드(index) — 자체완결 썸네일 그리드.
+     파일명: index.html (스토리보드 페이지들과 같은 폴더).
+     썸네일은 라이브 <iframe>(각 sb-페이지를 축소) → 스크린샷 도구 불필요.
+     (storyboard-spec + scripts/shoot.sh 가 있으면 thumbs/*.png 로 바꿔도 됨: 아래 주석 참고)
+     <article class="card"> 블록을 화면 수만큼 복제.
+     ──────────────────────────────────────────────────────────────────── -->
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{{PROJECT_NAME}} · 화면설계서 보드</title>
+<style>
+  :root{--primary:#2f6fed;--primary-strong:#1b3b86;--ink:#1d2330;--mut:#6b7280;
+    --line:#e3e8f0;--bg:#f5f7fb}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,"Segoe UI",Roboto,"Noto Sans KR",sans-serif}
+  .head{max-width:1180px;margin:0 auto;padding:40px 28px 6px}
+  .eyebrow{margin:0 0 6px;color:var(--primary-strong);font-weight:700;font-size:12px;
+    letter-spacing:.08em;text-transform:uppercase}
+  .head h1{margin:0 0 8px;font-size:30px}
+  .head p{margin:0;color:var(--mut);max-width:80ch}
+  .group{max-width:1180px;margin:26px auto 0;padding:0 28px}
+  .group h2{margin:0;font-size:16px}.group span{color:var(--mut);font-size:13px}
+  .grid{max-width:1180px;margin:0 auto;padding:16px 28px 8px;display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:20px}
+  .card{display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);
+    border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(20,40,80,.06);
+    transition:transform .12s,box-shadow .12s}
+  .card:hover{transform:translateY(-3px);box-shadow:0 16px 32px rgba(20,56,93,.14)}
+  /* 라이브 썸네일: iframe 을 축소해 실제 페이지를 미리보기. pointer-events:none 로 클릭은 a 가 받음 */
+  .thumb{position:relative;display:block;height:172px;overflow:hidden;background:#eef2f7;
+    border-bottom:1px solid var(--line)}
+  .thumb iframe{position:absolute;top:0;left:0;width:250%;height:250%;border:0;
+    transform:scale(.4);transform-origin:top left;pointer-events:none;background:#fff}
+  .thumb .ph{display:flex;align-items:center;justify-content:center;height:100%;color:#9aa3b2;
+    font-weight:700}
+  .body{padding:14px 16px 16px;display:flex;flex-direction:column;flex:1}
+  .top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:#eaf1fe;color:var(--primary)}
+  .code{font-size:11px;font-weight:700;color:var(--mut);font-family:ui-monospace,Menlo,monospace}
+  .card h3{margin:0 0 6px;font-size:16px}
+  .card .desc{margin:0 0 12px;font-size:13px;color:#374151;flex:1}
+  .open{text-align:center;text-decoration:none;font-weight:700;font-size:14px;
+    padding:9px 14px;border-radius:10px;background:var(--primary);color:#fff}
+  .open:hover{background:var(--primary-strong)}
+  .foot{max-width:1180px;margin:28px auto 50px;padding:0 28px;text-align:center;
+    color:var(--mut);font-size:12px}
+</style>
+</head>
+<body>
+  <div class="head">
+    <p class="eyebrow">화면설계서 보드 · Screen Design Board</p>
+    <h1>{{PROJECT_NAME}} 화면설계서</h1>
+    <p>{{BOARD_INTRO}} 카드를 누르면 화면이 열리고, 왼쪽에 화면 + 번호 콜아웃, 오른쪽에 요소별 기능명세가 나란히 표시됩니다.</p>
+  </div>
+
+  <div class="group">
+    <h2>{{GROUP_TITLE}}</h2>
+    <span>{{GROUP_SUBTITLE}}</span>
+  </div>
+  <main class="grid">
+
+    <!-- 카드 1개 패턴 (화면마다 복제). thumb 의 iframe src = 해당 페이지 파일 -->
+    <article class="card">
+      <a class="thumb" href="./sb-01-login.html">
+        <iframe src="./sb-01-login.html" loading="lazy" title="sb-01 미리보기" tabindex="-1"></iframe>
+        <!-- storyboard-spec/shoot.sh 가 있으면 위 iframe 대신: <img src="./thumbs/sb-01-login.png" alt=""> -->
+      </a>
+      <div class="body">
+        <div class="top"><span class="st">기획</span><span class="code">sb-01</span></div>
+        <h3>로그인</h3>
+        <p class="desc">계정으로 서비스에 진입한다.</p>
+        <a class="open" href="./sb-01-login.html">스토리보드 열기 →</a>
+      </div>
+    </article>
+
+    <article class="card">
+      <a class="thumb" href="./sb-02-home.html">
+        <iframe src="./sb-02-home.html" loading="lazy" title="sb-02 미리보기" tabindex="-1"></iframe>
+      </a>
+      <div class="body">
+        <div class="top"><span class="st">기획</span><span class="code">sb-02</span></div>
+        <h3>홈</h3>
+        <p class="desc">로그인 후 첫 화면.</p>
+        <a class="open" href="./sb-02-home.html">스토리보드 열기 →</a>
+      </div>
+    </article>
+
+  </main>
+
+  <p class="foot">{{PROJECT_NAME}} 화면설계서 보드 · 기준 {{SOURCE_REFERENCE}}</p>
+</body>
+</html>

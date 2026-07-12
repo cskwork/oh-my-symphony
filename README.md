@@ -56,6 +56,17 @@ for browser/runtime proof. The former production profile remains at
 `examples/advanced/WORKFLOW.file.example.md`. Verified Done tickets merge into
 the launch branch, and bounded Build/Verify budgets stop runaway agent loops.
 
+The four standard skills are pinned inside the Symphony package and copied
+into each project, so beginners do not install them separately and can still
+customize the project copies. Browser execution is not dependency-free.
+Superdesign gates require Node.js 18+, `@playwright/cli`
+(`npm install -g @playwright/cli@latest`), `playwright-cli install --skills`,
+and either system Chrome or Playwright Chromium
+(`npx playwright install chromium`). A SuperQA browser run needs `textual`,
+`playwright`, `pyyaml`, and `pillow`, plus Playwright Chromium
+(`python -m playwright install chromium`). These runtimes may require a
+network-enabled first-time setup.
+
 ## Contents
 
 - [Why Symphony?](#why-symphony)

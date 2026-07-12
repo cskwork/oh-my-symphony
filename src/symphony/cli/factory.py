@@ -6,6 +6,7 @@ import argparse
 import shutil
 import sys
 from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ _SKILL_SEARCH_ROOTS = (
     Path.home() / ".claude/skills",
     Path.home() / ".config/opencode/skills",
 )
+_BUNDLED_SKILLS_PACKAGE = "symphony.factory.bundled_skills"
+_BUNDLED_SKILL_NAMES = {"supergoal", "superdesign", "superpm", "superqa"}
 _BACKEND_BLOCKS = {
     "agy": "agy:\n  command: agy --print -\n  resume_across_turns: true\n",
     "claude": (
@@ -46,12 +49,6 @@ _BACKEND_BLOCKS = {
     "pi": "pi:\n  command: 'pi --mode json -p \"\"'\n",
 }
 _BACKEND_MARKER = "# __FACTORY_BACKEND_CONFIG__"
-_REQUIRED_SKILL_PATHS = {
-    "supergoal": ("reference/role-loop.md", "agents/executor.md"),
-    "superdesign": ("reference/taste-core.md", "templates/preflight-gate.sh"),
-    "superpm": ("reference/critic.md",),
-    "superqa": ("reference/agent-qa.md",),
-}
 WAYFINDER_NEXT_STEP_PROMPT = """Use the supergoal skill in WAYFINDER mode to map my product idea.
 Use SuperPM when customer demand, market choice, positioning, or product-spec
 evidence is load-bearing; separate observed evidence from assumptions. Write
@@ -82,8 +79,9 @@ skills: []
 - Work intentionally excluded from this slice.
 
 Schema rules: route is one of GREENFIELD, DEBUG, LEGACY. blocked_by is a YAML
-list of stable ticket ids. skills is a YAML list containing only optional
-overlays superdesign, superpm, superqa; Symphony adds supergoal automatically.
+list of stable ticket ids. skills is a YAML list of path-safe installed skill
+names; bundled overlays: superdesign, superpm, superqa. Symphony
+adds supergoal automatically.
 kind is optional and, when present, is one of
 customer-research, research, design, product-spec, qa, ui.
 browser is optional and must be the YAML boolean true or false. You may use
@@ -147,6 +145,19 @@ def _asset_paths(root: Any, prefix: Path = Path()) -> list[Path]:
     return out
 
 
+def _skill_asset_paths(root: Any, prefix: Path = Path()) -> list[Path]:
+    out: list[Path] = []
+    for child in root.iterdir():
+        if child.name == "__pycache__":
+            continue
+        relative = prefix / child.name
+        if child.is_dir():
+            out.extend(_skill_asset_paths(child, relative))
+        elif not child.name.endswith(".pyc"):
+            out.append(relative)
+    return out
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     target = Path(args.target).resolve()
     try:
@@ -154,7 +165,12 @@ def cmd_init(args: argparse.Namespace) -> int:
         _preflight_init(target, skill_sources, force=args.force)
         _copy_assets(target, force=args.force, agent_kind=args.agent_kind)
         _merge_runtime_gitignore(target)
-        _copy_skills(target, skill_sources, force=args.force)
+        _copy_skills(
+            target,
+            skill_sources,
+            force=args.force,
+            recovery="rerun 'symphony factory init <project> --force'",
+        )
     except (FileExistsError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -163,7 +179,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _preflight_init(target: Path, sources: dict[str, Path], *, force: bool) -> None:
+def _preflight_init(
+    target: Path, sources: dict[str, Traversable], *, force: bool
+) -> None:
     if force:
         return
     root = files("symphony.factory.templates")
@@ -172,20 +190,28 @@ def _preflight_init(target: Path, sources: dict[str, Path], *, force: bool) -> N
         raise FileExistsError(f"refusing to overwrite {target / conflicts[0]}; pass --force")
     for name in sources:
         destination = target / "skills" / name
-        if destination.exists():
+        if destination.exists() or destination.is_symlink():
             try:
                 _validate_skill_runtime(name, destination)
             except FileNotFoundError as exc:
                 raise FileExistsError(
-                    f"{destination} is incomplete; pass --force to replace it"
+                    f"{destination} is incomplete; rerun "
+                    "'symphony factory init <project> --force' to replace it"
                 ) from exc
 
 
-def _sync(target: Path, wayfinder: Path, prefix: str, *, all_tickets: bool = True) -> int:
+def _sync(
+    target: Path,
+    wayfinder: Path,
+    prefix: str,
+    *,
+    all_tickets: bool = True,
+    force_skills: bool = False,
+) -> int:
     requested = {"supergoal"}
     for path in sorted((wayfinder / "tickets").glob("*.md")):
         requested.update(parse_wayfinder_ticket(path).skills)
-    _install_skills(target, requested, force=False)
+    _install_skills(target, requested, force=force_skills)
     workflow = target / "WORKFLOW.md"
     cfg = build_service_config(load_workflow(workflow))
     if cfg.tracker.kind != "file":
@@ -200,12 +226,23 @@ def _sync(target: Path, wayfinder: Path, prefix: str, *, all_tickets: bool = Tru
 
 
 def _install_skills(target: Path, names: set[str], *, force: bool) -> None:
-    _copy_skills(target, _skill_sources(names), force=force)
+    _copy_skills(
+        target,
+        _skill_sources(names),
+        force=force,
+        recovery="rerun 'symphony factory sync <project> --force'",
+    )
 
 
-def _skill_sources(names: set[str]) -> dict[str, Path]:
-    sources: dict[str, Path] = {}
+def _skill_sources(names: set[str]) -> dict[str, Traversable]:
+    sources: dict[str, Traversable] = {}
+    bundled = files(_BUNDLED_SKILLS_PACKAGE)
     for name in sorted(names):
+        packaged = bundled.joinpath(name)
+        if name in _BUNDLED_SKILL_NAMES and packaged.joinpath("SKILL.md").is_file():
+            _validate_skill_runtime(name, packaged)
+            sources[name] = packaged
+            continue
         source = next(
             (
                 root / name
@@ -215,9 +252,10 @@ def _skill_sources(names: set[str]) -> dict[str, Path]:
             None,
         )
         if source is None:
+            locations = ", ".join(str(root) for root in _SKILL_SEARCH_ROOTS)
             raise FileNotFoundError(
-                f"required skill {name!r} is not installed; install it under "
-                "~/.agents/skills (or ~/.codex/skills) and retry"
+                f"required custom skill {name!r} is not bundled or installed; "
+                f"install it under one of: {locations}"
             )
         source = source.resolve()
         _validate_skill_runtime(name, source)
@@ -225,28 +263,64 @@ def _skill_sources(names: set[str]) -> dict[str, Path]:
     return sources
 
 
-def _validate_skill_runtime(name: str, root: Path) -> None:
-    for relative in _REQUIRED_SKILL_PATHS.get(name, ()):
-        if not (root / relative).is_file():
+def _validate_skill_runtime(name: str, root: Traversable) -> None:
+    required_paths = [Path("SKILL.md")]
+    if name in _BUNDLED_SKILL_NAMES:
+        packaged = files(_BUNDLED_SKILLS_PACKAGE).joinpath(name)
+        required_paths = _skill_asset_paths(packaged)
+    for relative in required_paths:
+        required = root.joinpath(*Path(relative).parts)
+        if not required.is_file():
             raise FileNotFoundError(
-                f"required skill {name!r} is incomplete: missing {root / relative}"
+                f"required skill {name!r} is incomplete: missing {required}"
             )
 
 
-def _copy_skills(target: Path, sources: dict[str, Path], *, force: bool) -> None:
+def _copy_skills(
+    target: Path,
+    sources: dict[str, Traversable],
+    *,
+    force: bool,
+    recovery: str,
+) -> None:
     for name, source in sources.items():
         destination = target / "skills" / name
-        if destination.exists() and not force:
+        destination_present = destination.exists() or destination.is_symlink()
+        if destination_present and not force:
             try:
                 _validate_skill_runtime(name, destination)
             except FileNotFoundError as exc:
                 raise FileExistsError(
-                    f"{destination} is incomplete; pass --force to replace it"
+                    f"{destination} is incomplete; {recovery}"
                 ) from exc
             continue
-        if destination.exists():
-            shutil.rmtree(destination)
-        shutil.copytree(source, destination, ignore=_skill_copy_ignore(name, source))
+        if destination_present:
+            _remove_skill_destination(destination)
+        if isinstance(source, Path):
+            shutil.copytree(source, destination, ignore=_skill_copy_ignore(name, source))
+        else:
+            _copy_resource_tree(source, destination)
+
+
+def _remove_skill_destination(destination: Path) -> None:
+    if destination.is_symlink() or not destination.is_dir():
+        destination.unlink()
+    else:
+        shutil.rmtree(destination)
+
+
+def _copy_resource_tree(source: Traversable, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for child in source.iterdir():
+        if child.name in {"__pycache__", ".pytest_cache", "node_modules"}:
+            continue
+        target = destination / child.name
+        if child.is_dir():
+            _copy_resource_tree(child, target)
+        elif not child.name.endswith(".pyc"):
+            target.write_bytes(child.read_bytes())
+            if child.name.endswith(".sh"):
+                target.chmod(target.stat().st_mode | 0o111)
 
 
 def _skill_copy_ignore(name: str, root: Path):
@@ -267,7 +341,13 @@ def _skill_copy_ignore(name: str, root: Path):
 def cmd_sync(args: argparse.Namespace) -> int:
     target, wayfinder = _resolve_project_and_wayfinder(args.target, args.wayfinder)
     try:
-        return _sync(target, wayfinder, args.prefix, all_tickets=args.all_tickets)
+        return _sync(
+            target,
+            wayfinder,
+            args.prefix,
+            all_tickets=args.all_tickets,
+            force_skills=args.force,
+        )
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -306,7 +386,13 @@ def cmd_start(args: argparse.Namespace) -> int:
         return 1
     if wayfinder.exists():
         try:
-            _sync(target, wayfinder, args.prefix, all_tickets=args.all_tickets)
+            _sync(
+                target,
+                wayfinder,
+                args.prefix,
+                all_tickets=args.all_tickets,
+                force_skills=args.force,
+            )
         except (ValueError, OSError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -367,6 +453,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("target", nargs="?", default=".")
     sync.add_argument("--wayfinder", default=None)
     sync.add_argument("--prefix", default="TASK")
+    sync.add_argument(
+        "--force",
+        action="store_true",
+        help="replace generated skill copies from the pinned bundle before syncing",
+    )
     sync_scope = sync.add_mutually_exclusive_group()
     sync_scope.add_argument(
         "--frontier-only",

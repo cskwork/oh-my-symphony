@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "skills": {
+    "superdesign": {
+      "source": "https://github.com/cskwork/superdesign-skill.git",
+      "commit": "c5cae1b80475367279dd2a399fda099227f6e981"
+    },
+    "supergoal": {
+      "source": "https://github.com/cskwork/supergoal-skill.git",
+      "version": "v0.6.1",
+      "commit": "295992a12cc1cd901584082d93d3afd69bb1b4bb"
+    },
+    "superpm": {
+      "source": "https://github.com/cskwork/superpm-skill.git",
+      "commit": "bd7587f0f6c92882bf5744ed5f406ab8aaa0195b"
+    },
+    "superqa": {
+      "source": "https://github.com/cskwork/superqa-skill.git",
+      "version": "v0.3.0",
+      "commit": "d4e6a210a2b66cb10998164a159bfd68de569df6"
+    }
+  },
+  "adapted_sources": {
+    "agent-reach": "https://github.com/Panniantong/Agent-Reach",
+    "impeccable": "https://github.com/pbakaus/impeccable",
+    "last30days-skill": "https://github.com/mvanhorn/last30days-skill",
+    "stitch-landing-skill": {
+      "source": "https://github.com/cskwork/stitch-landing-skill",
+      "commit": "4b4c7fb00d7d77d48403f6b7682c3fb502e0db0c"
+    },
+    "storyboard-spec": {
+      "source": "https://github.com/cskwork/storyboard-spec",
+      "commit": "1b77079347daf2339e61c9b4cba0938c848c5c35"
+    },
+    "taste-skill": "https://github.com/leonxlnx/taste-skill"
+  }
+}

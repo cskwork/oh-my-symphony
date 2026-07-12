@@ -41,6 +41,68 @@ skills: [superdesign, superqa, superdesign]
     assert "Acceptance criteria" in ticket.description
 
 
+def test_parser_accepts_path_safe_custom_skill_names(tmp_path: Path) -> None:
+    path = tmp_path / "custom.md"
+    path.write_text(
+        """---
+id: custom
+title: Run a custom check
+route: LEGACY
+blocked_by: []
+skills: [custom-check.v2]
+---
+
+## Acceptance criteria
+
+- The custom check runs.
+
+## Proof commands
+
+- `pytest`
+
+## Non-goals
+
+- Unrelated work.
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_wayfinder_ticket(path).skills == ("supergoal", "custom-check.v2")
+
+
+@pytest.mark.parametrize("name", ["../escape", "/absolute", "nested/skill"])
+def test_parser_rejects_path_unsafe_custom_skill_names(
+    tmp_path: Path, name: str
+) -> None:
+    path = tmp_path / "unsafe.md"
+    path.write_text(
+        f"""---
+id: unsafe
+title: Reject an unsafe skill
+route: LEGACY
+blocked_by: []
+skills: [{name}]
+---
+
+## Acceptance criteria
+
+- Unsafe paths are rejected.
+
+## Proof commands
+
+- `pytest`
+
+## Non-goals
+
+- None.
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid skill name"):
+        parse_wayfinder_ticket(path)
+
+
 def test_parser_requires_title_route_and_acceptance(tmp_path: Path) -> None:
     path = tmp_path / "bad.md"
     path.write_text("---\nid: bad\ntitle: Incomplete\n---\n", encoding="utf-8")

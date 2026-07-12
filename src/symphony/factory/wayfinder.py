@@ -11,7 +11,6 @@ import yaml
 from ..skills import normalize_skill_names
 
 _ROUTES = {"GREENFIELD", "DEBUG", "LEGACY"}
-_OVERLAYS = {"superdesign", "superpm", "superqa"}
 _KIND_OVERLAYS = {
     "customer-research": "superpm",
     "research": "superpm",
@@ -21,6 +20,7 @@ _KIND_OVERLAYS = {
     "ui": ("superdesign", "superqa"),
 }
 _KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SKILL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -62,10 +62,13 @@ def parse_wayfinder_ticket(path: Path) -> WayfinderTicket:
     invalid_blockers = [item for item in blockers if not _KEY_RE.fullmatch(item)]
     if invalid_blockers:
         raise ValueError(f"{path}: blocked_by contains invalid ids: {', '.join(invalid_blockers)}")
-    explicit = _string_list(front.get("skills"), "skills", path)
-    unsupported = sorted(set(explicit) - _OVERLAYS)
-    if unsupported:
-        raise ValueError(f"{path}: unsupported skill overlays: {', '.join(unsupported)}")
+    explicit = tuple(
+        name.strip().lower()
+        for name in _string_list(front.get("skills"), "skills", path)
+    )
+    invalid_skills = sorted({name for name in explicit if not _SKILL_RE.fullmatch(name)})
+    if invalid_skills:
+        raise ValueError(f"{path}: invalid skill name: {', '.join(invalid_skills)}")
     inferred = _inferred_overlays(front, path)
     skills = normalize_skill_names(["supergoal", *inferred, *explicit])
     return WayfinderTicket(key, title, route, blockers, skills, body.strip(), path)

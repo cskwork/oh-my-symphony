@@ -208,3 +208,45 @@
   installed Supergoal skill. The runtime correctly requires that skill, but
   unit tests must not depend on HOME. They now install a minimal valid skill
   fixture and the exact coverage command passes with an empty HOME.
+
+## Factory-owned skill runtime bundle
+
+- The beginner factory now resolves its four standard skills from pinned
+  package resources before checking mutable home-directory installs. This
+  removes a hidden second download while retaining local fallback for an
+  arbitrary custom skill and preserving already customized project copies.
+- The bundle contains the runtime closure named by each factory overlay,
+  including both Superdesign JavaScript gates and attribution sources, the
+  SuperPM intent-to-critic references, and SuperQA's shell launcher,
+  references, package metadata, and TUI runtime. A manifest records the source
+  repositories and commits; every skill retains its upstream license.
+- A network installer was rejected because it makes init availability- and
+  version-dependent. Assuming package resources are real filesystem paths was
+  also rejected; the copier walks the `Traversable` resource tree so a zipped
+  wheel works as well as an editable checkout.
+- Bundling a browser skill does not imply a bundled browser. Documentation now
+  names SuperQA's Python extras and Playwright Chromium requirement, including
+  the possible first-run network dependency.
+- Edge-case review found that `--force` assumed an existing skill destination
+  was a real directory. Factory replacement now unlinks files and symlinks
+  without following them, removes only real directories recursively, and
+  detects broken skill symlinks during init preflight before copying assets.
+- R-LOOP iteration 2 made every shipped shell gate executable in the source
+  tree, wheel metadata, filesystem-installed copies, and zip-import-generated
+  copies. The resource copier sets the executable bits explicitly because a
+  generic `Traversable` exposes bytes, not portable source mode metadata.
+- SuperQA now includes the README required by its advertised editable install.
+  Beginner English, Korean, and operator docs also name Superdesign's actual
+  Node.js 18+, `@playwright/cli`, skill-install, and browser prerequisites.
+- Recursive closure checks now follow `.cmd`, `.html`, `.tcss`, and `.toml`
+  references in addition to the earlier script and Markdown extensions. That
+  stricter scan found the storyboard template's missing `scripts/shoot.sh`, so
+  the pinned runtime now includes an executable adapted helper instead of
+  weakening the reference check.
+- The redistribution notice now inventories every adapted or method source
+  named by shipped files and retains the authoritative MIT or Apache-2.0 text
+  available during the audit. Follow-up evidence pins stitch-landing-skill at
+  `4b4c7fb00d7d77d48403f6b7682c3fb502e0db0c`, retains its exact cskwork MIT
+  notice, and limits its attribution to the shipped `assets.md` and `web.md`
+  inspiration. This engineering inventory is not legal approval; public
+  release still requires maintainer legal review.
