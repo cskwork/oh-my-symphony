@@ -1,12 +1,10 @@
 {
-  "phase": "delivery",
+  "phase": "complete",
   "iteration": 8,
   "plan_approval": "user",
-  "unresolved_gates": [
-    "pull request"
-  ],
+  "unresolved_gates": [],
   "blockers": [],
-  "next_action": "run commit gate, commit, push, and open the PR to dev",
+  "next_action": "review and merge PR 57 into dev",
   "regression_ledger": [
     "focused factory tests",
     "full pytest",
@@ -16,5 +14,5 @@
     "real OpenCode lifecycle"
   ],
   "last_proof_command": "PYTHONPATH=src /opt/anaconda3/bin/python -m pytest -q",
-  "completion_promise": "verified implementation pending PR publication"
+  "completion_promise": "complete"
 }

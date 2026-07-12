@@ -116,5 +116,4 @@ then repeat mandatory adversarial review and a bounded real OpenCode lifecycle.
 - Clean generated-project proof reached Done through real OpenCode Build and
   Verify sessions, committed exactly two product files, and auto-merged to
   disposable main. Full tests, lint, types, Doctor, wheel, and diff gates pass.
-- Remaining gate: publish the already verified feature branch as a PR to
-  `dev`.
+- Published as PR #57 into `dev`; no unresolved delivery gate remains.

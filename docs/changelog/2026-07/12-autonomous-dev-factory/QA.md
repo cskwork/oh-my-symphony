@@ -46,6 +46,19 @@
 
 Verdict: pass.
 
+Backward-trace: clean
+
+## Reproduction Fidelity
+
+- Fidelity level: exact
+
+## QA
+
+- CLI integration smoke: a freshly generated project ran real OpenCode Build
+  and Verify workers, reached Done, committed exactly two scoped product files,
+  auto-merged to disposable main, and passed its host unittest.
+- Trusted proof: `evaluator_owned` exact commands from the approved QA plan.
+
 ## Final real OpenCode proof
 
 - Disposable generated project: `/private/tmp/symphony-factory-opencode-ship-cfCae5`.
@@ -60,6 +73,11 @@ Verdict: pass.
 
 - Wheel built successfully at `/private/tmp/symphony-factory-wheel-FWRWlR/oh_my_symphony-0.13.0-py3-none-any.whl`.
 - Wheel contains the factory workflow, Build/Verify prompts, and worktree hook; no bytecode match was present.
+
+## Delivery
+
+- Commit: `514c552` (`feat: add autonomous development factory`).
+- Pull request: https://github.com/cskwork/oh-my-symphony/pull/57 into `dev`.
 
 ## 2026-07-13 focused live-failure regression
 

@@ -31,7 +31,7 @@ run. Publish the result as a pull request into `dev`.
 - [x] README and Symphony operator skill document the beginner default and advanced customization path.
 - [x] Focused tests, full pytest, Ruff, Pyright, Doctor, and diff checks pass.
 - [x] A disposable real OpenCode-agent run proves dispatch and the starter state loop, or is recorded as Not proven with the exact external blocker.
-- [ ] Feature branch is pushed and a reviewer-facing PR into `dev` is open.
+- [x] Feature branch is pushed and reviewer-facing PR #57 into `dev` is open.
 
 ## QA Cases
 

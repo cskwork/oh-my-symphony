@@ -13,7 +13,7 @@
 
 ## Approval
 
-- Status: user-approved.
+- Status: approved-by-user.
 - Evidence: user replied “good implement with pr and make this default in oh my
   symphony and do a test run with opencode agents” after reviewing the plan.
 
