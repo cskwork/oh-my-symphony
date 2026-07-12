@@ -13,6 +13,6 @@
     "factory doctor",
     "real OpenCode lifecycle"
   ],
-  "last_proof_command": "PYTHONPATH=src /opt/anaconda3/bin/python -m pytest -q",
+  "last_proof_command": "HOME=/private/tmp/symphony-empty-home python -m pytest -q --cov=src/symphony --cov-report=term --cov-fail-under=80",
   "completion_promise": "complete"
 }

@@ -13,6 +13,21 @@ from symphony.skills import render_skill_block
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _installed_supergoal_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keep factory CLI tests hermetic from developer-installed skills."""
+    skill_root = tmp_path / "installed-skills"
+    supergoal = skill_root / "supergoal"
+    (supergoal / "reference").mkdir(parents=True)
+    (supergoal / "agents").mkdir()
+    (supergoal / "SKILL.md").write_text("# Supergoal\n", encoding="utf-8")
+    (supergoal / "reference/role-loop.md").write_text("loop\n", encoding="utf-8")
+    (supergoal / "agents/executor.md").write_text("execute\n", encoding="utf-8")
+    monkeypatch.setattr(factory_cli, "_SKILL_SEARCH_ROOTS", (skill_root,))
+
+
 def test_board_new_accepts_skills(tmp_path: Path) -> None:
     assert board_cli.main(
         ["new", "--root", str(tmp_path), "T-1", "ticket", "--skills", "supergoal,superqa"]

@@ -204,3 +204,7 @@
   the validator accepted broader green tokens and extra rows. The factory
   contract now enforces the documented exact multiset; advanced scorecard
   semantics remain unchanged.
+- GitHub CI then exposed that factory CLI tests inherited the developer's
+  installed Supergoal skill. The runtime correctly requires that skill, but
+  unit tests must not depend on HOME. They now install a minimal valid skill
+  fixture and the exact coverage command passes with an empty HOME.

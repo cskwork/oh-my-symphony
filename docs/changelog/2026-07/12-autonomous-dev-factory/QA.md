@@ -68,6 +68,8 @@ Backward-trace: clean
 - Scoped commit `1e6bf5c`: only `factory_probe.py` and `test_factory_probe.py`.
 - Merge `9fe55bf` landed on disposable `main`; host proof command passed with one unittest.
 - No `stage_contract_failed`, token-budget failure, process-vault output, or bytecode entered the shipping proof.
+- CI-hermetic rerun: empty HOME plus the exact coverage command passed
+  `1474 passed, 5 skipped` at 84.12% coverage.
 
 ## Final package proof
 
