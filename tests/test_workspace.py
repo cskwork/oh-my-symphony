@@ -491,7 +491,7 @@ async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_
     _git(host, "add", "-A")
     _git(host, "commit", "-q", "-m", "seed")
 
-    workflow = load_workflow(Path(__file__).parents[1] / "WORKFLOW.file.example.md")
+    workflow = load_workflow(Path(__file__).parents[1] / "WORKFLOW.md")
     cfg = build_service_config(workflow)
     mgr = WorkspaceManager(
         tmp_path / "ws",
@@ -1008,6 +1008,80 @@ async def test_commit_workspace_on_done_squashes_to_recorded_base(
     files = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
     for fname in ("seed.txt", "turn1.txt", "turn2.txt", "turn3.txt"):
         assert fname in files, f"{fname} missing from squashed commit"
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_excludes_shared_ignored_board_from_squash(
+    tmp_path, monkeypatch
+):
+    """Factory worktrees replace the tracked kanban/.gitkeep sentinel with
+    a shared ignored symlink. Agent-authored commits may record the sentinel
+    deletion before the final squash; auto-commit must restore the excluded
+    path from the base while preserving the ticket's scoped product changes."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / ".gitignore").write_text("/kanban\n", encoding="utf-8")
+    (repo / "kanban").mkdir()
+    (repo / "kanban/.gitkeep").write_text("\n", encoding="utf-8")
+    (repo / "seed.txt").write_text("base", encoding="utf-8")
+    _git(repo, "add", "-f", ".gitignore", "kanban/.gitkeep", "seed.txt")
+    _git(repo, "commit", "-q", "-m", "base commit")
+    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "config", "symphony.basesha", base_sha)
+    _git(repo, "config", "--add", "symphony.autocommitExclude", "kanban")
+
+    shared_board = tmp_path / "shared-board"
+    shared_board.mkdir()
+    (shared_board / "TASK-1.md").write_text("runtime card\n", encoding="utf-8")
+    (repo / "kanban/.gitkeep").unlink()
+    (repo / "kanban").rmdir()
+    (repo / "kanban").symlink_to(shared_board, target_is_directory=True)
+
+    (repo / "feature.txt").write_text("worker product change\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "wip: worker turn")
+    (repo / "leftover.txt").write_text("final product change\n", encoding="utf-8")
+
+    await commit_workspace_on_done(repo, identifier="TASK-1", title="factory ticket")
+
+    log = _git(repo, "log", "--format=%s").stdout.strip().splitlines()
+    assert log == ["TASK-1: factory ticket", "base commit"]
+    files = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    assert "feature.txt" in files
+    assert "leftover.txt" in files
+    assert "kanban/.gitkeep" in files
+    assert "kanban/TASK-1.md" not in files
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_ignores_untracked_shared_board_symlink(
+    tmp_path, monkeypatch
+):
+    """Generated projects have no tracked sentinel in their first commit."""
+    _git_id_env(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / ".gitignore").write_text("/kanban\n", encoding="utf-8")
+    (repo / "seed.txt").write_text("base", encoding="utf-8")
+    _git(repo, "add", ".gitignore", "seed.txt")
+    _git(repo, "commit", "-q", "-m", "base commit")
+    _git(repo, "config", "--add", "symphony.autocommitExclude", "kanban")
+    shared_board = tmp_path / "shared-board"
+    shared_board.mkdir()
+    (shared_board / "TASK-1.md").write_text("runtime card\n", encoding="utf-8")
+    (repo / "kanban").symlink_to(shared_board, target_is_directory=True)
+    (repo / "feature.txt").write_text("worker product change\n", encoding="utf-8")
+
+    await commit_workspace_on_done(repo, identifier="TASK-1", title="factory ticket")
+
+    files = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    assert "feature.txt" in files
+    assert not any(path.startswith("kanban") for path in files)
 
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")

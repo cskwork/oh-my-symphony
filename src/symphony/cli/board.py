@@ -127,15 +127,17 @@ def cmd_ls(args: argparse.Namespace) -> int:
 def cmd_new(args: argparse.Namespace) -> int:
     tracker = _get_tracker(args)
     fbt = FileBoardTracker(tracker)
+    state = args.state or (tracker.active_states[0] if args.root is None else "Todo")
     try:
         path = fbt.create(
             identifier=args.id,
             title=args.title,
-            state=args.state,
+            state=state,
             priority=args.priority,
             labels=args.labels.split(",") if args.labels else None,
             description=args.description or "",
             agent_kind=args.agent_kind,
+            skills=args.skills.split(",") if args.skills else None,
         )
     except SymphonyError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -211,10 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_workflow_args(p_new)
     p_new.add_argument("id", help="ticket identifier (e.g. DEV-001)")
     p_new.add_argument("title", help="ticket title")
-    p_new.add_argument("--state", default="Todo")
+    p_new.add_argument("--state", default=None)
     p_new.add_argument("--priority", type=int, default=None)
     p_new.add_argument("--labels", default=None, help="comma-separated labels")
     p_new.add_argument("--description", default=None)
+    p_new.add_argument("--skills", default=None, help="comma-separated attached skills")
     p_new.add_argument(
         "--agent-kind",
         choices=sorted(SUPPORTED_AGENT_KINDS),

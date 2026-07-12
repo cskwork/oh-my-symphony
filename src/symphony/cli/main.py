@@ -406,6 +406,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import board
 
         return board.main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "factory":
+        from . import factory
+
+        return factory.main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "doctor":
         from . import doctor
 

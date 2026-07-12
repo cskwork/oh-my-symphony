@@ -26,6 +26,33 @@
 
 [**AI CLI 없이 60초 만에 체험하기 →**](#try-it-in-60-seconds-no-agent-cli-required)
 
+## 기본 경로: 자율 개발 팩토리
+
+Git 저장소의 새 파일 보드 프로젝트는 작은 Wayfinder -> Symphony -> Supergoal
+흐름으로 시작한다.
+
+```bash
+symphony factory init . --agent opencode
+git add . && git commit -m "Initialize Symphony factory"
+# wayfinder/tickets/ 아래에 티켓을 만든 뒤:
+symphony factory sync ./wayfinder
+symphony factory start ./wayfinder
+```
+
+Factory init은 기존 `.gitignore` 내용을 유지하면서 실시간 보드 카드,
+worktree, 로그, `WORKFLOW-PROGRESS.md` 제외 규칙을 추가한다. 이 파일들은
+공유 런타임 상태이며 Wayfinder 명세와 완성된 제품 코드는 커밋 대상이다.
+
+생성되는 보드는 `Ready -> Build -> Verify -> Done`을 사용하고, 권한이나 실행
+환경이 없으면 `Blocked`로 이동한다. Supergoal은 각 티켓의 테스트 우선 개발을,
+Symphony는 의존성 순서, worktree, 재시도, 독립 Verify를 맡는다. 기본 sync는
+전체 티켓과 blocker 연결을 가져오므로 선행 작업이 끝나면 다음 작업이 자동으로
+시작된다. 현재 실행 가능한 frontier만 가져오려면 `--frontier-only`를
+사용한다. UI 작업은
+`superdesign`, 제품 조사/스펙은 `superpm`, 브라우저/런타임 검증은 `superqa`를
+Wayfinder frontmatter에 명시한다. 기존 운영 프로필은
+`examples/advanced/WORKFLOW.file.example.md`에 유지된다.
+
 ## 목차
 
 - [Symphony를 쓰는 이유](#why-symphony)

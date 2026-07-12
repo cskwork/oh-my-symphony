@@ -1,0 +1,1 @@
+"""Packaged autonomous factory assets."""

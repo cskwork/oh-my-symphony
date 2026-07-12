@@ -12,7 +12,10 @@ from symphony.workflow import build_service_config, load_workflow
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WORKFLOW_FILES = ("WORKFLOW.file.example.md", "WORKFLOW.example.md")
+WORKFLOW_FILES = (
+    "examples/advanced/WORKFLOW.file.example.md",
+    "WORKFLOW.example.md",
+)
 
 STAGE_HEADINGS_BY_STATE = {
     "Todo": "### TRIAGE",
@@ -383,7 +386,7 @@ def test_base_prompt_omits_token_budget_directive_by_default(workflow: str) -> N
 
 
 def test_file_base_prompt_renders_full_ticket_path_outside_description() -> None:
-    cfg = _load("WORKFLOW.file.example.md")
+    cfg = _load("examples/advanced/WORKFLOW.file.example.md")
     rendered = render(
         cfg.prompt_template_for_state("Verify"),
         build_prompt_env(

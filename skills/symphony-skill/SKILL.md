@@ -28,6 +28,7 @@ State the route in one line, then open only the reference that route needs.
 | one prompt should become a full evidence-gated delivery pipeline | ONESHOT | `oneshot/reference/operations.md` |
 | OneShot plan quality, ticket slicing, QA/PDF, vault, or lane gates | ONESHOT-DEEP | `oneshot/reference/decomposition.md`, then the needed OneShot reference |
 | bootstrap Symphony into another repo | BOOTSTRAP | `reference/bootstrapping.md` |
+| initialize or run the beginner autonomous development factory | FACTORY | `reference/factory.md` |
 | bootstrap isolated worktrees for a monorepo/polyrepo | MONOREPO | `monorepo/references/workflow-template.md` and `monorepo/scripts/setup-monorepo.sh` |
 | worker exit, auth stall, blank TUI, stuck service, platform issue | TRIAGE | `reference/troubleshooting.md` or `reference/platform-compat.md` |
 
@@ -115,6 +116,17 @@ unwritable workspaces, and missing board directories.
   previous-turn work before it is finalized.
 
 ## Common Starts
+
+Beginner autonomous factory:
+
+```bash
+symphony factory init . --agent opencode
+symphony factory sync ./wayfinder
+symphony factory start ./wayfinder
+```
+
+Use the FACTORY route for new file-board projects. The former production file
+workflow remains at `examples/advanced/WORKFLOW.file.example.md`.
 
 Add one file-board ticket and open the managed TUI launcher:
 

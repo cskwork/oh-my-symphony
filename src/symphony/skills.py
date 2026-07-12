@@ -98,7 +98,27 @@ def normalize_skill_names(value: object) -> tuple[str, ...]:
     return tuple(out)
 
 
-def render_skill_block(workflow_dir: Path, skill_names: tuple[str, ...]) -> str:
+def select_skills_for_stage(
+    contract_profile: str, state: str, skill_names: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Limit factory skill context to the owner of the current stage."""
+    if contract_profile.strip().lower() != "factory":
+        return skill_names
+    stage = state.strip().lower()
+    if stage == "ready":
+        return ()
+    if stage == "verify":
+        return tuple(name for name in skill_names if name == "superqa")
+    return skill_names
+
+
+def render_skill_block(
+    workflow_dir: Path,
+    skill_names: tuple[str, ...],
+    *,
+    runtime_dir: Path | None = None,
+    inline_body: bool = True,
+) -> str:
     """Return the `## Attached skills` prompt section, or "" when none apply.
 
     Unknown names are listed as unavailable rather than silently dropped so
@@ -117,6 +137,22 @@ def render_skill_block(workflow_dir: Path, skill_names: tuple[str, ...]) -> str:
         if skill is None:
             parts.append(f"\n### {name}\n\n(skill not found under skills/)")
             continue
-        body = skill.body() or "(empty skill)"
-        parts.append(f"\n### {name}\n\n{body}")
+        source_root = skill.path.parent.resolve()
+        runtime_root = (
+            runtime_dir / "skills" / name if runtime_dir is not None else None
+        )
+        root = (
+            runtime_root.resolve()
+            if runtime_root is not None and (runtime_root / "SKILL.md").is_file()
+            else source_root
+        )
+        section = (
+            f"\n### {name}\n\n"
+            f"Skill root: `{root}`\n"
+            f"Instructions: `{root / 'SKILL.md'}`\n"
+            "Resolve relative paths in this skill from its skill root."
+        )
+        if inline_body:
+            section += f"\n\n{skill.body() or '(empty skill)'}"
+        parts.append(section)
     return "\n".join(parts)

@@ -62,7 +62,7 @@ from ..continuous_improvement import (
 from ..issue import BlockerRef, Issue, normalize_state
 from ..logging import get_logger
 from ..prompt import build_continuation_prompt, build_first_turn_prompt
-from ..skills import render_skill_block
+from ..skills import render_skill_block, select_skills_for_stage
 from ..stats import StatsStore, stats_store_for
 from ..trackers import build_tracker_client
 from ..utils.wiki_sweep import sweep as _wiki_sweep_run
@@ -2062,10 +2062,12 @@ class Orchestrator:
         for issue in self._sort_with_wait_age_bump(candidates, cfg):
             if await self._auto_triage_todo_if_actionable(issue, cfg):
                 continue
-            if self._available_slots(cfg) <= 0:
-                break
             if not self._should_dispatch(issue, cfg):
                 continue
+            if await self._auto_promote_factory_ready(issue, cfg):
+                continue
+            if self._available_slots(cfg) <= 0:
+                break
             # C1 — system-level pre-check. An overlap with any in-flight
             # ticket's `## Touched Files` would race two workers against
             # the same paths. Move the candidate to Blocked instead of
@@ -2104,6 +2106,33 @@ class Orchestrator:
         self._maybe_schedule_continuous_improvement(cfg)
 
         await self._notify_observers()
+
+    async def _auto_promote_factory_ready(
+        self, issue: Issue, cfg: ServiceConfig
+    ) -> bool:
+        """Advance the factory dependency gate without starting a worker."""
+        profile = str(cfg.raw.get("contract_profile", "advanced")).strip().lower()
+        if profile != "factory" or normalize_state(issue.state) != "ready":
+            return False
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_update_state, cfg, issue, "Build"
+            )
+        except Exception as exc:
+            self._record_tracker_error(issue.id, exc)
+            log.warning(
+                "factory_ready_promotion_failed",
+                identifier=issue.identifier,
+                error=str(exc),
+            )
+            return True
+        self._clear_tracker_error(issue.id)
+        log.info(
+            "factory_ready_promoted",
+            identifier=issue.identifier,
+            target="Build",
+        )
+        return True
 
     def _sort_with_wait_age_bump(
         self, candidates: list[Issue], cfg: ServiceConfig
@@ -3217,10 +3246,27 @@ class Orchestrator:
         return threshold or 0
 
     def _ticket_prompt_path(
-        self, cfg: ServiceConfig, issue: Issue
+        self,
+        cfg: ServiceConfig,
+        issue: Issue,
+        workspace_path: Path | None = None,
     ) -> str | None:
         if cfg.tracker.kind != "file":
             return None
+        profile = str(cfg.raw.get("contract_profile", "advanced")).strip().lower()
+        if profile == "factory" and workspace_path is not None:
+            host_board = cfg.tracker.board_root
+            if host_board is None:
+                return None
+            local_path = workspace_path / "kanban" / f"{issue.identifier}.md"
+            shared_board = (
+                local_path.parent.exists()
+                and local_path.parent.resolve() == host_board.resolve()
+            )
+            if shared_board and local_path.is_file():
+                return str(local_path.relative_to(workspace_path))
+            host_path = host_board / f"{issue.identifier}.md"
+            return str(host_path) if host_path.is_file() else None
         tracker = getattr(self, "_tracker", None)
         find_path = getattr(tracker, "find_path", None)
         if find_path is None:
@@ -3585,7 +3631,27 @@ class Orchestrator:
                 # Skill files are read off-loop; dispatch shares the event
                 # loop with every other running worker.
                 skill_context = await asyncio.to_thread(
-                    render_skill_block, cfg.workflow_path.parent, issue.skills
+                    render_skill_block,
+                    cfg.workflow_path.parent,
+                    select_skills_for_stage(
+                        str(cfg.raw.get("contract_profile", "advanced")),
+                        issue.state,
+                        issue.skills,
+                    ),
+                    runtime_dir=(
+                        workspace.path
+                        if str(cfg.raw.get("contract_profile", "advanced"))
+                        .strip()
+                        .lower()
+                        == "factory"
+                        else None
+                    ),
+                    inline_body=(
+                        str(cfg.raw.get("contract_profile", "advanced"))
+                        .strip()
+                        .lower()
+                        != "factory"
+                    ),
                 )
                 first_prompt, _ = build_first_turn_prompt(
                     prompt_template=cfg.prompt_template_for_state(issue.state),
@@ -3600,7 +3666,9 @@ class Orchestrator:
                     token_budget=self._token_budget_for_state(cfg, issue.state),
                     rewind_scope=None,
                     compact_issue_context=cfg.agent.compact_issue_context,
-                    full_ticket_path=self._ticket_prompt_path(cfg, issue),
+                    full_ticket_path=self._ticket_prompt_path(
+                        cfg, issue, workspace.path
+                    ),
                     extra_context=skill_context,
                 )
                 await client.start_session(
@@ -3691,6 +3759,7 @@ class Orchestrator:
                             # bookkeeping below still apply.
                             if not is_rewind:
                                 if prev_phase_state in {
+                                    "build",
                                     "in progress",
                                     "verify",
                                     "learn",
@@ -3724,6 +3793,7 @@ class Orchestrator:
                                     ticket_body=issue.description or "",
                                     identifier=issue.identifier,
                                     docs_root=workspace.path / "docs",
+                                    profile=str(cfg.raw.get("contract_profile", "advanced")),
                                 )
                                 if not contract.passed:
                                     log.warning(
@@ -3848,33 +3918,6 @@ class Orchestrator:
                                 running_entry.thread_id = None
                                 running_entry.session_id = None
                                 running_entry.turn_id = None
-                                # New backend session reports absolute token
-                                # totals from 0; the high-water marks below
-                                # MUST reset or `_apply_token_totals` computes
-                                # `max(new - old_high, 0) = 0` and silently
-                                # drops every token from the new phase until
-                                # the cumulative count overtakes the old mark.
-                                # Cumulative `codex_*_tokens` are NOT reset;
-                                # state-local totals reset so
-                                # max_total_tokens_by_state is measured per
-                                # stage, not against ticket lifetime usage.
-                                running_entry.last_reported_input_tokens = 0
-                                running_entry.last_reported_cache_input_tokens = 0
-                                running_entry.last_reported_output_tokens = 0
-                                running_entry.last_reported_total_tokens = 0
-                                running_entry.codex_state_input_tokens = 0
-                                running_entry.codex_state_cache_input_tokens = 0
-                                running_entry.codex_state_output_tokens = 0
-                                running_entry.codex_state_total_tokens = 0
-                                # Per-stage EMA window restarts with the
-                                # new state so first-turn cost in the new
-                                # stage isn't inflated by the prior
-                                # stage's cumulative total.
-                                running_entry.last_ema_state_total_tokens = 0
-                                running_entry.hit_token_budget = False
-                                running_entry.token_budget_cap = 0
-                                debug.state_turn_state = current_state
-                                debug.state_turn_count = 0
                             log.info(
                                 "worker_phase_transition",
                                 issue_id=issue.id,
@@ -4021,6 +4064,30 @@ class Orchestrator:
                     running.issue = issue
                     state = normalize_state(issue.state)
                     active = {s.lower() for s in cfg.tracker.active_states}
+                    profile = str(cfg.raw.get("contract_profile", "advanced"))
+                    contract_states = (
+                        {"build", "verify"}
+                        if profile == "factory"
+                        else {"in progress", "verify", "learn", "done"}
+                    )
+                    if (
+                        state not in active
+                        and state != prev_phase_state
+                        and prev_phase_state in contract_states
+                    ):
+                        issue, contract_passed = await self._enforce_transition_contract(
+                            cfg=cfg,
+                            issue=issue,
+                            issue_id=running_issue_id,
+                            producing_state=prev_phase_state,
+                            producing_state_raw=prev_phase_state_raw,
+                            advanced_to=state,
+                            workspace_path=workspace.path,
+                        )
+                        running.issue = issue
+                        state = normalize_state(issue.state)
+                        if not contract_passed:
+                            active = {s.lower() for s in cfg.tracker.active_states}
                     if state not in active:
                         break
                     state_turn_count = _update_state_turn_counter(debug, state)
@@ -4160,10 +4227,8 @@ class Orchestrator:
         """Tear down `old_client` and rebuild a fresh-context backend.
 
         Returns `(new_client, new_first_prompt)` so the worker loop can
-        rebind both. The caller is responsible for resetting bookkeeping
-        on `RunningEntry` (session_id, token high-water marks, etc.) —
-        keeping that here would couple this helper to the running-state
-        dict and hurt testability.
+        rebind both. Phase-local accounting resets after the old backend
+        stops and before the replacement can emit session-start usage.
         """
         try:
             await old_client.stop()
@@ -4180,6 +4245,10 @@ class Orchestrator:
             raise
         else:
             self._sync_backend_agent_pid(running_issue_id, None)
+        running = self._running.get(running_issue_id)
+        if running is not None:
+            debug = self._issue_debug.setdefault(running_issue_id, _IssueDebug())
+            self._reset_phase_accounting(running, issue.state, debug)
         tools: list[Any] = []
         if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
             tools.append(linear_graphql_tool())
@@ -4210,7 +4279,27 @@ class Orchestrator:
                 )
             await new_client.initialize()
             skill_context = await asyncio.to_thread(
-                render_skill_block, cfg.workflow_path.parent, issue.skills
+                render_skill_block,
+                cfg.workflow_path.parent,
+                select_skills_for_stage(
+                    str(cfg.raw.get("contract_profile", "advanced")),
+                    issue.state,
+                    issue.skills,
+                ),
+                runtime_dir=(
+                    workspace_path
+                    if str(cfg.raw.get("contract_profile", "advanced"))
+                    .strip()
+                    .lower()
+                    == "factory"
+                    else None
+                ),
+                inline_body=(
+                    str(cfg.raw.get("contract_profile", "advanced"))
+                    .strip()
+                    .lower()
+                    != "factory"
+                ),
             )
             first_prompt, _ = build_first_turn_prompt(
                 prompt_template=cfg.prompt_template_for_state(issue.state),
@@ -4228,7 +4317,9 @@ class Orchestrator:
                     _parse_findings_rows(issue.description) if is_rewind else None
                 ),
                 compact_issue_context=cfg.agent.compact_issue_context,
-                full_ticket_path=self._ticket_prompt_path(cfg, issue),
+                full_ticket_path=self._ticket_prompt_path(
+                    cfg, issue, workspace_path
+                ),
                 extra_context=skill_context,
             )
             await new_client.start_session(
@@ -4252,6 +4343,26 @@ class Orchestrator:
                 self._sync_backend_agent_pid(running_issue_id, None)
             raise
         return new_client, first_prompt
+
+    @staticmethod
+    def _reset_phase_accounting(
+        entry: RunningEntry, state: str, debug: _IssueDebug
+    ) -> None:
+        """Start one backend phase without erasing ticket-lifetime totals."""
+        entry.last_reported_input_tokens = 0
+        entry.last_reported_cache_input_tokens = 0
+        entry.last_reported_output_tokens = 0
+        entry.last_reported_total_tokens = 0
+        entry.codex_state_input_tokens = 0
+        entry.codex_state_cache_input_tokens = 0
+        entry.codex_state_output_tokens = 0
+        entry.codex_state_total_tokens = 0
+        entry.last_ema_state_total_tokens = 0
+        entry.hit_token_budget = False
+        entry.token_budget_cap = 0
+        entry.state_at_turn_start = normalize_state(state)
+        debug.state_turn_state = normalize_state(state)
+        debug.state_turn_count = 0
 
     async def _refresh_issue_state(
         self, cfg: ServiceConfig, issue_id: str
@@ -4294,6 +4405,59 @@ class Orchestrator:
             )
             self._record_tracker_error(issue_id, exc)
             return None
+
+    async def _enforce_transition_contract(
+        self,
+        *,
+        cfg: ServiceConfig,
+        issue: Issue,
+        issue_id: str,
+        producing_state: str,
+        producing_state_raw: str,
+        advanced_to: str,
+        workspace_path: Path,
+    ) -> tuple[Issue, bool]:
+        latest = await self._refresh_issue_full(cfg, issue_id)
+        if latest is not None:
+            issue = latest
+        contract = evaluate_contract(
+            producing_state=producing_state,
+            ticket_body=issue.description or "",
+            identifier=issue.identifier,
+            docs_root=workspace_path / "docs",
+            profile=str(cfg.raw.get("contract_profile", "advanced")),
+        )
+        if contract.passed:
+            if contract.warnings:
+                await asyncio.to_thread(
+                    self._tracker_call_append_note,
+                    cfg,
+                    issue,
+                    "Contract Warning",
+                    contract.warning_note.split("\n", 1)[1],
+                )
+            return issue, True
+        log.warning(
+            "stage_contract_failed",
+            issue_id=issue.id,
+            identifier=issue.identifier,
+            producing_state=producing_state,
+            advanced_to=advanced_to,
+            missing=contract.missing,
+        )
+        await asyncio.to_thread(
+            self._tracker_call_append_note,
+            cfg,
+            issue,
+            contract.note_heading,
+            contract.note_body,
+        )
+        rewind_state = producing_state_raw or producing_state
+        await asyncio.to_thread(
+            self._tracker_call_update_state, cfg, issue, rewind_state
+        )
+        refreshed = await self._refresh_issue_full(cfg, issue_id)
+        return (refreshed or replace(issue, state=rewind_state)), False
 
     async def _persist_budget_exhausted_state(
         self,
@@ -4377,6 +4541,39 @@ class Orchestrator:
             )
             self._record_tracker_error(issue_id, persist_exc)
             return False
+
+    async def _persist_token_budget_stop(
+        self,
+        *,
+        cfg: ServiceConfig,
+        entry: RunningEntry,
+        issue_id: str,
+        debug: _IssueDebug,
+    ) -> None:
+        self._mark_budget_exhausted(issue_id)
+        self._claimed.add(issue_id)
+        cap = entry.token_budget_cap or self._token_cap_for_entry(cfg, entry)
+        debug.last_error = (
+            f"max_total_tokens reached "
+            f"({entry.codex_state_total_tokens}/{cap} in {entry.issue.state}); "
+            f"state still {entry.issue.state}"
+        )
+        log.warning(
+            "worker_token_budget_exhausted",
+            issue_id=issue_id,
+            issue_identifier=entry.issue.identifier,
+            state_total_tokens=entry.codex_state_total_tokens,
+            total_tokens=entry.codex_total_tokens,
+            max_total_tokens=cap,
+            state=entry.issue.state,
+        )
+        await self._persist_budget_exhausted_state(
+            cfg=cfg,
+            entry=entry,
+            issue_id=issue_id,
+            target_state=cfg.agent.budget_exhausted_state,
+            budget_kind="tokens",
+        )
 
     async def _escalate_empty_response_loop(
         self,
@@ -4491,7 +4688,7 @@ class Orchestrator:
     def _token_cap_for_entry(cfg: ServiceConfig | None, entry: RunningEntry) -> int:
         if cfg is None:
             return 0
-        state = normalize_state(entry.issue.state)
+        state = normalize_state(entry.state_at_turn_start or entry.issue.state)
         by_state = cfg.agent.max_total_tokens_by_state
         cap = by_state.get(state)
         if cap is None and state == "learn":
@@ -4585,6 +4782,7 @@ class Orchestrator:
         # record the reason so the operator finds out without log-diving.
         cfg = self._workflow_state.current()
         cap = self._token_cap_for_entry(cfg, entry)
+        budget_state = entry.state_at_turn_start or entry.issue.state
         if (
             cap > 0
             and entry.cancelled_at is None
@@ -4597,12 +4795,12 @@ class Orchestrator:
                 state_total_tokens=entry.codex_state_total_tokens,
                 total_tokens=entry.codex_total_tokens,
                 cap=cap,
-                state=entry.issue.state,
+                state=budget_state,
             )
             debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
             debug.last_error = (
                 f"token budget exceeded "
-                f"({entry.codex_state_total_tokens}/{cap} in {entry.issue.state}) "
+                f"({entry.codex_state_total_tokens}/{cap} in {budget_state}) "
                 "— worker cancelled"
             )
             entry.hit_token_budget = True
@@ -4974,46 +5172,48 @@ class Orchestrator:
             self._clear_issue_flags(issue_id, retry_attempt=True)
             if entry.hit_token_budget:
                 if cfg is not None:
-                    before_state = normalize_state(entry.issue.state)
+                    before_state = normalize_state(
+                        entry.state_at_turn_start or entry.issue.state
+                    )
                     refreshed = await self._refresh_issue_state(cfg, issue_id)
                     if refreshed is not None:
                         entry.issue = refreshed
                     after_state = normalize_state(entry.issue.state)
                     if refreshed is not None and after_state != before_state:
-                        log.info(
-                            "token_budget_stage_advanced",
-                            issue_id=issue_id,
-                            issue_identifier=entry.issue.identifier,
-                            from_state=before_state,
-                            to_state=after_state,
+                        producing_raw = next(
+                            (
+                                state
+                                for state in cfg.tracker.active_states
+                                if normalize_state(state) == before_state
+                            ),
+                            entry.state_at_turn_start or before_state,
                         )
-                    else:
-                        self._mark_budget_exhausted(issue_id)
-                        self._claimed.add(issue_id)
-                        cap = entry.token_budget_cap or self._token_cap_for_entry(
-                            cfg, entry
+                        entry.issue, contract_passed = (
+                            await self._enforce_transition_contract(
+                                cfg=cfg,
+                                issue=entry.issue,
+                                issue_id=issue_id,
+                                producing_state=before_state,
+                                producing_state_raw=producing_raw,
+                                advanced_to=after_state,
+                                workspace_path=entry.workspace_path,
+                            )
                         )
-                        debug.last_error = (
-                            f"max_total_tokens reached "
-                            f"({entry.codex_state_total_tokens}/{cap} "
-                            f"in {entry.issue.state}); "
-                            f"state still {entry.issue.state}"
-                        )
-                        log.warning(
-                            "worker_token_budget_exhausted",
-                            issue_id=issue_id,
-                            issue_identifier=entry.issue.identifier,
-                            state_total_tokens=entry.codex_state_total_tokens,
-                            total_tokens=entry.codex_total_tokens,
-                            max_total_tokens=cap,
-                            state=entry.issue.state,
-                        )
-                        await self._persist_budget_exhausted_state(
+                        if contract_passed:
+                            log.info(
+                                "token_budget_stage_advanced",
+                                issue_id=issue_id,
+                                issue_identifier=entry.issue.identifier,
+                                from_state=before_state,
+                                to_state=after_state,
+                            )
+                            after_state = normalize_state(entry.issue.state)
+                    if refreshed is None or after_state == before_state or not contract_passed:
+                        await self._persist_token_budget_stop(
                             cfg=cfg,
                             entry=entry,
                             issue_id=issue_id,
-                            target_state=cfg.agent.budget_exhausted_state,
-                            budget_kind="tokens",
+                            debug=debug,
                         )
                         return
                 else:
@@ -5813,6 +6013,34 @@ class Orchestrator:
                     terminal_age_s=round(terminal_age, 1),
                 )
                 return
+            profile = str(cfg.raw.get("contract_profile", "advanced")).strip().lower()
+            producing_state = normalize_state(entry.state_at_turn_start)
+            if (
+                profile == "factory"
+                and producing_state in {"build", "verify"}
+                and producing_state != state
+            ):
+                producing_state_raw = next(
+                    (
+                        candidate
+                        for candidate in cfg.tracker.active_states
+                        if normalize_state(candidate) == producing_state
+                    ),
+                    entry.state_at_turn_start,
+                )
+                checked_issue, contract_passed = await self._enforce_transition_contract(
+                    cfg=cfg,
+                    issue=issue,
+                    issue_id=issue.id,
+                    producing_state=producing_state,
+                    producing_state_raw=producing_state_raw,
+                    advanced_to=state,
+                    workspace_path=entry.workspace_path,
+                )
+                entry.issue = checked_issue
+                if not contract_passed:
+                    entry.terminal_seen_at = None
+                    return
             log.info(
                 "reconcile_terminate_terminal",
                 issue_id=issue.id,

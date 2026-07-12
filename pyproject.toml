@@ -38,8 +38,18 @@ symphony = "symphony.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools]
+include-package-data = false
+
 [tool.setuptools.package-data]
-symphony = ["web/static/*", "web/static/*/*"]
+symphony = [
+    "web/static/*",
+    "factory/templates/*.md",
+    "factory/templates/docs/symphony-prompts/file/*.md",
+    "factory/templates/docs/symphony-prompts/file/stages/*.md",
+    "factory/templates/scripts/*.sh",
+    "factory/templates/wayfinder/*.md",
+]
 
 [tool.ruff]
 target-version = "py312"

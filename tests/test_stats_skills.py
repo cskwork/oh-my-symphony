@@ -7,7 +7,12 @@ from pathlib import Path
 
 from symphony.prompt import build_first_turn_prompt
 from symphony.issue import Issue
-from symphony.skills import list_skills, normalize_skill_names, render_skill_block
+from symphony.skills import (
+    list_skills,
+    normalize_skill_names,
+    render_skill_block,
+    select_skills_for_stage,
+)
 from symphony.stats import StatsStore, stats_store_for
 
 
@@ -124,6 +129,72 @@ def test_render_skill_block_includes_body_and_flags_missing(tmp_path: Path) -> N
     assert "Write tests before code." in block
     assert "ghost" in block and "not found" in block
     assert render_skill_block(tmp_path, ()) == ""
+
+
+def test_render_skill_block_names_absolute_root_for_relative_references(
+    tmp_path: Path,
+) -> None:
+    _make_skill(tmp_path, "tdd", "test first", "Read reference/red-green.md.")
+
+    block = render_skill_block(tmp_path, ("tdd",))
+
+    skill_root = (tmp_path / "skills/tdd").resolve()
+    assert f"Skill root: `{skill_root}`" in block
+    assert f"Instructions: `{skill_root / 'SKILL.md'}`" in block
+    assert "Resolve relative paths in this skill from its skill root." in block
+
+
+def test_render_skill_block_can_name_workspace_local_runtime_copy(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "host"
+    workspace_dir = tmp_path / "workspace"
+    _make_skill(workflow_dir, "tdd", "test first", "Read reference/red-green.md.")
+    _make_skill(workspace_dir, "tdd", "test first", "Runtime copy.")
+
+    block = render_skill_block(
+        workflow_dir,
+        ("tdd",),
+        runtime_dir=workspace_dir,
+    )
+
+    runtime_root = (workspace_dir / "skills/tdd").resolve()
+    host_root = (workflow_dir / "skills/tdd").resolve()
+    assert f"Skill root: `{runtime_root}`" in block
+    assert f"Instructions: `{runtime_root / 'SKILL.md'}`" in block
+    assert str(host_root) not in block
+    assert "Read reference/red-green.md." in block
+
+
+def test_render_skill_block_can_omit_body_for_runtime_loaded_skill(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "host"
+    workspace_dir = tmp_path / "workspace"
+    _make_skill(workflow_dir, "tdd", "test first", "Large inline instructions.")
+    _make_skill(workspace_dir, "tdd", "test first", "Runtime copy.")
+
+    block = render_skill_block(
+        workflow_dir,
+        ("tdd",),
+        runtime_dir=workspace_dir,
+        inline_body=False,
+    )
+
+    runtime_root = (workspace_dir / "skills/tdd").resolve()
+    assert f"Skill root: `{runtime_root}`" in block
+    assert f"Instructions: `{runtime_root / 'SKILL.md'}`" in block
+    assert "Large inline instructions." not in block
+    assert "Runtime copy." not in block
+
+
+def test_factory_selects_only_stage_owned_skills() -> None:
+    attached = ("supergoal", "superdesign", "superpm", "superqa")
+
+    assert select_skills_for_stage("factory", "Ready", attached) == ()
+    assert select_skills_for_stage("factory", "Build", attached) == attached
+    assert select_skills_for_stage("factory", "Verify", attached) == ("superqa",)
+    assert select_skills_for_stage("advanced", "Ready", attached) == attached
 
 
 def test_orchestrator_turn_recorder_writes_deltas(tmp_path: Path) -> None:

@@ -21,6 +21,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import os
 import re
@@ -595,6 +596,12 @@ def main(argv: list[str]) -> int:
         help="host to test the JSON API port against (default: 127.0.0.1)",
     )
     parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="override the workflow server port for this preflight",
+    )
+    parser.add_argument(
         "--no-color",
         action="store_true",
         help="disable ANSI color even when stdout is a tty",
@@ -611,6 +618,8 @@ def main(argv: list[str]) -> int:
     except SymphonyError as exc:
         print(f"FAIL  workflow load failed: {exc}", file=sys.stderr)
         return 2
+    if args.port is not None:
+        cfg = replace(cfg, server=replace(cfg.server, port=args.port))
 
     color = (not args.no_color) and sys.stdout.isatty()
     results = run_checks(cfg, host=args.host)

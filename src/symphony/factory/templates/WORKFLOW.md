@@ -21,7 +21,7 @@ workspace:
 
 hooks:
   after_create: |
-    bash "$SYMPHONY_WORKFLOW_DIR/src/symphony/factory/templates/scripts/factory-setup-worktree.sh"
+    bash "$SYMPHONY_WORKFLOW_DIR/scripts/factory-setup-worktree.sh"
   before_remove: |
     git -C "$SYMPHONY_WORKFLOW_DIR" worktree remove --force "$PWD" 2>/dev/null || true
 
@@ -47,16 +47,14 @@ agent:
     Build: 1
     Verify: 1
 
-opencode:
-  command: opencode run --format json --auto
-  resume_across_turns: true
+# __FACTORY_BACKEND_CONFIG__
 
 prompts:
-  base: ./src/symphony/factory/templates/docs/symphony-prompts/file/base.md
+  base: ./docs/symphony-prompts/file/base.md
   stages:
-    Ready: ./src/symphony/factory/templates/docs/symphony-prompts/file/stages/ready.md
-    Build: ./src/symphony/factory/templates/docs/symphony-prompts/file/stages/build.md
-    Verify: ./src/symphony/factory/templates/docs/symphony-prompts/file/stages/verify.md
+    Ready: ./docs/symphony-prompts/file/stages/ready.md
+    Build: ./docs/symphony-prompts/file/stages/build.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
 
 server:
   port: 9999
@@ -65,7 +63,7 @@ system:
   keep_awake: true
 ---
 
-# Default autonomous development factory
+# Autonomous development factory
 
-Use `symphony factory init` for a portable project-local copy. The former
-production template remains at `examples/advanced/WORKFLOW.file.example.md`.
+Created by `symphony factory init`. Sync Supergoal Wayfinder tickets with
+`symphony factory sync`, then launch with `symphony factory start`.
