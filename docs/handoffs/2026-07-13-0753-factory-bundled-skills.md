@@ -19,6 +19,7 @@ request: stop now, save a handoff, commit, and push.
 - Branch: `feat/autonomous-dev-factory`
 - Target: `dev`
 - Pre-checkpoint HEAD: `ba07496a56d29aa0726a3af4a027fedf4fc33390`
+- Pushed WIP checkpoint: `d5a23fc24d79435364d5a9ef9fcd64b5c72a91a7`
 - Pull request: https://github.com/cskwork/oh-my-symphony/pull/57
 - Active services or sessions: none; all implementation/review subagents were completed or interrupted
 - Run vault: `docs/changelog/2026-07/13-factory-bundled-skills/`
@@ -68,32 +69,41 @@ request: stop now, save a handoff, commit, and push.
 - Iteration 3 builder: focused attribution/closure -> `14 passed`; Ruff and `git diff --check` passed.
 - Handoff check after interruption: `PYTHONPATH=src /Users/danny/Documents/PARA/Resource/symphony-multi-agent/.venv/bin/python -m pytest -q tests/factory/test_bundled_skills.py` -> `30 passed`.
 - Handoff lint/check: focused Ruff and `git diff --check` -> passed.
+- Pre-push full repository tests: `1510 passed, 5 skipped`; push reached the remote at `d5a23fc24d79435364d5a9ef9fcd64b5c72a91a7`.
+- GitHub CI on the checkpoint: failed in `python -m ruff check src tests` with 9 errors inside the pinned bundled SuperQA runtime: E702 in `superqa_tui/cli.py`, E731 in `engine.py` and `report.py`, and F401 in `scheduler.py`. Run: https://github.com/cskwork/oh-my-symphony/actions/runs/29212518694/job/86702538791
 - Not yet proven after iteration 3: fresh independent adversarial review, full factory suite, rebuilt wheel inventory/execution, repository-wide suite, Supergoal commit gate, updated GitHub CI.
 
 ## Remaining Plan
 
-1. Independently re-review iteration 3 attribution edits.
+1. Clear the GitHub Ruff blocker without drifting pinned runtime behavior.
+   - Why: PR CI scans all Python under `src`, including the copied upstream SuperQA runtime, and currently fails with 9 lint findings.
+   - Where: `pyproject.toml` Ruff configuration and `src/symphony/factory/bundled_skills/superqa/superqa_tui/`.
+   - Command: `python -m ruff check src tests`.
+   - Done when: repository-wide Ruff passes locally and on GitHub.
+   - Risk: prefer a narrowly documented vendored-runtime exclusion or per-file ignores so pinned files remain byte-identical; do not mechanically rewrite upstream runtime without updating manifest/integrity expectations.
+
+2. Independently re-review iteration 3 attribution edits.
    - Why: the previous final reviewer found one stale Stitch record; the builder fixed it immediately before this handoff, but review was interrupted.
    - Where: `THIRD_PARTY_NOTICES.md`, `MANIFEST.json`, `superdesign/reference/sources.md`, `tests/factory/test_bundled_skills.py`, latest `R-LOOP.md` section.
    - Command: run the focused attribution/closure tests and inspect the Stitch MIT byte match and pinned commit.
    - Done when: a fresh no-edit reviewer reports no merge-blocking findings.
    - Risk: attribution inventory is not legal approval.
 
-2. Run Exact Verify from current checkpoint.
+3. Run Exact Verify from current checkpoint.
    - Why: no full or wheel proof was rerun after iteration 3.
    - Where: feature worktree and a fresh temporary install directory.
    - Command: `pytest -q tests/factory`; focused Ruff; Pyright for touched Python; `git diff --check`; build a fresh wheel; compare source/wheel inventory and modes; empty-home installed-wheel init/sync; direct zipimport init/copy/gate execution; clean-venv SuperQA editable install.
    - Done when: all commands pass with exact outputs recorded in `QA.md`.
    - Risk: wheel build may emit the pre-existing setuptools `project.license` deprecation warning.
 
-3. Close the Supergoal run vault.
+4. Close the Supergoal run vault.
    - Why: checkpoint state currently has unchecked GOAL criteria, a non-final QA verdict, and no completion marker.
    - Where: `GOAL.md`, `QA.md`, `run-state.json`, then `Z-2026-07-13.md`.
    - Command: run the Supergoal commit gate after all evidence is written.
    - Done when: every criterion is checked by the verifier, `Backward-trace: clean`, QA PASS, completion promise fulfilled, and commit gate exits 0.
    - Risk: do not rewrite older R-LOOP sections; append corrections.
 
-4. Update PR #57 after final verification.
+5. Update PR #57 after final verification.
    - Why: this handoff commit is a WIP checkpoint, not merge approval.
    - Where: GitHub PR #57 and branch `feat/autonomous-dev-factory`.
    - Command: push final verified commit; inspect `gh pr checks 57` and mergeability.
@@ -116,7 +126,7 @@ request: stop now, save a handoff, commit, and push.
 - The WIP checkpoint is deliberately not a completion claim and should not be merged.
 - Browser engines, Node.js, `@playwright/cli`, and related browser dependencies are not embedded in the skill bundle.
 - Third-party notices preserve available texts and provenance but require maintainer/legal review for public redistribution policy.
-- GitHub CI shown before this push belongs to the previous commit and is stale until the new checkpoint run starts.
+- GitHub CI for checkpoint `d5a23fc` is red only at the recorded repository-wide Ruff step; full pre-push pytest passed locally.
 
 ## Suggested Skills
 
@@ -126,7 +136,7 @@ request: stop now, save a handoff, commit, and push.
 
 ## Resume Prompt
 
-Resume `/private/tmp/symphony-autonomous-factory` from `docs/handoffs/2026-07-13-0753-factory-bundled-skills.md`. First run a fresh no-edit adversarial review of the iteration-3 Stitch attribution correction. If clean, execute the full Exact Verify plan, close the Supergoal run vault, and update PR #57. Do not merge the WIP checkpoint before those gates pass.
+Resume `/private/tmp/symphony-autonomous-factory` from `docs/handoffs/2026-07-13-0753-factory-bundled-skills.md`. First clear the recorded GitHub Ruff blocker for the pinned bundled SuperQA runtime without silently drifting upstream files. Then run a fresh no-edit adversarial review of the iteration-3 Stitch attribution correction, execute the full Exact Verify plan, close the Supergoal run vault, and update PR #57. Do not merge the WIP checkpoint before those gates pass.
 
 ## Redactions
 
