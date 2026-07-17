@@ -6012,8 +6012,15 @@ class Orchestrator:
         for issue in terminals:
             path = self._workspace_manager.path_for(issue.identifier)
             if path.exists():
-                is_done = (issue.state or "").strip().lower() == "done"
-                if is_done:
+                state = (issue.state or "").strip().lower()
+                if state == "blocked":
+                    log.warning(
+                        "startup_terminal_cleanup_preserved_blocked_workspace",
+                        identifier=issue.identifier,
+                        path=str(path),
+                    )
+                    continue
+                if state == "done":
                     branch = f"symphony/{issue.identifier}"
                     already_merged = False
                     if cfg.agent.auto_merge_on_done:

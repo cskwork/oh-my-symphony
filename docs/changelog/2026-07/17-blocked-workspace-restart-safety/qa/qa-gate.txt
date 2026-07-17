@@ -1,0 +1,4 @@
+== /supergoal QA gate ==
+vault: docs/changelog/2026-07/17-blocked-workspace-restart-safety  app-type: cli
+  ok: ## QA present (CLI/library integration smoke; no browser evidence required)
+== QA GATE PASS ==

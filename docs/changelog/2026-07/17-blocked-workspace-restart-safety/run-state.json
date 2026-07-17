@@ -1,0 +1,25 @@
+{
+  "schema_version": 3,
+  "mode": "DEBUG",
+  "branches": {
+    "source_base_branch": "dev@ee04e5dcc2f188f6686127be537039e5b197006a",
+    "target_integration_branch": "dev@ee04e5dcc2f188f6686127be537039e5b197006a",
+    "run_branch": "codex/auto-merge-retry-safety-20260717",
+    "worktree_path": "/private/tmp/symphony-auto-merge-retry-safety-20260717",
+    "refs_verified": true
+  },
+  "phase": "Finalize",
+  "iteration": 0,
+  "max_iterations": 3,
+  "unresolved_gates": [],
+  "blockers": [],
+  "regression_ledger": [
+    "tests/test_auto_merge.py",
+    "tests/test_orchestrator_dispatch.py startup terminal cleanup cases",
+    "tests/test_orchestrator_dispatch.py immediate merge-gate failure preservation",
+    "full repository coverage gate"
+  ],
+  "next_action": "Report the independent PASS; no commit, push, or merge was requested.",
+  "forced_reflection": null,
+  "updated_at": "2026-07-17T10:38:24Z"
+}

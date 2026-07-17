@@ -1,0 +1,26 @@
+{
+  "schema_version": 3,
+  "mode": "LEGACY",
+  "branches": {
+    "source_base_branch": "dev@ee04e5dcc2f188f6686127be537039e5b197006a",
+    "target_integration_branch": "dev@ee04e5dcc2f188f6686127be537039e5b197006a",
+    "run_branch": "codex/auto-merge-retry-safety-20260717",
+    "worktree_path": "/private/tmp/symphony-auto-merge-retry-safety-20260717",
+    "refs_verified": true
+  },
+  "phase": "Finalize",
+  "iteration": 2,
+  "max_iterations": 3,
+  "unresolved_gates": [],
+  "blockers": [],
+  "regression_ledger": [
+    ".venv/bin/python -m pytest -q tests/test_auto_merge.py",
+    ".venv/bin/python -m pytest -q --cov=src/symphony --cov-report=term --cov-fail-under=80",
+    ".venv/bin/ruff check src tests",
+    "env PATH=/private/tmp/symphony-auto-merge-retry-safety-20260717/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin .venv/bin/pyright",
+    ".venv/bin/symphony doctor ./WORKFLOW.md"
+  ],
+  "next_action": "Report the independent PASS and await user acceptance before the commit gate or integration.",
+  "forced_reflection": null,
+  "updated_at": "2026-07-17T07:06:00Z"
+}

@@ -214,24 +214,35 @@ def _build_script(
     preserves across the merge.
     """
     exclude_re = "^(" + "|".join(excludes) + ")$" if excludes else ""
-    capture_block = ""
-    if captures:
-        quoted = " ".join(shlex.quote(p) for p in captures)
-        capture_block = (
-            f"for cap in {quoted}; do\n"
-            '  if [ -n "$cap" ] && [ -d "$cap" ] && [ ! -L "$cap" ]; then\n'
-            '    git add -- "$cap" 2>/dev/null || true\n'
-            "  fi\n"
-            "done\n"
-        )
-    upstream_sync = _build_upstream_sync_block()
-    return (
+    setup = (
         "set -uo pipefail\n"
         f"BRANCH={shlex.quote(branch)}\n"
         f"TARGET={shlex.quote(target)}\n"
         f"EXCLUDE_RE={shlex.quote(exclude_re)}\n"
         f"IDENT={shlex.quote(identifier)}\n"
         f"TITLE={shlex.quote(title)}\n"
+    )
+    return (
+        setup
+        + _build_upstream_sync_block()
+        + _build_preflight_phase(has_captures=bool(captures))
+        + _build_merge_phase(captures=captures)
+        + "sync_upstream\n"
+        + 'echo "OK: ${BRANCH} (${SHA}) merged to ${TARGET}"\n'
+    )
+
+
+def _build_preflight_phase(*, has_captures: bool) -> str:
+    """Validate the target, branch, merge safety, and retry/no-op state."""
+    return (
+        _build_target_preflight_block()
+        + _build_merge_safety_block()
+        + _build_nothing_to_apply_block(has_captures=has_captures)
+    )
+
+
+def _build_target_preflight_block() -> str:
+    return (
         "if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then\n"
         '  echo "FAIL: not a git repo"; exit 50\n'
         "fi\n"
@@ -256,6 +267,11 @@ def _build_script(
         "    exit 44\n"
         "  fi\n"
         "fi\n"
+    )
+
+
+def _build_merge_safety_block() -> str:
+    return (
         'MERGE_TREE_OUTPUT="$(git merge-tree --write-tree "$TARGET" "$BRANCH" 2>&1)"\n'
         "MERGE_TREE_RC=$?\n"
         'if [ "$MERGE_TREE_RC" -ne 0 ]; then\n'
@@ -275,44 +291,72 @@ def _build_script(
         "  fi\n"
         '  echo "WARN: preserving non-overlapping host tracked changes"\n'
         "fi\n"
-        f"HAS_CAPTURES={1 if captures else 0}\n"
+    )
+
+
+def _build_nothing_to_apply_block(*, has_captures: bool) -> str:
+    return (
+        f"HAS_CAPTURES={1 if has_captures else 0}\n"
         'if [ -z "$CHANGED" ] && [ "$HAS_CAPTURES" = "0" ]; then\n'
-        '  echo "SKIP: nothing differs"; exit 43\n'
+        "  sync_upstream\n"
+        '  echo "SKIP: nothing differs"\n'
+        "  exit 43\n"
         "fi\n"
+    )
+
+
+def _build_merge_phase(*, captures: tuple[str, ...]) -> str:
+    capture_block = _build_capture_block(captures)
+    return (
         'SHA="$(git rev-parse --short "$BRANCH")"\n'
         "git -c user.email=symphony@local -c user.name=symphony merge "
         '--no-ff --no-commit "$BRANCH" || '
         '{ echo "FAIL: merge failed"; git merge --abort >/dev/null 2>&1 || true; exit 50; }\n'
         + capture_block
         + "if git diff --cached --quiet; then\n"
-        '  echo "SKIP: nothing staged after merge"; '
-        "git merge --abort >/dev/null 2>&1 || true; exit 43\n"
+        '  echo "SKIP: nothing staged after merge"\n'
+        "  git merge --abort >/dev/null 2>&1 || true\n"
+        "  sync_upstream\n"
+        "  exit 43\n"
         "fi\n"
         "git -c user.email=symphony@local -c user.name=symphony commit "
         '-m "merge: ${IDENT} from ${BRANCH} (${SHA})" '
         '-m "${TITLE}" '
         '-m "Source: ${BRANCH} ${SHA}" '
         '|| { echo "FAIL: commit failed"; git merge --abort >/dev/null 2>&1 || true; exit 51; }\n'
-        + upstream_sync
-        + 'echo "OK: ${BRANCH} (${SHA}) merged to ${TARGET}"\n'
+    )
+
+
+def _build_capture_block(captures: tuple[str, ...]) -> str:
+    if not captures:
+        return ""
+    quoted = " ".join(shlex.quote(path) for path in captures)
+    return (
+        f"for cap in {quoted}; do\n"
+        '  if [ -n "$cap" ] && [ -d "$cap" ] && [ ! -L "$cap" ]; then\n'
+        '    git add -- "$cap" 2>/dev/null || true\n'
+        "  fi\n"
+        "done\n"
     )
 
 
 def _build_upstream_sync_block() -> str:
     """Push and verify a terminal merge when the target tracks an upstream."""
     return (
-        'REMOTE="$(git config --get "branch.${TARGET}.remote" || true)"\n'
-        'MERGE_REF="$(git config --get "branch.${TARGET}.merge" || true)"\n'
-        'if [ -n "$REMOTE" ] && [ -n "$MERGE_REF" ]; then\n'
-        '  if ! git push "$REMOTE" "$TARGET:$MERGE_REF"; then\n'
-        '    echo "FAIL: push $TARGET to $REMOTE/$MERGE_REF"; exit 52\n'
-        "  fi\n"
-        '  LOCAL_SHA="$(git rev-parse "$TARGET")"\n'
-        '  REMOTE_SHA="$(git ls-remote "$REMOTE" "$MERGE_REF" '
+        "sync_upstream() {\n"
+        '  REMOTE="$(git config --get "branch.${TARGET}.remote" || true)"\n'
+        '  MERGE_REF="$(git config --get "branch.${TARGET}.merge" || true)"\n'
+        '  if [ -n "$REMOTE" ] && [ -n "$MERGE_REF" ]; then\n'
+        '    if ! git push "$REMOTE" "$TARGET:$MERGE_REF"; then\n'
+        '      echo "FAIL: push $TARGET to $REMOTE/$MERGE_REF"; exit 52\n'
+        "    fi\n"
+        '    LOCAL_SHA="$(git rev-parse "$TARGET")"\n'
+        '    REMOTE_SHA="$(git ls-remote "$REMOTE" "$MERGE_REF" '
         "| awk 'NR == 1 { print $1 }')\"\n"
-        '  if [ -z "$REMOTE_SHA" ] || [ "$REMOTE_SHA" != "$LOCAL_SHA" ]; then\n'
-        '    echo "FAIL: upstream $REMOTE/$MERGE_REF is not $LOCAL_SHA"; exit 53\n'
+        '    if [ -z "$REMOTE_SHA" ] || [ "$REMOTE_SHA" != "$LOCAL_SHA" ]; then\n'
+        '      echo "FAIL: upstream $REMOTE/$MERGE_REF is not $LOCAL_SHA"; exit 53\n'
+        "    fi\n"
+        '    echo "OK: verified $TARGET at $REMOTE/$MERGE_REF ($LOCAL_SHA)"\n'
         "  fi\n"
-        '  echo "OK: verified $TARGET at $REMOTE/$MERGE_REF ($LOCAL_SHA)"\n'
-        "fi\n"
+        "}\n"
     )

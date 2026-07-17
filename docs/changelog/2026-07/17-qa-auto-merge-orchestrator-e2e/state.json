@@ -1,0 +1,11 @@
+{
+  "phase": "complete",
+  "comparison": "functional",
+  "target": "disposable-local-symphony-codex-git",
+  "action_cap": 100,
+  "action_count": 0,
+  "database_used": false,
+  "tester_status": "complete",
+  "auditor_status": "complete",
+  "verdict": "FAIL"
+}

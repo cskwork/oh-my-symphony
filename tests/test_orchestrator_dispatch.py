@@ -4634,6 +4634,66 @@ def _git(cwd: Path, *args: str) -> None:
     )
 
 
+def test_startup_terminal_cleanup_preserves_blocked_workspace_across_restarts(
+    tmp_path: Path, monkeypatch
+):
+    workspace_root = tmp_path / "ws"
+    cfg = _make_config(workspace_root=workspace_root)
+    cfg = replace(cfg, agent=replace(cfg.agent, auto_commit_on_done=False))
+    issue = _issue("MT-BLOCKED", state="bLoCkEd")
+    workspace = WorkspaceManager(workspace_root, cfg.hooks).path_for(issue.identifier)
+    workspace.mkdir(parents=True)
+    diagnostic = workspace / "merge-gate-diagnostic.txt"
+    diagnostic.write_text("remote target is stale\n", encoding="utf-8")
+
+    for _ in range(2):
+        orch = _orch()
+        monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda c: [issue])
+        orch._workspace_manager = WorkspaceManager(workspace_root, cfg.hooks)
+        asyncio.run(orch._startup_terminal_cleanup(cfg))
+
+    assert workspace.is_dir()
+    assert diagnostic.read_text(encoding="utf-8") == "remote target is stale\n"
+
+
+def test_startup_terminal_cleanup_removes_cancelled_but_preserves_blocked(
+    tmp_path: Path, monkeypatch
+):
+    workspace_root = tmp_path / "ws"
+    cfg = _make_config(workspace_root=workspace_root)
+    blocked = _issue("MT-BLOCKED", state="Blocked")
+    cancelled = _issue("MT-CANCELLED", state="Cancelled")
+    workspace_manager = WorkspaceManager(workspace_root, cfg.hooks)
+    blocked_workspace = workspace_manager.path_for(blocked.identifier)
+    cancelled_workspace = workspace_manager.path_for(cancelled.identifier)
+    blocked_workspace.mkdir(parents=True)
+    cancelled_workspace.mkdir(parents=True)
+    blocked_diagnostic = blocked_workspace / "diagnostic.txt"
+    cancelled_diagnostic = cancelled_workspace / "diagnostic.txt"
+    blocked_diagnostic.write_text("blocked evidence\n", encoding="utf-8")
+    cancelled_diagnostic.write_text("cancelled evidence\n", encoding="utf-8")
+
+    snapshots: list[tuple[str, str]] = []
+
+    async def _capture_snapshot(path, *, identifier, **_):
+        snapshots.append(
+            (identifier, (Path(path) / "diagnostic.txt").read_text(encoding="utf-8"))
+        )
+
+    orch = _orch()
+    monkeypatch.setattr(
+        orch, "_tracker_call_terminal_issues", lambda c: [blocked, cancelled]
+    )
+    monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_snapshot)
+    orch._workspace_manager = workspace_manager
+
+    asyncio.run(orch._startup_terminal_cleanup(cfg))
+
+    assert blocked_diagnostic.read_text(encoding="utf-8") == "blocked evidence\n"
+    assert not cancelled_workspace.exists()
+    assert snapshots == [("MT-CANCELLED", "cancelled evidence\n")]
+
+
 def test_startup_terminal_cleanup_skips_done_workspace_when_branch_already_merged(
     tmp_path: Path, monkeypatch
 ):

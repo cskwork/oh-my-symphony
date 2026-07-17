@@ -6,8 +6,14 @@ import asyncio
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from symphony._shell import resolve_bash
-from symphony.utils.auto_merge import auto_merge_on_done_best_effort, _build_script
+from symphony.utils.auto_merge import (
+    AutoMergeResult,
+    _build_script,
+    auto_merge_on_done_best_effort,
+)
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -25,6 +31,16 @@ def _git(cwd: Path, *args: str) -> None:
             "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
         },
     )
+
+
+def _git_output(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -160,6 +176,75 @@ def test_auto_merge_reports_target_push_failure(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.status == "push_failed"
+
+
+@pytest.mark.parametrize(
+    "capture_dirname",
+    [None, "empty-capture"],
+    ids=["no-capture-preflight-noop", "empty-capture-staged-noop"],
+)
+def test_retry_after_push_failure_retries_rejected_push_until_upstream_matches(
+    tmp_path: Path,
+    capture_dirname: str | None,
+) -> None:
+    repo = _make_repo(tmp_path)
+    origin = _add_bare_origin(repo, tmp_path)
+    hook = origin / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    _make_symphony_branch(repo, "T-RETRY", with_symlinks=False)
+    capture_untracked: tuple[str, ...] = ()
+    expected_retry_message = "SKIP: nothing differs"
+    if capture_dirname is not None:
+        (repo / capture_dirname).mkdir()
+        capture_untracked = (capture_dirname,)
+        expected_retry_message = "SKIP: nothing staged after merge"
+
+    def run_merge() -> AutoMergeResult:
+        return asyncio.run(
+            auto_merge_on_done_best_effort(
+                workflow_dir=repo,
+                branch="symphony/T-RETRY",
+                identifier="T-RETRY",
+                title="retry rejected terminal push",
+                target_branch="main",
+                exclude_paths=(),
+                capture_untracked=capture_untracked,
+            )
+        )
+
+    first = run_merge()
+    local_merge_sha = _git_output(repo, "rev-parse", "main")
+    remote_sha = _git_output(origin, "rev-parse", "main")
+    merge_count = _git_output(repo, "rev-list", "--merges", "--count", "main")
+    assert first.ok is False
+    assert first.status == "push_failed"
+    assert remote_sha != local_merge_sha
+    assert merge_count == "1"
+
+    second = run_merge()
+    assert second.ok is False
+    assert second.status == "push_failed"
+    assert _git_output(repo, "rev-parse", "main") == local_merge_sha
+    assert _git_output(origin, "rev-parse", "main") != local_merge_sha
+    assert (
+        _git_output(repo, "rev-list", "--merges", "--count", "main")
+        == merge_count
+    )
+
+    hook.unlink()
+    third = run_merge()
+    local_sha = _git_output(repo, "rev-parse", "main")
+    remote_sha = _git_output(origin, "rev-parse", "main")
+    assert third.ok is True
+    assert third.status == "nothing_to_apply"
+    assert expected_retry_message in third.detail
+    assert local_sha == local_merge_sha
+    assert remote_sha == local_sha
+    assert (
+        _git_output(repo, "rev-list", "--merges", "--count", "main")
+        == merge_count
+    )
 
 
 def test_auto_merge_reports_remote_verification_mismatch(tmp_path: Path) -> None:
