@@ -10,7 +10,71 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Post-v0.11.0 changes will be listed here.
+No unreleased changes.
+
+## [0.14.0] - 2026-07-17 - Auto-merge retry and restart safety
+
+### Fixed
+
+- Auto-merge retries now synchronize and verify the configured upstream even
+  when the feature branch is already merged locally. A rejected target push can
+  be retried without creating a duplicate merge commit or reporting success
+  while the remote target remains stale.
+- Startup cleanup now preserves `Blocked` workspaces and their diagnostic files,
+  allowing a rejected-push recovery to continue after a clean Symphony restart.
+  Cleanup behavior for `Done` and other terminal states is unchanged.
+
+### Added
+
+- Regression coverage for repeated push rejection, recovery with and without
+  capture directories, remote SHA verification, and repeated blocked-workspace
+  restarts.
+
+### Verified
+
+- Full suite: 1,385 passed, 5 skipped; Ruff and Pyright clean; `symphony doctor`
+  passed.
+- A real Codex/Git lifecycle reached Done after a rejected target push, a clean
+  orchestrator restart, and recovery. The original merge was reused, the
+  diagnostic workspace survived until recovery, and local and remote target
+  SHAs matched afterward.
+
+## [0.13.0] - 2026-07-10 - Agent-flow reliability hardening
+
+### Fixed
+
+- Closed the AF-01 through AF-16 reliability audit across worker identity,
+  process-group cleanup, leases, retry timing, tracker refresh, prompt budgets,
+  and terminal dispatch state.
+- Preserved merged lineage during Done squashes and aligned Verify evidence
+  validation with the shipped contract.
+- Hardened OpenCode telemetry and worktree setup.
+
+### Verified
+
+- Full suite: 1,371 passed, 5 skipped; Ruff and Pyright clean.
+- Three real OpenCode lifecycle runs exercised Todo through Done with the merge
+  gate enabled.
+
+## [0.12.0] - 2026-07-06 - Continuous improvement and blocked recovery
+
+### Added
+
+- Continuous-improvement heartbeat checks that file follow-up work through the
+  normal Kanban flow.
+- Root Cause Analysis recovery tickets for blocked work, with guarded reopening
+  of the source ticket after successful recovery.
+
+### Changed
+
+- Human Review became intervention-only in prompts and contracts.
+- File-board recovery, backend retry handling, and dispatch preflight checks
+  were hardened.
+
+### Verified
+
+- A real OpenCode end-to-end run passed; the release push gate completed with
+  1,279 passed and 2 skipped.
 
 ## [0.11.0] - 2026-07-05 - OpenCode terminal cleanup
 
@@ -199,7 +263,7 @@ registered from the UI or the TUI with skills attached per ticket.
 - `tools/board-viewer/` is deprecated in place; the built-in app replaces it.
 - New dependency: `ruamel.yaml` (comment-preserving WORKFLOW.md edits).
 
-## [Unreleased] — supergoal verification discipline + hardening
+### Verification discipline and hardening
 
 Ports the `supergoal` skill's verification discipline into Symphony's per-stage
 pipeline, then hardens it so every promised mechanism is honest and enforced: a
@@ -940,7 +1004,10 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.14.0
+[0.13.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.13.0
+[0.12.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.12.0
 [0.11.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.11.0
 [0.10.1]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.10.1
 [0.10.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.10.0
