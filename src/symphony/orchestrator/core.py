@@ -24,8 +24,9 @@ import os
 import re
 import time
 import traceback
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Coroutine
 
@@ -152,6 +153,19 @@ _RETRYABLE_WORKER_ERROR_MARKERS = (
     "connection timed out",
     "try again later",
 )
+
+
+class _EligibilityDisposition(str, Enum):
+    READY = "ready"
+    WAIT_SLOT = "wait_slot"
+    WAIT_NON_SLOT = "wait_non_slot"
+    REJECT = "reject"
+
+
+@dataclass(frozen=True)
+class _EligibilityDecision:
+    disposition: _EligibilityDisposition
+    reason: str
 
 
 def _clean_board_error_message(message: str) -> str:
@@ -2705,47 +2719,67 @@ class Orchestrator:
     def _eligible(
         self, issue: Issue, cfg: ServiceConfig, *, owning_retry: bool
     ) -> bool:
-        """Shared eligibility logic.
+        """Compatibility seam for callers that only need a yes/no answer."""
+        return (
+            self._eligibility_decision(issue, cfg, owning_retry=owning_retry).disposition
+            is _EligibilityDisposition.READY
+        )
 
-        `owning_retry=True` is set by the retry handler — it already owns the
-        issue's claim (§7.1: `Claimed = Running or RetryQueued`), so the
-        `_claimed`/`_running` self-membership checks would otherwise create a
-        false-negative loop where the retry timer keeps rescheduling itself.
-        """
+    def _eligibility_ownership_decision(
+        self, issue: Issue, cfg: ServiceConfig, *, owning_retry: bool
+    ) -> _EligibilityDecision | None:
         if issue.id in self._running:
-            return False
+            return _EligibilityDecision(
+                _EligibilityDisposition.REJECT, "duplicate running ownership"
+            )
         ci_task = self._improvement_task
         if (
             cfg.continuous_improvement.require_idle_board
             and ci_task is not None
             and not ci_task.done()
         ):
-            return False
-        if self._has_active_run_lease(issue.id):
-            self._lease_blocked[issue.id] = (
-                "another active run lease exists for this issue"
+            return _EligibilityDecision(
+                _EligibilityDisposition.WAIT_NON_SLOT,
+                "continuous improvement is using the idle board",
             )
-            return False
+        if self._has_active_run_lease(issue.id):
+            reason = "another active run lease exists for this issue"
+            self._lease_blocked[issue.id] = reason
+            return _EligibilityDecision(_EligibilityDisposition.WAIT_NON_SLOT, reason)
         self._lease_blocked.pop(issue.id, None)
         if not owning_retry and issue.id in self._claimed:
-            return False
-        # Paused tickets hold their slot but never start a fresh worker
-        # until the operator resumes. Without this, a worker that exits
-        # (turn_error, max_turns, reconcile cancel, …) would silently
-        # re-dispatch via `_on_retry_timer` and look like an auto-unpause.
+            return _EligibilityDecision(
+                _EligibilityDisposition.REJECT, "issue already has a claim"
+            )
         if issue.id in self._paused_issue_ids:
-            return False
+            return _EligibilityDecision(
+                _EligibilityDisposition.WAIT_SLOT,
+                self._pause_reasons.get(issue.id, "paused"),
+            )
         if issue.id in self._turn_budget_exhausted:
-            return False
+            return _EligibilityDecision(
+                _EligibilityDisposition.REJECT, "turn budget exhausted"
+            )
         if issue.id in self._terminal_persist_pending:
-            return False
+            return _EligibilityDecision(
+                _EligibilityDisposition.REJECT, "finalization already owns issue"
+            )
+        return None
+
+    def _eligibility_contract_decision(
+        self, issue: Issue, cfg: ServiceConfig
+    ) -> _EligibilityDecision | None:
         active = {s.lower() for s in cfg.tracker.active_states}
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         state = normalize_state(issue.state)
         if state in terminal or state not in active:
-            return False
+            return _EligibilityDecision(
+                _EligibilityDisposition.REJECT, f"inactive state: {issue.state}"
+            )
         if not (issue.id and issue.identifier and issue.title and issue.state):
-            return False
+            return _EligibilityDecision(
+                _EligibilityDisposition.REJECT, "incomplete issue identity"
+            )
         requested_agent = _requested_agent_kind(issue)
         if requested_agent is not None and requested_agent not in SUPPORTED_AGENT_KINDS:
             log.warning(
@@ -2755,8 +2789,16 @@ class Orchestrator:
                 agent_kind=requested_agent,
                 supported=sorted(SUPPORTED_AGENT_KINDS),
             )
-            return False
-        # Per-state limit (§8.3).
+            return _EligibilityDecision(
+                _EligibilityDisposition.REJECT,
+                f"unsupported agent kind: {requested_agent}",
+            )
+        return None
+
+    def _eligibility_contention_decision(
+        self, issue: Issue, cfg: ServiceConfig
+    ) -> _EligibilityDecision | None:
+        state = normalize_state(issue.state)
         per_state_cap = cfg.agent.max_concurrent_agents_by_state.get(state)
         if per_state_cap is not None:
             current_in_state = sum(
@@ -2765,17 +2807,41 @@ class Orchestrator:
                 if normalize_state(entry.issue.state) == state
             )
             if current_in_state >= per_state_cap:
-                return False
-        # Blockers apply to every active state; downstream work must wait
-        # if an upstream dependency regresses, is unknown, or still has a
-        # worker/finalizer that can change the shared base branch.
-        if issue.blocked_by:
-            for blocker in issue.blocked_by:
-                if self._blocker_is_in_flight(blocker):
-                    return False
-                if not _blocker_dependency_is_resolved(blocker.state, cfg):
-                    return False
-        return True
+                return _EligibilityDecision(
+                    _EligibilityDisposition.WAIT_NON_SLOT,
+                    f"per-state capacity reached for {issue.state}",
+                )
+        for blocker in issue.blocked_by:
+            if self._blocker_is_in_flight(blocker):
+                return _EligibilityDecision(
+                    _EligibilityDisposition.WAIT_NON_SLOT,
+                    f"blocker still in flight: {blocker.identifier}",
+                )
+            if not _blocker_dependency_is_resolved(blocker.state, cfg):
+                return _EligibilityDecision(
+                    _EligibilityDisposition.WAIT_NON_SLOT,
+                    f"blocker unresolved: {blocker.identifier}",
+                )
+        if self._available_slots(cfg) == 0:
+            return _EligibilityDecision(
+                _EligibilityDisposition.WAIT_NON_SLOT,
+                "no available orchestrator slots",
+            )
+        return None
+
+    def _eligibility_decision(
+        self, issue: Issue, cfg: ServiceConfig, *, owning_retry: bool
+    ) -> _EligibilityDecision:
+        decision = self._eligibility_ownership_decision(
+            issue, cfg, owning_retry=owning_retry
+        )
+        if decision is None:
+            decision = self._eligibility_contract_decision(issue, cfg)
+        if decision is None:
+            decision = self._eligibility_contention_decision(issue, cfg)
+        return decision or _EligibilityDecision(
+            _EligibilityDisposition.READY, "eligible"
+        )
 
     def _blocker_is_in_flight(self, blocker: BlockerRef) -> bool:
         """Keep dependents idle until the upstream run is fully finalized."""
@@ -5321,20 +5387,35 @@ class Orchestrator:
         delay_ms: int,
         error: str | None,
         kind: str | None = None,
+        holds_slot: bool = True,
     ) -> None:
         if self._loop is None:
             return
-        # v0.6.7 — cap auto-retries scheduled after a failure (kind
-        # other than "continuation"). When the cap is set (>0) and we
-        # would otherwise schedule attempt N where N exceeds the cap,
-        # escalate the ticket to a terminal state instead so the
-        # operator gets a board-level signal rather than a silent
-        # retry storm. Continuations (turn-to-turn / stage-to-stage
-        # success rescheduling) are exempt — they aren't failure
-        # retries and reset the attempt counter to 1.
+        retry_kind = kind or ("continuation" if error is None else "retry")
+        if self._retry_cap_exceeded(
+            issue_id, identifier, attempt, error, retry_kind
+        ):
+            return
+        self._install_retry(
+            issue_id=issue_id,
+            identifier=identifier,
+            attempt=attempt,
+            delay_ms=delay_ms,
+            error=error,
+            kind=retry_kind,
+            holds_slot=holds_slot,
+        )
+
+    def _retry_cap_exceeded(
+        self,
+        issue_id: str,
+        identifier: str,
+        attempt: int,
+        error: str | None,
+        retry_kind: str,
+    ) -> bool:
         cfg = self._workflow_state.current()
         max_retries = cfg.agent.max_retries if cfg is not None else 0
-        retry_kind = kind or ("continuation" if error is None else "retry")
         if (
             max_retries > 0
             and retry_kind != "continuation"
@@ -5364,7 +5445,21 @@ class Orchestrator:
             )
             self._persisted_retry_attempts.pop(issue_id, None)
             self._clear_issue_flags(issue_id, retry_attempt=True)
-            return
+            return True
+        return False
+
+    def _install_retry(
+        self,
+        *,
+        issue_id: str,
+        identifier: str,
+        attempt: int,
+        delay_ms: int,
+        error: str | None,
+        kind: str,
+        holds_slot: bool,
+    ) -> None:
+        assert self._loop is not None
         due = self._loop.time() + delay_ms / 1000.0
         handle = self._loop.call_later(
             delay_ms / 1000.0,
@@ -5382,13 +5477,14 @@ class Orchestrator:
                 due_at_ms=due * 1000.0,
                 timer_handle=handle,
                 error=error,
-                kind=kind or ("continuation" if error is None else "retry"),
+                kind=kind,
+                holds_slot=holds_slot,
             ),
         )
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.current_retry_attempt = attempt
-        debug.current_attempt_kind = self._retry[issue_id].kind
-        if self._retry[issue_id].kind == "continuation":
+        debug.current_attempt_kind = kind
+        if kind == "continuation":
             self._persisted_retry_attempts.pop(issue_id, None)
             self._clear_issue_flags(issue_id, retry_attempt=True)
         else:
@@ -5525,82 +5621,122 @@ class Orchestrator:
         retry = self._retry.pop(issue_id, None)
         if retry is None:
             return
-        # Paused tickets re-park the retry on a fixed short hold without
-        # consuming a retry attempt. `resume_worker` cancels the timer
-        # and re-fires this coroutine, so unpause is immediate. Without
-        # this we'd reach `_eligible` → "not eligible at retry time" and
-        # silently burn through the backoff schedule.
         if issue_id in self._paused_issue_ids:
-            paused_error = (
-                self._pause_reasons.get(issue_id)
-                or retry.error
-                or "paused"
-            )
-            self._schedule_retry(
-                issue_id,
-                identifier=retry.identifier,
-                attempt=retry.attempt,
-                delay_ms=PAUSED_RETRY_HOLD_MS,
-                error=paused_error,
-                kind=retry.kind,
-            )
+            self._repark_paused_retry(retry)
             return
         cfg = self._workflow_state.current()
         if cfg is None:
-            self._claimed.discard(issue_id)
-            self._paused_issue_ids.discard(issue_id)
-            self._pause_reasons.pop(issue_id, None)
-            self._persisted_retry_attempts.pop(issue_id, None)
-            self._clear_issue_flags(issue_id, retry_attempt=True, paused=True)
+            self._release_retry_ownership(
+                retry, clear_pause=True, reason="workflow config unavailable"
+            )
             return
+        await self._process_retry(retry, cfg)
+
+    def _repark_paused_retry(self, retry: RetryEntry) -> None:
+        error = self._pause_reasons.get(retry.issue_id) or retry.error or "paused"
+        self._schedule_retry(
+            retry.issue_id,
+            identifier=retry.identifier,
+            attempt=retry.attempt,
+            delay_ms=PAUSED_RETRY_HOLD_MS,
+            error=error,
+            kind=retry.kind,
+            holds_slot=True,
+        )
+
+    async def _process_retry(self, retry: RetryEntry, cfg: ServiceConfig) -> None:
         try:
             candidates = await self._fetch_candidates(cfg)
         except Exception as exc:
-            self._schedule_retry(
-                issue_id,
+            self._repark_retry(
+                retry,
+                cfg,
                 identifier=retry.identifier,
-                attempt=retry.attempt + 1,
-                delay_ms=min(
-                    RETRY_BASE_MS * (2 ** retry.attempt), cfg.agent.max_retry_backoff_ms
-                ),
-                error=f"retry poll failed: {exc}",
+                reason=f"retry poll failed: {exc}",
+                holds_slot=retry.holds_slot,
             )
             return
-        match = next((i for i in candidates if i.id == issue_id), None)
+        match = next((issue for issue in candidates if issue.id == retry.issue_id), None)
         if match is None:
-            self._claimed.discard(issue_id)
-            # Ticket left the orchestrator's view (terminal, archived,
-            # filtered out by workflow change); drop any pause flag so
-            # we don't leak it across the resurrection of the same id.
-            self._paused_issue_ids.discard(issue_id)
-            self._pause_reasons.pop(issue_id, None)
-            self._persisted_retry_attempts.pop(issue_id, None)
-            self._clear_issue_flags(issue_id, retry_attempt=True, paused=True)
-            log.info("retry_release", issue_id=issue_id, identifier=retry.identifier)
-            return
-        if not self._eligible(match, cfg, owning_retry=True):
-            self._schedule_retry(
-                issue_id,
-                identifier=match.identifier,
-                attempt=retry.attempt + 1,
-                delay_ms=min(
-                    RETRY_BASE_MS * (2 ** retry.attempt), cfg.agent.max_retry_backoff_ms
-                ),
-                error="not eligible at retry time",
+            self._release_retry_ownership(
+                retry, clear_pause=True, reason="issue left active tracker view"
             )
             return
-        if self._available_slots(cfg) == 0:
-            self._schedule_retry(
-                issue_id,
-                identifier=match.identifier,
-                attempt=retry.attempt + 1,
-                delay_ms=min(
-                    RETRY_BASE_MS * (2 ** retry.attempt), cfg.agent.max_retry_backoff_ms
-                ),
-                error="no available orchestrator slots",
-            )
+        decision = self._eligibility_decision(match, cfg, owning_retry=True)
+        if self._handle_retry_decision(retry, match, cfg, decision):
             return
         self._dispatch(match, cfg, attempt=retry.attempt, attempt_kind=retry.kind)
+
+    def _handle_retry_decision(
+        self,
+        retry: RetryEntry,
+        issue: Issue,
+        cfg: ServiceConfig,
+        decision: _EligibilityDecision,
+    ) -> bool:
+        if decision.disposition is _EligibilityDisposition.READY:
+            return False
+        if decision.disposition is _EligibilityDisposition.REJECT:
+            self._release_retry_ownership(
+                retry, clear_pause=False, reason=decision.reason
+            )
+            return True
+        self._repark_retry(
+            retry,
+            cfg,
+            identifier=issue.identifier,
+            reason=decision.reason,
+            holds_slot=decision.disposition is _EligibilityDisposition.WAIT_SLOT,
+        )
+        return True
+
+    def _repark_retry(
+        self,
+        retry: RetryEntry,
+        cfg: ServiceConfig,
+        *,
+        identifier: str,
+        reason: str,
+        holds_slot: bool,
+    ) -> None:
+        delay_ms = min(
+            RETRY_BASE_MS * (2 ** retry.attempt), cfg.agent.max_retry_backoff_ms
+        )
+        self._schedule_retry(
+            retry.issue_id,
+            identifier=identifier,
+            attempt=retry.attempt,
+            delay_ms=delay_ms,
+            error=_clean_board_error_message(reason)[:300],
+            kind=retry.kind,
+            holds_slot=holds_slot,
+        )
+
+    def _release_retry_ownership(
+        self, retry: RetryEntry, *, clear_pause: bool, reason: str
+    ) -> None:
+        issue_id = retry.issue_id
+        active_owner = (
+            issue_id in self._running
+            or issue_id in self._terminal_persist_pending
+            or issue_id in self._pending_escalations
+        )
+        if not active_owner:
+            self._claimed.discard(issue_id)
+        self._persisted_retry_attempts.pop(issue_id, None)
+        if clear_pause:
+            self._paused_issue_ids.discard(issue_id)
+            self._pause_reasons.pop(issue_id, None)
+        self._clear_issue_flags(
+            issue_id, retry_attempt=True, paused=clear_pause
+        )
+        log.info(
+            "retry_release",
+            issue_id=issue_id,
+            identifier=retry.identifier,
+            reason=reason,
+            active_owner=active_owner,
+        )
 
     # ------------------------------------------------------------------
     # reconciliation (§16.3)

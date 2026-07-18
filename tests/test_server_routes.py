@@ -19,14 +19,16 @@ this works without the optional `pytest-aiohttp` plugin.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, cast
 
 import pytest_asyncio
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from symphony.orchestrator import Orchestrator
-from symphony.server import build_app
+from symphony.server import build_app, run_server
 
 
 @dataclass
@@ -149,6 +151,19 @@ async def test_root_serves_web_app(client: TestClient) -> None:
         # Assets missing (e.g. partial install) degrades to a clear 503.
         assert resp.status == 503
         assert "assets missing" in body
+
+
+async def test_run_server_uses_typed_aiohttp_application_key() -> None:
+    app, _ = _make_app_with_stub()
+    runner = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", web.NotAppKeyWarning)
+            runner, bound_port = await run_server(app, "127.0.0.1", 0)
+        assert bound_port > 0
+    finally:
+        if runner is not None:
+            await runner.cleanup()
 
 
 async def test_state_route_returns_orchestrator_snapshot(client: TestClient) -> None:

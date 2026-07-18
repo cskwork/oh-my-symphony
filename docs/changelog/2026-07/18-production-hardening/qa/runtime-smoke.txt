@@ -1,0 +1,23 @@
+ok health
+ok state
+ok board
+ok static assets
+ok issue create
+ok issue detail
+ok issue patch
+ok refresh
+ok workflow stats skills
+{
+  "count": 9,
+  "checks": [
+    "health",
+    "state",
+    "board",
+    "static assets",
+    "issue create",
+    "issue detail",
+    "issue patch",
+    "refresh",
+    "workflow stats skills"
+  ]
+}

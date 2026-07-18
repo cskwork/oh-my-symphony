@@ -57,6 +57,7 @@ _MAX_LABELS = 20
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 _LOOPBACK_BINDS = {"", "localhost", "127.0.0.1", "::1", "[::1]"}
 _CI_EDITABLE_KEYS = {"enabled", "interval_ms", "max_turns", "agent_kind"}
+BIND_HOST_KEY: web.AppKey[str] = web.AppKey("symphony.bind_host", str)
 
 
 def _json_error(status: int, code: str, message: str) -> web.Response:
@@ -81,7 +82,7 @@ def _request_host(request: web.Request) -> str:
 @web.middleware
 async def _api_guard(request: web.Request, handler):
     if request.path.startswith("/api/"):
-        bind = str(request.app.get("bind_host") or "127.0.0.1").lower()
+        bind = str(request.app.get(BIND_HOST_KEY) or "127.0.0.1").lower()
         if bind in _LOOPBACK_BINDS and _request_host(request) not in _ALLOWED_HOSTS:
             return _json_error(
                 403, "forbidden_host", f"host {request.host!r} not allowed"

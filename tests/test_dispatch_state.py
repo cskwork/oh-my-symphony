@@ -71,6 +71,24 @@ def test_available_slots_counts_running_and_retry() -> None:
     assert state.in_flight_ids() == {"A", "B"}
 
 
+def test_available_slots_counts_only_slot_holding_retries_but_keeps_all_in_flight() -> None:
+    state = DispatchState()
+    state.begin_run("A", _entry("A"))
+    state.schedule_retry("B", _retry_entry("B"))
+    non_slot = RetryEntry(
+        issue_id="C",
+        identifier="C",
+        attempt=1,
+        due_at_ms=0.0,
+        timer_handle=_FakeTimerHandle(),  # type: ignore[arg-type]
+        holds_slot=False,
+    )
+    state.schedule_retry("C", non_slot)
+
+    assert state.available_slots(3) == 1
+    assert state.in_flight_ids() == {"A", "B", "C"}
+
+
 def test_begin_run_and_abort_run_round_trip() -> None:
     state = DispatchState()
     entry = _entry("A")

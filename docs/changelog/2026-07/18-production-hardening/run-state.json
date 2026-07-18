@@ -1,0 +1,35 @@
+{
+  "schema_version": 3,
+  "mode": "LEGACY",
+  "branches": {
+    "source_base_branch": "dev",
+    "target_integration_branch": "dev",
+    "run_branch": "supergoal/production-hardening-20260718",
+    "worktree_path": "/private/tmp/symphony-production-hardening-20260718",
+    "refs_verified": true
+  },
+  "phase": "Finalize",
+  "iteration": 2,
+  "max_iterations": 3,
+  "unresolved_gates": [],
+  "blockers": [],
+  "regression_ledger": [
+    "auto-merge: 21 passed in 47.95 seconds",
+    "dispatch-state and orchestrator-dispatch: 212 passed in 19.11 seconds",
+    "server and Web API: 48 passed in 1.15 seconds",
+    "TUI and file tracker: 112 passed in 24.90 seconds",
+    "package metadata: 1 passed in 0.16 seconds",
+    "Jira and Linear adapters: 83 passed in 2.29 seconds",
+    "full suite: 1415 passed, 6 skipped in 148.57 seconds, 84.18% coverage",
+    "Ruff: all checks passed; Pyright: 0 errors and 0 warnings",
+    "frozen TUI benchmark: ratios 0.5056 at 1000 cards and 0.5344 at 5000 cards",
+    "package verifier: wheel and sdist metadata, install, resources, warnings, and pollution passed",
+    "installed CLI lifecycle: doctor, health, 9 API checks, SIGTERM, cleanup, and board isolation passed",
+    "AST cohesion: 133 added or changed functions within 50 lines and nesting 4",
+    "DEBUG gate: all six owner, alternative repro, and conformance triplets passed",
+    "final hygiene and backward trace: clean"
+  ],
+  "next_action": "bash /Users/danny/Documents/PARA/Resource/supergoal-skill/templates/commit-gate.sh docs/changelog/2026-07/18-production-hardening cli",
+  "forced_reflection": null,
+  "updated_at": "2026-07-18T06:21:20Z"
+}

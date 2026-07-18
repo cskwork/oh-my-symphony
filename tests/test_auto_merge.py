@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -41,6 +45,65 @@ def _git_output(cwd: Path, *args: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _git_bytes(cwd: Path, *args: str) -> bytes:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def _capture_repo_state(repo: Path, paths: tuple[Path, ...]) -> dict[str, Any]:
+    merge_head = repo / ".git" / "MERGE_HEAD"
+    return {
+        "head": _git_bytes(repo, "rev-parse", "HEAD"),
+        "merge_head": merge_head.read_bytes() if merge_head.exists() else None,
+        "status": _git_bytes(
+            repo, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        ),
+        "cached": _git_bytes(repo, "diff", "--cached", "--binary", "--no-ext-diff"),
+        "worktree": _git_bytes(repo, "diff", "--binary", "--no-ext-diff"),
+        "files": {str(path): path.read_bytes() if path.exists() else None for path in paths},
+    }
+
+
+def _prepare_capture_repo(tmp_path: Path, ident: str) -> tuple[Path, Path, Path]:
+    repo = _make_repo(tmp_path)
+    capture = repo / "capture"
+    capture.mkdir()
+    tracked = capture / "tracked.txt"
+    tracked.write_bytes(b"tracked baseline\n")
+    (repo / ".gitignore").write_text("capture/*.ignored\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore", "capture/tracked.txt")
+    _git(repo, "commit", "-q", "-m", "capture baseline")
+    _make_symphony_branch(repo, ident, with_symlinks=False)
+    tracked.write_bytes(b"operator dirty bytes\n")
+    return repo, capture, tracked
+
+
+def _prepend_git_wrapper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str
+) -> None:
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "git-wrapper"
+    wrapper_dir.mkdir()
+    wrapper = wrapper_dir / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n" + body + f"\nexec {shlex.quote(real_git)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{wrapper_dir}:{os.environ.get('PATH', '')}")
+    bash_env = wrapper_dir / "bash-env"
+    bash_env.write_text(
+        f"export PATH={shlex.quote(str(wrapper_dir))}:\"$PATH\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BASH_ENV", str(bash_env))
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -540,3 +603,158 @@ def test_auto_merge_captures_untracked_paths(tmp_path: Path) -> None:
         check=True,
     ).stdout
     assert "merge: T-5 from symphony/T-5" in log
+
+
+@pytest.mark.parametrize(
+    ("identifier", "excluded_root", "changed_path", "blocked"),
+    [
+        ("T-ROOT", "kanban", "kanban", True),
+        ("T-DESC", "kanban", "kanban/T-DESC.md", True),
+        ("T-META", "work[1]", "work[1]/ticket.md", True),
+        ("T-ODD", "odd\tline\nroot", "odd\tline\nroot/ticket.md", True),
+        ("T-PREFIX", "kanban", "kanban-copy/T-PREFIX.md", False),
+    ],
+    ids=["root", "descendant", "regex-metachar", "tab-newline", "prefix-near-miss"],
+)
+def test_auto_merge_exclusions_use_literal_pathspec_boundaries(
+    tmp_path: Path,
+    identifier: str,
+    excluded_root: str,
+    changed_path: str,
+    blocked: bool,
+) -> None:
+    repo = _make_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", f"symphony/{identifier}")
+    changed = repo / changed_path
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    changed.write_bytes(b"branch bytes\n")
+    _git(repo, "add", "--", changed_path)
+    _git(repo, "commit", "-q", "-m", f"{identifier}: path boundary")
+    _git(repo, "checkout", "-q", "main")
+    head_before = _git_output(repo, "rev-parse", "HEAD")
+
+    result = asyncio.run(
+        auto_merge_on_done_best_effort(
+            workflow_dir=repo,
+            branch=f"symphony/{identifier}",
+            identifier=identifier,
+            title="literal exclusion boundary",
+            target_branch="main",
+            exclude_paths=(excluded_root,),
+        )
+    )
+
+    if blocked:
+        assert result.status == "excluded_paths"
+        assert "BLOCK: branch changed excluded workspace roots:" in result.detail
+        assert _git_output(repo, "rev-parse", "HEAD") == head_before
+        assert not changed.exists()
+    else:
+        assert result.ok is True
+        assert changed.read_bytes() == b"branch bytes\n"
+
+
+def test_auto_merge_capture_stages_only_untracked_literal_paths(tmp_path: Path) -> None:
+    repo, capture, tracked = _prepare_capture_repo(tmp_path, "T-CAPTURE")
+    unusual = (
+        capture / "space name.txt",
+        capture / "tab\tname.txt",
+        capture / "line\nname.txt",
+    )
+    for index, path in enumerate(unusual):
+        path.write_bytes(f"artifact-{index}\n".encode())
+    ignored = capture / "secret.ignored"
+    ignored.write_bytes(b"ignored operator bytes\n")
+
+    result = asyncio.run(
+        auto_merge_on_done_best_effort(
+            workflow_dir=repo,
+            branch="symphony/T-CAPTURE",
+            identifier="T-CAPTURE",
+            title="capture untracked only",
+            target_branch="main",
+            exclude_paths=(),
+            capture_untracked=("capture",),
+        )
+    )
+
+    tree_paths = set(_git_bytes(repo, "ls-tree", "-rz", "--name-only", "HEAD").split(b"\0"))
+    assert result.ok is True
+    assert {os.fsencode(str(path.relative_to(repo))) for path in unusual} <= tree_paths
+    assert b"capture/secret.ignored" not in tree_paths
+    assert ignored.read_bytes() == b"ignored operator bytes\n"
+    assert _git_output(repo, "show", "HEAD:capture/tracked.txt") == "tracked baseline"
+    assert tracked.read_bytes() == b"operator dirty bytes\n"
+    assert _git_bytes(repo, "diff", "--cached") == b""
+
+
+def test_auto_merge_partial_capture_add_failure_restores_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, capture, tracked = _prepare_capture_repo(tmp_path, "T-PARTIAL")
+    first = capture / "a.txt"
+    second = capture / "b.txt"
+    first.write_bytes(b"first bytes\n")
+    second.write_bytes(b"second bytes\n")
+    before = _capture_repo_state(repo, (tracked, first, second))
+    marker = tmp_path / "partial-add-fired"
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_body = (
+        'case " $* " in\n'
+        '  *" add "*)\n'
+        f"    if [ ! -e {shlex.quote(str(marker))} ]; then\n"
+        f"      : > {shlex.quote(str(marker))}\n"
+        f"      {shlex.quote(real_git)} --literal-pathspecs add -- "
+        f"{shlex.quote(str(first.relative_to(repo)))}\n"
+        "      exit 86\n"
+        "    fi\n"
+        "    ;;\n"
+        "esac"
+    )
+    _prepend_git_wrapper(monkeypatch, tmp_path, wrapper_body)
+
+    result = asyncio.run(
+        auto_merge_on_done_best_effort(
+            workflow_dir=repo,
+            branch="symphony/T-PARTIAL",
+            identifier="T-PARTIAL",
+            title="partial capture failure",
+            target_branch="main",
+            exclude_paths=(),
+            capture_untracked=("capture",),
+        )
+    )
+
+    assert result.ok is False
+    assert result.status == "git_failed"
+    assert marker.exists()
+    assert _capture_repo_state(repo, (tracked, first, second)) == before
+
+
+def test_auto_merge_commit_hook_failure_restores_captured_files(tmp_path: Path) -> None:
+    repo, capture, tracked = _prepare_capture_repo(tmp_path, "T-HOOK")
+    first = capture / "space name.txt"
+    second = capture / "line\nname.txt"
+    first.write_bytes(b"first bytes\n")
+    second.write_bytes(b"second bytes\n")
+    hook = repo / ".git" / "hooks" / "commit-msg"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    before = _capture_repo_state(repo, (tracked, first, second))
+
+    result = asyncio.run(
+        auto_merge_on_done_best_effort(
+            workflow_dir=repo,
+            branch="symphony/T-HOOK",
+            identifier="T-HOOK",
+            title="commit hook failure",
+            target_branch="main",
+            exclude_paths=(),
+            capture_untracked=("capture",),
+        )
+    )
+
+    assert result.ok is False
+    assert result.status == "commit_failed"
+    assert _capture_repo_state(repo, (tracked, first, second)) == before

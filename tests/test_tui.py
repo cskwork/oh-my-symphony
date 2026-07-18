@@ -16,12 +16,15 @@ framework, so this file shrinks to:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import symphony.trackers.file as file_tracker_module
+import symphony.tui.helpers as tui_helpers
 from symphony.issue import Issue
 from symphony.tui import (
     DENSITY_COMPACT,
@@ -271,6 +274,142 @@ def test_ordered_column_states_dedupes_active_then_terminal() -> None:
     assert _ordered_column_states(cfg) == ["Todo", "In Progress", "Done", "Cancelled"]
 
 
+def _write_ticket(root: Path, name: str, state: str) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / name
+    path.write_text(
+        f"---\nid: {name[:-3]}\ntitle: {name[:-3]}\nstate: {state}\n---\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _file_config(
+    root: Path,
+    *,
+    active: tuple[str, ...] = ("Todo", "Shared"),
+    terminal: tuple[str, ...] = ("Shared", "Done"),
+) -> ServiceConfig:
+    cfg = _make_config(active_states=active, terminal_states=terminal)
+    return replace(
+        cfg,
+        tracker=replace(
+            cfg.tracker,
+            kind="file",
+            endpoint="",
+            api_key="",
+            project_slug="",
+            board_root=root,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_file_refresh_parses_each_ticket_once(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    root = tmp_path / "board"
+    for name, state in (("A.md", "Todo"), ("B.md", "Done"), ("C.md", "Shared")):
+        _write_ticket(root, name, state)
+    cfg = _file_config(root)
+    original = file_tracker_module.issue_from_file
+    parses = 0
+
+    def counted(path: Path) -> Issue | None:
+        nonlocal parses
+        parses += 1
+        return original(path)
+
+    monkeypatch.setattr(file_tracker_module, "issue_from_file", counted)
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+
+    await app._refresh_tracker(cfg)
+
+    assert parses == 3
+    assert [issue.identifier for issue in app._candidates] == ["A"]
+    assert [issue.identifier for issue in app._terminal_issues] == ["B", "C"]
+
+
+def test_fetch_tracker_snapshot_file_scans_once_and_sees_next_poll(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    root = tmp_path / "board"
+    _write_ticket(root, "A.md", "Todo")
+    mutable = _write_ticket(root, "B.md", "Done")
+    _write_ticket(root, "C.md", "Shared")
+    cfg = _file_config(root)
+    original = file_tracker_module.issue_from_file
+    parses = 0
+
+    def counted(path: Path) -> Issue | None:
+        nonlocal parses
+        parses += 1
+        return original(path)
+
+    monkeypatch.setattr(file_tracker_module, "issue_from_file", counted)
+
+    candidates, terminals = tui_helpers._fetch_tracker_snapshot(cfg)
+
+    assert [issue.identifier for issue in candidates] == ["A"]
+    assert [issue.identifier for issue in terminals] == ["B", "C"]
+    assert parses == 3
+
+    mutable.write_text(
+        "---\nid: B\ntitle: B\nstate: Todo\n---\n", encoding="utf-8"
+    )
+    candidates, terminals = tui_helpers._fetch_tracker_snapshot(cfg)
+
+    assert [issue.identifier for issue in candidates] == ["A", "B"]
+    assert [issue.identifier for issue in terminals] == ["C"]
+    assert parses == 6
+
+
+def test_fetch_tracker_snapshot_non_file_reuses_and_closes_one_client(
+    monkeypatch: Any,
+) -> None:
+    calls: list[str] = []
+
+    class _Tracker:
+        def fetch_candidate_issues(self) -> list[Issue]:
+            calls.append("active")
+            return [_issue("SMA-1")]
+
+        def fetch_issues_by_states(self, _states: tuple[str, ...]) -> list[Issue]:
+            calls.append("terminal")
+            return [_issue("SMA-9", state="Done")]
+
+        def close(self) -> None:
+            calls.append("close")
+
+    monkeypatch.setattr(tui_helpers, "build_tracker_client", lambda _cfg: _Tracker())
+
+    candidates, terminals = tui_helpers._fetch_tracker_snapshot(_make_config())
+
+    assert [issue.identifier for issue in candidates] == ["SMA-1"]
+    assert [issue.identifier for issue in terminals] == ["SMA-9"]
+    assert calls == ["active", "terminal", "close"]
+
+
+def test_fetch_tracker_snapshot_closes_client_when_fetch_fails(
+    monkeypatch: Any,
+) -> None:
+    closed = False
+
+    class _Tracker:
+        def fetch_candidate_issues(self) -> list[Issue]:
+            raise RuntimeError("tracker unavailable")
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr(tui_helpers, "build_tracker_client", lambda _cfg: _Tracker())
+
+    with pytest.raises(RuntimeError, match="tracker unavailable"):
+        tui_helpers._fetch_tracker_snapshot(_make_config())
+    assert closed is True
+
+
 def test_state_color_map_covers_common_states() -> None:
     for s in ("todo", "in progress", "done", "blocked"):
         assert s in STATE_COLOR
@@ -403,8 +542,10 @@ def test_app_card_status_uses_orchestrator_attention() -> None:
 
 
 def _stub_tracker(monkeypatch: Any, candidates: list[Issue], terminals: list[Issue]) -> None:
-    monkeypatch.setattr("symphony.tui.app._fetch_candidates", lambda _: list(candidates))
-    monkeypatch.setattr("symphony.tui.app._fetch_terminals", lambda _: list(terminals))
+    monkeypatch.setattr(
+        "symphony.tui.app._fetch_tracker_snapshot",
+        lambda _: (list(candidates), list(terminals)),
+    )
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,34 @@
+Using Python 3.12.7 environment at: venv
+Resolved 28 packages in 630ms
+Downloading pygments (1.2MiB)
+ Downloaded pygments
+Prepared 28 packages in 703ms
+Installed 28 packages in 43ms
+ + aiohappyeyeballs==2.7.1
+ + aiohttp==3.14.1
+ + aiosignal==1.4.0
+ + anyio==4.14.2
+ + attrs==26.1.0
+ + certifi==2026.6.17
+ + frozenlist==1.8.0
+ + h11==0.16.0
+ + httpcore==1.0.9
+ + httpx==0.28.1
+ + idna==3.18
+ + linkify-it-py==2.1.0
+ + markdown-it-py==4.2.0
+ + mdit-py-plugins==0.6.1
+ + mdurl==0.1.2
+ + multidict==6.7.1
+ + oh-my-symphony==0.14.0 (from file:///private/tmp/symphony-runtime-qa-ple766sk/dist/oh_my_symphony-0.14.0-py3-none-any.whl)
+ + platformdirs==4.10.1
+ + propcache==0.5.2
+ + pygments==2.20.0
+ + pyyaml==6.0.3
+ + rich==15.0.0
+ + ruamel-yaml==0.19.1
+ + textual==8.2.8
+ + typing-extensions==4.16.0
+ + uc-micro-py==2.0.0
+ + watchdog==6.0.0
+ + yarl==1.24.2

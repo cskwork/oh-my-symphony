@@ -4,10 +4,9 @@ Initiative A of docs/improvements/architecture-improvement-plan-2026-07-05.md
 (Encapsulate Record + Tell, Don't Ask). The rules that used to be scattered
 across dispatch/completion/retry/reconcile call sites are encoded once here:
 
-- **Slot budget counts retry-pending.** A ticket holds its slot through the
-  full Todo -> Done lifecycle; the 1s continuation-retry window between a
-  worker exiting and its retry firing must not let a sibling claim the slot
-  (`max_concurrent_agents == 1` means strict serial through Done).
+- **Slot budget counts owned backoff, not contention waits.** A ticket holds
+  its slot through ordinary retry/continuation backoff, while dependency and
+  capacity waits stay in-flight without blocking work that can make progress.
 - **Task identity before eviction.** A worker-done callback may fire after
   the 1s retry timer installed a *fresh* entry under the same key; only the
   entry whose `worker_task` is the finished task may be treated as stale.
@@ -44,16 +43,14 @@ class DispatchState:
     # ------------------------------------------------------------------
 
     def available_slots(self, max_concurrent_agents: int) -> int:
-        """Slots left after subtracting running AND retry-pending tickets.
+        """Slots left after running and explicitly slot-holding retries.
 
-        Retry-pending tickets count against the slot budget so a ticket
-        holds its slot through the full Todo -> Done lifecycle. Without
-        this, the 1s `CONTINUATION_RETRY_DELAY_MS` window between a
-        worker exiting and its retry firing would let another ticket
-        claim the slot — surfacing as "OLV-005 starts while OLV-002 is
-        still in Verify" even though `max_concurrent_agents == 1`.
+        Ordinary backoff holds ownership through the Todo -> Done lifecycle.
+        Classified dependency/capacity waits remain in ``retry`` for duplicate
+        prevention, but set ``holds_slot=False`` so their blocker can run.
         """
-        in_flight = len(self.running) + len(self.retry)
+        held_retries = sum(entry.holds_slot for entry in self.retry.values())
+        in_flight = len(self.running) + held_retries
         return max(max_concurrent_agents - in_flight, 0)
 
     def in_flight_ids(self) -> set[str]:

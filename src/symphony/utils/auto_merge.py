@@ -213,35 +213,37 @@ def _build_script(
     untouched, except for non-overlapping pre-existing dirty files that Git
     preserves across the merge.
     """
-    exclude_re = "^(" + "|".join(excludes) + ")$" if excludes else ""
     setup = (
         "set -uo pipefail\n"
         f"BRANCH={shlex.quote(branch)}\n"
         f"TARGET={shlex.quote(target)}\n"
-        f"EXCLUDE_RE={shlex.quote(exclude_re)}\n"
         f"IDENT={shlex.quote(identifier)}\n"
         f"TITLE={shlex.quote(title)}\n"
     )
     return (
         setup
         + _build_upstream_sync_block()
-        + _build_preflight_phase(has_captures=bool(captures))
+        + _build_preflight_phase(
+            has_captures=bool(captures), excludes=excludes
+        )
         + _build_merge_phase(captures=captures)
         + "sync_upstream\n"
         + 'echo "OK: ${BRANCH} (${SHA}) merged to ${TARGET}"\n'
     )
 
 
-def _build_preflight_phase(*, has_captures: bool) -> str:
+def _build_preflight_phase(
+    *, has_captures: bool, excludes: tuple[str, ...]
+) -> str:
     """Validate the target, branch, merge safety, and retry/no-op state."""
     return (
-        _build_target_preflight_block()
+        _build_target_preflight_block(excludes)
         + _build_merge_safety_block()
         + _build_nothing_to_apply_block(has_captures=has_captures)
     )
 
 
-def _build_target_preflight_block() -> str:
+def _build_target_preflight_block(excludes: tuple[str, ...]) -> str:
     return (
         "if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then\n"
         '  echo "FAIL: not a git repo"; exit 50\n'
@@ -259,14 +261,29 @@ def _build_target_preflight_block() -> str:
         '  echo "SKIP: branch $BRANCH missing"; exit 42\n'
         "fi\n"
         'CHANGED="$(git diff --name-only "$TARGET".."$BRANCH" || true)"\n'
-        'if [ -n "$EXCLUDE_RE" ]; then\n'
-        '  BAD="$(printf "%s\\n" "$CHANGED" | grep -E "$EXCLUDE_RE" || true)"\n'
-        '  if [ -n "$BAD" ]; then\n'
+        + _build_exclusion_block(excludes)
+    )
+
+
+def _build_exclusion_block(excludes: tuple[str, ...]) -> str:
+    if not excludes:
+        return ""
+    quoted = " ".join(shlex.quote(path) for path in excludes)
+    return (
+        f"for excluded in {quoted}; do\n"
+        "  git --literal-pathspecs diff --quiet "
+        '"$TARGET".."$BRANCH" -- "$excluded"\n'
+        "  EXCLUDED_RC=$?\n"
+        '  if [ "$EXCLUDED_RC" -eq 1 ]; then\n'
         '    echo "BLOCK: branch changed excluded workspace roots:"\n'
-        '    printf "%s\\n" "$BAD"\n'
+        "    git --literal-pathspecs diff --name-only "
+        '"$TARGET".."$BRANCH" -- "$excluded" || true\n'
         "    exit 44\n"
+        '  elif [ "$EXCLUDED_RC" -ne 0 ]; then\n'
+        '    echo "FAIL: could not inspect excluded root: $excluded"\n'
+        "    exit 50\n"
         "  fi\n"
-        "fi\n"
+        "done\n"
     )
 
 
@@ -309,13 +326,16 @@ def _build_merge_phase(*, captures: tuple[str, ...]) -> str:
     capture_block = _build_capture_block(captures)
     return (
         'SHA="$(git rev-parse --short "$BRANCH")"\n'
+        'CAPTURE_MANIFEST=""\n'
+        + _build_capture_rollback_helpers()
+        +
         "git -c user.email=symphony@local -c user.name=symphony merge "
-        '--no-ff --no-commit "$BRANCH" || '
-        '{ echo "FAIL: merge failed"; git merge --abort >/dev/null 2>&1 || true; exit 50; }\n'
+        '--no-ff --no-commit "$BRANCH" '
+        '|| fail_after_merge 50 "FAIL: merge failed"\n'
         + capture_block
         + "if git diff --cached --quiet; then\n"
         '  echo "SKIP: nothing staged after merge"\n'
-        "  git merge --abort >/dev/null 2>&1 || true\n"
+        "  if ! rollback_capture_merge; then exit 50; fi\n"
         "  sync_upstream\n"
         "  exit 43\n"
         "fi\n"
@@ -323,7 +343,38 @@ def _build_merge_phase(*, captures: tuple[str, ...]) -> str:
         '-m "merge: ${IDENT} from ${BRANCH} (${SHA})" '
         '-m "${TITLE}" '
         '-m "Source: ${BRANCH} ${SHA}" '
-        '|| { echo "FAIL: commit failed"; git merge --abort >/dev/null 2>&1 || true; exit 51; }\n'
+        '|| fail_after_merge 51 "FAIL: commit failed"\n'
+        'if [ -n "$CAPTURE_MANIFEST" ]; then\n'
+        '  rm -f -- "$CAPTURE_MANIFEST"\n'
+        "fi\n"
+    )
+
+
+def _build_capture_rollback_helpers() -> str:
+    return (
+        "rollback_capture_merge() {\n"
+        '  if [ -n "$CAPTURE_MANIFEST" ] && [ -s "$CAPTURE_MANIFEST" ]; then\n'
+        "    if ! git --literal-pathspecs reset -q HEAD "
+        '--pathspec-from-file="$CAPTURE_MANIFEST" --pathspec-file-nul; then\n'
+        '      echo "RECOVERY: capture manifest retained at $CAPTURE_MANIFEST"\n'
+        "      return 1\n"
+        "    fi\n"
+        "  fi\n"
+        "  if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then\n"
+        "    if ! git merge --abort >/dev/null 2>&1; then\n"
+        '      echo "RECOVERY: merge state and manifest retained at $CAPTURE_MANIFEST"\n'
+        "      return 1\n"
+        "    fi\n"
+        "  fi\n"
+        '  if [ -n "$CAPTURE_MANIFEST" ]; then rm -f -- "$CAPTURE_MANIFEST"; fi\n'
+        "}\n"
+        "fail_after_merge() {\n"
+        '  FAIL_RC="$1"\n'
+        '  FAIL_MESSAGE="$2"\n'
+        '  if [ -n "$FAIL_MESSAGE" ]; then echo "$FAIL_MESSAGE"; fi\n'
+        "  if ! rollback_capture_merge; then exit 50; fi\n"
+        "  exit \"$FAIL_RC\"\n"
+        "}\n"
     )
 
 
@@ -332,11 +383,20 @@ def _build_capture_block(captures: tuple[str, ...]) -> str:
         return ""
     quoted = " ".join(shlex.quote(path) for path in captures)
     return (
+        'CAPTURE_MANIFEST="$(mktemp)" '
+        '|| fail_after_merge 50 "FAIL: capture manifest creation failed"\n'
         f"for cap in {quoted}; do\n"
         '  if [ -n "$cap" ] && [ -d "$cap" ] && [ ! -L "$cap" ]; then\n'
-        '    git add -- "$cap" 2>/dev/null || true\n'
+        "    git --literal-pathspecs ls-files -z --others --exclude-standard "
+        '-- "$cap" >> "$CAPTURE_MANIFEST" '
+        '|| fail_after_merge 50 "FAIL: capture enumeration failed"\n'
         "  fi\n"
         "done\n"
+        'if [ -s "$CAPTURE_MANIFEST" ]; then\n'
+        "  git --literal-pathspecs add "
+        '--pathspec-from-file="$CAPTURE_MANIFEST" --pathspec-file-nul '
+        '|| fail_after_merge 50 "FAIL: capture add failed"\n'
+        "fi\n"
     )
 
 

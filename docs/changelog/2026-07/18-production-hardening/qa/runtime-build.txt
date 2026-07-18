@@ -1,0 +1,498 @@
+Building source distribution...
+running egg_info
+creating src/oh_my_symphony.egg-info
+writing src/oh_my_symphony.egg-info/PKG-INFO
+writing dependency_links to src/oh_my_symphony.egg-info/dependency_links.txt
+writing entry points to src/oh_my_symphony.egg-info/entry_points.txt
+writing requirements to src/oh_my_symphony.egg-info/requires.txt
+writing top-level names to src/oh_my_symphony.egg-info/top_level.txt
+writing manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+reading manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+running sdist
+running egg_info
+writing src/oh_my_symphony.egg-info/PKG-INFO
+writing dependency_links to src/oh_my_symphony.egg-info/dependency_links.txt
+writing entry points to src/oh_my_symphony.egg-info/entry_points.txt
+writing requirements to src/oh_my_symphony.egg-info/requires.txt
+writing top-level names to src/oh_my_symphony.egg-info/top_level.txt
+reading manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+running check
+creating oh_my_symphony-0.14.0
+creating oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+creating oh_my_symphony-0.14.0/src/symphony
+creating oh_my_symphony-0.14.0/src/symphony/backends
+creating oh_my_symphony-0.14.0/src/symphony/cli
+creating oh_my_symphony-0.14.0/src/symphony/notifications
+creating oh_my_symphony-0.14.0/src/symphony/orchestrator
+creating oh_my_symphony-0.14.0/src/symphony/trackers
+creating oh_my_symphony-0.14.0/src/symphony/tui
+creating oh_my_symphony-0.14.0/src/symphony/utils
+creating oh_my_symphony-0.14.0/src/symphony/web/static
+creating oh_my_symphony-0.14.0/src/symphony/workflow
+creating oh_my_symphony-0.14.0/tests
+copying files to oh_my_symphony-0.14.0...
+copying LICENSE -> oh_my_symphony-0.14.0
+copying NOTICE -> oh_my_symphony-0.14.0
+copying README.md -> oh_my_symphony-0.14.0
+copying pyproject.toml -> oh_my_symphony-0.14.0
+copying src/oh_my_symphony.egg-info/PKG-INFO -> oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+copying src/oh_my_symphony.egg-info/SOURCES.txt -> oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+copying src/oh_my_symphony.egg-info/dependency_links.txt -> oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+copying src/oh_my_symphony.egg-info/entry_points.txt -> oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+copying src/oh_my_symphony.egg-info/requires.txt -> oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+copying src/oh_my_symphony.egg-info/top_level.txt -> oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+copying src/symphony/__init__.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/__main__.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/_shell.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/agent.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/continuous_improvement.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/errors.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/i18n.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/issue.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/logging.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/mock_codex.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/progress_md.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/prompt.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/prompt_context.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/server.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/service.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/skills.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/stats.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/ticket_markdown.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/webapi.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/workspace.py -> oh_my_symphony-0.14.0/src/symphony
+copying src/symphony/backends/__init__.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/agy.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/approval_policy.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/claude_code.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/codex.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/gemini.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/kiro.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/opencode.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/per_turn.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/pi.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/backends/plain_cli.py -> oh_my_symphony-0.14.0/src/symphony/backends
+copying src/symphony/cli/__init__.py -> oh_my_symphony-0.14.0/src/symphony/cli
+copying src/symphony/cli/__main__.py -> oh_my_symphony-0.14.0/src/symphony/cli
+copying src/symphony/cli/board.py -> oh_my_symphony-0.14.0/src/symphony/cli
+copying src/symphony/cli/doctor.py -> oh_my_symphony-0.14.0/src/symphony/cli
+copying src/symphony/cli/main.py -> oh_my_symphony-0.14.0/src/symphony/cli
+copying src/symphony/notifications/__init__.py -> oh_my_symphony-0.14.0/src/symphony/notifications
+copying src/symphony/notifications/config.py -> oh_my_symphony-0.14.0/src/symphony/notifications
+copying src/symphony/notifications/dispatcher.py -> oh_my_symphony-0.14.0/src/symphony/notifications
+copying src/symphony/notifications/events.py -> oh_my_symphony-0.14.0/src/symphony/notifications
+copying src/symphony/notifications/slack.py -> oh_my_symphony-0.14.0/src/symphony/notifications
+copying src/symphony/orchestrator/__init__.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/constants.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/contracts.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/core.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/dispatch_state.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/entries.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/helpers.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/parsing.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/orchestrator/run_registry.py -> oh_my_symphony-0.14.0/src/symphony/orchestrator
+copying src/symphony/trackers/__init__.py -> oh_my_symphony-0.14.0/src/symphony/trackers
+copying src/symphony/trackers/_retry.py -> oh_my_symphony-0.14.0/src/symphony/trackers
+copying src/symphony/trackers/file.py -> oh_my_symphony-0.14.0/src/symphony/trackers
+copying src/symphony/trackers/jira.py -> oh_my_symphony-0.14.0/src/symphony/trackers
+copying src/symphony/trackers/linear.py -> oh_my_symphony-0.14.0/src/symphony/trackers
+copying src/symphony/tui/__init__.py -> oh_my_symphony-0.14.0/src/symphony/tui
+copying src/symphony/tui/app.py -> oh_my_symphony-0.14.0/src/symphony/tui
+copying src/symphony/tui/constants.py -> oh_my_symphony-0.14.0/src/symphony/tui
+copying src/symphony/tui/helpers.py -> oh_my_symphony-0.14.0/src/symphony/tui
+copying src/symphony/tui/screens.py -> oh_my_symphony-0.14.0/src/symphony/tui
+copying src/symphony/tui/widgets.py -> oh_my_symphony-0.14.0/src/symphony/tui
+copying src/symphony/utils/__init__.py -> oh_my_symphony-0.14.0/src/symphony/utils
+copying src/symphony/utils/archive.py -> oh_my_symphony-0.14.0/src/symphony/utils
+copying src/symphony/utils/auto_merge.py -> oh_my_symphony-0.14.0/src/symphony/utils
+copying src/symphony/utils/keep_awake.py -> oh_my_symphony-0.14.0/src/symphony/utils
+copying src/symphony/utils/wiki_sweep.py -> oh_my_symphony-0.14.0/src/symphony/utils
+copying src/symphony/web/static/app.js -> oh_my_symphony-0.14.0/src/symphony/web/static
+copying src/symphony/web/static/index.html -> oh_my_symphony-0.14.0/src/symphony/web/static
+copying src/symphony/web/static/style.css -> oh_my_symphony-0.14.0/src/symphony/web/static
+copying src/symphony/workflow/__init__.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/builder.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/coercion.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/config.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/constants.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/mutate.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/parser.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/preflight.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying src/symphony/workflow/state.py -> oh_my_symphony-0.14.0/src/symphony/workflow
+copying tests/test_after_run_classifier.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_agent_lifecycle_e2e.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_archive.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_auto_merge.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_backend_contract.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_backends.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_backends_edges.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_backends_lifecycle.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_board_cli.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_board_cli_subcommands.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_board_viewer.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_claude_cache_tokens.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_cli_lazy_imports.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_cli_main_routing.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_cli_run_startup.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_codex_approvals.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_continuous_improvement.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_dispatch_state.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_doctor.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_git_quality_gate.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_i18n.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_issue.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_keep_awake.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_logging.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_notifications.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_archive.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_continuous_improvement.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_contract_integration.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_contracts.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_dispatch.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_health.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_max_retries.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_phase_transition.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_orchestrator_reconcile.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_package_metadata.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_progress_md.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_prompt.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_prompt_context.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_run_registry.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_server_routes.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_service.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_shell.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_static_todo_browser_acceptance.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_stats_skills.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_supergoal_hardening_loop.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_tracker_file.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_tracker_jira.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_tracker_jira_edges.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_tracker_linear_archive.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_tracker_linear_full.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_tui.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_web_api_smoke_script.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_web_browser_e2e.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_web_static_contract.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_webapi.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_wiki_sweep.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_workflow.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_workflow_file_tracker.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_workflow_mutate.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_workflow_pipeline_prompt.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_workflow_preflight_full.py -> oh_my_symphony-0.14.0/tests
+copying tests/test_workspace.py -> oh_my_symphony-0.14.0/tests
+copying src/oh_my_symphony.egg-info/SOURCES.txt -> oh_my_symphony-0.14.0/src/oh_my_symphony.egg-info
+Writing oh_my_symphony-0.14.0/setup.cfg
+Creating tar archive
+removing 'oh_my_symphony-0.14.0' (and everything under it)
+Building wheel from source distribution...
+running egg_info
+writing src/oh_my_symphony.egg-info/PKG-INFO
+writing dependency_links to src/oh_my_symphony.egg-info/dependency_links.txt
+writing entry points to src/oh_my_symphony.egg-info/entry_points.txt
+writing requirements to src/oh_my_symphony.egg-info/requires.txt
+writing top-level names to src/oh_my_symphony.egg-info/top_level.txt
+reading manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+running bdist_wheel
+running build
+running build_py
+creating build/lib/symphony
+copying src/symphony/logging.py -> build/lib/symphony
+copying src/symphony/service.py -> build/lib/symphony
+copying src/symphony/server.py -> build/lib/symphony
+copying src/symphony/prompt_context.py -> build/lib/symphony
+copying src/symphony/skills.py -> build/lib/symphony
+copying src/symphony/_shell.py -> build/lib/symphony
+copying src/symphony/ticket_markdown.py -> build/lib/symphony
+copying src/symphony/continuous_improvement.py -> build/lib/symphony
+copying src/symphony/mock_codex.py -> build/lib/symphony
+copying src/symphony/progress_md.py -> build/lib/symphony
+copying src/symphony/__init__.py -> build/lib/symphony
+copying src/symphony/webapi.py -> build/lib/symphony
+copying src/symphony/stats.py -> build/lib/symphony
+copying src/symphony/agent.py -> build/lib/symphony
+copying src/symphony/i18n.py -> build/lib/symphony
+copying src/symphony/errors.py -> build/lib/symphony
+copying src/symphony/prompt.py -> build/lib/symphony
+copying src/symphony/workspace.py -> build/lib/symphony
+copying src/symphony/issue.py -> build/lib/symphony
+copying src/symphony/__main__.py -> build/lib/symphony
+creating build/lib/symphony/tui
+copying src/symphony/tui/constants.py -> build/lib/symphony/tui
+copying src/symphony/tui/__init__.py -> build/lib/symphony/tui
+copying src/symphony/tui/widgets.py -> build/lib/symphony/tui
+copying src/symphony/tui/app.py -> build/lib/symphony/tui
+copying src/symphony/tui/screens.py -> build/lib/symphony/tui
+copying src/symphony/tui/helpers.py -> build/lib/symphony/tui
+creating build/lib/symphony/backends
+copying src/symphony/backends/agy.py -> build/lib/symphony/backends
+copying src/symphony/backends/codex.py -> build/lib/symphony/backends
+copying src/symphony/backends/__init__.py -> build/lib/symphony/backends
+copying src/symphony/backends/gemini.py -> build/lib/symphony/backends
+copying src/symphony/backends/pi.py -> build/lib/symphony/backends
+copying src/symphony/backends/opencode.py -> build/lib/symphony/backends
+copying src/symphony/backends/per_turn.py -> build/lib/symphony/backends
+copying src/symphony/backends/plain_cli.py -> build/lib/symphony/backends
+copying src/symphony/backends/kiro.py -> build/lib/symphony/backends
+copying src/symphony/backends/approval_policy.py -> build/lib/symphony/backends
+copying src/symphony/backends/claude_code.py -> build/lib/symphony/backends
+creating build/lib/symphony/utils
+copying src/symphony/utils/__init__.py -> build/lib/symphony/utils
+copying src/symphony/utils/wiki_sweep.py -> build/lib/symphony/utils
+copying src/symphony/utils/auto_merge.py -> build/lib/symphony/utils
+copying src/symphony/utils/keep_awake.py -> build/lib/symphony/utils
+copying src/symphony/utils/archive.py -> build/lib/symphony/utils
+creating build/lib/symphony/trackers
+copying src/symphony/trackers/linear.py -> build/lib/symphony/trackers
+copying src/symphony/trackers/__init__.py -> build/lib/symphony/trackers
+copying src/symphony/trackers/file.py -> build/lib/symphony/trackers
+copying src/symphony/trackers/jira.py -> build/lib/symphony/trackers
+copying src/symphony/trackers/_retry.py -> build/lib/symphony/trackers
+creating build/lib/symphony/cli
+copying src/symphony/cli/board.py -> build/lib/symphony/cli
+copying src/symphony/cli/__init__.py -> build/lib/symphony/cli
+copying src/symphony/cli/main.py -> build/lib/symphony/cli
+copying src/symphony/cli/doctor.py -> build/lib/symphony/cli
+copying src/symphony/cli/__main__.py -> build/lib/symphony/cli
+creating build/lib/symphony/workflow
+copying src/symphony/workflow/config.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/constants.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/__init__.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/builder.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/parser.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/coercion.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/mutate.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/state.py -> build/lib/symphony/workflow
+copying src/symphony/workflow/preflight.py -> build/lib/symphony/workflow
+creating build/lib/symphony/notifications
+copying src/symphony/notifications/dispatcher.py -> build/lib/symphony/notifications
+copying src/symphony/notifications/config.py -> build/lib/symphony/notifications
+copying src/symphony/notifications/events.py -> build/lib/symphony/notifications
+copying src/symphony/notifications/__init__.py -> build/lib/symphony/notifications
+copying src/symphony/notifications/slack.py -> build/lib/symphony/notifications
+creating build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/parsing.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/constants.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/__init__.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/core.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/run_registry.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/dispatch_state.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/contracts.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/helpers.py -> build/lib/symphony/orchestrator
+copying src/symphony/orchestrator/entries.py -> build/lib/symphony/orchestrator
+running egg_info
+writing src/oh_my_symphony.egg-info/PKG-INFO
+writing dependency_links to src/oh_my_symphony.egg-info/dependency_links.txt
+writing entry points to src/oh_my_symphony.egg-info/entry_points.txt
+writing requirements to src/oh_my_symphony.egg-info/requires.txt
+writing top-level names to src/oh_my_symphony.egg-info/top_level.txt
+reading manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+adding license file 'NOTICE'
+writing manifest file 'src/oh_my_symphony.egg-info/SOURCES.txt'
+creating build/lib/symphony/web/static
+copying src/symphony/web/static/index.html -> build/lib/symphony/web/static
+copying src/symphony/web/static/style.css -> build/lib/symphony/web/static
+copying src/symphony/web/static/app.js -> build/lib/symphony/web/static
+copying src/symphony/web/static/app.js -> build/lib/symphony/web/static
+copying src/symphony/web/static/index.html -> build/lib/symphony/web/static
+copying src/symphony/web/static/style.css -> build/lib/symphony/web/static
+warning: build_py: byte-compiling is disabled, skipping.
+
+installing to build/bdist.macosx-10.9-universal2/wheel
+running install
+running install_lib
+creating build/bdist.macosx-10.9-universal2/wheel
+creating build/bdist.macosx-10.9-universal2/wheel/symphony
+copying build/lib/symphony/logging.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/service.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/server.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/prompt_context.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/skills.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/_shell.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/tui
+copying build/lib/symphony/tui/constants.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/tui
+copying build/lib/symphony/tui/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/tui
+copying build/lib/symphony/tui/widgets.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/tui
+copying build/lib/symphony/tui/app.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/tui
+copying build/lib/symphony/tui/screens.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/tui
+copying build/lib/symphony/tui/helpers.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/tui
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/web
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/web/static
+copying build/lib/symphony/web/static/index.html -> build/bdist.macosx-10.9-universal2/wheel/./symphony/web/static
+copying build/lib/symphony/web/static/style.css -> build/bdist.macosx-10.9-universal2/wheel/./symphony/web/static
+copying build/lib/symphony/web/static/app.js -> build/bdist.macosx-10.9-universal2/wheel/./symphony/web/static
+copying build/lib/symphony/ticket_markdown.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/continuous_improvement.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/mock_codex.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/backends
+copying build/lib/symphony/backends/agy.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/codex.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/gemini.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/pi.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/opencode.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/per_turn.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/plain_cli.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/kiro.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/approval_policy.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/backends/claude_code.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/backends
+copying build/lib/symphony/progress_md.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/webapi.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/utils
+copying build/lib/symphony/utils/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/utils
+copying build/lib/symphony/utils/wiki_sweep.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/utils
+copying build/lib/symphony/utils/auto_merge.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/utils
+copying build/lib/symphony/utils/keep_awake.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/utils
+copying build/lib/symphony/utils/archive.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/utils
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/trackers
+copying build/lib/symphony/trackers/linear.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/trackers
+copying build/lib/symphony/trackers/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/trackers
+copying build/lib/symphony/trackers/file.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/trackers
+copying build/lib/symphony/trackers/jira.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/trackers
+copying build/lib/symphony/trackers/_retry.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/trackers
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/cli
+copying build/lib/symphony/cli/board.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/cli
+copying build/lib/symphony/cli/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/cli
+copying build/lib/symphony/cli/main.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/cli
+copying build/lib/symphony/cli/doctor.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/cli
+copying build/lib/symphony/cli/__main__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/cli
+copying build/lib/symphony/stats.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/workflow
+copying build/lib/symphony/workflow/config.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/constants.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/builder.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/parser.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/coercion.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/mutate.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/state.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/workflow/preflight.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/workflow
+copying build/lib/symphony/agent.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/i18n.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/errors.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/prompt.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/workspace.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/issue.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+copying build/lib/symphony/__main__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/notifications
+copying build/lib/symphony/notifications/dispatcher.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/notifications
+copying build/lib/symphony/notifications/config.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/notifications
+copying build/lib/symphony/notifications/events.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/notifications
+copying build/lib/symphony/notifications/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/notifications
+copying build/lib/symphony/notifications/slack.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/notifications
+creating build/bdist.macosx-10.9-universal2/wheel/symphony/orchestrator
+copying build/lib/symphony/orchestrator/parsing.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/constants.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/__init__.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/core.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/run_registry.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/dispatch_state.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/contracts.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/helpers.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+copying build/lib/symphony/orchestrator/entries.py -> build/bdist.macosx-10.9-universal2/wheel/./symphony/orchestrator
+warning: install_lib: byte-compiling is disabled, skipping.
+
+running install_egg_info
+Copying src/oh_my_symphony.egg-info to build/bdist.macosx-10.9-universal2/wheel/./oh_my_symphony-0.14.0-py3.12.egg-info
+running install_scripts
+creating build/bdist.macosx-10.9-universal2/wheel/oh_my_symphony-0.14.0.dist-info/WHEEL
+creating '/private/tmp/symphony-runtime-qa-ple766sk/dist/.tmp-8dg616k5/oh_my_symphony-0.14.0-py3-none-any.whl' and adding 'build/bdist.macosx-10.9-universal2/wheel' to it
+adding 'oh_my_symphony-0.14.0.dist-info/licenses/LICENSE'
+adding 'oh_my_symphony-0.14.0.dist-info/licenses/NOTICE'
+adding 'symphony/__init__.py'
+adding 'symphony/__main__.py'
+adding 'symphony/_shell.py'
+adding 'symphony/agent.py'
+adding 'symphony/continuous_improvement.py'
+adding 'symphony/errors.py'
+adding 'symphony/i18n.py'
+adding 'symphony/issue.py'
+adding 'symphony/logging.py'
+adding 'symphony/mock_codex.py'
+adding 'symphony/progress_md.py'
+adding 'symphony/prompt.py'
+adding 'symphony/prompt_context.py'
+adding 'symphony/server.py'
+adding 'symphony/service.py'
+adding 'symphony/skills.py'
+adding 'symphony/stats.py'
+adding 'symphony/ticket_markdown.py'
+adding 'symphony/webapi.py'
+adding 'symphony/workspace.py'
+adding 'symphony/backends/__init__.py'
+adding 'symphony/backends/agy.py'
+adding 'symphony/backends/approval_policy.py'
+adding 'symphony/backends/claude_code.py'
+adding 'symphony/backends/codex.py'
+adding 'symphony/backends/gemini.py'
+adding 'symphony/backends/kiro.py'
+adding 'symphony/backends/opencode.py'
+adding 'symphony/backends/per_turn.py'
+adding 'symphony/backends/pi.py'
+adding 'symphony/backends/plain_cli.py'
+adding 'symphony/cli/__init__.py'
+adding 'symphony/cli/__main__.py'
+adding 'symphony/cli/board.py'
+adding 'symphony/cli/doctor.py'
+adding 'symphony/cli/main.py'
+adding 'symphony/notifications/__init__.py'
+adding 'symphony/notifications/config.py'
+adding 'symphony/notifications/dispatcher.py'
+adding 'symphony/notifications/events.py'
+adding 'symphony/notifications/slack.py'
+adding 'symphony/orchestrator/__init__.py'
+adding 'symphony/orchestrator/constants.py'
+adding 'symphony/orchestrator/contracts.py'
+adding 'symphony/orchestrator/core.py'
+adding 'symphony/orchestrator/dispatch_state.py'
+adding 'symphony/orchestrator/entries.py'
+adding 'symphony/orchestrator/helpers.py'
+adding 'symphony/orchestrator/parsing.py'
+adding 'symphony/orchestrator/run_registry.py'
+adding 'symphony/trackers/__init__.py'
+adding 'symphony/trackers/_retry.py'
+adding 'symphony/trackers/file.py'
+adding 'symphony/trackers/jira.py'
+adding 'symphony/trackers/linear.py'
+adding 'symphony/tui/__init__.py'
+adding 'symphony/tui/app.py'
+adding 'symphony/tui/constants.py'
+adding 'symphony/tui/helpers.py'
+adding 'symphony/tui/screens.py'
+adding 'symphony/tui/widgets.py'
+adding 'symphony/utils/__init__.py'
+adding 'symphony/utils/archive.py'
+adding 'symphony/utils/auto_merge.py'
+adding 'symphony/utils/keep_awake.py'
+adding 'symphony/utils/wiki_sweep.py'
+adding 'symphony/web/static/app.js'
+adding 'symphony/web/static/index.html'
+adding 'symphony/web/static/style.css'
+adding 'symphony/workflow/__init__.py'
+adding 'symphony/workflow/builder.py'
+adding 'symphony/workflow/coercion.py'
+adding 'symphony/workflow/config.py'
+adding 'symphony/workflow/constants.py'
+adding 'symphony/workflow/mutate.py'
+adding 'symphony/workflow/parser.py'
+adding 'symphony/workflow/preflight.py'
+adding 'symphony/workflow/state.py'
+adding 'oh_my_symphony-0.14.0.dist-info/METADATA'
+adding 'oh_my_symphony-0.14.0.dist-info/WHEEL'
+adding 'oh_my_symphony-0.14.0.dist-info/entry_points.txt'
+adding 'oh_my_symphony-0.14.0.dist-info/top_level.txt'
+adding 'oh_my_symphony-0.14.0.dist-info/RECORD'
+removing build/bdist.macosx-10.9-universal2/wheel
+Successfully built /private/tmp/symphony-runtime-qa-ple766sk/dist/oh_my_symphony-0.14.0.tar.gz
+Successfully built /private/tmp/symphony-runtime-qa-ple766sk/dist/oh_my_symphony-0.14.0-py3-none-any.whl

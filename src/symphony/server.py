@@ -21,7 +21,7 @@ from aiohttp import web
 
 from .logging import get_logger
 from .orchestrator import Orchestrator
-from .webapi import register_web_routes
+from .webapi import BIND_HOST_KEY, register_web_routes
 
 
 log = get_logger()
@@ -209,7 +209,7 @@ async def run_server(
 ) -> tuple[web.AppRunner, int]:
     # The API guard middleware only enforces the loopback Host allowlist
     # when the server itself is loopback-bound; record the bind address.
-    app["bind_host"] = host
+    app[BIND_HOST_KEY] = host
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)

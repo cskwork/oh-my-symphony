@@ -1,0 +1,13 @@
+PASS  server.port=0                 127.0.0.1:0 is free
+PASS  shell.bash                    bash
+PASS  agent.max_turns               100 turn budget covers 4 active states
+PASS  agent.kind=codex              /private/tmp/symphony-runtime-qa-ple766sk/venv/bin/python → /private/tmp/symphony-runtime-qa-ple766sk/venv/bin/python
+PASS  agent.kind=pi.auth            not pi (skipped)
+PASS  agent.kind=gemini.auth        not gemini (skipped)
+PASS  agent.kind=agy.state          not agy (skipped)
+PASS  agent.kind=kiro.auth          not kiro (skipped)
+PASS  prompts                       built-in template in use
+PASS  hooks.after_create            looks customized
+PASS  workspace.root=/private/tmp/symphony-runtime-qa-ple766sk/runtime/workspaces  /private/tmp/symphony-runtime-qa-ple766sk/runtime/workspaces exists and is writable
+PASS  tracker.board_root            /private/tmp/symphony-runtime-qa-ple766sk/runtime/board (0 tickets)
+WARN  viewer.board-viewer           /private/tmp/symphony-runtime-qa-ple766sk/runtime/tools/board-viewer/server.py not found — `--viewer-port` will be a no-op. The built-in web app on the orchestrator port (`--port`, default 9999) replaces it; the legacy `tools/board-viewer/` copy is only needed for the separate read-only viewer.

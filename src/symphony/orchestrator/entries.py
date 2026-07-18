@@ -147,6 +147,7 @@ class RetryEntry:
     timer_handle: asyncio.TimerHandle
     error: str | None = None
     kind: str = "retry"
+    holds_slot: bool = True
 
 
 @dataclass

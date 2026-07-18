@@ -546,6 +546,58 @@ def test_active_state_issue_with_unresolved_blocker_is_ineligible():
     assert orch._eligible(issue, cfg, owning_retry=False) is False
 
 
+def test_retry_eligibility_classifies_transient_and_durable_outcomes():
+    cfg = _make_config(active_states=("Todo", "In Progress", "Verify"))
+    blocker = BlockerRef(id="MT-9", identifier="MT-9", state="Verify")
+    blocked = _issue("MT-1", state="In Progress", blocked_by=(blocker,))
+    unsupported = replace(_issue("MT-2"), agent_kind="unsupported")
+    orch = _orch()
+
+    blocked_decision = orch._eligibility_decision(blocked, cfg, owning_retry=True)
+    unsupported_decision = orch._eligibility_decision(
+        unsupported, cfg, owning_retry=True
+    )
+    ready_decision = orch._eligibility_decision(_issue("MT-3"), cfg, owning_retry=True)
+
+    assert blocked_decision.disposition.value == "wait_non_slot"
+    assert "blocker" in blocked_decision.reason
+    assert unsupported_decision.disposition.value == "reject"
+    assert ready_decision.disposition.value == "ready"
+
+
+@pytest.mark.parametrize("contention", ["ci", "lease", "per-state", "global"])
+def test_retry_eligibility_classifies_all_contention_as_non_slot_wait(
+    monkeypatch: pytest.MonkeyPatch, contention: str
+) -> None:
+    cfg = _make_config(
+        max_concurrent=1 if contention == "global" else 5,
+        per_state={"todo": 1} if contention == "per-state" else {},
+    )
+    orch = _orch()
+    issue = _issue("MT-1")
+    if contention == "ci":
+        class _PendingImprovement:
+            def done(self) -> bool:
+                return False
+
+        orch._improvement_task = _PendingImprovement()  # type: ignore[assignment]
+    elif contention == "lease":
+        monkeypatch.setattr(orch, "_has_active_run_lease", lambda _issue_id: True)
+    elif contention in {"per-state", "global"}:
+        sibling = _issue("MT-2")
+        orch._running[sibling.id] = RunningEntry(
+            issue=sibling,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=None,
+            worker_task=None,
+            workspace_path=Path("/tmp/sibling"),
+        )
+
+    decision = orch._eligibility_decision(issue, cfg, owning_retry=True)
+
+    assert decision.disposition.value == "wait_non_slot"
+
+
 def test_auto_triage_refuses_todo_with_body_dependency():
     cfg = _make_config(tracker_kind="file", active_states=("Todo", "In Progress"))
     issue = _issue(
@@ -2024,6 +2076,243 @@ def test_available_slots_counts_retry_pending_against_budget():
         finally:
             for retry in list(orch._retry.values()):
                 retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    ("kind", "error"),
+    [("retry", "turn_error"), ("continuation", None)],
+)
+def test_standard_backoff_retry_owns_slot(kind: str, error: str | None) -> None:
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._schedule_retry(
+            "id-MT-1",
+            identifier="MT-1",
+            attempt=1,
+            delay_ms=60_000,
+            error=error,
+            kind=kind,
+        )
+        try:
+            assert orch._retry["id-MT-1"].holds_slot is True
+            assert orch._available_slots(cfg) == 0
+        finally:
+            orch._retry["id-MT-1"].timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+async def _assert_capacity_retry_repark(
+    orch: Orchestrator,
+    cfg: ServiceConfig,
+    issue: Issue,
+    sibling: Issue,
+    *,
+    kind: str,
+    error: str | None,
+    dispatched: list[tuple[int | None, str | None]],
+    escalations: list[int],
+) -> None:
+    orch._loop = asyncio.get_running_loop()
+    orch._claimed.update((issue.id, sibling.id))
+    orch._running[sibling.id] = RunningEntry(
+        issue=sibling,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,
+        workspace_path=Path("/tmp/sibling"),
+    )
+    orch._schedule_retry(
+        issue.id,
+        identifier=issue.identifier,
+        attempt=1,
+        delay_ms=60_000,
+        error=error,
+        kind=kind,
+    )
+    orch._retry[issue.id].timer_handle.cancel()
+    await orch._on_retry_timer(issue.id)
+    requeued = orch._retry[issue.id]
+    assert (requeued.attempt, requeued.kind, requeued.holds_slot) == (1, kind, False)
+    assert issue.id in orch._in_flight_ids()
+    orch._running.pop(sibling.id)
+    orch._claimed.discard(sibling.id)
+    assert orch._available_slots(cfg) == 1
+    requeued.timer_handle.cancel()
+    await orch._on_retry_timer(issue.id)
+    await asyncio.sleep(0)
+    assert dispatched == [(1, kind)]
+    assert escalations == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "error"),
+    [("retry", "turn_error"), ("continuation", None)],
+)
+def test_retry_timer_capacity_wait_preserves_attempt_kind_and_cap(
+    monkeypatch: pytest.MonkeyPatch, kind: str, error: str | None
+) -> None:
+    cfg = _make_config(max_concurrent=1)
+    cfg = replace(cfg, agent=replace(cfg.agent, max_retries=1))
+    orch = _orch()
+    issue = _issue("MT-1")
+    sibling = _issue("MT-2")
+    dispatched: list[tuple[int | None, str | None]] = []
+    escalations: list[int] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _escalate(**kwargs):
+        escalations.append(kwargs["attempt"])
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append((attempt, attempt_kind))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+    monkeypatch.setattr(orch, "_escalate_max_retries", _escalate)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    asyncio.run(
+        _assert_capacity_retry_repark(
+            orch,
+            cfg,
+            issue,
+            sibling,
+            kind=kind,
+            error=error,
+            dispatched=dispatched,
+            escalations=escalations,
+        )
+    )
+
+
+@pytest.mark.parametrize(("holds_slot", "expected_slots"), [(True, 0), (False, 1)])
+def test_retry_poll_failure_preserves_slot_ownership(
+    monkeypatch: pytest.MonkeyPatch, holds_slot: bool, expected_slots: int
+) -> None:
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-1")
+
+    async def _fetch(_cfg):
+        raise RuntimeError("tracker unavailable")
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._claimed.add(issue.id)
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=1,
+            delay_ms=60_000,
+            error="turn_error",
+            kind="retry",
+            holds_slot=holds_slot,
+        )
+        orch._retry[issue.id].timer_handle.cancel()
+        await orch._on_retry_timer(issue.id)
+        requeued = orch._retry[issue.id]
+        try:
+            assert (requeued.attempt, requeued.kind) == (1, "retry")
+            assert requeued.holds_slot is holds_slot
+            assert orch._available_slots(cfg) == expected_slots
+        finally:
+            requeued.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("rejection", ["unsupported-agent", "budget-exhausted"])
+def test_retry_timer_releases_durable_rejection(
+    monkeypatch: pytest.MonkeyPatch, rejection: str
+) -> None:
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-1")
+    if rejection == "unsupported-agent":
+        issue = replace(issue, agent_kind="unsupported")
+    else:
+        orch._turn_budget_exhausted.add(issue.id)
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._claimed.add(issue.id)
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=1,
+            delay_ms=60_000,
+            error="turn_error",
+            kind="retry",
+        )
+        orch._retry[issue.id].timer_handle.cancel()
+        await orch._on_retry_timer(issue.id)
+        assert issue.id not in orch._retry
+        assert issue.id not in orch._claimed
+        if rejection == "budget-exhausted":
+            assert issue.id in orch._turn_budget_exhausted
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("owner", ["running", "finalizing"])
+def test_retry_rejection_preserves_active_owner_claim(
+    monkeypatch: pytest.MonkeyPatch, owner: str
+) -> None:
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-1")
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._claimed.add(issue.id)
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=1,
+            delay_ms=60_000,
+            error="stale retry",
+            kind="retry",
+        )
+        orch._retry[issue.id].timer_handle.cancel()
+        if owner == "running":
+            orch._running[issue.id] = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=None,
+                workspace_path=Path("/tmp/running-owner"),
+            )
+        else:
+            orch._terminal_persist_pending.add(issue.id)
+
+        await orch._on_retry_timer(issue.id)
+
+        assert issue.id not in orch._retry
+        assert issue.id in orch._claimed
+        assert issue.id not in orch._persisted_retry_attempts
 
     asyncio.run(_run())
 
@@ -4079,6 +4368,7 @@ def test_retry_timer_reparks_paused_ticket_without_dispatching(monkeypatch):
             assert reparked.attempt == original_attempt, (
                 "paused re-park must not consume a retry attempt"
             )
+            assert reparked.holds_slot is True
             assert reparked.error == "worker error: turn_error: simulated"
             # Hold delay roughly matches PAUSED_RETRY_HOLD_MS.
             expected_due = (
@@ -4090,6 +4380,45 @@ def test_retry_timer_reparks_paused_ticket_without_dispatching(monkeypatch):
                 retry.timer_handle.cancel()
 
     asyncio.run(_run())
+
+
+async def _assert_blocked_retry_recovers(
+    orch: Orchestrator,
+    issue: Issue,
+    released: Issue,
+    candidates: list[Issue],
+    dispatched: list[tuple[str, int | None]],
+) -> None:
+    orch._loop = asyncio.get_running_loop()
+    orch._schedule_retry(
+        issue.id,
+        identifier=issue.identifier,
+        attempt=1,
+        delay_ms=60_000,
+        error="turn_error",
+        kind="retry",
+    )
+    try:
+        orch._retry[issue.id].timer_handle.cancel()
+        await orch._on_retry_timer(issue.id)
+        assert dispatched == []
+        requeued = orch._retry.get(issue.id)
+        assert requeued is not None
+        assert (requeued.attempt, requeued.kind, requeued.holds_slot) == (
+            1,
+            "retry",
+            False,
+        )
+        assert "blocker" in (requeued.error or "")
+        assert orch.issue_attention(issue)["kind"] == "blocked_dependency"  # type: ignore[index]
+        requeued.timer_handle.cancel()
+        candidates[0] = released
+        await orch._on_retry_timer(issue.id)
+        assert dispatched == [("MT-1", 1)]
+        assert issue.id not in orch._retry
+    finally:
+        for retry in list(orch._retry.values()):
+            retry.timer_handle.cancel()
 
 
 def test_retry_timer_waits_for_unresolved_blocker_then_recovers(monkeypatch):
@@ -4114,38 +4443,99 @@ def test_retry_timer_waits_for_unresolved_blocker_then_recovers(monkeypatch):
     monkeypatch.setattr(orch, "_dispatch", _capture_dispatch)
     monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
 
-    async def _run() -> None:
-        orch._loop = asyncio.get_running_loop()
-        orch._schedule_retry(
-            issue.id,
-            identifier=issue.identifier,
-            attempt=1,
-            delay_ms=60_000,
-            error="turn_error",
-            kind="retry",
+    asyncio.run(
+        _assert_blocked_retry_recovers(
+            orch, issue, released, candidates, dispatched
         )
-        try:
-            orch._retry[issue.id].timer_handle.cancel()
-            await orch._on_retry_timer(issue.id)
+    )
 
-            assert dispatched == []
-            requeued = orch._retry.get(issue.id)
-            assert requeued is not None
-            assert requeued.attempt == 2
-            assert requeued.error == "not eligible at retry time"
-            assert orch.issue_attention(issue)["kind"] == "blocked_dependency"  # type: ignore[index]
 
-            requeued.timer_handle.cancel()
-            candidates[0] = released
-            await orch._on_retry_timer(issue.id)
+def _patch_retry_tick_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    orch: Orchestrator,
+    cfg: ServiceConfig,
+    fetch,
+    dispatch,
+) -> None:
+    async def _noop(*_args, **_kwargs):
+        return None
 
-            assert dispatched == [("MT-1", 2)]
-            assert issue.id not in orch._retry
-        finally:
-            for retry in list(orch._retry.values()):
-                retry.timer_handle.cancel()
+    async def _not_triaged(*_args, **_kwargs):
+        return False
 
-    asyncio.run(_run())
+    monkeypatch.setattr(orch, "_fetch_candidates", fetch)
+    monkeypatch.setattr(orch, "_dispatch", dispatch)
+    monkeypatch.setattr(orch, "_ensure_run_registry", lambda _cfg: None)
+    monkeypatch.setattr(orch, "_reconcile_running", _noop)
+    monkeypatch.setattr(orch, "_auto_normalize_legacy_human_review_done", _noop)
+    monkeypatch.setattr(orch, "_auto_triage_todo_if_actionable", _not_triaged)
+    monkeypatch.setattr(orch, "_conflict_blocker", lambda _issue: None)
+    monkeypatch.setattr(orch, "_auto_reopen_sources_from_resolved_rcas", _noop)
+    monkeypatch.setattr(orch, "_auto_recover_blocked_sources", _noop)
+    monkeypatch.setattr(orch, "_archive_sweep", _noop)
+    monkeypatch.setattr(orch, "_notify_observers", _noop)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+
+
+async def _assert_non_slot_wait_allows_blocker(
+    orch: Orchestrator,
+    cfg: ServiceConfig,
+    dependent: Issue,
+    dispatched: list[str],
+) -> None:
+    orch._loop = asyncio.get_running_loop()
+    orch._claimed.add(dependent.id)
+    orch._schedule_retry(
+        dependent.id,
+        identifier=dependent.identifier,
+        attempt=1,
+        delay_ms=60_000,
+        error="turn_error",
+        kind="retry",
+    )
+    orch._retry[dependent.id].timer_handle.cancel()
+    await orch._on_retry_timer(dependent.id)
+    retry = orch._retry[dependent.id]
+    try:
+        assert (retry.attempt, retry.holds_slot) == (1, False)
+        assert dependent.id in orch._in_flight_ids()
+        assert orch._available_slots(cfg) == 1
+        await orch._on_tick()
+        assert dispatched == ["MT-1"]
+    finally:
+        retry.timer_handle.cancel()
+
+
+def test_retry_timer_non_slot_blocker_wait_allows_blocker_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress", "Verify"),
+        terminal_states=("Done",),
+    )
+    cfg = replace(cfg, agent=replace(cfg.agent, max_retries=1))
+    orch = _orch()
+    blocker = _issue("MT-1", state="In Progress")
+    blocker_ref = BlockerRef(
+        id=blocker.id, identifier=blocker.identifier, state=blocker.state
+    )
+    dependent = _issue("MT-2", state="In Progress", blocked_by=(blocker_ref,))
+    fetch_count = 0
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        nonlocal fetch_count
+        fetch_count += 1
+        return [dependent] if fetch_count == 1 else [blocker, dependent]
+
+    def _dispatch(issue, _cfg, *, attempt, attempt_kind=None):
+        del attempt, attempt_kind
+        dispatched.append(issue.identifier)
+
+    _patch_retry_tick_dependencies(monkeypatch, orch, cfg, _fetch, _dispatch)
+    asyncio.run(_assert_non_slot_wait_allows_blocker(orch, cfg, dependent, dispatched))
 
 
 def test_resume_worker_releases_held_retry_immediately(monkeypatch):

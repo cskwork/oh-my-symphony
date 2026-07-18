@@ -1,0 +1,66 @@
+[
+  {
+    "path": "DEMO-001.md",
+    "sha256": "68577a07591b45e1d5d395920cd4d19df845af594a6c3febf497f63cc342e529"
+  },
+  {
+    "path": "QA-TODO-001.md",
+    "sha256": "a2d7c5a26343dd7837906be80a315ca1859bfe23e8982bb8d3d95254d0cceb4d"
+  },
+  {
+    "path": "SMA-18.md",
+    "sha256": "4aacb565636a96f432b45a854c307d357df85fe95936b765778ff761cd6574da"
+  },
+  {
+    "path": "SMA-19.md",
+    "sha256": "5ed82cc5459d36fccbdb85e22bcf761c8defb45351ac71c12205432c688d9ee9"
+  },
+  {
+    "path": "SMA-20.md",
+    "sha256": "9ceae80c2a501717398dc4db351807cfefca29b30b2c1d088c57de329e6b05b1"
+  },
+  {
+    "path": "SMA-22.md",
+    "sha256": "045e656ae69b41c25ac51ce3cdb2d1132ea4a2f74f0b16ebfded8c983763e80e"
+  },
+  {
+    "path": "SMA-23.md",
+    "sha256": "325cc1c9ef14f70d286747159b7bc3e7448298beaa36be9e9bdb59abf4db8644"
+  },
+  {
+    "path": "SMA-24.md",
+    "sha256": "0355054dfa2c87878784883432ccd82c9c4d138eb4ea7e7956959a88b52a9790"
+  },
+  {
+    "path": "SMA-25.md",
+    "sha256": "a4e1efcbe7c1eaf819ca9a031b69ae985d52d8e377024f1e5f9dbf3f86ed6c7e"
+  },
+  {
+    "path": "SMA-26.md",
+    "sha256": "f4e57eaef9b97e94fb2d0c35ba6c139d5954cbde51dae04effdf08b706346038"
+  },
+  {
+    "path": "SMA-27.md",
+    "sha256": "49905f65fdcff95b489540c5d39ddd0aa7c291398a0125a88c25ae77d1cbd226"
+  },
+  {
+    "path": "SMA-28.md",
+    "sha256": "d08ed7fc011848be72b59dce0f0e6b2803cde53950564bb2374eaf0dfab0a0e2"
+  },
+  {
+    "path": "SMA-29.md",
+    "sha256": "804bc3b782eed9385925aa304d8506329454fe6455c7677b34349d9edc171da4"
+  },
+  {
+    "path": "SMA-30.md",
+    "sha256": "05f25b06625dfe499c929087295846f54f32ae67fdaa44ac0889a14413eff6d9"
+  },
+  {
+    "path": "SMA-31.md",
+    "sha256": "294d4626280e64b27d9b6c49701dde8f13b02899a2083a6758da252099fb43a9"
+  },
+  {
+    "path": "SMA-32.md",
+    "sha256": "deeab4f438135d1fe3717c610bea80ccbbbe87579631c3713e0486773ee849ec"
+  }
+]

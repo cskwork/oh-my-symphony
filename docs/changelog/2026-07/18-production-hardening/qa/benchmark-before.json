@@ -1,0 +1,29 @@
+{
+  "body_bytes": 1024,
+  "results": [
+    {
+      "candidate_count": 500,
+      "candidate_order_sha256": "d0c1a8defc880258900a9cc1480a8ae0cadd42898c2a06ea19b235a985b3d02b",
+      "cards": 1000,
+      "implementation": "legacy_two_scan",
+      "median_ms": 453.86,
+      "parse_counts": [2000, 2000, 2000, 2000, 2000],
+      "samples_ms": [444.997, 466.106, 453.86, 441.965, 536.847],
+      "terminal_count": 500,
+      "terminal_order_sha256": "19aed518cc86a4138e43c292c825ed489da8b1bc288e055c6b25da06de2bef5d"
+    },
+    {
+      "candidate_count": 2500,
+      "candidate_order_sha256": "fda41effdece372dfd183073bb1a7a62713184db9810abe43b6e263f36c718f1",
+      "cards": 5000,
+      "implementation": "legacy_two_scan",
+      "median_ms": 2247.174,
+      "parse_counts": [10000, 10000, 10000, 10000, 10000],
+      "samples_ms": [2336.07, 2261.663, 2238.736, 2247.174, 2247.093],
+      "terminal_count": 2500,
+      "terminal_order_sha256": "f69c530d7da6ad4b63fdeb8b4d4ec6d1d3759f16bc8fbb2ef8965936a59ff926"
+    }
+  ],
+  "samples": 5,
+  "warmups": 1
+}

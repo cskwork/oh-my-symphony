@@ -5,9 +5,8 @@ Everything in this module is dependency-light: rendering uses Rich
 import most of these directly to assert behavior without spinning up a
 Textual app.
 
-`_fetch_candidates` and `_fetch_terminals` deliberately live here (not
-in the app) so unit tests can `monkeypatch.setattr("symphony.tui._fetch_candidates", ...)`
-and the live `KanbanApp` picks up the stub at call time.
+Tracker fetch helpers deliberately live here (not in the app) so tests can
+replace the app's imported snapshot seam without constructing live clients.
 """
 
 from __future__ import annotations
@@ -191,6 +190,42 @@ def _build_runtime_index(snap: dict[str, Any]) -> dict[str, _CardStatus]:
             attention=row.get("attention") if isinstance(row.get("attention"), dict) else None,
         )
     return index
+
+
+def _partition_tracker_snapshot(
+    issues: list[Issue], cfg: ServiceConfig
+) -> tuple[list[Issue], list[Issue]]:
+    active = {normalize_state(state) for state in cfg.tracker.active_states}
+    terminal = {normalize_state(state) for state in cfg.tracker.terminal_states}
+    candidates = [
+        issue
+        for issue in issues
+        if normalize_state(issue.state) in active
+        and normalize_state(issue.state) not in terminal
+    ]
+    terminals = [
+        issue for issue in issues if normalize_state(issue.state) in terminal
+    ]
+    return candidates, terminals
+
+
+def _fetch_tracker_snapshot(
+    cfg: ServiceConfig,
+) -> tuple[list[Issue], list[Issue]]:
+    client = build_tracker_client(cfg)
+    try:
+        if cfg.tracker.kind.lower() == "file":
+            states = tuple(cfg.tracker.active_states) + tuple(
+                cfg.tracker.terminal_states
+            )
+            return _partition_tracker_snapshot(
+                client.fetch_issues_by_states(states), cfg
+            )
+        candidates = client.fetch_candidate_issues()
+        terminals = client.fetch_issues_by_states(cfg.tracker.terminal_states)
+        return candidates, terminals
+    finally:
+        client.close()
 
 
 def _fetch_candidates(cfg: ServiceConfig) -> list[Issue]:

@@ -7,10 +7,8 @@ The App owns:
   - all key bindings + actions (zoom, pagination, density, filter, archive,
     pause/resume, language toggle, scroll).
 
-`_fetch_candidates` / `_fetch_terminals` are imported directly and
-resolved through this module's globals at call time, so tests patch
-`symphony.tui.app._fetch_candidates` — the consumer's reference
-(initiative D; the former parent-package indirection is gone).
+`_fetch_tracker_snapshot` is imported directly and resolved through this
+module's globals at call time, so tests patch the consumer's reference.
 """
 
 from __future__ import annotations
@@ -44,8 +42,7 @@ from .helpers import (
     _CardStatus,
     _build_runtime_index,
     _card_sort_key,
-    _fetch_candidates,
-    _fetch_terminals,
+    _fetch_tracker_snapshot,
     _matches_filter,
     _ordered_column_states,
     _stage_position,
@@ -236,8 +233,9 @@ class KanbanApp(App):
 
     async def _refresh_tracker(self, cfg: ServiceConfig) -> None:
         try:
-            candidates = await asyncio.to_thread(_fetch_candidates, cfg)
-            terminals = await asyncio.to_thread(_fetch_terminals, cfg)
+            candidates, terminals = await asyncio.to_thread(
+                _fetch_tracker_snapshot, cfg
+            )
         except Exception as exc:
             log.debug("tui_tracker_fetch_failed", error=str(exc))
             return

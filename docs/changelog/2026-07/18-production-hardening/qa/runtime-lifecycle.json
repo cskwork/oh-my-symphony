@@ -1,0 +1,179 @@
+{
+  "artifact": {
+    "installed_cli": "/private/tmp/symphony-runtime-qa-ple766sk/venv/bin/symphony",
+    "wheel": "oh_my_symphony-0.14.0-py3-none-any.whl",
+    "wheel_sha256": "3e2c0e3f3dad68bd740969150bfaf1691b82f1ec706479c0857ecca6b7e45a92"
+  },
+  "commands": {
+    "build": {
+      "argv": [
+        "uv",
+        "build",
+        "--cache-dir",
+        "/private/tmp/symphony-runtime-qa-ple766sk/uv-cache",
+        "--out-dir",
+        "/private/tmp/symphony-runtime-qa-ple766sk/dist",
+        "--no-create-gitignore"
+      ],
+      "cwd": "/private/tmp/symphony-runtime-qa-ple766sk/source",
+      "duration_seconds": 8.282,
+      "exit_code": 0,
+      "log": "runtime-build.txt",
+      "timeout_seconds": 300
+    },
+    "doctor": {
+      "argv": [
+        "/private/tmp/symphony-runtime-qa-ple766sk/venv/bin/symphony",
+        "doctor",
+        "/private/tmp/symphony-runtime-qa-ple766sk/runtime/WORKFLOW.md",
+        "--no-color"
+      ],
+      "cwd": "/private/tmp/symphony-runtime-qa-ple766sk/runtime",
+      "duration_seconds": 2.912,
+      "exit_code": 0,
+      "log": "runtime-doctor.txt",
+      "timeout_seconds": 60
+    },
+    "install": {
+      "argv": [
+        "uv",
+        "pip",
+        "install",
+        "--cache-dir",
+        "/private/tmp/symphony-runtime-qa-ple766sk/uv-cache",
+        "--python",
+        "/private/tmp/symphony-runtime-qa-ple766sk/venv/bin/python",
+        "/private/tmp/symphony-runtime-qa-ple766sk/dist/oh_my_symphony-0.14.0-py3-none-any.whl"
+      ],
+      "cwd": "/private/tmp/symphony-runtime-qa-ple766sk",
+      "duration_seconds": 1.441,
+      "exit_code": 0,
+      "log": "runtime-install.txt",
+      "timeout_seconds": 300
+    },
+    "runtime": {
+      "argv": [
+        "/private/tmp/symphony-runtime-qa-ple766sk/venv/bin/symphony",
+        "/private/tmp/symphony-runtime-qa-ple766sk/runtime/WORKFLOW.md",
+        "--log-level",
+        "INFO"
+      ],
+      "cwd": "/private/tmp/symphony-runtime-qa-ple766sk/runtime",
+      "log": "runtime-server.txt",
+      "shutdown_timeout_seconds": 30,
+      "startup_timeout_seconds": 30
+    },
+    "smoke": {
+      "argv": [
+        "/private/tmp/symphony-runtime-qa-ple766sk/venv/bin/python",
+        "/private/tmp/symphony-runtime-qa-ple766sk/source/scripts/smoke_web_api.py",
+        "--base-url",
+        "http://127.0.0.1:59884",
+        "--prefix",
+        "QAPH46BF66FB"
+      ],
+      "cwd": "/private/tmp/symphony-runtime-qa-ple766sk/runtime",
+      "duration_seconds": 0.202,
+      "exit_code": 0,
+      "log": "runtime-smoke.txt",
+      "timeout_seconds": 60
+    },
+    "venv": {
+      "argv": [
+        "/opt/anaconda3/bin/python",
+        "-m",
+        "venv",
+        "/private/tmp/symphony-runtime-qa-ple766sk/venv"
+      ],
+      "cwd": "/private/tmp/symphony-runtime-qa-ple766sk",
+      "duration_seconds": 2.137,
+      "exit_code": 0,
+      "log": "runtime-venv.txt",
+      "timeout_seconds": 120
+    }
+  },
+  "emergency_process_cleanup": "not-running",
+  "observation": "completed",
+  "original_linked_board": {
+    "exact_manifest_equal": true,
+    "link": "/private/tmp/symphony-production-hardening-20260718/kanban",
+    "manifest_digest_after": "0e9be1b8057a69cb3d7d59d91c9f73f29d7369c2d883102885527c07a7dd91a9",
+    "manifest_digest_before": "0e9be1b8057a69cb3d7d59d91c9f73f29d7369c2d883102885527c07a7dd91a9",
+    "target": "/Users/danny/Documents/PARA/Resource/symphony-multi-agent/kanban",
+    "ticket_count_after": 16,
+    "ticket_count_before": 16
+  },
+  "registry": {
+    "active": 0,
+    "lease_holding": 0,
+    "statuses": {}
+  },
+  "runtime": {
+    "base_url": "http://127.0.0.1:59884",
+    "ephemeral_port": 59884,
+    "health": {
+      "counts": {
+        "retrying": 0,
+        "running": 0
+      },
+      "degraded_reasons": [],
+      "generated_at": "2026-07-18T05:52:48Z",
+      "run_registry": {
+        "enabled": true,
+        "error_count": 0,
+        "last_error": null
+      },
+      "status": "ok",
+      "tick": {
+        "alive": true,
+        "consecutive_failures": 0,
+        "error_count": 0,
+        "last_completed_at": "2026-07-18T05:52:48.898023+00:00",
+        "last_error": null,
+        "loop_restarts": 0,
+        "seconds_since_last": 0.1,
+        "started": true
+      },
+      "tracker": {
+        "consecutive_fetch_failures": 0
+      },
+      "version": "0.14.0",
+      "workflow_path": "/private/tmp/symphony-runtime-qa-ple766sk/runtime/WORKFLOW.md"
+    },
+    "health_observations": [
+      "http=200,status=ok"
+    ],
+    "warnings_mode": "error"
+  },
+  "shutdown": {
+    "duration_seconds": 1.058,
+    "exit_code": 0,
+    "shutdown_complete": true,
+    "signal": "SIGTERM",
+    "socket": {
+      "attempts": 1,
+      "closed": true,
+      "port": 59884
+    }
+  },
+  "smoke": {
+    "external_cleanup": {
+      "api_prefixed_identifiers": [],
+      "disk_prefixed_ticket_paths": []
+    },
+    "prefix": "QAPH46BF66FB"
+  },
+  "teardown": {
+    "runtime_process": "not-running",
+    "temp_root_removed": true
+  },
+  "temp_root": "/private/tmp/symphony-runtime-qa-ple766sk",
+  "workflow": {
+    "board": "/private/tmp/symphony-runtime-qa-ple766sk/runtime/board",
+    "keep_awake": false,
+    "path": "/private/tmp/symphony-runtime-qa-ple766sk/runtime/WORKFLOW.md",
+    "progress_enabled": false,
+    "server_port": 0,
+    "workspace": "/private/tmp/symphony-runtime-qa-ple766sk/runtime/workspaces"
+  }
+}
