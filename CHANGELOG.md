@@ -12,6 +12,51 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 No unreleased changes.
 
+## [0.15.0] - 2026-07-18 - Production boundary hardening
+
+### Fixed
+
+- Auto-merge now checks excluded roots with literal Git path boundaries and
+  stages only the exact untracked, non-ignored capture files. Partial staging
+  and commit-hook failures restore repository state without losing captured
+  file bytes or staging unrelated tracked edits.
+- Retry waits now distinguish agent failures from capacity, dependency, lease,
+  continuous-improvement, and blocker contention. Non-agent waits preserve
+  duplicate-prevention ownership without consuming a worker slot or retry
+  attempt.
+- Server startup now uses one typed aiohttp application key, eliminating the
+  startup warning while preserving existing host-guard behavior.
+
+### Changed
+
+- File-board TUI refreshes now scan and parse each ticket once while preserving
+  ticket order and the existing Jira and Linear query behavior.
+- Distribution metadata now declares the SPDX `Apache-2.0` license expression,
+  includes `LICENSE` and `NOTICE`, and uses the PEP 639-capable Setuptools 77
+  build floor.
+
+### Verified
+
+- Full suite: 1,415 passed, 6 skipped with 84.18% coverage; Ruff and Pyright
+  clean.
+- The frozen 1,000- and 5,000-card file-board benchmark preserved ordering and
+  parse counts while running at 50.56% and 53.44% of the prior two-scan
+  baseline.
+- Isolated wheel and sdist checks passed, including installed CLI and static
+  resources, SPDX/legal-file metadata, warning rejection, and source-tree
+  cleanliness.
+- Installed-artifact lifecycle testing passed `symphony doctor`, exact health,
+  all nine API smoke checks, graceful shutdown, closed-port and zero-active-run
+  checks, cleanup, and original-board integrity.
+
+### Verification limits
+
+- The lifecycle test used an empty disposable file board and did not exercise a
+  real worker dispatch, managed service/viewer, browser/TUI interaction, or live
+  Jira and Linear adapters.
+- The existing registry-error fail-open policy and non-atomic Jira/Linear
+  multi-query snapshots remain unchanged.
+
 ## [0.14.0] - 2026-07-17 - Auto-merge retry and restart safety
 
 ### Fixed
@@ -1004,7 +1049,8 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.15.0
 [0.14.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.14.0
 [0.13.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.13.0
 [0.12.0]: https://github.com/cskwork/oh-my-symphony/releases/tag/v0.12.0
