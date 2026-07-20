@@ -2,7 +2,7 @@
 
 Route: GREENFIELD
 
-Status: pending
+Status: drafting
 
 Blocked by: 002
 

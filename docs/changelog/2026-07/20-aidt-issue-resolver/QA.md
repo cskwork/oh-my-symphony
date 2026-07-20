@@ -13,7 +13,8 @@
 ## Results
 
 - [x] Frontier 001 safe Jira inbox passed its nested literal commit gate after two Build/Verify iterations.
-- [ ] AIDT routing, worktrees, stage gates, QA, merge/deploy, managed surfaces, and integrated/live E2E remain.
+- [x] Frontiers 002/002a immutable AIDT routing and public output closure passed independent final verification.
+- [ ] Worktrees, stage gates, QA, merge/deploy, managed surfaces, and integrated/live E2E remain.
 
 Backward-trace: clean
 

@@ -22,6 +22,7 @@ from symphony.errors import JiraApiStatusError, JiraUnknownPayload, SymphonyErro
 from symphony.issue import Issue
 from symphony.jira_intake import (
     JiraIntakeFailure,
+    build_source_snapshot,
     render_jira_source,
     run_jira_intake,
 )
@@ -57,6 +58,21 @@ def _adf(text: str) -> dict[str, Any]:
     }
 
 
+def _named(name: str, *, item_id: str = "10000") -> dict[str, Any]:
+    return {
+        "id": item_id,
+        "name": name,
+        "self": f"{SITE}/rest/api/3/item/{item_id}",
+    }
+
+
+def _components(*names: str) -> list[dict[str, Any]]:
+    return [
+        _named(name, item_id=str(10000 + index))
+        for index, name in enumerate(names)
+    ]
+
+
 def _row(
     key: str = "A20-1",
     *,
@@ -65,16 +81,87 @@ def _row(
     description: Any = None,
     subtask: bool = False,
     parent: str | None = None,
+    components: tuple[str, ...] = ("Viewer API",),
+    status: str = "Ready",
+    priority: str | None = "Medium",
+    updated: str = "2026-07-20T12:34:56Z",
 ) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "summary": summary,
         "description": description,
         "assignee": {"accountId": account} if account is not None else None,
-        "issuetype": {"name": "Sub-task" if subtask else "Task", "subtask": subtask},
+        "issuetype": {
+            "id": "10001",
+            "name": "Sub-task" if subtask else "Task",
+            "subtask": subtask,
+        },
+        "components": _components(*components),
+        "status": {**_named(status), "statusCategory": {"key": "indeterminate"}},
+        "priority": None if priority is None else _named(priority),
+        "updated": updated,
     }
     if parent is not None:
-        fields["parent"] = {"key": parent}
+        fields["parent"] = {"id": "10", "key": parent, "self": f"{SITE}/{parent}"}
     return {"id": key.removeprefix("A20-") or "1", "key": key, "fields": fields}
+
+
+def _parent_payload(
+    key: str = "A20-10",
+    *,
+    summary: str = "Parent summary",
+    description: Any = None,
+    components: tuple[str, ...] = ("Viewer API",),
+) -> dict[str, Any]:
+    return {
+        "id": "10",
+        "key": key,
+        "fields": {
+            "summary": summary,
+            "description": description or _adf("Parent description"),
+            "issuetype": {"id": "10002", "name": "Story", "subtask": False},
+            "components": _components(*components),
+        },
+    }
+
+
+def _invalid_wire_row(case: str) -> dict[str, Any]:
+    row = _row("A20-2")
+    fields = row["fields"]
+    if case == "missing_components":
+        fields.pop("components")
+        return row
+    if case == "missing_status":
+        fields.pop("status")
+        return row
+    if case == "missing_priority":
+        fields.pop("priority")
+        return row
+    if case == "missing_updated":
+        fields.pop("updated")
+        return row
+    if case == "wrong_components":
+        fields["components"] = {"name": "Viewer API"}
+        return row
+    if case == "wrong_status":
+        fields["status"] = "Ready"
+        return row
+    if case == "wrong_priority":
+        fields["priority"] = "Medium"
+        return row
+    if case == "wrong_updated":
+        fields["updated"] = {"value": "2026-07-20T12:34:56Z"}
+        return row
+    if case == "control_status":
+        fields["status"] = _named("Ready\nHidden")
+        return row
+    if case == "oversize_priority":
+        size = jira_module.INTAKE_MAX_COMPONENT_BYTES + 1
+        fields["priority"] = _named("x" * size)
+        return row
+    if case == "duplicate_components":
+        fields["components"] = _components("Viewer API", "viewer api")
+        return row
+    raise AssertionError(f"unknown invalid wire case: {case}")
 
 
 def _client(
@@ -191,6 +278,7 @@ def _update(
         source_kind="jira",
         source_key=key,
         body=render_jira_source(item),
+        source=build_source_snapshot(item),
     )
 
 
@@ -218,6 +306,90 @@ def test_jql_requires_project_status_and_current_user() -> None:
         _client(handler, statuses=("Ready\nOR assignee is not EMPTY",)).fetch_assigned_inbox()
 
 
+def test_live_wire_uses_complete_fields_and_ignores_nested_transport_keys() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/myself"):
+            return httpx.Response(200, json={"active": True, "accountId": ACCOUNT})
+        if request.url.path.endswith("/issue/A20-10"):
+            return httpx.Response(200, json=_parent_payload())
+        child = _row(
+            description=_adf("Non-empty child description"),
+            parent="A20-10",
+            priority=None,
+        )
+        return httpx.Response(200, json={"isLast": True, "issues": [child]})
+
+    item = _client(handler).fetch_assigned_inbox()[0]
+
+    assert requests[1].url.params["fields"] == jira_module._INTAKE_SEARCH_FIELDS
+    assert requests[2].url.params["fields"] == (
+        "summary,description,issuetype,components"
+    )
+    assert item.components == ("Viewer API",)
+    assert item.status == "Ready"
+    assert item.priority is None
+    assert item.updated == "2026-07-20T12:34:56Z"
+    assert item.parent_components == ("Viewer API",)
+    assert item.parent_description == "Parent description"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_components",
+        "missing_status",
+        "missing_priority",
+        "missing_updated",
+        "wrong_components",
+        "wrong_status",
+        "wrong_priority",
+        "wrong_updated",
+        "control_status",
+        "oversize_priority",
+        "duplicate_components",
+    ],
+)
+def test_invalid_live_wire_rejects_complete_batch_with_zero_writes(
+    case: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _workflow_config(tmp_path, _enabled_raw(), monkeypatch)
+    issues = [_row("A20-1"), _invalid_wire_row(case)]
+    client = _client(_jira_handler(issues))
+
+    with pytest.raises(JiraIntakeFailure):
+        run_jira_intake(cfg, jira_client_factory=lambda _tracker: client)
+
+    assert list((tmp_path / "kanban").glob("*.md")) == []
+
+
+def test_missing_hydrated_parent_components_rejects_batch_with_zero_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _workflow_config(tmp_path, _enabled_raw(), monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/myself"):
+            return httpx.Response(200, json={"active": True, "accountId": ACCOUNT})
+        if request.url.path.endswith("/issue/A20-10"):
+            parent = _parent_payload()
+            parent["fields"].pop("components")
+            return httpx.Response(200, json=parent)
+        issues = [_row("A20-1"), _row("A20-2", parent="A20-10")]
+        return httpx.Response(200, json={"isLast": True, "issues": issues})
+
+    client = _client(handler)
+    with pytest.raises(JiraIntakeFailure):
+        run_jira_intake(cfg, jira_client_factory=lambda _tracker: client)
+
+    assert list((tmp_path / "kanban").glob("*.md")) == []
+
+
 @pytest.mark.parametrize("assignee", [None, "foreign-account"])
 def test_missing_or_foreign_assignee_is_rejected(assignee: str | None) -> None:
     client = _client(_jira_handler([_row(account=assignee)]))
@@ -241,17 +413,7 @@ def test_empty_subtask_hydrates_parent_summary_and_description() -> None:
         if request.url.path.endswith("/myself"):
             return httpx.Response(200, json={"active": True, "accountId": ACCOUNT})
         if request.url.path.endswith("/issue/A20-10"):
-            return httpx.Response(
-                200,
-                json={
-                    "key": "A20-10",
-                    "fields": {
-                        "summary": "Parent summary",
-                        "description": _adf("Parent description"),
-                        "issuetype": {"name": "Story", "subtask": False},
-                    },
-                },
-            )
+            return httpx.Response(200, json=_parent_payload())
         return httpx.Response(
             200,
             json={
@@ -272,17 +434,12 @@ def test_parent_response_key_must_match_requested_parent() -> None:
         if request.url.path.endswith("/myself"):
             return httpx.Response(200, json={"active": True, "accountId": ACCOUNT})
         if request.url.path.endswith("/issue/A20-10"):
-            return httpx.Response(
-                200,
-                json={
-                    "key": "A20-99",
-                    "fields": {
-                        "summary": "Wrong parent",
-                        "description": _adf("Wrong parent description"),
-                        "issuetype": {"name": "Story", "subtask": False},
-                    },
-                },
+            wrong_parent = _parent_payload(
+                "A20-99",
+                summary="Wrong parent",
+                description=_adf("Wrong parent description"),
             )
+            return httpx.Response(200, json=wrong_parent)
         return httpx.Response(
             200,
             json={
@@ -341,7 +498,12 @@ def test_empty_parent_context_is_rejected() -> None:
                     "fields": {
                         "summary": "",
                         "description": None,
-                        "issuetype": {"name": "Story", "subtask": False},
+                        "issuetype": {
+                            "id": "10002",
+                            "name": "Story",
+                            "subtask": False,
+                        },
+                        "components": _components("Viewer API"),
                     },
                 },
             )
@@ -480,6 +642,40 @@ def test_marker_injection_and_forged_markdown_are_inert() -> None:
     assert "<!-- symphony:jira-source:start -->" not in inner.lower()
 
 
+def test_source_snapshot_is_complete_stable_and_legacy_compatible() -> None:
+    item = JiraInboxIssue(
+        key="A20-1",
+        summary="Route viewer API",
+        description="Change GET /v-api/learning",
+        issue_type="Task",
+        parent_key="A20-10",
+        parent_summary="Learning parent",
+        parent_description="Parent context",
+        components=("Viewer API", "AI Learning"),
+        status="Ready",
+        priority=None,
+        updated="2026-07-20T03:34:56Z",
+        url=f"{SITE}/browse/A20-1",
+        parent_components=("Viewer API",),
+    )
+
+    source = build_source_snapshot(item)
+    reordered = build_source_snapshot(
+        replace(item, components=tuple(reversed(item.components)))
+    )
+    legacy = build_source_snapshot(
+        JiraInboxIssue("A20-2", "Legacy", "Body", "Task")
+    )
+
+    assert source["parent"]["components"] == ["Viewer API"]
+    assert source["priority"] is None
+    assert source["revision"] == reordered["revision"]
+    assert legacy["status"] == ""
+    assert legacy["updated"] == ""
+    assert "Unknown" not in repr(legacy)
+    assert "1970-01-01" not in repr(legacy)
+
+
 def test_imported_acceptance_criteria_does_not_trigger_auto_triage() -> None:
     hostile = "\n".join(
         [
@@ -599,18 +795,36 @@ def test_source_refresh_preserves_local_state_and_delivery_evidence(tmp_path: Pa
     front.update(
         state="In Progress",
         priority=1,
+        url="https://local.invalid/A20-1",
+        created_at="2026-07-01T00:00:00Z",
+        updated_at="2026-07-02T00:00:00Z",
         labels=["local"],
         agent={"kind": "codex"},
+        routing={"local": "keep"},
         local_flag="keep",
     )
+    old_source_revision = front["source"]["revision"]
     body = body + "\n\n## Touched Files\n\n- local.py\n\n## QA Evidence\n\npassed"
     write_ticket_atomic(path, front, body)
 
     assert tracker.upsert_external_sources([_update("A20-1", "new", title="remote")]) == 1
     refreshed_front, refreshed_body = parse_ticket_file(path)
-    for key in ("state", "priority", "labels", "agent", "local_flag"):
+    preserved_keys = (
+        "state",
+        "priority",
+        "url",
+        "created_at",
+        "updated_at",
+        "labels",
+        "agent",
+        "routing",
+        "local_flag",
+    )
+    for key in preserved_keys:
         assert refreshed_front[key] == front[key]
     assert refreshed_front["title"] == front["title"]
+    assert refreshed_front["source"]["description"] == "new"
+    assert refreshed_front["source"]["revision"] != old_source_revision
     assert "source body" not in refreshed_body
     assert "new" in refreshed_body
     assert "## Touched Files" in refreshed_body

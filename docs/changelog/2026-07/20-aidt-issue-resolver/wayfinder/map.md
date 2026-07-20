@@ -42,8 +42,9 @@ to aidt-dev Jenkins, and records final dev E2E evidence in dashboard/TUI-visible
 | Ticket | Status | Blocked by |
 |---|---|---|
 | 001-safe-jira-inbox | closed | none |
-| 002-aidt-routing-contract | drafting | 001 |
-| 003-aidt-worktree-provisioner | pending | 002 |
+| 002-aidt-routing-contract | closed | 001, 002a correction |
+| 002a-routing-result-output-closure | closed | 002 implementation |
+| 003-aidt-worktree-provisioner | drafting | 002 |
 | 004-delivery-stage-enforcement | pending | 001, 002, 003 |
 | 005-local-qa-adapters | pending | 003, 004 |
 | 006-dev-merge-promotion | pending | 004, 005 |
@@ -55,8 +56,10 @@ to aidt-dev Jenkins, and records final dev E2E evidence in dashboard/TUI-visible
 
 ## Frontier
 
-Current frontier: 002-aidt-routing-contract only.
+Current frontier: 003-aidt-worktree-provisioner. Frontiers 002 and 002a passed independent final verification:
+177 isolated routing tests, 407 affected tests, 722 broad tests, 230 Frontier 001 preservation tests, and repository
+parity of 1,656 passes/6 skips with only the accepted pre-change CI-1 failure.
 
-Frontier 001 passed its nested literal commit gate after two iterations: 51 intake tests and 216 affected
-regressions passed, with the sole repository-wide failure unchanged from baseline. Freeze fail-closed AIDT service
-routing before any service worktree, implementation, merge, deployment, managed runtime, or live E2E work begins.
+Frontier 001 passed its nested literal commit gate after two iterations. Frontier 002 added immutable production-base
+routing, complete Jira source context, deterministic coordinator/children, and a fail-closed dispatch barrier; 002a
+closed the public result-output boundary. Provisioning is now the only active frontier.

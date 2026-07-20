@@ -32,6 +32,11 @@ from typing import Any, Awaitable, Callable, Coroutine
 
 from .. import __version__
 from .._shell import kill_process_group
+from ..aidt_routing import (
+    AidtRoutingResult,
+    filter_routing_candidates,
+    run_aidt_routing,
+)
 from ..backends import (
     EVENT_AGENT_RETRY,
     EVENT_APPROVAL_DENIED,
@@ -127,6 +132,83 @@ from .run_registry import RunRecord, RunRegistry, registry_path_for_workflow
 log = get_logger()
 
 DEFAULT_IMPROVEMENT_RUN_TIMEOUT_S = 3600.0
+
+
+@dataclass(frozen=True)
+class JiraIntakePoll:
+    """Same-tick intake availability passed to dependent runtime hooks."""
+
+    enabled: bool
+    status: str
+    result: JiraIntakeResult | None
+
+
+@dataclass
+class _AidtRoutingHealth:
+    enabled: bool = False
+    status: str = "disabled"
+    last_success: str | None = None
+    last_error: str | None = None
+    routed_count: int = 0
+    review_count: int = 0
+    child_count: int = 0
+    failure_count: int = 0
+    consecutive_failures: int = 0
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "status": self.status,
+            "last_success": self.last_success,
+            "last_error": self.last_error,
+            "routed_count": self.routed_count,
+            "review_count": self.review_count,
+            "child_count": self.child_count,
+            "failure_count": self.failure_count,
+            "consecutive_failures": self.consecutive_failures,
+        }
+
+
+def _aidt_routing_requested(cfg: ServiceConfig) -> bool:
+    value = cfg.raw.get("aidt_routing")
+    return isinstance(value, dict) and value.get("enabled") is True
+
+
+def _aidt_routing_failure_result(category: str) -> AidtRoutingResult:
+    return AidtRoutingResult(
+        True,
+        False,
+        frozenset(),
+        0,
+        0,
+        0,
+        1,
+        "failure",
+        category,
+    )
+
+
+def _aidt_error_message(result: AidtRoutingResult) -> str:
+    category = result.error_category or "internal_error"
+    if result.error_ref is None:
+        return category
+    return f"{category} ({result.error_ref})"
+
+
+def _log_aidt_routing_failure(
+    result: AidtRoutingResult,
+    consecutive_failures: int,
+) -> None:
+    log.warning(
+        "aidt_routing_failure",
+        category=result.error_category or "internal_error",
+        ref=result.error_ref,
+        routed_count=result.routed_count,
+        review_count=result.review_count,
+        child_count=result.child_count,
+        failure_count=result.failure_count,
+        consecutive_failures=consecutive_failures,
+    )
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -591,6 +673,7 @@ class Orchestrator:
         self._jira_intake_last_success: str | None = None
         self._jira_intake_last_error: str | None = None
         self._jira_intake_consecutive_failures: int = 0
+        self._aidt_routing_health = _AidtRoutingHealth()
         self._registry_error_count: int = 0
         self._last_registry_error: str | None = None
         # R8 — issue_id -> failed escalation attempts. Keeps a retry-capped
@@ -1311,6 +1394,8 @@ class Orchestrator:
             degraded_reasons.append("run_registry_error")
         if self._jira_intake_enabled and self._jira_intake_status == "error":
             degraded_reasons.append("jira_intake_failure")
+        if self._aidt_routing_health.status == "failure":
+            degraded_reasons.append("aidt_routing_failure")
         status = "degraded" if degraded_reasons else ("starting" if last is None else "ok")
         return {
             "status": status,
@@ -1340,6 +1425,7 @@ class Orchestrator:
                 "last_error": self._jira_intake_last_error,
                 "consecutive_failures": self._jira_intake_consecutive_failures,
             },
+            "aidt_routing": self._aidt_routing_health.snapshot(),
             "run_registry": {
                 "enabled": self._run_registry is not None,
                 "error_count": self._registry_error_count,
@@ -1999,7 +2085,7 @@ class Orchestrator:
             self._tick_event.clear()
             self._refresh_pending = False
 
-    async def _poll_jira_intake(self, cfg: ServiceConfig) -> None:
+    async def _poll_jira_intake(self, cfg: ServiceConfig) -> JiraIntakePoll:
         try:
             result = await asyncio.to_thread(run_jira_intake, cfg)
         except Exception as exc:
@@ -2018,8 +2104,10 @@ class Orchestrator:
                 status=failure.status,
                 consecutive=self._jira_intake_consecutive_failures,
             )
-            return
+            return JiraIntakePoll(True, "failure", None)
         self._apply_jira_intake_result(result)
+        status = "success" if result.enabled else "disabled"
+        return JiraIntakePoll(result.enabled, status, result)
 
     def _apply_jira_intake_result(self, result: JiraIntakeResult) -> None:
         self._jira_intake_enabled = result.enabled
@@ -2031,12 +2119,56 @@ class Orchestrator:
         self._jira_intake_status = "ok"
         self._jira_intake_last_success = _utc_iso_z()
 
+    async def _poll_aidt_routing(
+        self,
+        cfg: ServiceConfig,
+        intake_poll: JiraIntakePoll,
+    ) -> AidtRoutingResult:
+        try:
+            result = await asyncio.to_thread(
+                run_aidt_routing,
+                cfg,
+                intake_result=intake_poll.result,
+            )
+        except Exception:
+            result = _aidt_routing_failure_result("internal_error")
+        self._apply_aidt_routing_result(result)
+        return result
+
+    def _apply_aidt_routing_result(self, result: AidtRoutingResult) -> None:
+        health = self._aidt_routing_health
+        health.enabled = result.enabled
+        health.status = result.status
+        health.routed_count = result.routed_count
+        health.review_count = result.review_count
+        health.child_count = result.child_count
+        health.failure_count = result.failure_count
+        if not result.enabled:
+            health.last_error = None
+            health.consecutive_failures = 0
+            return
+        if not result.global_allow_dispatch:
+            health.last_error = _aidt_error_message(result)
+            health.consecutive_failures += 1
+            _log_aidt_routing_failure(result, health.consecutive_failures)
+            return
+        health.last_success = _utc_iso_z()
+        health.last_error = None
+        health.consecutive_failures = 0
+
     async def _on_tick(self) -> None:
         cfg, err = self._workflow_state.reload()
-        if err is not None and cfg is None:
-            cfg = self._workflow_state.current()
+        if err is not None:
+            if cfg is None:
+                cfg = self._workflow_state.current()
             if cfg is None:
                 log.error("workflow_unavailable", error=str(err))
+                await self._notify_observers()
+                return
+            if _aidt_routing_requested(cfg):
+                self._apply_aidt_routing_result(
+                    _aidt_routing_failure_result("workflow_reload_error")
+                )
                 await self._notify_observers()
                 return
             log.warning("workflow_reload_failed", error=str(err))
@@ -2101,7 +2233,11 @@ class Orchestrator:
             await self._notify_observers()
             return
 
-        await self._poll_jira_intake(cfg)
+        intake_poll = await self._poll_jira_intake(cfg)
+        routing_result = await self._poll_aidt_routing(cfg, intake_poll)
+        if not routing_result.global_allow_dispatch:
+            await self._notify_observers()
+            return
         await self._auto_normalize_legacy_human_review_done(cfg)
 
         # Fetch candidates.
@@ -2117,6 +2253,10 @@ class Orchestrator:
             await self._notify_observers()
             return
         self._consecutive_candidate_fetch_failures = 0
+        candidates = filter_routing_candidates(
+            candidates,
+            routing_result.blocked_identifiers,
+        )
 
         for issue in candidates:
             self._blocked_rca_source_ids.discard(issue.id)
