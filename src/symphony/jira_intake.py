@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ from .workflow import ServiceConfig, TrackerConfig
 
 MAX_RENDERED_CARD_BYTES = 256_000
 MAX_RENDERED_BATCH_BYTES = 4_000_000
+SOURCE_SCHEMA = "aidt-jira-source-v1"
 _ENV_REFERENCE = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
 _ACCEPTANCE_CRITERIA = re.compile(
     r"\b(acceptance)\s+(criteria)\b", re.IGNORECASE
@@ -140,11 +143,57 @@ def _quoted_lines(lines: list[str]) -> list[str]:
     return rendered
 
 
+def _source_parent(item: JiraInboxIssue) -> dict[str, Any] | None:
+    if item.parent_key is None:
+        return None
+    return {
+        "key": item.parent_key,
+        "summary": item.parent_summary or "",
+        "description": item.parent_description or "",
+        "components": sorted(item.parent_components, key=str.casefold),
+    }
+
+
+def _source_revision(value: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        {"schema": SOURCE_SCHEMA, "value": value},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def build_source_snapshot(item: JiraInboxIssue) -> dict[str, Any]:
+    """Return the complete structured Jira routing input and its revision."""
+    source: dict[str, Any] = {
+        "schema": SOURCE_SCHEMA,
+        "kind": "jira",
+        "key": item.key,
+        "summary": item.summary,
+        "description": item.description,
+        "components": sorted(item.components, key=str.casefold),
+        "status": item.status,
+        "priority": item.priority,
+        "issue_type": item.issue_type,
+        "updated": item.updated,
+        "url": item.url,
+        "parent": _source_parent(item),
+    }
+    source["revision"] = _source_revision(source)
+    return source
+
+
 def render_jira_source(item: JiraInboxIssue) -> str:
     """Render Jira-controlled text as inert blockquote lines between markers."""
     lines = [
         f"Jira key: {item.key}",
         f"Issue type: {item.issue_type}",
+        f"Status: {item.status}",
+        f"Priority: {item.priority or ''}",
+        f"Components: {', '.join(item.components)}",
+        f"URL: {item.url}",
         f"Summary: {item.summary}",
         "Description:",
         item.description,
@@ -154,6 +203,7 @@ def render_jira_source(item: JiraInboxIssue) -> str:
             [
                 f"Parent key: {item.parent_key}",
                 f"Parent summary: {item.parent_summary or ''}",
+                f"Parent components: {', '.join(item.parent_components)}",
                 "Parent description:",
                 item.parent_description or "",
             ]
@@ -182,6 +232,7 @@ def _updates(
                 source_kind="jira",
                 source_key=item.key,
                 body=body,
+                source=build_source_snapshot(item),
             )
         )
     return updates

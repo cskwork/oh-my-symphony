@@ -2,9 +2,9 @@
 
 Route: GREENFIELD
 
-Status: drafting
+Status: closed
 
-Blocked by: 001
+Blocked by: none
 
 Unblocks: 003, 004
 

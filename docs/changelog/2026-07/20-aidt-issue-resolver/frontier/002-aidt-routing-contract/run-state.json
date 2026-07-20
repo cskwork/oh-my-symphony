@@ -1,6 +1,10 @@
 {
   "schema_version": 3,
   "mode": "GREENFIELD",
+  "ticket": "002-aidt-routing-contract",
+  "phase": "Finalize",
+  "iteration": 3,
+  "max_iterations": 3,
   "branches": {
     "source_base_branch": "origin/dev",
     "target_integration_branch": "dev",
@@ -8,13 +12,7 @@
     "worktree_path": ".codex-worktrees/aidt-orchestrator-20260720",
     "refs_verified": true
   },
-  "phase": "Frontier",
-  "iteration": 1,
-  "max_iterations": 3,
-  "unresolved_gates": [
-    "Atlassian API authentication is required for live unattended Jira proof",
-    "Future per-issue plans remain subject to repository safety gates"
-  ],
+  "unresolved_gates": [],
   "blockers": [],
   "regression_ledger": [
     {
@@ -23,7 +21,7 @@
       "finding": "expected kanban/CI-1.md was not created"
     }
   ],
-  "next_action": "Freeze and attack Frontier 003 AIDT worktree provisioning using the verified object-backed route child contract",
+  "next_action": "Finalize the verified frontier without commit, activation, merge, or deployment",
   "forced_reflection": null,
-  "updated_at": "2026-07-21T00:05:00+09:00"
+  "updated_at": "2026-07-21T00:24:45+09:00"
 }

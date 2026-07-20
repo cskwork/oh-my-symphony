@@ -84,6 +84,7 @@ _CANONICAL_FRONT_MATTER_KEYS = {
     "created_at",
     "updated_at",
     "source",
+    "routing",
 }
 _LOCK_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _TRACKER_TEMP_NAME_RE = re.compile(
@@ -115,6 +116,7 @@ class ExternalSourceUpdate:
     source_kind: str
     source_key: str
     body: str
+    source: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -731,6 +733,10 @@ class FileBoardTracker:
             seen.add(folded)
             if update.source_kind != "jira" or update.source_key != identifier:
                 raise SymphonyError("mismatched external source metadata")
+            if update.source is not None:
+                source = update.source
+                if source.get("kind") != "jira" or source.get("key") != identifier:
+                    raise SymphonyError("mismatched structured source metadata")
             if not update.title.strip() or not update.state.strip():
                 raise SymphonyError("invalid external source card fields")
             _jira_marker_span(update.body)
@@ -751,7 +757,10 @@ class FileBoardTracker:
                 agent_kind=None,
                 skills=None,
             )
-            front["source"] = {"kind": "jira", "key": update.identifier}
+            front["source"] = update.source or {
+                "kind": "jira",
+                "key": update.identifier,
+            }
             return _ExternalSourcePlan(
                 update, target, (None, None), front, update.body, True
             )
@@ -760,12 +769,11 @@ class FileBoardTracker:
         start, end = _jira_marker_span(body)
         new_body = body[:start] + update.body + body[end:]
         token = (front.get("updated_at"), _file_mtime_ns(path))
-        if new_body == body:
+        desired_source = update.source or front["source"]
+        if new_body == body and desired_source == front["source"]:
             return _ExternalSourcePlan(update, path, token, front, body, False)
         new_front = dict(front)
-        new_front["updated_at"] = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        new_front["source"] = desired_source
         return _ExternalSourcePlan(update, path, token, new_front, new_body, True)
 
     def _external_source_matches(

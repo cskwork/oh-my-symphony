@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import httpx
@@ -50,7 +51,9 @@ _SEARCH_FIELDS = (
     "issuelinks,issuetype"
 )
 _MINIMAL_SEARCH_FIELDS = "summary,status,updated"
-_INTAKE_SEARCH_FIELDS = "summary,description,assignee,issuetype,parent"
+_INTAKE_SEARCH_FIELDS = (
+    "summary,description,assignee,issuetype,parent,components,status,priority,updated"
+)
 INTAKE_MAX_PAGES = 20
 INTAKE_MAX_ISSUES = 500
 INTAKE_MAX_RESPONSE_BYTES = 1_000_000
@@ -60,6 +63,9 @@ INTAKE_MAX_ADF_NODES = 5_000
 INTAKE_MAX_FIELD_BYTES = 128_000
 INTAKE_MAX_CARD_BYTES = 256_000
 INTAKE_MAX_BATCH_BYTES = 4_000_000
+INTAKE_MAX_COMPONENTS = 64
+INTAKE_MAX_NAME_BYTES = 256
+INTAKE_MAX_COMPONENT_BYTES = INTAKE_MAX_NAME_BYTES
 _INTAKE_MAX_LITERAL_LENGTH = 128
 _INTAKE_MAX_STATUSES = 25
 _INTAKE_MAX_TOKEN_LENGTH = 512
@@ -76,6 +82,19 @@ class JiraInboxIssue:
     parent_key: str | None = None
     parent_summary: str | None = None
     parent_description: str | None = None
+    components: tuple[str, ...] = ()
+    status: str = ""
+    priority: str | None = None
+    updated: str = ""
+    url: str = ""
+    parent_components: tuple[str, ...] = ()
+
+
+def _has_forbidden_controls(value: str) -> bool:
+    return any(
+        ord(char) == 127 or (ord(char) < 32 and char not in "\t\n\r")
+        for char in value
+    )
 
 
 def _intake_literal(value: Any, *, field: str) -> str:
@@ -140,6 +159,8 @@ def _flatten_intake_adf(value: Any, *, required: bool = False) -> str:
         text = "".join(output).strip()
     if len(text.encode("utf-8")) > INTAKE_MAX_FIELD_BYTES:
         raise JiraUnknownPayload("intake field limit exceeded")
+    if _has_forbidden_controls(text):
+        raise JiraUnknownPayload("invalid intake text control")
     if required and not text.strip():
         raise JiraUnknownPayload("required intake content missing")
     return text
@@ -150,9 +171,90 @@ def _intake_text(value: Any, *, field: str, required: bool) -> str:
         raise JiraUnknownPayload("invalid intake text field", field=field)
     if len(value.encode("utf-8")) > INTAKE_MAX_FIELD_BYTES:
         raise JiraUnknownPayload("intake field limit exceeded", field=field)
+    if _has_forbidden_controls(value):
+        raise JiraUnknownPayload("invalid intake text control", field=field)
     if required and not value.strip():
         raise JiraUnknownPayload("required intake content missing", field=field)
     return value
+
+
+def _intake_components(value: Any, *, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > INTAKE_MAX_COMPONENTS:
+        raise JiraUnknownPayload("invalid intake components", field=field)
+    components: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise JiraUnknownPayload("invalid intake component", field=field)
+        name = _intake_object_name(item, field=field)
+        assert name is not None
+        if len(name.encode("utf-8")) > INTAKE_MAX_COMPONENT_BYTES:
+            raise JiraUnknownPayload("intake component limit exceeded", field=field)
+        folded = name.casefold()
+        if folded in seen:
+            raise JiraUnknownPayload("duplicate intake component", field=field)
+        seen.add(folded)
+        components.append(name)
+    return tuple(components)
+
+
+def _intake_object_name(
+    value: Any,
+    *,
+    field: str,
+    nullable: bool = False,
+) -> str | None:
+    if value is None:
+        if nullable:
+            return None
+        raise JiraUnknownPayload("missing intake named field", field=field)
+    if not isinstance(value, dict):
+        raise JiraUnknownPayload("invalid intake named field", field=field)
+    name = _intake_text(value.get("name"), field=field, required=True)
+    if any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise JiraUnknownPayload("invalid intake name control", field=field)
+    if len(name.encode("utf-8")) > INTAKE_MAX_NAME_BYTES:
+        raise JiraUnknownPayload("intake name limit exceeded", field=field)
+    return name
+
+
+def _required_intake_field(fields: dict[str, Any], field: str) -> Any:
+    if field not in fields:
+        raise JiraUnknownPayload("missing intake field", field=field)
+    return fields[field]
+
+
+def _intake_routing_fields(
+    fields: dict[str, Any],
+) -> tuple[tuple[str, ...], str, str | None, str]:
+    components = _intake_components(
+        _required_intake_field(fields, "components"), field="components"
+    )
+    status = _intake_object_name(
+        _required_intake_field(fields, "status"), field="status"
+    )
+    priority = _intake_object_name(
+        _required_intake_field(fields, "priority"),
+        field="priority",
+        nullable=True,
+    )
+    updated = _intake_updated(_required_intake_field(fields, "updated"))
+    assert status is not None
+    return components, status, priority, updated
+
+
+def _intake_updated(value: Any) -> str:
+    if value is None:
+        raise JiraUnknownPayload("missing intake timestamp", field="updated")
+    text = _intake_text(value, field="updated", required=True)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise JiraUnknownPayload("invalid intake timestamp", field="updated") from exc
+    if parsed.tzinfo is None:
+        raise JiraUnknownPayload("invalid intake timestamp", field="updated")
+    normalized = parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return normalized.replace("+00:00", "Z")
 
 
 def _intake_key(value: Any, *, project: str) -> str:
@@ -173,6 +275,12 @@ def _intake_card_size(item: JiraInboxIssue) -> int:
         item.parent_key or "",
         item.parent_summary or "",
         item.parent_description or "",
+        *item.components,
+        item.status,
+        item.priority or "",
+        item.updated,
+        item.url,
+        *item.parent_components,
     )
     return sum(len(value.encode("utf-8")) for value in values)
 
@@ -579,7 +687,7 @@ class JiraClient:
         response_bytes: list[int],
     ) -> list[JiraInboxIssue]:
         items: list[JiraInboxIssue] = []
-        parent_cache: dict[str, tuple[str, str]] = {}
+        parent_cache: dict[str, tuple[str, str, tuple[str, ...]]] = {}
         total_size = 0
         for node in nodes:
             item = self._normalize_inbox_node(
@@ -605,7 +713,7 @@ class JiraClient:
         project: str,
         account_id: str,
         response_bytes: list[int],
-        parent_cache: dict[str, tuple[str, str]],
+        parent_cache: dict[str, tuple[str, str, tuple[str, ...]]],
     ) -> JiraInboxIssue:
         key = _intake_key(node.get("key"), project=project)
         fields = node.get("fields")
@@ -616,11 +724,15 @@ class JiraClient:
         self._validate_intake_assignee(fields, account_id)
         description = _flatten_intake_adf(fields.get("description"))
         parent_key = self._intake_parent_key(fields, project, is_subtask, description)
+        components, status, priority, updated = _intake_routing_fields(fields)
         parent_summary: str | None = None
         parent_description: str | None = None
+        parent_components: tuple[str, ...] = ()
         if parent_key is not None:
-            parent_summary, parent_description = self._load_intake_parent(
-                parent_key, project, response_bytes, parent_cache
+            parent_summary, parent_description, parent_components = (
+                self._load_intake_parent(
+                    parent_key, project, response_bytes, parent_cache
+                )
             )
         return JiraInboxIssue(
             key=key,
@@ -630,6 +742,12 @@ class JiraClient:
             parent_key=parent_key,
             parent_summary=parent_summary,
             parent_description=parent_description,
+            components=components,
+            status=status,
+            priority=priority,
+            updated=updated,
+            url=f"{self._site}/browse/{key}",
+            parent_components=parent_components,
         )
 
     @staticmethod
@@ -637,10 +755,11 @@ class JiraClient:
         issue_type = fields.get("issuetype")
         if not isinstance(issue_type, dict):
             raise JiraUnknownPayload("invalid intake issue type")
-        name = _intake_text(issue_type.get("name"), field="issue_type", required=True)
+        name = _intake_object_name(issue_type, field="issue_type")
         is_subtask = issue_type.get("subtask")
         if type(is_subtask) is not bool:
             raise JiraUnknownPayload("invalid intake issue type")
+        assert name is not None
         return name, is_subtask
 
     @staticmethod
@@ -664,24 +783,22 @@ class JiraClient:
         if not isinstance(parent, dict):
             raise JiraUnknownPayload("invalid intake parent")
         parent_key = _intake_key(parent.get("key"), project=project)
-        if is_subtask and not description:
-            return parent_key
-        return None
+        return parent_key
 
     def _load_intake_parent(
         self,
         parent_key: str,
         project: str,
         response_bytes: list[int],
-        cache: dict[str, tuple[str, str]],
-    ) -> tuple[str, str]:
+        cache: dict[str, tuple[str, str, tuple[str, ...]]],
+    ) -> tuple[str, str, tuple[str, ...]]:
         cached = cache.get(parent_key)
         if cached is not None:
             return cached
         payload = self._intake_get_json(
             f"{API_BASE}/issue/{parent_key}",
             response_bytes,
-            params={"fields": "summary,description,issuetype"},
+            params={"fields": "summary,description,issuetype,components"},
         )
         response_key = _intake_key(payload.get("key"), project=project)
         if response_key != parent_key:
@@ -694,8 +811,12 @@ class JiraClient:
             fields.get("summary"), field="parent_summary", required=True
         )
         description = _flatten_intake_adf(fields.get("description"), required=True)
-        cache[parent_key] = (summary, description)
-        return summary, description
+        components = _intake_components(
+            _required_intake_field(fields, "components"),
+            field="parent_components",
+        )
+        cache[parent_key] = (summary, description, components)
+        return summary, description, components
 
     def _find_transition_id(self, issue_key: str, target_state: str) -> str:
         path = f"{API_BASE}/issue/{issue_key}/transitions"
