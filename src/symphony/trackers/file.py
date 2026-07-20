@@ -34,10 +34,11 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import tempfile
 import time
-from contextlib import contextmanager
-from dataclasses import replace
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
@@ -82,6 +83,7 @@ _CANONICAL_FRONT_MATTER_KEYS = {
     "skills",
     "created_at",
     "updated_at",
+    "source",
 }
 _LOCK_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _TRACKER_TEMP_NAME_RE = re.compile(
@@ -94,6 +96,48 @@ _TicketMutation = Callable[
 ]
 _CasToken = tuple[Any, int | None]
 log = get_logger()
+
+JIRA_SOURCE_START = "<!-- symphony:jira-source:start -->"
+JIRA_SOURCE_END = "<!-- symphony:jira-source:end -->"
+_JIRA_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*$")
+_JIRA_MARKER_RE = re.compile(
+    r"<!--\s*symphony\s*:\s*jira-source\s*:\s*(?:start|end)\s*-->",
+    re.IGNORECASE,
+)
+_EXTERNAL_CAS_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class ExternalSourceUpdate:
+    identifier: str
+    title: str
+    state: str
+    source_kind: str
+    source_key: str
+    body: str
+
+
+@dataclass(frozen=True)
+class _ExternalSourcePlan:
+    update: ExternalSourceUpdate
+    path: Path
+    token: _CasToken
+    front: dict[str, Any]
+    body: str
+    changed: bool
+
+
+def _jira_marker_span(body: str) -> tuple[int, int]:
+    matches = list(_JIRA_MARKER_RE.finditer(body))
+    if len(matches) != 2:
+        raise SymphonyError("invalid Jira source markers")
+    if matches[0].group(0) != JIRA_SOURCE_START:
+        raise SymphonyError("invalid Jira source start marker")
+    if matches[1].group(0) != JIRA_SOURCE_END:
+        raise SymphonyError("invalid Jira source end marker")
+    if matches[0].start() >= matches[1].start():
+        raise SymphonyError("invalid Jira source marker order")
+    return matches[0].start(), matches[1].end()
 
 
 @contextmanager
@@ -650,6 +694,146 @@ class FileBoardTracker:
                 seen[issue.id] = path
                 out.append(issue)
         return _hydrate_blocker_states(out)
+
+    def upsert_external_sources(
+        self, updates: Iterable[ExternalSourceUpdate]
+    ) -> int:
+        """Preflight and atomically rename a complete external-source batch."""
+        ordered = self._validate_external_updates(list(updates))
+        if not ordered:
+            return 0
+        with ExitStack() as locks:
+            for update in ordered:
+                locks.enter_context(
+                    _exclusive_lock(self._ticket_lock_path(update.identifier))
+                )
+            plans = [self._plan_external_update(update) for update in ordered]
+            changed = 0
+            for plan in plans:
+                if self._commit_external_plan(plan):
+                    changed += 1
+            return changed
+
+    @staticmethod
+    def _validate_external_updates(
+        updates: list[ExternalSourceUpdate],
+    ) -> list[ExternalSourceUpdate]:
+        seen: set[str] = set()
+        for update in updates:
+            if not isinstance(update, ExternalSourceUpdate):
+                raise SymphonyError("invalid external source update")
+            identifier = update.identifier
+            if _JIRA_KEY_RE.fullmatch(identifier) is None:
+                raise SymphonyError("invalid Jira source identifier")
+            folded = identifier.casefold()
+            if folded in seen:
+                raise SymphonyError("duplicate external source identifier")
+            seen.add(folded)
+            if update.source_kind != "jira" or update.source_key != identifier:
+                raise SymphonyError("mismatched external source metadata")
+            if not update.title.strip() or not update.state.strip():
+                raise SymphonyError("invalid external source card fields")
+            _jira_marker_span(update.body)
+        return sorted(updates, key=lambda update: update.identifier)
+
+    def _plan_external_update(
+        self, update: ExternalSourceUpdate
+    ) -> _ExternalSourcePlan:
+        target = self._root / f"{update.identifier}.md"
+        matches = self._external_source_matches(update.identifier, target)
+        if not matches:
+            front = self._new_ticket_front(
+                identifier=update.identifier,
+                title=update.title,
+                state=update.state,
+                priority=None,
+                labels=None,
+                agent_kind=None,
+                skills=None,
+            )
+            front["source"] = {"kind": "jira", "key": update.identifier}
+            return _ExternalSourcePlan(
+                update, target, (None, None), front, update.body, True
+            )
+        path, front, body = matches[0]
+        self._validate_managed_external_card(update, path, front)
+        start, end = _jira_marker_span(body)
+        new_body = body[:start] + update.body + body[end:]
+        token = (front.get("updated_at"), _file_mtime_ns(path))
+        if new_body == body:
+            return _ExternalSourcePlan(update, path, token, front, body, False)
+        new_front = dict(front)
+        new_front["updated_at"] = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        return _ExternalSourcePlan(update, path, token, new_front, new_body, True)
+
+    def _external_source_matches(
+        self, identifier: str, target: Path
+    ) -> list[tuple[Path, dict[str, Any], str]]:
+        matches: list[tuple[Path, dict[str, Any], str]] = []
+        for path in self._root.iterdir():
+            if path.name.startswith(".tmp-") or path.suffix.lower() != ".md":
+                continue
+            file_stat = path.lstat()
+            if stat.S_ISLNK(file_stat.st_mode):
+                raise SymphonyError("Jira source path may not be a symlink")
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise SymphonyError("Jira source path must be a regular file")
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(self._root):
+                raise SymphonyError("Jira source path escapes board root")
+            front, body = parse_ticket_file(path)
+            raw_ids = (front.get("id"), front.get("identifier"))
+            id_match = any(
+                isinstance(value, str) and value.casefold() == identifier.casefold()
+                for value in raw_ids
+            )
+            if id_match or path.name.casefold() == target.name.casefold():
+                matches.append((path, front, body))
+        if len(matches) > 1:
+            raise SymphonyError("duplicate Jira source card")
+        return matches
+
+    @staticmethod
+    def _validate_managed_external_card(
+        update: ExternalSourceUpdate, path: Path, front: dict[str, Any]
+    ) -> None:
+        expected_name = f"{update.identifier}.md"
+        if path.name != expected_name:
+            raise SymphonyError("noncanonical Jira source filename")
+        if front.get("id") != update.identifier or front.get("identifier") != update.identifier:
+            raise SymphonyError("mismatched Jira source identifier")
+        source = front.get("source")
+        if not isinstance(source, dict):
+            raise SymphonyError("unmanaged Jira source collision")
+        if source.get("kind") != "jira" or source.get("key") != update.identifier:
+            raise SymphonyError("mismatched Jira source ownership")
+
+    def _commit_external_plan(self, plan: _ExternalSourcePlan) -> bool:
+        if not plan.changed:
+            return False
+        expected = plan.token
+        for _ in range(_EXTERNAL_CAS_ATTEMPTS):
+            latest = self._plan_external_update(plan.update)
+            if not latest.changed:
+                return False
+            if latest.token != expected:
+                expected = latest.token
+                continue
+            current: _CasToken = (None, None)
+            if latest.path.exists():
+                current_front, _ = parse_ticket_file(latest.path)
+                current = (
+                    current_front.get("updated_at"),
+                    _file_mtime_ns(latest.path),
+                )
+            if current != latest.token:
+                expected = current
+                continue
+            write_ticket_atomic(latest.path, latest.front, latest.body)
+            return True
+        raise SymphonyError("external source CAS retries exhausted")
 
     # ------------------------------------------------------------------
     # convenience helpers used by board CLI / agent tool

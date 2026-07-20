@@ -61,6 +61,7 @@ from ..continuous_improvement import (
     lease_path_for,
 )
 from ..issue import BlockerRef, Issue, normalize_state
+from ..jira_intake import JiraIntakeFailure, JiraIntakeResult, run_jira_intake
 from ..logging import get_logger
 from ..prompt import build_continuation_prompt, build_first_turn_prompt
 from ..skills import render_skill_block
@@ -585,6 +586,11 @@ class Orchestrator:
         self._tick_loop_restarts: int = 0
         self._last_tick_error: str | None = None
         self._consecutive_candidate_fetch_failures: int = 0
+        self._jira_intake_enabled: bool = False
+        self._jira_intake_status: str = "disabled"
+        self._jira_intake_last_success: str | None = None
+        self._jira_intake_last_error: str | None = None
+        self._jira_intake_consecutive_failures: int = 0
         self._registry_error_count: int = 0
         self._last_registry_error: str | None = None
         # R8 — issue_id -> failed escalation attempts. Keeps a retry-capped
@@ -1303,6 +1309,8 @@ class Orchestrator:
             degraded_reasons.append("tracker_fetch_failures")
         if self._last_registry_error is not None:
             degraded_reasons.append("run_registry_error")
+        if self._jira_intake_enabled and self._jira_intake_status == "error":
+            degraded_reasons.append("jira_intake_failure")
         status = "degraded" if degraded_reasons else ("starting" if last is None else "ok")
         return {
             "status": status,
@@ -1324,6 +1332,13 @@ class Orchestrator:
             },
             "tracker": {
                 "consecutive_fetch_failures": self._consecutive_candidate_fetch_failures,
+            },
+            "jira_intake": {
+                "enabled": self._jira_intake_enabled,
+                "status": self._jira_intake_status,
+                "last_success": self._jira_intake_last_success,
+                "last_error": self._jira_intake_last_error,
+                "consecutive_failures": self._jira_intake_consecutive_failures,
             },
             "run_registry": {
                 "enabled": self._run_registry is not None,
@@ -1984,6 +1999,38 @@ class Orchestrator:
             self._tick_event.clear()
             self._refresh_pending = False
 
+    async def _poll_jira_intake(self, cfg: ServiceConfig) -> None:
+        try:
+            result = await asyncio.to_thread(run_jira_intake, cfg)
+        except Exception as exc:
+            failure = (
+                exc
+                if isinstance(exc, JiraIntakeFailure)
+                else JiraIntakeFailure("internal_error")
+            )
+            self._jira_intake_enabled = True
+            self._jira_intake_status = "error"
+            self._jira_intake_last_error = failure.health_message
+            self._jira_intake_consecutive_failures += 1
+            log.warning(
+                "jira_intake_failed",
+                category=failure.category,
+                status=failure.status,
+                consecutive=self._jira_intake_consecutive_failures,
+            )
+            return
+        self._apply_jira_intake_result(result)
+
+    def _apply_jira_intake_result(self, result: JiraIntakeResult) -> None:
+        self._jira_intake_enabled = result.enabled
+        self._jira_intake_consecutive_failures = 0
+        self._jira_intake_last_error = None
+        if not result.enabled:
+            self._jira_intake_status = "disabled"
+            return
+        self._jira_intake_status = "ok"
+        self._jira_intake_last_success = _utc_iso_z()
+
     async def _on_tick(self) -> None:
         cfg, err = self._workflow_state.reload()
         if err is not None and cfg is None:
@@ -2054,6 +2101,7 @@ class Orchestrator:
             await self._notify_observers()
             return
 
+        await self._poll_jira_intake(cfg)
         await self._auto_normalize_legacy_human_review_done(cfg)
 
         # Fetch candidates.
