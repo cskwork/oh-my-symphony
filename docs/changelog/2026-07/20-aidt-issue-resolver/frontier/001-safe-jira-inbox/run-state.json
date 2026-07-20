@@ -1,0 +1,27 @@
+{
+  "schema_version": 3,
+  "mode": "LEGACY",
+  "ticket": "001-safe-jira-inbox",
+  "phase": "Finalize",
+  "iteration": 2,
+  "max_iterations": 3,
+  "branches": {
+    "source_base_branch": "origin/dev",
+    "target_integration_branch": "dev",
+    "run_branch": "run/symphony-aidt-orchestrator-20260720",
+    "worktree_path": ".codex-worktrees/aidt-orchestrator-20260720",
+    "refs_verified": true
+  },
+  "unresolved_gates": [],
+  "blockers": [],
+  "regression_ledger": [
+    {
+      "test": "test_run_continuous_improvement_real_git_target_worktree_e2e",
+      "status": "accepted_pre_change_failure",
+      "finding": "expected kanban/CI-1.md was not created"
+    }
+  ],
+  "next_action": "Finalize the frontier after the literal commit gate passes",
+  "forced_reflection": null,
+  "updated_at": "2026-07-20T19:46:49+09:00"
+}

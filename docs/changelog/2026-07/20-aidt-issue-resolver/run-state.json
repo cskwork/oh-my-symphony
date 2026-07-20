@@ -1,0 +1,29 @@
+{
+  "schema_version": 3,
+  "mode": "GREENFIELD",
+  "branches": {
+    "source_base_branch": "origin/dev",
+    "target_integration_branch": "dev",
+    "run_branch": "run/symphony-aidt-orchestrator-20260720",
+    "worktree_path": ".codex-worktrees/aidt-orchestrator-20260720",
+    "refs_verified": true
+  },
+  "phase": "Frontier",
+  "iteration": 1,
+  "max_iterations": 3,
+  "unresolved_gates": [
+    "Atlassian API authentication is required for live unattended Jira proof",
+    "Future per-issue plans remain subject to repository safety gates"
+  ],
+  "blockers": [],
+  "regression_ledger": [
+    {
+      "test": "test_run_continuous_improvement_real_git_target_worktree_e2e",
+      "status": "accepted_pre_change_failure",
+      "finding": "expected kanban/CI-1.md was not created"
+    }
+  ],
+  "next_action": "Freeze and attack the Frontier 002 AIDT routing contract plan",
+  "forced_reflection": null,
+  "updated_at": "2026-07-20T19:55:00+09:00"
+}

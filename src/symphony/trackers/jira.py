@@ -14,6 +14,8 @@ References (official docs):
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 import httpx
@@ -48,6 +50,131 @@ _SEARCH_FIELDS = (
     "issuelinks,issuetype"
 )
 _MINIMAL_SEARCH_FIELDS = "summary,status,updated"
+_INTAKE_SEARCH_FIELDS = "summary,description,assignee,issuetype,parent"
+INTAKE_MAX_PAGES = 20
+INTAKE_MAX_ISSUES = 500
+INTAKE_MAX_RESPONSE_BYTES = 1_000_000
+INTAKE_MAX_TOTAL_RESPONSE_BYTES = 4_000_000
+INTAKE_MAX_ADF_DEPTH = 20
+INTAKE_MAX_ADF_NODES = 5_000
+INTAKE_MAX_FIELD_BYTES = 128_000
+INTAKE_MAX_CARD_BYTES = 256_000
+INTAKE_MAX_BATCH_BYTES = 4_000_000
+_INTAKE_MAX_LITERAL_LENGTH = 128
+_INTAKE_MAX_STATUSES = 25
+_INTAKE_MAX_TOKEN_LENGTH = 512
+
+
+@dataclass(frozen=True)
+class JiraInboxIssue:
+    """Fully validated read-only Jira context for one file-board card."""
+
+    key: str
+    summary: str
+    description: str
+    issue_type: str
+    parent_key: str | None = None
+    parent_summary: str | None = None
+    parent_description: str | None = None
+
+
+def _intake_literal(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > _INTAKE_MAX_LITERAL_LENGTH:
+        raise JiraUnknownPayload("invalid intake JQL literal", field=field)
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise JiraUnknownPayload("invalid intake JQL literal", field=field)
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _intake_jql(project: Any, statuses: Iterable[Any]) -> str:
+    escaped_project = _intake_literal(project, field="project")
+    status_values = list(statuses)
+    if not status_values or len(status_values) > _INTAKE_MAX_STATUSES:
+        raise JiraUnknownPayload("invalid intake status list")
+    escaped_statuses = [
+        f'"{_intake_literal(status, field="status")}"' for status in status_values
+    ]
+    return (
+        f'project = "{escaped_project}" AND status in '
+        f'({", ".join(escaped_statuses)}) AND assignee = currentUser()'
+    )
+
+
+def _walk_intake_adf(
+    node: Any,
+    *,
+    depth: int,
+    count: list[int],
+    output: list[str],
+) -> None:
+    if depth > INTAKE_MAX_ADF_DEPTH or count[0] >= INTAKE_MAX_ADF_NODES:
+        raise JiraUnknownPayload("intake ADF limit exceeded")
+    if not isinstance(node, dict):
+        raise JiraUnknownPayload("invalid intake ADF node")
+    count[0] += 1
+    node_type = node.get("type")
+    if not isinstance(node_type, str) or not node_type:
+        raise JiraUnknownPayload("invalid intake ADF node type")
+    if node_type == "text":
+        text = node.get("text")
+        if not isinstance(text, str):
+            raise JiraUnknownPayload("invalid intake ADF text")
+        output.append(text)
+    content = node.get("content", [])
+    if not isinstance(content, list):
+        raise JiraUnknownPayload("invalid intake ADF content")
+    for child in content:
+        _walk_intake_adf(child, depth=depth + 1, count=count, output=output)
+    if node_type in {"paragraph", "heading", "listItem", "blockquote", "hardBreak"}:
+        output.append("\n")
+
+
+def _flatten_intake_adf(value: Any, *, required: bool = False) -> str:
+    if value is None:
+        text = ""
+    elif isinstance(value, str):
+        text = value
+    else:
+        output: list[str] = []
+        _walk_intake_adf(value, depth=0, count=[0], output=output)
+        text = "".join(output).strip()
+    if len(text.encode("utf-8")) > INTAKE_MAX_FIELD_BYTES:
+        raise JiraUnknownPayload("intake field limit exceeded")
+    if required and not text.strip():
+        raise JiraUnknownPayload("required intake content missing")
+    return text
+
+
+def _intake_text(value: Any, *, field: str, required: bool) -> str:
+    if not isinstance(value, str):
+        raise JiraUnknownPayload("invalid intake text field", field=field)
+    if len(value.encode("utf-8")) > INTAKE_MAX_FIELD_BYTES:
+        raise JiraUnknownPayload("intake field limit exceeded", field=field)
+    if required and not value.strip():
+        raise JiraUnknownPayload("required intake content missing", field=field)
+    return value
+
+
+def _intake_key(value: Any, *, project: str) -> str:
+    if not isinstance(value, str):
+        raise JiraUnknownPayload("invalid intake issue key")
+    pattern = rf"^{re.escape(project)}-[1-9][0-9]*$"
+    if re.fullmatch(pattern, value) is None:
+        raise JiraUnknownPayload("invalid intake issue key")
+    return value
+
+
+def _intake_card_size(item: JiraInboxIssue) -> int:
+    values = (
+        item.key,
+        item.summary,
+        item.description,
+        item.issue_type,
+        item.parent_key or "",
+        item.parent_summary or "",
+        item.parent_description or "",
+    )
+    return sum(len(value.encode("utf-8")) for value in values)
 
 
 def _flatten_adf(node: Any) -> str:
@@ -223,6 +350,21 @@ class JiraClient:
         )
         return self._search_paginated(jql, fields=_SEARCH_FIELDS, minimal=False)
 
+    def fetch_assigned_inbox(self) -> list[JiraInboxIssue]:
+        """Fetch one complete, identity-checked, GET-only Jira inbox batch."""
+        project = self._tracker.project_slug
+        jql = _intake_jql(project, self._tracker.active_states)
+        response_bytes = [0]
+        myself = self._intake_get_json(f"{API_BASE}/myself", response_bytes)
+        account_id = self._intake_account_id(myself)
+        nodes = self._search_assigned_inbox(jql, project, response_bytes)
+        return self._normalize_inbox_batch(
+            nodes,
+            project=project,
+            account_id=account_id,
+            response_bytes=response_bytes,
+        )
+
     # §11.1.2
     def fetch_issues_by_states(self, state_names: Iterable[str]) -> list[Issue]:
         states = [s for s in state_names if s]
@@ -329,6 +471,231 @@ class JiraClient:
                 break
             next_token = token
         return out
+
+    def _intake_get_json(
+        self,
+        path: str,
+        response_bytes: list[int],
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = self._request("GET", path, params=params)
+        size = len(response.content)
+        response_bytes[0] += size
+        if size > INTAKE_MAX_RESPONSE_BYTES:
+            raise JiraUnknownPayload("intake response limit exceeded")
+        if response_bytes[0] > INTAKE_MAX_TOTAL_RESPONSE_BYTES:
+            raise JiraUnknownPayload("intake response batch limit exceeded")
+        return self._json_or_raise(response)
+
+    @staticmethod
+    def _intake_account_id(payload: dict[str, Any]) -> str:
+        account_id = payload.get("accountId")
+        if payload.get("active") is not True:
+            raise JiraUnknownPayload("inactive Jira intake identity")
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise JiraUnknownPayload("invalid Jira intake identity")
+        return account_id
+
+    def _search_assigned_inbox(
+        self,
+        jql: str,
+        project: str,
+        response_bytes: list[int],
+    ) -> list[dict[str, Any]]:
+        nodes: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        seen_tokens: set[str] = set()
+        next_token: str | None = None
+        for page_number in range(1, INTAKE_MAX_PAGES + 1):
+            payload = self._intake_search_page(jql, next_token, response_bytes)
+            self._append_intake_nodes(payload, project, nodes, seen_keys)
+            is_last = payload.get("isLast")
+            if type(is_last) is not bool:
+                raise JiraUnknownPayload("invalid intake isLast flag")
+            if is_last:
+                return nodes
+            next_token = self._next_intake_token(payload, seen_tokens)
+            if page_number == INTAKE_MAX_PAGES:
+                raise JiraUnknownPayload("intake page limit exceeded")
+        raise JiraUnknownPayload("incomplete intake pagination")
+
+    def _intake_search_page(
+        self,
+        jql: str,
+        next_token: str | None,
+        response_bytes: list[int],
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "jql": jql,
+            "fields": _INTAKE_SEARCH_FIELDS,
+            "maxResults": PAGE_SIZE,
+        }
+        if next_token is not None:
+            params["nextPageToken"] = next_token
+        return self._intake_get_json(
+            f"{API_BASE}/search/jql", response_bytes, params=params
+        )
+
+    @staticmethod
+    def _append_intake_nodes(
+        payload: dict[str, Any],
+        project: str,
+        nodes: list[dict[str, Any]],
+        seen_keys: set[str],
+    ) -> None:
+        issues = payload.get("issues")
+        if not isinstance(issues, list):
+            raise JiraUnknownPayload("invalid intake issues list")
+        if len(nodes) + len(issues) > INTAKE_MAX_ISSUES:
+            raise JiraUnknownPayload("intake issue limit exceeded")
+        for node in issues:
+            if not isinstance(node, dict):
+                raise JiraUnknownPayload("invalid intake issue row")
+            key = _intake_key(node.get("key"), project=project)
+            if key in seen_keys:
+                raise JiraUnknownPayload("duplicate intake issue key")
+            seen_keys.add(key)
+            nodes.append(node)
+
+    @staticmethod
+    def _next_intake_token(
+        payload: dict[str, Any], seen_tokens: set[str]
+    ) -> str:
+        token = payload.get("nextPageToken")
+        if not isinstance(token, str) or not token.strip():
+            raise JiraUnknownPayload("missing intake page token")
+        if len(token) > _INTAKE_MAX_TOKEN_LENGTH or token in seen_tokens:
+            raise JiraUnknownPayload("invalid intake page token")
+        seen_tokens.add(token)
+        return token
+
+    def _normalize_inbox_batch(
+        self,
+        nodes: list[dict[str, Any]],
+        *,
+        project: str,
+        account_id: str,
+        response_bytes: list[int],
+    ) -> list[JiraInboxIssue]:
+        items: list[JiraInboxIssue] = []
+        parent_cache: dict[str, tuple[str, str]] = {}
+        total_size = 0
+        for node in nodes:
+            item = self._normalize_inbox_node(
+                node,
+                project=project,
+                account_id=account_id,
+                response_bytes=response_bytes,
+                parent_cache=parent_cache,
+            )
+            item_size = _intake_card_size(item)
+            if item_size > INTAKE_MAX_CARD_BYTES:
+                raise JiraUnknownPayload("intake card limit exceeded")
+            total_size += item_size
+            if total_size > INTAKE_MAX_BATCH_BYTES:
+                raise JiraUnknownPayload("intake content batch limit exceeded")
+            items.append(item)
+        return items
+
+    def _normalize_inbox_node(
+        self,
+        node: dict[str, Any],
+        *,
+        project: str,
+        account_id: str,
+        response_bytes: list[int],
+        parent_cache: dict[str, tuple[str, str]],
+    ) -> JiraInboxIssue:
+        key = _intake_key(node.get("key"), project=project)
+        fields = node.get("fields")
+        if not isinstance(fields, dict):
+            raise JiraUnknownPayload("invalid intake issue fields")
+        summary = _intake_text(fields.get("summary"), field="summary", required=True)
+        issue_type, is_subtask = self._intake_issue_type(fields)
+        self._validate_intake_assignee(fields, account_id)
+        description = _flatten_intake_adf(fields.get("description"))
+        parent_key = self._intake_parent_key(fields, project, is_subtask, description)
+        parent_summary: str | None = None
+        parent_description: str | None = None
+        if parent_key is not None:
+            parent_summary, parent_description = self._load_intake_parent(
+                parent_key, project, response_bytes, parent_cache
+            )
+        return JiraInboxIssue(
+            key=key,
+            summary=summary,
+            description=description,
+            issue_type=issue_type,
+            parent_key=parent_key,
+            parent_summary=parent_summary,
+            parent_description=parent_description,
+        )
+
+    @staticmethod
+    def _intake_issue_type(fields: dict[str, Any]) -> tuple[str, bool]:
+        issue_type = fields.get("issuetype")
+        if not isinstance(issue_type, dict):
+            raise JiraUnknownPayload("invalid intake issue type")
+        name = _intake_text(issue_type.get("name"), field="issue_type", required=True)
+        is_subtask = issue_type.get("subtask")
+        if type(is_subtask) is not bool:
+            raise JiraUnknownPayload("invalid intake issue type")
+        return name, is_subtask
+
+    @staticmethod
+    def _validate_intake_assignee(fields: dict[str, Any], account_id: str) -> None:
+        assignee = fields.get("assignee")
+        if not isinstance(assignee, dict):
+            raise JiraUnknownPayload("missing intake assignee")
+        assigned_id = assignee.get("accountId")
+        if not isinstance(assigned_id, str) or assigned_id != account_id:
+            raise JiraUnknownPayload("foreign intake assignee")
+
+    @staticmethod
+    def _intake_parent_key(
+        fields: dict[str, Any], project: str, is_subtask: bool, description: str
+    ) -> str | None:
+        parent = fields.get("parent")
+        if parent is None:
+            if is_subtask and not description:
+                raise JiraUnknownPayload("missing required intake parent")
+            return None
+        if not isinstance(parent, dict):
+            raise JiraUnknownPayload("invalid intake parent")
+        parent_key = _intake_key(parent.get("key"), project=project)
+        if is_subtask and not description:
+            return parent_key
+        return None
+
+    def _load_intake_parent(
+        self,
+        parent_key: str,
+        project: str,
+        response_bytes: list[int],
+        cache: dict[str, tuple[str, str]],
+    ) -> tuple[str, str]:
+        cached = cache.get(parent_key)
+        if cached is not None:
+            return cached
+        payload = self._intake_get_json(
+            f"{API_BASE}/issue/{parent_key}",
+            response_bytes,
+            params={"fields": "summary,description,issuetype"},
+        )
+        response_key = _intake_key(payload.get("key"), project=project)
+        if response_key != parent_key:
+            raise JiraUnknownPayload("mismatched intake parent key")
+        fields = payload.get("fields")
+        if not isinstance(fields, dict):
+            raise JiraUnknownPayload("invalid intake parent fields")
+        self._intake_issue_type(fields)
+        summary = _intake_text(
+            fields.get("summary"), field="parent_summary", required=True
+        )
+        description = _flatten_intake_adf(fields.get("description"), required=True)
+        cache[parent_key] = (summary, description)
+        return summary, description
 
     def _find_transition_id(self, issue_key: str, target_state: str) -> str:
         path = f"{API_BASE}/issue/{issue_key}/transitions"
