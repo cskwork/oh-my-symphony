@@ -725,6 +725,8 @@ class JiraClient:
         description = _flatten_intake_adf(fields.get("description"))
         parent_key = self._intake_parent_key(fields, project, is_subtask, description)
         components, status, priority, updated = _intake_routing_fields(fields)
+        if status not in self._tracker.active_states:
+            raise JiraUnknownPayload("non-actionable intake status")
         parent_summary: str | None = None
         parent_description: str | None = None
         parent_components: tuple[str, ...] = ()
