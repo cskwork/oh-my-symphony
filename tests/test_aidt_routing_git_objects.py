@@ -14,6 +14,7 @@ from symphony.aidt_routing.contract import (
     load_routing_settings,
 )
 from symphony.aidt_routing.git_objects import (
+    AIDT_REPOSITORY_BINDING_SCHEMA,
     GIT_BLOB_STDOUT_CAP,
     GIT_METADATA_FILE_CAP,
     GIT_OBJECT_TRUST_SCHEMA,
@@ -27,9 +28,11 @@ from symphony.aidt_routing.git_objects import (
     _decode_blob,
     _decode_scalar,
     _default_git_runner,
+    _normalize_origin,
     _parse_tree_record,
     _read_metadata_file,
     observe_catalog,
+    observe_service_binding,
     recheck_catalog,
 )
 from tests.aidt_routing_support import (
@@ -45,7 +48,7 @@ from tests.aidt_routing_support import (
 def _repository(tmp_path: Path) -> FrozenGitRepository:
     root = tmp_path / "aidt"
     root.mkdir()
-    return frozen_git_repository(
+    repository = frozen_git_repository(
         root,
         {
             "pom.xml": "<project />",
@@ -55,6 +58,14 @@ def _repository(tmp_path: Path) -> FrozenGitRepository:
             ".gitignore": "ignored.txt\n",
         },
     )
+    git_command(
+        repository.checkout,
+        "remote",
+        "add",
+        "origin",
+        "https://fixture.invalid/repository.git",
+    )
+    return repository
 
 
 def _object_service() -> dict[str, Any]:
@@ -162,11 +173,18 @@ def _sized_service_repository(
                 "symbols": ["x"],
             }
         )
-    frozen_git_repository(
+    repository = frozen_git_repository(
         root,
         files,
         service_id=service_id,
         unrelated_head=False,
+    )
+    git_command(
+        repository.checkout,
+        "remote",
+        "add",
+        "origin",
+        f"https://fixture.invalid/{service_id}.git",
     )
     return service_definition(service_id, routes=routes)
 
@@ -209,6 +227,74 @@ def test_fixed_aidt_prd_objects_ignore_unrelated_head(tmp_path: Path) -> None:
         "src/Route.java": "GET /v-api/learning routeSymbol",
     }
     assert "pom.xml" not in service.contents
+
+
+def test_single_service_observer_shares_repository_binding_v1(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    settings = _routing_settings(repo)
+
+    catalog_service = observe_catalog(settings).services[0]
+    single_service = observe_service_binding(settings, "viewer-api")
+
+    assert AIDT_REPOSITORY_BINDING_SCHEMA == "aidt-repository-binding-v1"
+    assert single_service.checkout_revision == catalog_service.checkout_revision
+    assert (
+        single_service.repository_binding_digest
+        == catalog_service.repository_binding_digest
+    )
+
+
+def test_repository_binding_includes_canonical_origin_identity(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    settings = _routing_settings(repo)
+    original = observe_service_binding(settings, "viewer-api")
+    git_command(
+        repo.checkout,
+        "remote",
+        "set-url",
+        "origin",
+        "https://fixture.invalid/different.git",
+    )
+
+    changed = observe_service_binding(settings, "viewer-api")
+
+    assert changed.checkout_revision == original.checkout_revision
+    assert changed.repository_binding_digest != original.repository_binding_digest
+
+
+def test_origin_parser_normalizes_only_bounded_https_and_ssh_urls() -> None:
+    assert (
+        _normalize_origin(
+            "HTTPS://Fixture.Invalid:443/repository.git", "viewer-api"
+        )
+        == "https://fixture.invalid/repository.git"
+    )
+    assert (
+        _normalize_origin(
+            "ssh://git@Fixture.Invalid:22/repository.git", "viewer-api"
+        )
+        == "ssh://git@fixture.invalid/repository.git"
+    )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "file:///tmp/repository.git",
+        "git@fixture.invalid:repository.git",
+        "https://user@fixture.invalid/repository.git",
+        "ssh://user:password@fixture.invalid/repository.git",
+        "https://fixture.invalid/repository.git?query=1",
+        "https://fixture.invalid/repository.git#fragment",
+        "https://fixture.invalid/../repository.git",
+        "https://fixture.invalid/%2e%2e/repository.git",
+        "https://fixture.invalid/path%2Frepository.git",
+        "https://fixture.invalid/path\\repository.git",
+    ],
+)
+def test_origin_parser_rejects_ambiguous_or_unsafe_urls(origin: str) -> None:
+    with pytest.raises(AidtRoutingFailure, match="repository_invalid"):
+        _normalize_origin(origin, "viewer-api")
 
 
 def test_git_argv_and_environment_are_fixed_and_sanitized(

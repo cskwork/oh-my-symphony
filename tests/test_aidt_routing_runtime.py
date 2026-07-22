@@ -253,10 +253,12 @@ def test_facade_exports_only_the_frozen_runtime_contract() -> None:
         "AidtRoutingFailure",
         "AidtRoutingResult",
         "AidtRouteDispatchContract",
+        "AIDT_REPOSITORY_BINDING_SCHEMA",
         "canonical_fingerprint",
         "filter_routing_candidates",
         "load_routing_settings",
         "load_route_dispatch_contract",
+        "observe_service_binding",
         "run_aidt_routing",
     ]
 

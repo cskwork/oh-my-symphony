@@ -18,11 +18,18 @@ from .contract import (
 
 if TYPE_CHECKING:
     from .dispatch import AidtRouteDispatchContract, load_route_dispatch_contract
+    from .git_objects import (
+        AIDT_REPOSITORY_BINDING_SCHEMA,
+        observe_service_binding,
+    )
     from .runtime import filter_routing_candidates, run_aidt_routing
 
 _RUNTIME_EXPORTS = frozenset({"filter_routing_candidates", "run_aidt_routing"})
 _DISPATCH_EXPORTS = frozenset(
     {"AidtRouteDispatchContract", "load_route_dispatch_contract"}
+)
+_GIT_EXPORTS = frozenset(
+    {"AIDT_REPOSITORY_BINDING_SCHEMA", "observe_service_binding"}
 )
 
 __all__ = [
@@ -34,10 +41,12 @@ __all__ = [
     "AidtRoutingFailure",
     "AidtRoutingResult",
     "AidtRouteDispatchContract",
+    "AIDT_REPOSITORY_BINDING_SCHEMA",
     "canonical_fingerprint",
     "filter_routing_candidates",
     "load_routing_settings",
     "load_route_dispatch_contract",
+    "observe_service_binding",
     "run_aidt_routing",
 ]
 
@@ -49,6 +58,18 @@ def __getattr__(name: str) -> object:
         exports = {
             "AidtRouteDispatchContract": AidtRouteDispatchContract,
             "load_route_dispatch_contract": load_route_dispatch_contract,
+        }
+        globals().update(exports)
+        return exports[name]
+    if name in _GIT_EXPORTS:
+        from .git_objects import (
+            AIDT_REPOSITORY_BINDING_SCHEMA,
+            observe_service_binding,
+        )
+
+        exports = {
+            "AIDT_REPOSITORY_BINDING_SCHEMA": AIDT_REPOSITORY_BINDING_SCHEMA,
+            "observe_service_binding": observe_service_binding,
         }
         globals().update(exports)
         return exports[name]
