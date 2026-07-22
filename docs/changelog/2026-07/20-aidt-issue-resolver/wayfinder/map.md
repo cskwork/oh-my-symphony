@@ -56,7 +56,7 @@ to aidt-dev Jenkins, and records final dev E2E evidence in dashboard/TUI-visible
 | 003h-atomic-generation-publication | closed - verified | none |
 | 003i-operator-profile-example | closed - verified | none |
 | 003v-worktree-rollup-verification | closed - verified | none |
-| 004-delivery-stage-enforcement | current - ready for planning | none; 001, 002, 003 closed |
+| 004-delivery-stage-enforcement | current - plan passed; 004a green, 004b-004v pending | none; 001, 002, 003 closed |
 | 005-local-qa-adapters | pending | 004 |
 | 006-dev-merge-promotion | pending | 004, 005 |
 | 007-jenkins-dev-deploy-gate | pending | 006 |
