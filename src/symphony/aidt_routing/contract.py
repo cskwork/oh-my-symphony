@@ -173,6 +173,7 @@ class AidtRoutingResult:
     status: str
     error_category: str | None = None
     error_ref: str | None = None
+    provisionable_child_identifiers: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not _valid_result(self):
@@ -190,6 +191,7 @@ class AidtRoutingResult:
             f"status={self.status!r}",
             f"error_category={self.error_category!r}",
             f"error_ref={self.error_ref!r}",
+            f"provisionable_child_count={len(self.provisionable_child_identifiers)!r}",
         )
         return f"AidtRoutingResult({', '.join(fields)})"
 
@@ -209,6 +211,8 @@ def _valid_result(result: AidtRoutingResult) -> bool:
         return False
     if type(result.status) is not str or result.status not in _RESULT_STATUSES:
         return False
+    if not _valid_provisionable_identifiers(result):
+        return False
     return _valid_error_pair(result.error_category, result.error_ref)
 
 
@@ -225,6 +229,23 @@ def _valid_blocked_identifiers(value: object) -> bool:
         type(identifier) is str and _valid_blocked_identifier(identifier)
         for identifier in value
     )
+
+
+def _valid_provisionable_identifiers(result: AidtRoutingResult) -> bool:
+    value = result.provisionable_child_identifiers
+    if type(value) is not frozenset or len(value) > MAX_CHILDREN:
+        return False
+    if not all(type(item) is str and _valid_child_identifier(item) for item in value):
+        return False
+    if not value.issubset(result.blocked_identifiers):
+        return False
+    allowed = result.enabled and result.global_allow_dispatch
+    return not value or allowed and result.status in {"success", "review"}
+
+
+def _valid_child_identifier(value: str) -> bool:
+    parts = value.split("--")
+    return len(parts) == 2 and _valid_card_key(parts[0]) and _valid_id(parts[1])
 
 
 def _valid_blocked_identifier(value: str) -> bool:
@@ -259,6 +280,7 @@ def _normalize_result_failure(result: AidtRoutingResult) -> None:
     object.__setattr__(result, "status", "failure")
     object.__setattr__(result, "error_category", "internal_error")
     object.__setattr__(result, "error_ref", None)
+    object.__setattr__(result, "provisionable_child_identifiers", frozenset())
 
 
 def canonical_fingerprint(schema: str, value: object) -> str:

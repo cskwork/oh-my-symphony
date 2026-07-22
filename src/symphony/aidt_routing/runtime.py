@@ -23,7 +23,7 @@ from .contract import (
     RoutingSettings,
     load_routing_settings,
 )
-from .decision import RouteResolution, resolve_card
+from .decision import RouteCardProjection, RouteResolution, resolve_card
 from .git_objects import (
     CatalogObservation,
     GitRunner,
@@ -44,12 +44,14 @@ log = get_logger()
 def filter_routing_candidates(
     candidates: Iterable[Issue],
     blocked_identifiers: frozenset[str],
+    provisionable_child_identifiers: frozenset[str] = frozenset(),
 ) -> list[Issue]:
-    """Preserve tracker order while excluding every route-managed card."""
+    """Preserve unmanaged and nominated child order; block other managed cards."""
     return [
         issue
         for issue in candidates
         if issue.identifier not in blocked_identifiers
+        or issue.identifier in provisionable_child_identifiers
     ]
 
 
@@ -235,6 +237,13 @@ def _success_result(
         for resolution in resolutions
     )
     status = "review" if review_count else "success"
+    provisionable = frozenset(
+        child.identifier
+        for resolution in resolutions
+        if resolution.routed
+        for child in resolution.children
+        if _provisionable_projection(child)
+    )
     return AidtRoutingResult(
         True,
         True,
@@ -244,6 +253,18 @@ def _success_result(
         child_count,
         0,
         status,
+        provisionable_child_identifiers=provisionable,
+    )
+
+
+def _provisionable_projection(value: object) -> TypeGuard[RouteCardProjection]:
+    if not isinstance(value, RouteCardProjection) or value.role != "child":
+        return False
+    routing = value.routing
+    return (
+        routing.get("schema") == "aidt-route-object-v2"
+        and routing.get("role") == "child"
+        and routing.get("status") == "pending_fresh_base_equality"
     )
 
 
