@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import stat
 import subprocess
 import threading
+from urllib.parse import unquote, urlsplit
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +28,7 @@ from .contract import (
 
 _AIDT_BASE_REF = "refs/remotes/origin/aidt-prd"
 GIT_OBJECT_TRUST_SCHEMA = "aidt-git-object-v1"
+AIDT_REPOSITORY_BINDING_SCHEMA = "aidt-repository-binding-v1"
 GIT_TOKEN_STDOUT_CAP = 128
 GIT_PATH_STDOUT_CAP = 4_096
 GIT_TREE_RECORD_CAP = 1_024
@@ -80,6 +83,7 @@ class ObservedService:
         default_factory=lambda: MappingProxyType({}), repr=False
     )
     _repository: _RepositoryBinding | None = field(default=None, repr=False)
+    _origin_digest: str = field(default="", repr=False)
 
     @property
     def revision(self) -> str:
@@ -119,6 +123,8 @@ class _IdentityRecord:
     path: Path = field(repr=False)
     kind: str
     token: str
+    device: int | None
+    inode: int | None
 
 
 @dataclass(frozen=True, repr=False)
@@ -160,6 +166,30 @@ def observe_catalog(
         observed.append(item)
     _reject_checkout_collisions(observed)
     return CatalogObservation(tuple(observed), total_object_bytes=total_bytes)
+
+
+def observe_service_binding(
+    settings: RoutingSettings,
+    service_id: str,
+    *,
+    git_runner: GitRunner | None = None,
+    identity_probe: IdentityProbe | None = None,
+) -> ObservedService:
+    """Observe one enabled catalog service through the shared binding serializer."""
+    matches = [
+        service
+        for service in settings.services
+        if service.enabled and service.id == service_id
+    ]
+    if len(matches) != 1:
+        raise AidtRoutingFailure("catalog_invalid")
+    observed, _object_bytes = _observe_service(
+        settings,
+        matches[0],
+        git_runner or _default_git_runner,
+        identity_probe or _default_identity_probe,
+    )
+    return observed
 
 
 def recheck_catalog(
@@ -409,7 +439,10 @@ def _observe_service(
     contents, object_bytes = _read_scoring_blobs(
         repository, service, object_ids, runner
     )
-    digest = _repository_digest(service, repository, revision)
+    origin_digest = _read_origin_digest(repository, runner)
+    digest = _repository_digest(
+        service, repository, revision, origin_digest, object_ids
+    )
     observed = ObservedService(
         service=service,
         revision_ref=_AIDT_BASE_REF,
@@ -418,6 +451,7 @@ def _observe_service(
         contents=MappingProxyType(contents),
         _object_ids=MappingProxyType(object_ids),
         _repository=repository,
+        _origin_digest=origin_digest,
     )
     _recheck_service(observed, runner, probe)
     return observed, object_bytes
@@ -722,12 +756,15 @@ def _identity_record(
 ) -> _IdentityRecord:
     try:
         token = probe(path)
+        value = path.lstat()
     except Exception:
         raise _failure("repository_invalid", service_id) from None
     if not isinstance(token, str) or not token:
         raise _failure("repository_invalid", service_id)
     opaque = canonical_fingerprint("aidt-identity-probe-v1", token)
-    return _IdentityRecord(label, path, kind, opaque)
+    device = value.st_dev if type(value.st_dev) is int else None
+    inode = value.st_ino if type(value.st_ino) is int else None
+    return _IdentityRecord(label, path, kind, opaque, device, inode)
 
 
 def _default_identity_probe(path: Path) -> str:
@@ -800,20 +837,100 @@ def _lexists(path: Path) -> bool:
     return True
 
 
+def _read_origin_digest(
+    repository: _RepositoryBinding, runner: GitRunner
+) -> str:
+    output = _git_output(
+        repository,
+        ("remote", "get-url", "--all", "origin"),
+        GIT_PATH_STDOUT_CAP,
+        runner,
+    )
+    value = _decode_scalar(output, repository.service_id)
+    normalized = _normalize_origin(value, repository.service_id)
+    payload = b"aidt-origin-v1\0" + normalized.encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _normalize_origin(value: str, service_id: str) -> str:
+    if "\\" in value or re.search(r"%2f|%5c", value, re.IGNORECASE):
+        raise _failure("repository_invalid", service_id)
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise _failure("repository_invalid", service_id) from None
+    if not _valid_origin_parts(parsed, service_id):
+        raise _failure("repository_invalid", service_id)
+    host = str(parsed.hostname).lower()
+    host = f"[{host}]" if ":" in host else host
+    default_port = 443 if parsed.scheme.lower() == "https" else 22
+    port_text = "" if port is None or port == default_port else f":{port}"
+    user = f"{parsed.username}@" if parsed.username is not None else ""
+    return f"{parsed.scheme.lower()}://{user}{host}{port_text}{parsed.path}"
+
+
+def _valid_origin_parts(value: Any, service_id: str) -> bool:
+    scheme = value.scheme.lower()
+    if scheme not in {"https", "ssh"} or value.hostname is None:
+        return False
+    if value.password is not None or value.query or value.fragment:
+        return False
+    if scheme == "https" and value.username is not None:
+        return False
+    if value.username is not None and not _bounded_ascii(value.username, 256):
+        return False
+    if not _bounded_ascii(value.hostname, 253):
+        return False
+    if not value.path.startswith("/") or value.path == "/":
+        return False
+    try:
+        decoded = unquote(value.path, errors="strict")
+    except UnicodeDecodeError:
+        raise _failure("repository_invalid", service_id) from None
+    segments = decoded.split("/")
+    return "\\" not in decoded and all(item not in {".", ".."} for item in segments)
+
+
+def _bounded_ascii(value: str, cap: int) -> bool:
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return 0 < len(encoded) <= cap and not any(byte < 33 or byte == 127 for byte in encoded)
+
+
 def _repository_digest(
-    service: RoutingService, repository: _RepositoryBinding, revision: str
+    service: RoutingService,
+    repository: _RepositoryBinding,
+    revision: str,
+    origin_digest: str,
+    object_ids: Mapping[str, str],
 ) -> str:
     binding = {
         "service": service.id,
-        "checkout": service.checkout,
+        "kind": service.kind,
+        "catalog_checkout": service.checkout,
         "revision_ref": _AIDT_BASE_REF,
         "checkout_revision": revision,
+        "object_format": "sha1",
+        "origin_digest": origin_digest,
         "identities": [
-            {"label": item.label, "token": item.token}
+            {
+                "label": item.label,
+                "path": str(item.path),
+                "device": item.device,
+                "inode": item.inode,
+            }
             for item in repository.identities
+            if item.label in {"checkout", "common-directory", "object-directory"}
+        ],
+        "required_objects": [
+            {"path": path, "object_id": object_id}
+            for path, object_id in sorted(object_ids.items())
         ],
     }
-    return canonical_fingerprint(GIT_OBJECT_TRUST_SCHEMA, binding)
+    return canonical_fingerprint(AIDT_REPOSITORY_BINDING_SCHEMA, binding)
 
 
 def _recheck_service(
@@ -857,6 +974,16 @@ def _recheck_git_identity(
         raise _failure("revision_changed", observed.service.id) from None
     if revision != observed.checkout_revision:
         raise _failure("revision_changed", observed.service.id)
+    origin_digest = _read_origin_digest(repository, runner)
+    digest = _repository_digest(
+        observed.service,
+        repository,
+        revision,
+        origin_digest,
+        observed._object_ids,
+    )
+    if digest != observed.repository_binding_digest:
+        raise _failure("repository_changed", observed.service.id)
 
 
 def _recheck_object(
