@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from aiohttp.test_utils import TestClient, TestServer
 
 import symphony.orchestrator.core as core_mod
+from symphony.aidt_worktree.runtime import AidtWorktreeHealth
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator
 from symphony.orchestrator.constants import TICK_LOOP_MAX_RESTARTS
@@ -263,3 +264,51 @@ async def test_health_endpoint_returns_status() -> None:
         assert data["run_registry"]["enabled"] is False
     finally:
         await client.close()
+
+
+def test_worktree_degraded_and_fatal_health_add_one_bounded_reason() -> None:
+    hostile = "TOP-SECRET-/private/repository.git"
+
+    class _Runtime:
+        def __init__(self) -> None:
+            self.status = "degraded"
+
+        def health_snapshot(self) -> AidtWorktreeHealth:
+            return AidtWorktreeHealth(
+                True,
+                self.status,  # type: ignore[arg-type]
+                "a" * 64,
+                3,
+                2,
+                1,
+                1,
+                "scope_changed",
+                "A20-1--viewer-api",
+                "2026-07-21T00:00:00Z",
+            )
+
+    orch = _orch()
+    runtime = _Runtime()
+    runtime.hostile = hostile  # type: ignore[attr-defined]
+    orch._aidt_worktree_runtime = runtime  # type: ignore[attr-defined]
+
+    for status in ("degraded", "fatal"):
+        runtime.status = status
+        health = orch.health()
+        rendered = repr(health)
+
+        assert health["aidt_worktree"]["status"] == status
+        assert health["degraded_reasons"].count("aidt_worktree_failure") == 1
+        assert hostile not in rendered
+        assert set(health["aidt_worktree"]) == {
+            "enabled",
+            "status",
+            "workflow_generation",
+            "create_count",
+            "resume_count",
+            "failure_count",
+            "consecutive_failures",
+            "last_category",
+            "last_ref",
+            "last_success_at",
+        }

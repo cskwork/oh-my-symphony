@@ -111,8 +111,8 @@ def _make_config(
     )
 
 
-def _orch() -> Orchestrator:
-    state = WorkflowState(Path("/tmp/no.md"))
+def _orch(workflow_path: Path = Path("/tmp/WORKFLOW.md")) -> Orchestrator:
+    state = WorkflowState(workflow_path)
     return Orchestrator(state)
 
 
@@ -1691,7 +1691,7 @@ def test_retryable_persisted_pause_restarts_as_retry(tmp_path, monkeypatch):
         ),
     )
     registry.close()
-    restarted = _orch()
+    restarted = _orch(cfg.workflow_path)
 
     dispatched: list[tuple[str, int | None, str | None]] = []
 
@@ -1776,7 +1776,7 @@ def test_persisted_retry_attempt_drives_next_dispatch_and_cap(tmp_path, monkeypa
     registry = RunRegistry(state_db, lease_ttl=timedelta(minutes=5))
     registry.set_issue_flags(issue.id, retry_attempt=3)
     registry.close()
-    restarted = _orch()
+    restarted = _orch(cfg.workflow_path)
 
     dispatched: list[tuple[str, int | None, str | None]] = []
     escalated: list[int] = []
@@ -8150,7 +8150,7 @@ async def test_reload_refreshes_workflow_dir_for_existing_workspace_manager(
             timeout_ms=30_000,
         ),
     )
-    state = WorkflowState(tmp_path / "unused.md")
+    state = WorkflowState(new_cfg.workflow_path)
     monkeypatch.setattr(state, "reload", lambda: (new_cfg, None))
 
     orch = Orchestrator(state)
@@ -8215,7 +8215,7 @@ async def test_reload_refreshes_reuse_policy_and_hook_env_alongside_workflow_dir
         agent=new_agent,
         workspace_reuse_policy="refresh",
     )
-    state = WorkflowState(tmp_path / "unused.md")
+    state = WorkflowState(new_cfg.workflow_path)
     monkeypatch.setattr(state, "reload", lambda: (new_cfg, None))
 
     orch = Orchestrator(state)

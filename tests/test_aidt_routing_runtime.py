@@ -700,3 +700,78 @@ def test_health_transitions_are_exact_and_failure_retains_last_success(
     assert disabled["last_error"] is None
     assert disabled["failure_count"] == 0
     assert disabled["consecutive_failures"] == 0
+
+
+@pytest.mark.asyncio
+async def test_core_releases_only_provisionable_managed_children_in_input_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = Orchestrator(_StaticState(_enabled_config(tmp_path)))  # type: ignore[arg-type]
+    _isolate_tick(orchestrator, monkeypatch)
+    seen: list[str] = []
+    candidates = [
+        _issue("A20-1"),
+        _issue("A20-1--viewer-api"),
+        _issue("LOCAL-2"),
+        _issue("A20-2--viewer-api"),
+        _issue("LOCAL-1"),
+    ]
+    result = AidtRoutingResult(
+        True,
+        True,
+        frozenset(
+            {"A20-1", "A20-1--viewer-api", "A20-2--viewer-api"}
+        ),
+        1,
+        0,
+        2,
+        0,
+        "success",
+        provisionable_child_identifiers=frozenset({"A20-1--viewer-api"}),
+    )
+
+    monkeypatch.setattr(orchestrator, "_poll_jira_intake", _noop_intake)
+    monkeypatch.setattr(orchestrator, "_fetch_candidates", lambda _cfg: _async(candidates))
+    monkeypatch.setattr(
+        orchestrator,
+        "_sort_with_wait_age_bump",
+        lambda items, _cfg: seen.extend(item.identifier for item in items) or [],
+    )
+    monkeypatch.setattr(core_module, "run_aidt_routing", lambda *_a, **_k: result)
+
+    await orchestrator._on_tick()
+
+    assert seen == ["A20-1--viewer-api", "LOCAL-2", "LOCAL-1"]
+
+
+async def _noop_intake(_cfg: object):
+    result = JiraIntakeResult(False, 0, 0)
+    return core_module.JiraIntakePoll(False, "disabled", result)
+
+
+async def _async(value: Any) -> Any:
+    return value
+
+
+def test_never_enabled_core_does_not_load_provisioner_or_git_state() -> None:
+    script = """
+import sys
+from pathlib import Path
+from symphony.orchestrator import Orchestrator
+from symphony.workflow import WorkflowState
+
+Orchestrator(WorkflowState(Path('/tmp/missing-workflow.md')))
+assert 'symphony.aidt_worktree.provisioner' not in sys.modules
+assert 'symphony.aidt_worktree.git_state' not in sys.modules
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr

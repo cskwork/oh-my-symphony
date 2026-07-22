@@ -11,12 +11,28 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from ._shell import resolve_bash
+from .aidt_worktree.contract import (
+    AidtWorktreeFailure,
+    DelegateDisposition,
+    DelegateResult,
+)
 from .errors import InvalidWorkspaceCwd, SymphonyError
 from .issue import workspace_key
 from .logging import get_logger
 from .workflow import HooksConfig
+
+if TYPE_CHECKING:
+    from .aidt_worktree import (
+        ActiveCompletionLease,
+        AidtProvisioningAdmission,
+        AidtRunGuard,
+        AidtWorktreeGeneration,
+        AidtWorktreeRuntime,
+        CompletionAuthorization,
+    )
 
 log = get_logger()
 
@@ -94,6 +110,17 @@ class Workspace:
     path: Path
     workspace_key: str
     created_now: bool
+    aidt_guard: AidtRunGuard | None = None
+
+
+class AidtWorkspaceOperationError(Exception):
+    """Bounded workspace-facing failure for an owned AIDT operation."""
+
+    def __init__(self, category: object, ref: object = None) -> None:
+        failure = AidtWorktreeFailure(category, ref)
+        self.category = failure.category
+        self.ref = failure.ref
+        super().__init__(self.category)
 
 
 class WorkspaceManager:
@@ -108,6 +135,7 @@ class WorkspaceManager:
         board_root: Path | None = None,
         reuse_policy: str = "preserve",
         hook_env: dict[str, str] | None = None,
+        aidt_runtime: AidtWorktreeRuntime | None = None,
     ) -> None:
         self._root = root.resolve()
         self._hooks = hooks
@@ -115,6 +143,7 @@ class WorkspaceManager:
         self._board_root = board_root
         self._reuse_policy = reuse_policy
         self._hook_env = dict(hook_env or {})
+        self._aidt_runtime = aidt_runtime
         self._owner_identity = self._build_owner_identity()
         self._root.mkdir(parents=True, exist_ok=True)
 
@@ -147,11 +176,32 @@ class WorkspaceManager:
     def update_hook_env(self, hook_env: dict[str, str] | None) -> None:
         self._hook_env = dict(hook_env or {})
 
-    def path_for(self, identifier: str) -> Path:
+    def path_for(
+        self,
+        identifier: str,
+        *,
+        aidt_generation: AidtWorktreeGeneration | None = None,
+    ) -> Path:
+        if aidt_generation is not None:
+            result = self._delegate_path_for(identifier, aidt_generation)
+            if result is not None:
+                return result
         key = workspace_key(identifier)
         return (self._root / key).resolve()
 
-    async def create_or_reuse(self, identifier: str) -> Workspace:
+    async def create_or_reuse(
+        self,
+        identifier: str,
+        *,
+        aidt_generation: AidtWorktreeGeneration | None = None,
+        aidt_admission: AidtProvisioningAdmission | None = None,
+    ) -> Workspace:
+        if (aidt_generation is None) != (aidt_admission is None):
+            raise AidtWorkspaceOperationError("internal_error", identifier)
+        if aidt_generation is not None and aidt_admission is not None:
+            delegated = self._delegate_create(identifier, aidt_generation, aidt_admission)
+            if delegated is not None:
+                return delegated
         key = workspace_key(identifier)
         path = (self._root / key).resolve()
         self._enforce_root_containment(path)
@@ -183,7 +233,20 @@ class WorkspaceManager:
         self._write_workspace_owner_marker(key)
         return Workspace(path=path, workspace_key=key, created_now=created_now)
 
-    async def before_run(self, path: Path) -> None:
+    async def before_run(
+        self,
+        path: Path,
+        *,
+        aidt_generation: AidtWorktreeGeneration | None = None,
+        aidt_guard: AidtRunGuard | None = None,
+    ) -> None:
+        if (aidt_generation is None) != (aidt_guard is None):
+            ref = aidt_guard.identifier if aidt_guard is not None else path.name
+            raise AidtWorkspaceOperationError("internal_error", ref)
+        if aidt_generation is not None and aidt_guard is not None:
+            result = self._delegate_before_run(aidt_generation, aidt_guard)
+            if result:
+                return
         if self._hooks.before_run:
             await self._run_hook("before_run", self._hooks.before_run, path)
 
@@ -233,7 +296,26 @@ class WorkspaceManager:
             log.warning("hook_after_done_failed", path=str(path), error=str(exc))
             return False
 
-    async def remove(self, path: Path) -> None:
+    async def remove(
+        self,
+        path: Path,
+        *,
+        identifier: str | None = None,
+        aidt_generation: AidtWorktreeGeneration | None = None,
+        authorization: CompletionAuthorization | None = None,
+        lease: ActiveCompletionLease | None = None,
+    ) -> DelegateResult[None] | None:
+        if aidt_generation is not None:
+            runtime = self._require_aidt_runtime(identifier)
+            return runtime.remove(
+                aidt_generation,
+                path,
+                identifier=identifier,
+                authorization=authorization,
+                lease=lease,
+            )
+        if any(value is not None for value in (identifier, authorization, lease)):
+            raise AidtWorkspaceOperationError("internal_error", identifier)
         path = path.resolve()
         try:
             self._enforce_root_containment(path)
@@ -250,6 +332,67 @@ class WorkspaceManager:
         ok, err = await _force_rmtree(path)
         if not ok:
             log.warning("workspace_remove_failed", path=str(path), error=err)
+
+    def _require_aidt_runtime(self, identifier: str | None) -> AidtWorktreeRuntime:
+        if self._aidt_runtime is None:
+            raise AidtWorkspaceOperationError("internal_error", identifier)
+        return self._aidt_runtime
+
+    def _delegate_path_for(
+        self, identifier: str, generation: AidtWorktreeGeneration
+    ) -> Path | None:
+        result = self._require_aidt_runtime(identifier).path_for(generation, identifier)
+        if result.disposition is DelegateDisposition.UNMANAGED:
+            return None
+        if result.disposition is DelegateDisposition.HANDLED and isinstance(result.value, Path):
+            return result.value
+        self._raise_delegate_failure(result, identifier)
+
+    def _delegate_create(
+        self,
+        identifier: str,
+        generation: AidtWorktreeGeneration,
+        admission: AidtProvisioningAdmission,
+    ) -> Workspace | None:
+        result = self._require_aidt_runtime(identifier).create_or_reuse(
+            generation, admission
+        )
+        if result.disposition is DelegateDisposition.UNMANAGED:
+            return None
+        if result.disposition is not DelegateDisposition.HANDLED or result.value is None:
+            self._raise_delegate_failure(result, identifier)
+        prepared = result.value
+        prepared_result = getattr(prepared, "result", prepared)
+        path = getattr(prepared_result, "workspace_path", None)
+        if path is None:
+            path = getattr(prepared_result, "path", None)
+        created_now = getattr(prepared_result, "created_now", False)
+        if not isinstance(path, Path) or type(created_now) is not bool:
+            raise AidtWorkspaceOperationError("internal_error", identifier)
+        return Workspace(
+            path,
+            workspace_key(identifier),
+            created_now,
+            prepared.guard,
+        )
+
+    def _delegate_before_run(
+        self, generation: AidtWorktreeGeneration, guard: AidtRunGuard
+    ) -> bool:
+        result = self._require_aidt_runtime(guard.identifier).before_run(
+            generation, guard
+        )
+        if result.disposition is DelegateDisposition.UNMANAGED:
+            return False
+        if result.disposition is DelegateDisposition.HANDLED:
+            return True
+        self._raise_delegate_failure(result, guard.identifier)
+
+    @staticmethod
+    def _raise_delegate_failure(
+        result: DelegateResult[Any], identifier: str
+    ) -> NoReturn:
+        raise AidtWorkspaceOperationError(result.category, identifier)
 
     def _enforce_root_containment(self, path: Path) -> None:
         """§9.5 invariant 2."""

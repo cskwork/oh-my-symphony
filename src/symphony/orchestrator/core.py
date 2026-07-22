@@ -37,6 +37,12 @@ from ..aidt_routing import (
     filter_routing_candidates,
     run_aidt_routing,
 )
+from ..aidt_worktree.contract import (
+    AidtWorktreeFailure,
+    DelegateDisposition,
+    DelegateResult,
+)
+from ..aidt_worktree.runtime import AidtWorktreeRuntime
 from ..backends import (
     EVENT_AGENT_RETRY,
     EVENT_APPROVAL_DENIED,
@@ -81,7 +87,11 @@ from ..workflow import (
     validate_for_dispatch,
 )
 from ..utils.auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
-from ..workspace import WorkspaceManager, commit_workspace_on_done
+from ..workspace import (
+    AidtWorkspaceOperationError,
+    WorkspaceManager,
+    commit_workspace_on_done,
+)
 from .constants import (
     ARCHIVE_SWEEP_INTERVAL_SEC,
     AUTO_TRIAGE_NOTE,
@@ -104,7 +114,6 @@ from .contracts import evaluate_contract
 from .dispatch_state import DispatchState
 from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
 from .helpers import (
-    _branch_hook_env,
     _branch_already_merged_into_target,
     _config_for_issue_agent,
     _from_monotonic_to_iso,
@@ -626,6 +635,11 @@ class Orchestrator:
         self._totals = _CodexTotals()
         self._latest_rate_limits: dict[str, Any] | None = None
         self._issue_debug: dict[str, _IssueDebug] = {}
+        self._aidt_worktree_runtime = AidtWorktreeRuntime(
+            workflow_state.path,
+            clock=lambda: datetime.now(timezone.utc),
+        )
+        self._aidt_worktree_generation: Any = None
         self._workspace_manager: WorkspaceManager | None = None
         self._tick_task: asyncio.Task[None] | None = None
         self._tick_event = asyncio.Event()
@@ -1217,14 +1231,9 @@ class Orchestrator:
         # writes through the host-board junction installed by after_create.
         import os as _os
         _os.environ["SYMPHONY_WORKFLOW_DIR"] = str(cfg.workflow_path.parent)
-        self._workspace_manager = WorkspaceManager(
-            cfg.workspace_root,
-            cfg.hooks,
-            workflow_dir=cfg.workflow_path.parent,
-            board_root=cfg.tracker.board_root,
-            reuse_policy=cfg.workspace_reuse_policy,
-            hook_env=_branch_hook_env(cfg),
-        )
+        generation = self._aidt_worktree_runtime.publish(cfg)
+        self._workspace_manager = self._build_workspace_manager(cfg)
+        self._set_aidt_generation(generation)
         self._load_token_ema(cfg)
         self._load_done_count(cfg)
         self._stats = stats_store_for(
@@ -1396,6 +1405,9 @@ class Orchestrator:
             degraded_reasons.append("jira_intake_failure")
         if self._aidt_routing_health.status == "failure":
             degraded_reasons.append("aidt_routing_failure")
+        worktree = self._aidt_worktree_runtime.health_snapshot()
+        if worktree.status in {"degraded", "fatal"}:
+            degraded_reasons.append("aidt_worktree_failure")
         status = "degraded" if degraded_reasons else ("starting" if last is None else "ok")
         return {
             "status": status,
@@ -1426,6 +1438,18 @@ class Orchestrator:
                 "consecutive_failures": self._jira_intake_consecutive_failures,
             },
             "aidt_routing": self._aidt_routing_health.snapshot(),
+            "aidt_worktree": {
+                "enabled": worktree.enabled,
+                "status": worktree.status,
+                "workflow_generation": worktree.workflow_generation,
+                "create_count": worktree.create_count,
+                "resume_count": worktree.resume_count,
+                "failure_count": worktree.failure_count,
+                "consecutive_failures": worktree.consecutive_failures,
+                "last_category": worktree.last_category,
+                "last_ref": worktree.last_ref,
+                "last_success_at": worktree.last_success_at,
+            },
             "run_registry": {
                 "enabled": self._run_registry is not None,
                 "error_count": self._registry_error_count,
@@ -1955,6 +1979,40 @@ class Orchestrator:
             return
         await self._workspace_manager.remove(path)
 
+    async def _terminal_guard(
+        self,
+        manager: WorkspaceManager,
+        path: Path,
+        identifier: str,
+        generation: Any,
+    ) -> DelegateResult[None]:
+        if generation is None:
+            return DelegateResult.unmanaged()
+        try:
+            result = await manager.remove(
+                path,
+                identifier=identifier,
+                aidt_generation=generation,
+                authorization=None,
+                lease=None,
+            )
+        except AidtWorkspaceOperationError as exc:
+            return DelegateResult.owned_error(exc.category)
+        return result if result is not None else DelegateResult.unmanaged()
+
+    async def _guard_terminal_entry(
+        self, entry: RunningEntry
+    ) -> DelegateResult[None]:
+        if entry.aidt_generation is None:
+            return DelegateResult.unmanaged()
+        manager = self._workspace_manager_for_entry(entry)
+        return await self._terminal_guard(
+            manager,
+            entry.workspace_path,
+            entry.issue.identifier,
+            entry.aidt_generation,
+        )
+
     async def _block_done_ticket_for_merge_gate(
         self,
         cfg: "ServiceConfig",
@@ -2156,6 +2214,70 @@ class Orchestrator:
         health.last_error = None
         health.consecutive_failures = 0
 
+    def _set_aidt_generation(self, generation: Any) -> None:
+        self._aidt_worktree_generation = generation
+
+    @staticmethod
+    def _workspace_hook_env(cfg: ServiceConfig) -> dict[str, str]:
+        return {
+            "SYMPHONY_FEATURE_BASE_BRANCH": (
+                getattr(cfg.agent, "feature_base_branch", "") or ""
+            ),
+            "SYMPHONY_MERGE_TARGET_BRANCH": (
+                getattr(cfg.agent, "auto_merge_target_branch", "") or ""
+            ),
+        }
+
+    def _publish_aidt_worktree_config(self, cfg: ServiceConfig) -> bool:
+        stage = "validation"
+        try:
+            validate_for_dispatch(cfg)
+            stage = "publication"
+            generation = self._aidt_worktree_runtime.publish(cfg)
+            stage = "manager"
+            self._update_workspace_manager(cfg)
+        except Exception as exc:
+            failure = (
+                exc
+                if isinstance(exc, AidtWorktreeFailure)
+                else AidtWorktreeFailure("profile_invalid")
+            )
+            self._aidt_worktree_runtime.reject_reload(failure.category)
+            log.error(
+                "aidt_worktree_publication_failed",
+                category=failure.category,
+                exc_type=type(exc).__name__,
+                stage=stage,
+            )
+            return False
+        self._set_aidt_generation(generation)
+        return True
+
+    def _build_workspace_manager(self, cfg: ServiceConfig) -> WorkspaceManager:
+        return WorkspaceManager(
+            cfg.workspace_root,
+            cfg.hooks,
+            workflow_dir=cfg.workflow_path.parent,
+            board_root=cfg.tracker.board_root,
+            reuse_policy=cfg.workspace_reuse_policy,
+            hook_env=self._workspace_hook_env(cfg),
+            aidt_runtime=self._aidt_worktree_runtime,
+        )
+
+    def _update_workspace_manager(self, cfg: ServiceConfig) -> None:
+        manager = self._workspace_manager
+        if manager is not None and manager.root != cfg.workspace_root.resolve():
+            log.info("workspace_root_changed", new=str(cfg.workspace_root))
+            self._workspace_manager = self._build_workspace_manager(cfg)
+        elif manager is not None:
+            manager.update_hooks(
+                cfg.hooks,
+                workflow_dir=cfg.workflow_path.parent,
+                board_root=cfg.tracker.board_root,
+            )
+            manager.update_reuse_policy(cfg.workspace_reuse_policy)
+            manager.update_hook_env(self._workspace_hook_env(cfg))
+
     async def _on_tick(self) -> None:
         cfg, err = self._workflow_state.reload()
         if err is not None:
@@ -2173,25 +2295,8 @@ class Orchestrator:
                 return
             log.warning("workflow_reload_failed", error=str(err))
         assert cfg is not None
-        # Apply hot-reloadable settings.
-        if self._workspace_manager is not None and self._workspace_manager.root != cfg.workspace_root.resolve():
-            log.info("workspace_root_changed", new=str(cfg.workspace_root))
-            self._workspace_manager = WorkspaceManager(
-                cfg.workspace_root,
-                cfg.hooks,
-                workflow_dir=cfg.workflow_path.parent,
-                board_root=cfg.tracker.board_root,
-                reuse_policy=cfg.workspace_reuse_policy,
-                hook_env=_branch_hook_env(cfg),
-            )
-        elif self._workspace_manager is not None:
-            self._workspace_manager.update_hooks(
-                cfg.hooks,
-                workflow_dir=cfg.workflow_path.parent,
-                board_root=cfg.tracker.board_root,
-            )
-            self._workspace_manager.update_reuse_policy(cfg.workspace_reuse_policy)
-            self._workspace_manager.update_hook_env(_branch_hook_env(cfg))
+        if not self._publish_aidt_worktree_config(cfg):
+            return
         self._ensure_run_registry(cfg)
         self._heartbeat_running_leases()
         if self._run_registry is not None:
@@ -2226,13 +2331,6 @@ class Orchestrator:
             now_release = datetime.now(timezone.utc)
             for stale_id in stale_claimed:
                 self._claim_released_at[stale_id] = now_release
-        try:
-            validate_for_dispatch(cfg)
-        except SymphonyError as exc:
-            log.error("dispatch_validation_failed", error=str(exc))
-            await self._notify_observers()
-            return
-
         intake_poll = await self._poll_jira_intake(cfg)
         routing_result = await self._poll_aidt_routing(cfg, intake_poll)
         if not routing_result.global_allow_dispatch:
@@ -2256,6 +2354,7 @@ class Orchestrator:
         candidates = filter_routing_candidates(
             candidates,
             routing_result.blocked_identifiers,
+            routing_result.provisionable_child_identifiers,
         )
 
         for issue in candidates:
@@ -2264,6 +2363,20 @@ class Orchestrator:
         for issue in self._sort_with_wait_age_bump(candidates, cfg):
             if await self._auto_triage_todo_if_actionable(issue, cfg):
                 continue
+            admission_result = self._aidt_worktree_runtime.admit_candidate(
+                self._aidt_worktree_generation, issue.identifier
+            )
+            if admission_result.disposition in {
+                DelegateDisposition.OWNED_PRESERVED,
+                DelegateDisposition.OWNED_ERROR,
+            }:
+                continue
+            generation = admission = None
+            if admission_result.disposition is DelegateDisposition.HANDLED:
+                generation = self._aidt_worktree_generation
+                admission = admission_result.value
+                if admission is None:
+                    continue
             if self._available_slots(cfg) <= 0:
                 break
             if not self._should_dispatch(issue, cfg):
@@ -2281,12 +2394,23 @@ class Orchestrator:
                 )
                 continue
             persisted_attempt = self._persisted_retry_attempts.get(issue.id)
-            self._dispatch(
-                issue,
-                cfg,
-                attempt=persisted_attempt,
-                attempt_kind="retry" if persisted_attempt is not None else None,
-            )
+            attempt_kind = "retry" if persisted_attempt is not None else None
+            if generation is None:
+                self._dispatch(
+                    issue,
+                    cfg,
+                    attempt=persisted_attempt,
+                    attempt_kind=attempt_kind,
+                )
+            else:
+                self._dispatch(
+                    issue,
+                    cfg,
+                    attempt=persisted_attempt,
+                    attempt_kind=attempt_kind,
+                    aidt_generation=generation,
+                    aidt_admission=admission,
+                )
 
         await self._auto_reopen_sources_from_resolved_rcas(cfg)
         if self._available_slots(cfg) > 0:
@@ -3596,12 +3720,22 @@ class Orchestrator:
         *,
         attempt: int | None,
         attempt_kind: str | None = None,
+        aidt_generation: Any = None,
+        aidt_admission: Any = None,
     ) -> None:
+        if (aidt_generation is None) != (aidt_admission is None):
+            raise AidtWorktreeFailure("internal_error", issue.identifier)
         self._dispatch_state.cancel_pending_retry(issue.id)
 
+        manager = self._workspace_manager
         workspace_path = (
-            self._workspace_manager.path_for(issue.identifier)
-            if self._workspace_manager
+            manager.path_for(
+                issue.identifier,
+                aidt_generation=aidt_generation,
+            )
+            if manager is not None and aidt_generation is not None
+            else manager.path_for(issue.identifier)
+            if manager is not None
             else Path("/")
         )
         resolved_attempt_kind = attempt_kind or (
@@ -3626,6 +3760,24 @@ class Orchestrator:
             attempt_kind=resolved_attempt_kind,
             agent_kind=agent_kind,
             run_id=run_id,
+            workspace_manager=manager,
+            aidt_generation=aidt_generation,
+            aidt_admission=aidt_admission,
+            aidt_workflow_generation=(
+                aidt_admission.workflow_generation
+                if aidt_admission is not None
+                else None
+            ),
+            aidt_route_pair_digest=(
+                aidt_admission.route_pair_digest
+                if aidt_admission is not None
+                else None
+            ),
+            aidt_attempt_record_revision=(
+                aidt_admission.attempt_record_revision
+                if aidt_admission is not None
+                else None
+            ),
         )
         self._dispatch_state.begin_run(issue.id, entry)
         try:
@@ -3757,6 +3909,49 @@ class Orchestrator:
     # worker (§16.5)
     # ------------------------------------------------------------------
 
+    def _workspace_manager_for_entry(self, entry: RunningEntry) -> WorkspaceManager:
+        manager = entry.workspace_manager or self._workspace_manager
+        if manager is None:
+            raise SymphonyError("workspace manager unavailable")
+        return manager
+
+    async def _create_workspace_for_entry(
+        self, entry: RunningEntry, identifier: str
+    ) -> Any:
+        manager = self._workspace_manager_for_entry(entry)
+        if entry.aidt_admission is None:
+            return await manager.create_or_reuse(identifier)
+        return await manager.create_or_reuse(
+            identifier,
+            aidt_generation=entry.aidt_generation,
+            aidt_admission=entry.aidt_admission,
+        )
+
+    async def _guard_entry_before_run(
+        self, entry: RunningEntry, path: Path
+    ) -> None:
+        manager = self._workspace_manager_for_entry(entry)
+        if entry.aidt_admission is None and entry.aidt_guard is None:
+            await manager.before_run(path)
+            return
+        await manager.before_run(
+            path,
+            aidt_generation=entry.aidt_generation,
+            aidt_guard=entry.aidt_guard,
+        )
+
+    def _record_aidt_owned_failure(
+        self, entry: RunningEntry | None, error: AidtWorkspaceOperationError
+    ) -> None:
+        if entry is None:
+            return
+        entry.aidt_owned_failure = True
+        entry.aidt_failure_category = error.category
+        entry.last_error = error.category
+        self._issue_debug.setdefault(entry.issue.id, _IssueDebug()).last_error = (
+            error.category
+        )
+
     async def _run_agent_attempt(
         self, issue: Issue, attempt: int | None, cfg: ServiceConfig
     ) -> None:
@@ -3768,8 +3963,17 @@ class Orchestrator:
             running = self._running.get(running_issue_id)
             if running is not None:
                 running.agent_kind = cfg.agent.kind
-            assert self._workspace_manager is not None
-            workspace = await self._workspace_manager.create_or_reuse(issue.identifier)
+            if running is None:
+                return
+            try:
+                workspace = await self._create_workspace_for_entry(
+                    running, issue.identifier
+                )
+            except AidtWorkspaceOperationError as exc:
+                outcome = "aidt_owned_failure"
+                error = exc.category
+                self._record_aidt_owned_failure(running, exc)
+                return
             running = self._running.get(running_issue_id)
             if running is None:
                 # Slot was reclaimed externally between dispatch and the
@@ -3786,8 +3990,14 @@ class Orchestrator:
                 )
                 return
             running.workspace_path = workspace.path
+            running.aidt_guard = getattr(workspace, "aidt_guard", None)
             try:
-                await self._workspace_manager.before_run(workspace.path)
+                await self._guard_entry_before_run(running, workspace.path)
+            except AidtWorkspaceOperationError as exc:
+                outcome = "aidt_owned_failure"
+                error = exc.category
+                self._record_aidt_owned_failure(running, exc)
+                return
             except Exception as exc:
                 outcome = "before_run_error"
                 error = str(exc)
@@ -4204,7 +4414,14 @@ class Orchestrator:
                     )
                     if turn_number > 1:
                         try:
-                            await self._workspace_manager.before_run(workspace.path)
+                            await self._guard_entry_before_run(
+                                running, workspace.path
+                            )
+                        except AidtWorkspaceOperationError as exc:
+                            outcome = "aidt_owned_failure"
+                            error = exc.category
+                            self._record_aidt_owned_failure(running, exc)
+                            return
                         except Exception as exc:
                             outcome = "before_run_error"
                             error = str(exc)
@@ -4212,7 +4429,7 @@ class Orchestrator:
                     self._sync_backend_agent_pid(
                         running_issue_id, _backend_agent_pid(client)
                     )
-                    after_run_pending = True
+                    after_run_pending = running.aidt_guard is None
                     try:
                         await client.run_turn(prompt=prompt, is_continuation=is_continuation)
                     except (TurnTimeout, TurnFailed, TurnCancelled, TurnInputRequired) as exc:
@@ -4244,7 +4461,9 @@ class Orchestrator:
                             total_tokens=running_entry.codex_total_tokens,
                         )
 
-                    await self._workspace_manager.after_run_best_effort(workspace.path)
+                    if running.aidt_guard is None:
+                        manager = self._workspace_manager_for_entry(running)
+                        await manager.after_run_best_effort(workspace.path)
                     after_run_pending = False
 
                     # Record the state the backend just operated on so the
@@ -4337,7 +4556,16 @@ class Orchestrator:
                     else:
                         self._sync_backend_agent_pid(running_issue_id, None)
                 if after_run_pending:
-                    await self._workspace_manager.after_run_best_effort(workspace.path)
+                    running_entry = self._running.get(running_issue_id)
+                    if running_entry is not None:
+                        manager = self._workspace_manager_for_entry(running_entry)
+                        await manager.after_run_best_effort(workspace.path)
+        except AidtWorkspaceOperationError as exc:
+            outcome = "aidt_owned_failure"
+            error = exc.category
+            self._record_aidt_owned_failure(
+                self._running.get(running_issue_id), exc
+            )
         except SymphonyError as exc:
             outcome = "error"
             error = str(exc)
@@ -4434,6 +4662,9 @@ class Orchestrator:
             raise
         else:
             self._sync_backend_agent_pid(running_issue_id, None)
+        running = self._running.get(running_issue_id)
+        if running is not None:
+            await self._guard_entry_before_run(running, workspace_path)
         tools: list[Any] = []
         if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
             tools.append(linear_graphql_tool())
@@ -5222,7 +5453,23 @@ class Orchestrator:
                 seconds=elapsed,
             )
 
+        if entry.aidt_owned_failure:
+            category = AidtWorktreeFailure(entry.aidt_failure_category).category
+            debug.last_error = category
+            log.warning(
+                "aidt_worker_owned_failure",
+                issue_id=issue_id,
+                issue_identifier=entry.issue.identifier,
+                category=category,
+            )
+            await self._notify_observers()
+            return
+
         if reason == "normal":
+            terminal_result = await self._guard_terminal_entry(entry)
+            if terminal_result.disposition is not DelegateDisposition.UNMANAGED:
+                await self._notify_observers()
+                return
             cfg = self._workflow_state.current()
             self._persisted_retry_attempts.pop(issue_id, None)
             self._clear_issue_flags(issue_id, retry_attempt=True)
@@ -5850,10 +6097,52 @@ class Orchestrator:
                 retry, clear_pause=True, reason="issue left active tracker view"
             )
             return
+        aidt_context = self._admit_retry(retry, match.identifier)
+        if aidt_context is None:
+            return
+        generation, admission = aidt_context
         decision = self._eligibility_decision(match, cfg, owning_retry=True)
         if self._handle_retry_decision(retry, match, cfg, decision):
             return
-        self._dispatch(match, cfg, attempt=retry.attempt, attempt_kind=retry.kind)
+        if generation is None:
+            self._dispatch(
+                match,
+                cfg,
+                attempt=retry.attempt,
+                attempt_kind=retry.kind,
+            )
+            return
+        self._dispatch(
+            match,
+            cfg,
+            attempt=retry.attempt,
+            attempt_kind=retry.kind,
+            aidt_generation=generation,
+            aidt_admission=admission,
+        )
+
+    def _admit_retry(
+        self, retry: RetryEntry, identifier: str
+    ) -> tuple[Any, Any] | None:
+        result = self._aidt_worktree_runtime.admit_candidate(
+            self._aidt_worktree_generation, identifier
+        )
+        if result.disposition in {
+            DelegateDisposition.OWNED_PRESERVED,
+            DelegateDisposition.OWNED_ERROR,
+        }:
+            self._release_retry_ownership(
+                retry, clear_pause=False, reason=result.category or "owned"
+            )
+            return None
+        if result.disposition is DelegateDisposition.UNMANAGED:
+            return None, None
+        if result.value is None:
+            self._release_retry_ownership(
+                retry, clear_pause=False, reason="internal_error"
+            )
+            return None
+        return self._aidt_worktree_generation, result.value
 
     def _handle_retry_decision(
         self,
@@ -6154,6 +6443,11 @@ class Orchestrator:
                 ),
                 terminal_age_s=round(terminal_age, 1),
             )
+            terminal_result = await self._guard_terminal_entry(entry)
+            if terminal_result.disposition is not DelegateDisposition.UNMANAGED:
+                if entry.worker_task is not None:
+                    entry.worker_task.cancel()
+                return
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
             if self._workspace_manager is not None:
@@ -6235,6 +6529,11 @@ class Orchestrator:
                 identifier=issue.identifier,
                 state=issue.state,
             )
+            terminal_result = await self._guard_terminal_entry(entry)
+            if terminal_result.disposition is not DelegateDisposition.UNMANAGED:
+                if entry.worker_task is not None:
+                    entry.worker_task.cancel()
+                return
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
             if self._workspace_manager is not None:
@@ -6334,7 +6633,26 @@ class Orchestrator:
         if self._workspace_manager is None:
             return
         for issue in terminals:
-            path = self._workspace_manager.path_for(issue.identifier)
+            generation = self._aidt_worktree_generation
+            try:
+                path = (
+                    self._workspace_manager.path_for(
+                        issue.identifier,
+                        aidt_generation=generation,
+                    )
+                    if generation is not None
+                    else self._workspace_manager.path_for(issue.identifier)
+                )
+            except AidtWorkspaceOperationError:
+                continue
+            terminal_result = await self._terminal_guard(
+                self._workspace_manager,
+                path,
+                issue.identifier,
+                generation,
+            )
+            if terminal_result.disposition is not DelegateDisposition.UNMANAGED:
+                continue
             if path.exists():
                 state = (issue.state or "").strip().lower()
                 if state == "blocked":
