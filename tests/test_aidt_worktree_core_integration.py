@@ -753,7 +753,7 @@ async def _start_with_default_runtime(
     )
     monkeypatch.setattr(orchestrator, "_spawn_tick_loop", lambda: None)
     await orchestrator.start()
-    assert events == ["runtime:init", "publish", "manager"]
+    assert events == ["runtime:init", "manager", "publish"]
     assert created[0].runtime is runtime
     assert getattr(orchestrator, "_aidt_worktree_generation") is runtime.generation
     assert "symphony.aidt_worktree.provisioner" not in sys.modules
@@ -815,7 +815,7 @@ async def test_process_runtime_identity_survives_workspace_manager_root_replacem
 
     await orchestrator._on_tick()
 
-    assert events == ["publish", "manager"]
+    assert events == ["manager", "publish"]
     assert len(created) == 2 and created[1].runtime is runtime
     assert runtime is getattr(orchestrator._workspace_manager, "runtime")
     assert getattr(orchestrator, "_aidt_worktree_runtime", runtime) is runtime
@@ -870,6 +870,84 @@ async def test_failed_generation_publication_keeps_manager_and_denies_candidate_
     assert events == ["publish", "reject:profile_invalid"]
     assert orchestrator._workspace_manager is manager
     assert getattr(orchestrator, "_aidt_worktree_generation") is generation
+
+
+async def test_manager_failure_does_not_publish_a_partial_runtime_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prior_cfg = _config(
+        tmp_path,
+        root="prior-workspaces",
+        worktree_enabled=False,
+    )
+    next_cfg = _config(
+        tmp_path,
+        root="next-workspaces",
+        worktree_enabled=False,
+    )
+    orchestrator = Orchestrator(_StaticState(next_cfg))  # type: ignore[arg-type]
+    runtime = orchestrator._aidt_worktree_runtime
+    prior_generation = runtime.publish(prior_cfg)
+    prior_manager = _FakeManager(
+        prior_cfg.workspace_root,
+        [],
+        prior_generation,
+        _admission(),
+    )
+    orchestrator._workspace_manager = prior_manager  # type: ignore[assignment]
+    orchestrator._set_aidt_generation(prior_generation)
+    events: list[str] = []
+    publish = runtime.publish
+    reject_reload = runtime.reject_reload
+
+    def traced_publish(config: Any) -> Any:
+        events.append("publish")
+        return publish(config)
+
+    def traced_reject(category: str = "profile_invalid") -> None:
+        events.append(f"reject:{category}")
+        reject_reload(category)
+
+    def fail_manager(*_args: Any, **_kwargs: Any) -> Any:
+        events.append("manager")
+        raise OSError("fixture manager construction failure")
+
+    monkeypatch.setattr(runtime, "publish", traced_publish)
+    monkeypatch.setattr(runtime, "reject_reload", traced_reject)
+    monkeypatch.setattr(core_module, "WorkspaceManager", fail_manager)
+    _isolate_tick(orchestrator, monkeypatch)
+    monkeypatch.setattr(
+        orchestrator,
+        "_heartbeat_running_leases",
+        lambda: events.append("heartbeat"),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_reconcile_running",
+        lambda _cfg: _async_value(events.append("reconcile")),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_fetch_candidates",
+        lambda _cfg: _async_value(events.append("fetch")),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_dispatch",
+        lambda *_args, **_kwargs: events.append("dispatch"),
+    )
+
+    await orchestrator._on_tick()
+
+    assert events == ["manager", "reject:profile_invalid"]
+    assert runtime._generation is prior_generation
+    assert orchestrator._aidt_worktree_generation is prior_generation
+    assert orchestrator._workspace_manager is prior_manager
+    health = runtime.health_snapshot()
+    assert health.failure_count == 1
+    assert health.consecutive_failures == 1
+    assert health.last_category == "profile_invalid"
 
 
 async def test_provisionable_child_is_filtered_then_admitted_before_slot_or_lease(
