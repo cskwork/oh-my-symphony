@@ -4,7 +4,7 @@
 > immutable-object decision in `routing-git-object-trust.md` and Frontier 002 PLAN. Frontier 003 compares its fresh
 > fetched `origin/aidt-prd` SHA to the route's fixed-ref `checkout_revision`.
 
-Date: 2026-07-20  
+Date: 2026-07-20
 Mode: read-only code and Git inspection. No network, fetch, branch, worktree, checkout, cleanup, product/test edit,
 or secret inspection was performed.
 

@@ -4,7 +4,7 @@ Route: GREENFIELD
 
 Status: pending
 
-Blocked by: 003, 004
+Blocked by: 004
 
 Unblocks: 006, 008, 010
 

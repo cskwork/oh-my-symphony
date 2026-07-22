@@ -32,6 +32,15 @@ Domain(s): local orchestration + Jira integration + git worktrees + CI/CD safety
 9. External failures remain visible and retryable; no fake success or swallowed error path.
 10. Reuse current Symphony service, board, contracts, and browser surfaces before adding abstractions.
 
+## User-directed supervised worker environment
+
+- `EXAMBANK_TWIN_IMAGE_JUDGE_ENABLED` is an explicit user-supplied, non-secret ticket 009 setting with exact value
+  `true`; it is not inferred configuration or credential scope.
+- Ticket 009 owns injection into the supervised resolver worker plus startup/health proof of enabled state. Proof
+  must not serialize or log the surrounding environment.
+- Frontier 003 remains implementation/default-off verification only: it does not activate this variable, start the
+  managed resolver, or claim ticket 009 implementation.
+
 ## Steps
 
 1. Complete the Frontier Map from current code, A20-1188 evidence, Jira adapter behavior, AIDT branch rules,
@@ -39,7 +48,8 @@ Domain(s): local orchestration + Jira integration + git worktrees + CI/CD safety
 2. Deliver one unblocked vertical ticket at a time in a nested frontier vault with red-green tests.
 3. Integrate the closed tickets, run real local service/API/browser/TUI E2E, then validate live Jira intake.
 4. Only after green evidence, merge to Symphony `dev`, start the managed service, and exercise one AIDT issue
-   through local QA, aidt-dev Jenkins deploy, and final dev E2E.
+   through local QA, aidt-dev Jenkins deploy, and final dev E2E. The ticket 009 managed start supplies the exact
+   non-secret worker setting `EXAMBANK_TWIN_IMAGE_JUDGE_ENABLED=true` and proves its enabled health state.
 
 ## Acceptance checklist
 

@@ -4,7 +4,7 @@ Route: GREENFIELD
 
 Status: pending
 
-Blocked by: 001, 004
+Blocked by: 004
 
 Unblocks: 010, 011
 
@@ -20,6 +20,9 @@ expose the same durable card and runtime state.
 - Doctor passes and managed start waits for API health, not only PID survival.
 - A foreground entrypoint plus LaunchAgent RunAtLoad/KeepAlive restores one crashed child at the same URL,
   preserves ownership, and prevents duplicate dispatch.
+- The user-directed supervised resolver worker environment receives the exact non-secret setting
+  `EXAMBANK_TWIN_IMAGE_JUDGE_ENABLED=true`; ticket 009 owns activation and startup/health proof, which records only
+  the enabled/disabled state and never the surrounding environment.
 - Registry degradation is dispatch-fatal for this profile or single-process ownership is otherwise proven.
 - Browser, API, and TUI show the same card, lane, running/retry/token/pause/failure state.
 - TUI attach never starts a second orchestrator; plist, commands, records, logs, and UI contain no secrets.
@@ -29,11 +32,15 @@ expose the same durable card and runtime state.
 - pytest -q tests/test_service.py tests/test_macos_launchagent.py tests/test_tui.py
 - pytest -q tests/test_server_routes.py tests/test_webapi.py tests/test_web_browser_e2e.py
 - Disposable doctor/start/health/state/board/API smoke plus browser and PTY TUI parity on 9918.
+- Supervised-worker startup/health assertion that the image judge is enabled, without printing the process
+  environment or treating the flag as a credential.
 
 ## Scope boundaries
 
 - Owns supervision, dedicated-port profile, dashboard/API readiness, and TUI attach/parity.
+- Owns the user-directed image-judge environment injection and its activation/health proof.
 - Does not run real Jira, create AIDT worktrees, merge, deploy, or expose beyond loopback.
+- Frontier 003 does not activate this pending ticket or start the managed resolver.
 
 ## External blockers
 

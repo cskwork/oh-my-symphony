@@ -21,6 +21,10 @@ Current Jira sample evidence (2026-07-20): A20-1188 is a Medium-priority backend
 Chae Sung kuk in `백로그`; its own description is empty, so import must include parent A20-1186. The
 parent requires completion-state data for each AI-learning module and first-incomplete-module routing.
 
+User-directed supervised setting: ticket 009 must give the supervised resolver worker environment the exact
+non-secret value `EXAMBANK_TWIN_IMAGE_JUDGE_ENABLED=true`. Ticket 009 owns activation and health proof; the current
+Frontier 003 worktree frontier must not activate this setting or start the managed resolver.
+
 ## Success Criteria
 
 - [ ] Assigned A20 Jira issues are imported periodically without importing another assignee's work.
@@ -29,6 +33,8 @@ parent requires completion-state data for each AI-learning module and first-inco
 - [ ] The board enforces Plan, Build, Verify/Review, Local QA, Merge, Jenkins Deploy, and Dev QA gates.
 - [ ] Merge and deployment stop on failed, missing, stale, or side-effect evidence.
 - [ ] A managed background service hosts the HTML dashboard on a dedicated verified port and supports TUI use.
+- [ ] The ticket 009 supervised worker runs with `EXAMBANK_TWIN_IMAGE_JUDGE_ENABLED=true`, and health/startup proof
+  records only its enabled state without dumping the surrounding environment.
 - [ ] A real end-to-end scenario proves Jira intake through final dev QA, with secrets excluded from git.
 
 ## QA Cases (web apps only)
@@ -44,4 +50,3 @@ parent requires completion-state data for each AI-learning module and first-inco
 | d1 | auto-fix | resolved | A20 Jira stages do not match the required internal delivery stages. | Mirror assigned Jira issues into the file board; keep delivery stages local. | Integration E2E |
 | d2 | ask-user | open | No Atlassian CLI/API token is configured for unattended polling. | Operator must authenticate `acli` or provide `JIRA_EMAIL` and `JIRA_API_TOKEN` outside git. | Live Jira preflight |
 | d3 | ask-user | open | Future Jira ticket plans are not known at setup time. | The present request pre-approves this infrastructure plan; Jira issue plans still obey confidence and repository safety gates. | First live issue |
-

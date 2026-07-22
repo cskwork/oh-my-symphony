@@ -2,9 +2,9 @@
 
 Route: GREENFIELD
 
-Status: pending
+Status: current - ready for planning
 
-Blocked by: 001, 002, 003
+Blocked by: none; 001, 002, and 003 are closed
 
 Unblocks: 005, 006, 009
 

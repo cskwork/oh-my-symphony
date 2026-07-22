@@ -1,6 +1,6 @@
 # Frontier 002 — AIDT routing evidence
 
-Date: 2026-07-20  
+Date: 2026-07-20
 Mode: read-only AIDT inspection; no build, database, network, Git mutation, or product-code edit.
 
 ## Decision
