@@ -190,7 +190,7 @@ async def test_archive_sweep_throttled_across_ticks(monkeypatch) -> None:
     from symphony.orchestrator.constants import ARCHIVE_SWEEP_INTERVAL_SEC
 
     cfg = _cfg(archive_after_days=30)
-    state = WorkflowState(Path("/tmp/no.md"))
+    state = WorkflowState(cfg.workflow_path)
     orch = Orchestrator(state)
     monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
 

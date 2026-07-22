@@ -12,10 +12,18 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..backends import AgentBackend
 from ..issue import Issue
+from ..workspace import WorkspaceManager
+
+if TYPE_CHECKING:
+    from ..aidt_worktree import (
+        AidtProvisioningAdmission,
+        AidtRunGuard,
+        AidtWorktreeGeneration,
+    )
 
 
 @dataclass
@@ -136,6 +144,15 @@ class RunningEntry:
     # `EVENT_TURN_COMPLETED` after the empty-loop check. `last_codex_message`
     # is sticky for UI continuity; this buffer is what the guard reads.
     current_turn_message: str = ""
+    workspace_manager: WorkspaceManager | None = None
+    aidt_generation: AidtWorktreeGeneration | None = None
+    aidt_admission: AidtProvisioningAdmission | None = None
+    aidt_guard: AidtRunGuard | None = None
+    aidt_workflow_generation: str | None = None
+    aidt_route_pair_digest: str | None = None
+    aidt_attempt_record_revision: int | None = None
+    aidt_owned_failure: bool = False
+    aidt_failure_category: str | None = None
 
 
 @dataclass

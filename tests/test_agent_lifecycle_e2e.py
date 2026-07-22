@@ -345,9 +345,9 @@ def _make_issue(state: str = "Todo") -> Issue:
     )
 
 
-def _orch(tmp_path: Path) -> Orchestrator:
-    o = Orchestrator(WorkflowState(Path("/tmp/no.md")))
-    o._workspace_manager = _FakeWorkspaceManager(tmp_path)  # type: ignore[assignment]
+def _orch(workspace_path: Path, *, workflow_path: Path = Path("/tmp/no.md")) -> Orchestrator:
+    o = Orchestrator(WorkflowState(workflow_path))
+    o._workspace_manager = _FakeWorkspaceManager(workspace_path)  # type: ignore[assignment]
     return o
 
 
@@ -658,7 +658,7 @@ def test_file_board_e2e_auto_triage_dispatches_and_reaches_done(
     )
     tracker.close()
 
-    o = _orch(workspace_path)
+    o = _orch(workspace_path, workflow_path=cfg.workflow_path)
     monkeypatch.setattr(o._workflow_state, "reload", lambda: (cfg, None))
     instances = _install_file_board_backend_factory(monkeypatch)
 

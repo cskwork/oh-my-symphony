@@ -6,11 +6,20 @@ import json
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from symphony._shell import resolve_bash
+from symphony.aidt_worktree import (
+    AidtProvisioningAdmission,
+    AidtRunGuard,
+    AidtWorktreeResult,
+    DelegateResult,
+    PreparedAidtWorktree,
+)
 from symphony.errors import InvalidWorkspaceCwd, SymphonyError
 from symphony.workflow import HooksConfig
 from symphony.workflow import build_service_config, load_workflow
@@ -43,8 +52,8 @@ def _git(cwd, *args):
     )
 
 
-def _hooks(**overrides) -> HooksConfig:
-    base = dict(
+def _hooks(**overrides: Any) -> HooksConfig:
+    base: dict[str, Any] = dict(
         after_create=None,
         before_run=None,
         after_run=None,
@@ -55,6 +64,292 @@ def _hooks(**overrides) -> HooksConfig:
     )
     base.update(overrides)
     return HooksConfig(**base)
+
+
+_AIDT_IDENTIFIER = "A20-1203--lms-api"
+_AIDT_WORKFLOW_GENERATION = "a" * 64
+_AIDT_ROUTE_PAIR_DIGEST = "b" * 64
+_AIDT_GENERIC_ROOT_SENTINEL = "generic-manager-root-path-sentinel"
+_AIDT_MANAGED_PARENT_SENTINEL = "managed-worktree-parent-path-sentinel"
+_AIDT_OWNED_ROOT_SENTINEL = "owned-workspace-root-path-sentinel"
+
+
+@dataclass(frozen=True)
+class _AidtDelegateFixture:
+    generation: object
+    admission: AidtProvisioningAdmission
+    guard: AidtRunGuard
+    prepared: PreparedAidtWorktree
+
+
+class _FakeAidtWorkspaceRuntime:
+    def __init__(
+        self,
+        events: list[tuple[object, ...]],
+        *,
+        path_result: DelegateResult[Path] | None = None,
+        create_result: DelegateResult[PreparedAidtWorktree] | None = None,
+        before_result: DelegateResult[None] | None = None,
+        remove_result: DelegateResult[None] | None = None,
+    ) -> None:
+        self.events = events
+        self.path_result = path_result or DelegateResult.unmanaged()
+        self.create_result = create_result or DelegateResult.unmanaged()
+        self.before_result = before_result or DelegateResult.unmanaged()
+        self.remove_result = remove_result or DelegateResult.unmanaged()
+
+    def path_for(self, generation, identifier):
+        self.events.append(("delegate.path_for", generation, identifier))
+        return self.path_result
+
+    def create_or_reuse(self, generation, admission):
+        self.events.append(("delegate.create", generation, admission))
+        return self.create_result
+
+    def before_run(self, generation, guard):
+        self.events.append(("delegate.before_run", generation, guard))
+        return self.before_result
+
+    def remove(
+        self,
+        generation,
+        path,
+        *,
+        identifier=None,
+        authorization=None,
+        lease=None,
+    ):
+        self.events.append(
+            ("delegate.remove", generation, path, identifier, authorization, lease)
+        )
+        return self.remove_result
+
+
+def _aidt_delegate_fixture(
+    workspace: Path, *, created_now: bool = True
+) -> _AidtDelegateFixture:
+    admission = AidtProvisioningAdmission(
+        _AIDT_IDENTIFIER,
+        _AIDT_WORKFLOW_GENERATION,
+        _AIDT_ROUTE_PAIR_DIGEST,
+        1,
+        "provision",
+    )
+    guard = AidtRunGuard(
+        _AIDT_IDENTIFIER,
+        _AIDT_WORKFLOW_GENERATION,
+        _AIDT_ROUTE_PAIR_DIGEST,
+        1,
+        2,
+        workspace,
+    )
+    result = AidtWorktreeResult(workspace, created_now, 2)
+    prepared = PreparedAidtWorktree(result, guard)
+    return _AidtDelegateFixture(object(), admission, guard, prepared)
+
+
+def _delegate_manager(tmp_path: Path, runtime: object, hooks: HooksConfig) -> Any:
+    manager_type: Any = WorkspaceManager
+    try:
+        return manager_type(
+            tmp_path / _AIDT_GENERIC_ROOT_SENTINEL,
+            hooks,
+            board_root=tmp_path / "board",
+            aidt_runtime=runtime,
+        )
+    except TypeError as exc:
+        if "aidt_runtime" not in str(exc):
+            raise
+    manager = manager_type(
+        tmp_path / _AIDT_GENERIC_ROOT_SENTINEL,
+        hooks,
+        board_root=tmp_path / "board",
+    )
+    manager._aidt_runtime = runtime
+    manager._aidt_runtime_constructor_missing = True
+    return manager
+
+
+def _assert_native_delegate_constructor(manager: Any) -> None:
+    assert not getattr(manager, "_aidt_runtime_constructor_missing", False), (
+        "WorkspaceManager must accept aidt_runtime without the test-only bridge"
+    )
+
+
+def _assert_bounded_workspace_operation_error(
+    error: BaseException,
+    category: str,
+    *,
+    forbidden_paths: tuple[Path, ...],
+    forbidden_components: tuple[str, ...],
+) -> None:
+    assert type(error).__name__ == "AidtWorkspaceOperationError"
+    assert (
+        getattr(error, "category", None),
+        getattr(error, "ref", None),
+    ) == (category, _AIDT_IDENTIFIER)
+    error_text = str(error)
+    for forbidden in (*map(str, forbidden_paths), *forbidden_components):
+        assert forbidden not in error_text
+
+
+def _install_workspace_hook_spy(monkeypatch, manager, events) -> None:
+    async def hook_spy(name, _script, cwd, **_kwargs):
+        events.append((f"generic.{name}", cwd))
+        (cwd / f"{name}-ran").write_text("ran\n", encoding="utf-8")
+
+    monkeypatch.setattr(manager, "_run_hook", hook_spy)
+
+
+def _install_external_operation_sentinels(monkeypatch) -> list[str]:
+    import socket
+
+    from symphony import backends, jira_intake
+
+    calls: list[str] = []
+
+    def deny(kind: str):
+        def fail(*_args: object, **_kwargs: object) -> None:
+            calls.append(kind)
+            raise AssertionError(f"forbidden external operation: {kind}")
+
+        return fail
+
+    monkeypatch.setattr(subprocess, "run", deny("git"))
+    monkeypatch.setattr(socket, "create_connection", deny("network"))
+    monkeypatch.setattr(jira_intake, "run_jira_intake", deny("jira"))
+    monkeypatch.setattr(backends, "build_backend", deny("backend"))
+    return calls
+
+
+async def _invoke_specialized_workspace_operation(
+    manager: Any,
+    fixture: _AidtDelegateFixture,
+    managed: Path,
+    operation: str,
+) -> None:
+    match operation:
+        case "path_for":
+            manager.path_for(_AIDT_IDENTIFIER, aidt_generation=fixture.generation)
+        case "create":
+            await manager.create_or_reuse(
+                _AIDT_IDENTIFIER,
+                aidt_generation=fixture.generation,
+                aidt_admission=fixture.admission,
+            )
+        case "before_run":
+            await manager.before_run(
+                managed,
+                aidt_generation=fixture.generation,
+                aidt_guard=fixture.guard,
+            )
+        case "create_generation_only":
+            await manager.create_or_reuse(
+                _AIDT_IDENTIFIER, aidt_generation=fixture.generation
+            )
+        case "create_admission_only":
+            await manager.create_or_reuse(
+                _AIDT_IDENTIFIER, aidt_admission=fixture.admission
+            )
+        case "before_generation_only":
+            await manager.before_run(managed, aidt_generation=fixture.generation)
+        case _:
+            await manager.before_run(managed, aidt_guard=fixture.guard)
+
+
+async def _assert_unmanaged_workspace_operation(
+    manager: Any,
+    fixture: _AidtDelegateFixture,
+    managed: Path,
+    tmp_path: Path,
+    events: list[tuple[object, ...]],
+    operation: str,
+) -> None:
+    generic = (tmp_path / _AIDT_GENERIC_ROOT_SENTINEL / _AIDT_IDENTIFIER).resolve()
+    match operation:
+        case "path_for":
+            resolved = manager.path_for(
+                _AIDT_IDENTIFIER, aidt_generation=fixture.generation
+            )
+            assert resolved == generic
+            assert events == [
+                ("delegate.path_for", fixture.generation, _AIDT_IDENTIFIER)
+            ]
+        case "create":
+            workspace = await manager.create_or_reuse(
+                _AIDT_IDENTIFIER,
+                aidt_generation=fixture.generation,
+                aidt_admission=fixture.admission,
+            )
+            assert (workspace.path, workspace.workspace_key, workspace.created_now) == (
+                generic,
+                _AIDT_IDENTIFIER,
+                True,
+            )
+            assert workspace.aidt_guard is None
+            assert (generic / "after_create-ran").is_file()
+            assert manager._owner_marker_path(_AIDT_IDENTIFIER).is_file()
+            assert events == [
+                ("delegate.create", fixture.generation, fixture.admission),
+                ("generic.after_create", generic),
+            ]
+        case "before_run":
+            await manager.before_run(
+                managed,
+                aidt_generation=fixture.generation,
+                aidt_guard=fixture.guard,
+            )
+            assert (managed / "before_run-ran").is_file()
+            assert events == [
+                ("delegate.before_run", fixture.generation, fixture.guard),
+                ("generic.before_run", managed),
+            ]
+        case _:
+            raise AssertionError(f"unexpected operation: {operation}")
+
+
+async def _assert_handled_workspace_operation(
+    manager: Any,
+    fixture: _AidtDelegateFixture,
+    managed: Path,
+    events: list[tuple[object, ...]],
+    operation: str,
+) -> None:
+    match operation:
+        case "path_for":
+            resolved = manager.path_for(
+                _AIDT_IDENTIFIER, aidt_generation=fixture.generation
+            )
+            assert resolved == managed
+            assert events == [
+                ("delegate.path_for", fixture.generation, _AIDT_IDENTIFIER)
+            ]
+        case "create":
+            workspace = await manager.create_or_reuse(
+                _AIDT_IDENTIFIER,
+                aidt_generation=fixture.generation,
+                aidt_admission=fixture.admission,
+            )
+            assert (workspace.path, workspace.workspace_key, workspace.created_now) == (
+                managed,
+                _AIDT_IDENTIFIER,
+                False,
+            )
+            assert workspace.aidt_guard is fixture.guard
+            assert events == [
+                ("delegate.create", fixture.generation, fixture.admission)
+            ]
+        case "before_run":
+            await manager.before_run(
+                managed,
+                aidt_generation=fixture.generation,
+                aidt_guard=fixture.guard,
+            )
+            assert events == [
+                ("delegate.before_run", fixture.generation, fixture.guard)
+            ]
+        case _:
+            raise AssertionError(f"unexpected operation: {operation}")
 
 
 @pytest.mark.asyncio
@@ -687,6 +982,217 @@ async def test_branch_policy_env_is_scoped_to_after_create(tmp_path):
     await mgr.before_run(ws.path)
 
     assert (ws.path / "before-env").read_text() == ""
+
+
+@pytest.mark.parametrize("operation", ["path_for", "create", "before_run"])
+@pytest.mark.asyncio
+async def test_delegate_unmanaged_preserves_workspace_create_hooks_marker_and_return(
+    tmp_path, monkeypatch, operation
+):
+    events: list[tuple[object, ...]] = []
+    external_calls = _install_external_operation_sentinels(monkeypatch)
+    managed = (tmp_path / _AIDT_MANAGED_PARENT_SENTINEL / _AIDT_IDENTIFIER).resolve()
+    managed.mkdir(parents=True)
+    fixture = _aidt_delegate_fixture(managed)
+    runtime = _FakeAidtWorkspaceRuntime(events)
+    manager = _delegate_manager(
+        tmp_path,
+        runtime,
+        _hooks(after_create="hook-spy", before_run="hook-spy"),
+    )
+    _install_workspace_hook_spy(monkeypatch, manager, events)
+
+    await _assert_unmanaged_workspace_operation(
+        manager, fixture, managed, tmp_path, events, operation
+    )
+    assert external_calls == []
+    _assert_native_delegate_constructor(manager)
+
+
+@pytest.mark.parametrize("operation", ["path_for", "create", "before_run"])
+@pytest.mark.asyncio
+async def test_delegate_handled_create_returns_guard_without_generic_side_effects(
+    tmp_path, monkeypatch, operation
+):
+    events: list[tuple[object, ...]] = []
+    external_calls = _install_external_operation_sentinels(monkeypatch)
+    managed = (tmp_path / _AIDT_MANAGED_PARENT_SENTINEL / _AIDT_IDENTIFIER).resolve()
+    managed.mkdir(parents=True)
+    fixture = _aidt_delegate_fixture(managed, created_now=False)
+    runtime = _FakeAidtWorkspaceRuntime(
+        events,
+        path_result=DelegateResult.handled(managed),
+        create_result=DelegateResult.handled(fixture.prepared),
+        before_result=DelegateResult.handled(),
+    )
+    manager = _delegate_manager(
+        tmp_path, runtime, _hooks(after_create="hook-spy", before_run="hook-spy")
+    )
+    _install_workspace_hook_spy(monkeypatch, manager, events)
+
+    await _assert_handled_workspace_operation(
+        manager, fixture, managed, events, operation
+    )
+    generic_root = tmp_path / _AIDT_GENERIC_ROOT_SENTINEL
+    assert not (generic_root / _AIDT_IDENTIFIER).exists()
+    assert not (generic_root / ".symphony-workspace-owners").exists()
+    assert not (managed / "after_create-ran").exists()
+    assert not (managed / "before_run-ran").exists()
+    assert external_calls == []
+    _assert_native_delegate_constructor(manager)
+
+
+@pytest.mark.parametrize(
+    ("operation", "delegate_result", "category"),
+    [
+        (
+            "path_for",
+            DelegateResult.owned_preserved("scope_changed"),
+            "scope_changed",
+        ),
+        (
+            "path_for",
+            DelegateResult.owned_error("registry_invalid"),
+            "registry_invalid",
+        ),
+        ("create", DelegateResult.owned_preserved("authorization_invalid"), "authorization_invalid"),
+        ("create", DelegateResult.owned_error("manifest_invalid"), "manifest_invalid"),
+        ("before_run", DelegateResult.owned_preserved("scope_changed"), "scope_changed"),
+        ("before_run", DelegateResult.owned_error("registry_invalid"), "registry_invalid"),
+        ("create_generation_only", DelegateResult.unmanaged(), "internal_error"),
+        ("create_admission_only", DelegateResult.unmanaged(), "internal_error"),
+        ("before_generation_only", DelegateResult.unmanaged(), "internal_error"),
+        ("before_guard_only", DelegateResult.unmanaged(), "internal_error"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_delegate_owned_create_and_before_run_never_fall_back(
+    tmp_path, monkeypatch, operation, delegate_result, category
+):
+    events: list[tuple[object, ...]] = []
+    external_calls = _install_external_operation_sentinels(monkeypatch)
+    workspace_root = tmp_path / _AIDT_OWNED_ROOT_SENTINEL
+    managed = (workspace_root / _AIDT_MANAGED_PARENT_SENTINEL / _AIDT_IDENTIFIER).resolve()
+    managed.mkdir(parents=True)
+    fixture = _aidt_delegate_fixture(managed, created_now=False)
+    runtime = _FakeAidtWorkspaceRuntime(
+        events,
+        path_result=delegate_result,
+        create_result=delegate_result,
+        before_result=delegate_result,
+    )
+    hooks = _hooks(after_create="hook-spy", before_run="hook-spy")
+    manager = _delegate_manager(workspace_root, runtime, hooks)
+    _install_workspace_hook_spy(monkeypatch, manager, events)
+
+    with pytest.raises(Exception) as exc_info:
+        await _invoke_specialized_workspace_operation(
+            manager, fixture, managed, operation
+        )
+
+    _assert_bounded_workspace_operation_error(
+        exc_info.value,
+        category,
+        forbidden_paths=(managed, manager.root, workspace_root, tmp_path),
+        forbidden_components=(
+            managed.parent.name,
+            manager.root.name,
+            workspace_root.name,
+        ),
+    )
+    expected_events = {
+        "path_for": [
+            ("delegate.path_for", fixture.generation, _AIDT_IDENTIFIER)
+        ],
+        "create": [("delegate.create", fixture.generation, fixture.admission)],
+        "before_run": [
+            ("delegate.before_run", fixture.generation, fixture.guard)
+        ],
+    }
+    assert events == expected_events.get(operation, [])
+    assert not (managed / "after_create-ran").exists()
+    assert not (managed / "before_run-ran").exists()
+    assert not (manager.root / _AIDT_IDENTIFIER).exists()
+    assert external_calls == []
+    _assert_native_delegate_constructor(manager)
+
+
+@pytest.mark.asyncio
+async def test_keyworded_remove_is_a_non_destructive_unmanaged_probe(
+    tmp_path, monkeypatch
+):
+    events: list[tuple[object, ...]] = []
+    external_calls = _install_external_operation_sentinels(monkeypatch)
+    managed = (tmp_path / _AIDT_GENERIC_ROOT_SENTINEL / _AIDT_IDENTIFIER).resolve()
+    managed.mkdir(parents=True)
+    (managed / "keep.txt").write_text("keep\n", encoding="utf-8")
+    fixture = _aidt_delegate_fixture(managed, created_now=False)
+    runtime = _FakeAidtWorkspaceRuntime(
+        events, remove_result=DelegateResult.unmanaged()
+    )
+    manager = _delegate_manager(
+        tmp_path, runtime, _hooks(before_remove="hook-spy")
+    )
+    _install_workspace_hook_spy(monkeypatch, manager, events)
+
+    result = await manager.remove(
+        managed,
+        identifier=_AIDT_IDENTIFIER,
+        aidt_generation=fixture.generation,
+    )
+
+    delegate_event = (
+        "delegate.remove", fixture.generation, managed, _AIDT_IDENTIFIER, None, None
+    )
+    assert result == DelegateResult.unmanaged()
+    assert events == [delegate_event]
+    assert (managed / "keep.txt").is_file()
+    await manager.remove(managed)
+    assert events == [delegate_event, ("generic.before_remove", managed)]
+    assert not managed.exists()
+    assert external_calls == []
+    _assert_native_delegate_constructor(manager)
+
+
+@pytest.mark.parametrize(
+    "delegate_result",
+    [
+        DelegateResult.handled(),
+        DelegateResult.owned_preserved("authorization_invalid"),
+        DelegateResult.owned_error("manifest_invalid"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_keyworded_owned_remove_preserves_before_generic_hook_or_rmtree(
+    tmp_path, monkeypatch, delegate_result
+):
+    events: list[tuple[object, ...]] = []
+    external_calls = _install_external_operation_sentinels(monkeypatch)
+    managed = (tmp_path / _AIDT_GENERIC_ROOT_SENTINEL / _AIDT_IDENTIFIER).resolve()
+    managed.mkdir(parents=True)
+    sentinel = managed / "keep.txt"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    fixture = _aidt_delegate_fixture(managed, created_now=False)
+    runtime = _FakeAidtWorkspaceRuntime(events, remove_result=delegate_result)
+    manager = _delegate_manager(
+        tmp_path, runtime, _hooks(before_remove="hook-spy")
+    )
+    _install_workspace_hook_spy(monkeypatch, manager, events)
+
+    result = await manager.remove(
+        managed,
+        identifier=_AIDT_IDENTIFIER,
+        aidt_generation=fixture.generation,
+    )
+
+    assert result is delegate_result
+    assert events == [
+        ("delegate.remove", fixture.generation, managed, _AIDT_IDENTIFIER, None, None)
+    ]
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert not (managed / "before_remove-ran").exists()
+    assert external_calls == []
+    _assert_native_delegate_constructor(manager)
 
 
 # ---------------------------------------------------------------------------
