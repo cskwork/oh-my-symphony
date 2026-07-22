@@ -2,11 +2,13 @@
 
 Route: GREENFIELD
 
-Status: closed
+Status: closed - returned-status correction reverified
 
 Blocked by: none
 
 Unblocks: 002, 004, 009
+
+Contains: 001a
 
 ## Goal
 
@@ -44,9 +46,20 @@ Symphony file board, including parent context when a subtask description is empt
 - Live polling is blocked by Atlassian authentication, canonical operator identity, actionable-status
   discovery, and parent-read permission. No Jira write is authorized.
 
-## Closure evidence
+## Historical closure evidence
 
 - Nested proof vault: `frontier/001-safe-jira-inbox/`.
 - Literal supergoal commit gate: PASS on 2026-07-20 after Build/Verify iteration 2.
 - Frontier tests: 51 passed; affected regressions: 216 passed; Ruff, Pyright, and diff checks passed.
 - Full repository suite retained only the accepted pre-change missing-`CI-1.md` failure.
+
+## Reopened correction
+
+Ticket 001a adds exact returned-status enforcement at the Jira response seam. Its bounded build evidence is recorded,
+but Frontier 001 is not closed again until a fresh verifier repeats the focused, affected, static, and whitespace
+gates and confirms zero board writes for an out-of-allowlist response.
+
+## Reclosure
+
+Fresh verification passed 5 focused and 235 affected cases, full static/whitespace gates, and aggregate repository
+compatibility. Out-of-allowlist responses now fail before hydration/write; live Jira remains externally gated.

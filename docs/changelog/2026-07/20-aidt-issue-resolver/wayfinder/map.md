@@ -41,25 +41,44 @@ to aidt-dev Jenkins, and records final dev E2E evidence in dashboard/TUI-visible
 
 | Ticket | Status | Blocked by |
 |---|---|---|
-| 001-safe-jira-inbox | closed | none |
+| 001-safe-jira-inbox | closed - correction reverified | none |
+| 001a-returned-status-enforcement | closed - verified | none; corrects historical 001 |
 | 002-aidt-routing-contract | closed | 001, 002a correction |
 | 002a-routing-result-output-closure | closed | 002 implementation |
-| 003-aidt-worktree-provisioner | drafting | 002 |
-| 004-delivery-stage-enforcement | pending | 001, 002, 003 |
-| 005-local-qa-adapters | pending | 003, 004 |
+| 003-aidt-worktree-provisioner | closed - aggregate verification passed | none |
+| 003a-route-child-dispatch-attestation | historical umbrella - verified | none |
+| 003b-worktree-profile-identity-contract | historical umbrella - verified | none |
+| 003c-durable-worktree-records | historical umbrella - verified | none |
+| 003d-bounded-git-state-proofs | historical umbrella - verified | none |
+| 003e-provisioner-lifecycle | historical umbrella - verified | none |
+| 003f-process-runtime-ownership | historical umbrella - verified | none |
+| 003g-core-workspace-integration | historical umbrella - verified | none |
+| 003h-atomic-generation-publication | closed - verified | none |
+| 003i-operator-profile-example | closed - verified | none |
+| 003v-worktree-rollup-verification | closed - verified | none |
+| 004-delivery-stage-enforcement | current - ready for planning | none; 001, 002, 003 closed |
+| 005-local-qa-adapters | pending | 004 |
 | 006-dev-merge-promotion | pending | 004, 005 |
 | 007-jenkins-dev-deploy-gate | pending | 006 |
 | 008-dev-qa-and-completion | pending | 005, 007 |
-| 009-managed-resolver-surfaces | pending | 001, 004 |
+| 009-managed-resolver-surfaces | pending | 004 |
 | 010-integrated-fake-e2e | pending | 001-009 |
 | 011-live-a20-dev-e2e | blocked | 010 and external gates |
 
 ## Frontier
 
-Current frontier: 003-aidt-worktree-provisioner. Frontiers 002 and 002a passed independent final verification:
+Current frontier: 004-delivery-stage-enforcement. Frontiers 002 and 002a passed independent final verification:
 177 isolated routing tests, 407 affected tests, 722 broad tests, 230 Frontier 001 preservation tests, and repository
 parity of 1,656 passes/6 skips with only the accepted pre-change CI-1 failure.
 
-Frontier 001 passed its nested literal commit gate after two iterations. Frontier 002 added immutable production-base
+Frontier 001 passed fresh returned-status reclosure verification through 001a. Frontier 002 added immutable production-base
 routing, complete Jira source context, deterministic coordinator/children, and a fail-closed dispatch barrier; 002a
-closed the public result-output boundary. Provisioning is now the only active frontier.
+closed the public result-output boundary. Frontier 003 passed aggregate verification after bounded 003h/003i
+corrections and 003v release verification. Live AIDT fetch, worktree creation, cleanup, and activation remain
+forbidden.
+
+Frontier 003 is a rollup, not a Build ticket. Tickets 003a-003g record the already executed deep-module seams as
+historical umbrellas because their current single-module implementations cannot honestly satisfy the rough
+five-file/500-net-line Build limit. They are commit-attribution and verification records, not new Build prompts.
+The worker-sized 003h and 003i corrections and 003v aggregate verification passed. Frontier 004 is now the active
+planning frontier; this status does not authorize merge, push, Jenkins, deployment, Jira mutation, or live AIDT use.

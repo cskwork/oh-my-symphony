@@ -1,0 +1,27 @@
+{
+  "schema_version": 3,
+  "mode": "GREENFIELD",
+  "ticket": "003-aidt-worktree-provisioner",
+  "phase": "Finalize",
+  "iteration": 3,
+  "max_iterations": 3,
+  "branches": {
+    "source_base_branch": "origin/dev",
+    "target_integration_branch": "dev",
+    "run_branch": "run/symphony-aidt-orchestrator-20260720",
+    "worktree_path": ".codex-worktrees/aidt-orchestrator-20260720",
+    "refs_verified": true
+  },
+  "unresolved_gates": [],
+  "blockers": [],
+  "regression_ledger": [
+    {
+      "test": "test_run_continuous_improvement_real_git_target_worktree_e2e",
+      "status": "accepted_pre_change_failure",
+      "finding": "expected kanban/CI-1.md was not created"
+    }
+  ],
+  "next_action": "Frontier 003 is verified and finalized; proceed to Frontier 004 planning without live activation, commit, merge, push, or deployment",
+  "forced_reflection": null,
+  "updated_at": "2026-07-22T16:37:26+09:00"
+}

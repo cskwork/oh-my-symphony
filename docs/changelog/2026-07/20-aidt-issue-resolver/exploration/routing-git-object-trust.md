@@ -1,6 +1,6 @@
 # Frontier 002/003 — immutable Git object trust
 
-Date: 2026-07-20  
+Date: 2026-07-20
 Mode: read-only design analysis. No network, fetch, branch, worktree, checkout, cleanup, secret inspection, or
 product/test/Frontier 002 plan edit was performed.
 

@@ -50,3 +50,29 @@ PYTHONPATH=src rtk ../../.venv/bin/symphony doctor ./WORKFLOW.md
 - Doctor matched the accepted environment baseline: external workspace root is not writable and the isolated
   worktree has no `kanban/`; every other check passed.
 - No new material defect was found. Iteration 2 is closed for finalization.
+
+## 2026-07-22 15:09 KST Cross-Frontier Spec Review - REVISE
+
+- [ ] Expected: each normalized Jira search row independently proves its returned status is an exact member of the
+  configured actionable `active_states` allowlist before parent hydration or any board write. JQL is one boundary,
+  not authority over the response body.
+- [ ] Actual: `JiraClient.fetch_assigned_inbox()` uses `active_states` only to construct JQL;
+  `_normalize_inbox_node()` accepts any nonempty `fields.status.name`. An assigned `Done` row can enter the mirrored
+  batch despite the frozen inactive-result fail-closed criterion.
+- [ ] Evidence: `src/symphony/trackers/jira.py:461-474,709-750`, Frontier 001 `GOAL.md` criterion 3, and root
+  `PLAN.md` Priority Rule 1. Mandatory Ask Matt spec review: `/private/tmp/f003-ask-matt-spec-review.md`.
+- [ ] Smallest next fix: first add a red intake test whose JQL allowlist is actionable but whose returned row status
+  is `Done`; require a bounded intake failure and zero board writes. Pass the canonical configured allowlist into
+  normalization and compare the returned normalized status exactly before hydration/write. Then rerun the complete
+  Frontier 001 matrix and fresh verifier. Reopen the stale GOAL/run-state/completion marker before any PASS claim.
+
+## 2026-07-22 16:37 KST Returned-Status Reclosure Verification
+
+- [x] The correction is confined to `src/symphony/trackers/jira.py` and `tests/test_jira_intake.py`; no response status
+  normalization or fallback was introduced.
+- [x] Focused exact-membership/zero-write regressions: 5 passed. Affected Jira/intake/tracker/file-board/orchestrator/
+  service/web matrix: 235 passed.
+- [x] The final F003 repository/static/structure/whitespace gates include this correction and introduce no additional
+  failure beyond the accepted missing-`CI-1.md` baseline.
+- [x] Frontier 001 is eligible for reclosure; live Jira polling and every Jira mutation remain outside authorization.
+- [x] The exact nested literal commit gate passed after reclosure state was restored.
