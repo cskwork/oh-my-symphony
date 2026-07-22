@@ -641,6 +641,7 @@ class Orchestrator:
         )
         self._aidt_worktree_generation: Any = None
         self._workspace_manager: WorkspaceManager | None = None
+        self._workspace_manager_key: object = None
         self._tick_task: asyncio.Task[None] | None = None
         self._tick_event = asyncio.Event()
         self._stopping = False
@@ -1231,8 +1232,11 @@ class Orchestrator:
         # writes through the host-board junction installed by after_create.
         import os as _os
         _os.environ["SYMPHONY_WORKFLOW_DIR"] = str(cfg.workflow_path.parent)
+        manager_key = self._workspace_manager_publication_key(cfg)
+        manager = self._build_workspace_manager(cfg)
         generation = self._aidt_worktree_runtime.publish(cfg)
-        self._workspace_manager = self._build_workspace_manager(cfg)
+        self._workspace_manager = manager
+        self._workspace_manager_key = manager_key
         self._set_aidt_generation(generation)
         self._load_token_ema(cfg)
         self._load_done_count(cfg)
@@ -2232,10 +2236,13 @@ class Orchestrator:
         stage = "validation"
         try:
             validate_for_dispatch(cfg)
+            stage = "manager"
+            manager_key = self._workspace_manager_publication_key(cfg)
+            manager = self._prepare_workspace_manager(cfg, manager_key)
+            previous = self._workspace_manager
+            root_changed = previous is not None and previous.root != manager.root
             stage = "publication"
             generation = self._aidt_worktree_runtime.publish(cfg)
-            stage = "manager"
-            self._update_workspace_manager(cfg)
         except Exception as exc:
             failure = (
                 exc
@@ -2250,7 +2257,11 @@ class Orchestrator:
                 stage=stage,
             )
             return False
+        self._workspace_manager = manager
+        self._workspace_manager_key = manager_key
         self._set_aidt_generation(generation)
+        if root_changed:
+            log.info("workspace_root_changed", new=str(cfg.workspace_root))
         return True
 
     def _build_workspace_manager(self, cfg: ServiceConfig) -> WorkspaceManager:
@@ -2264,19 +2275,26 @@ class Orchestrator:
             aidt_runtime=self._aidt_worktree_runtime,
         )
 
-    def _update_workspace_manager(self, cfg: ServiceConfig) -> None:
+    def _prepare_workspace_manager(
+        self, cfg: ServiceConfig, key: object
+    ) -> WorkspaceManager:
         manager = self._workspace_manager
-        if manager is not None and manager.root != cfg.workspace_root.resolve():
-            log.info("workspace_root_changed", new=str(cfg.workspace_root))
-            self._workspace_manager = self._build_workspace_manager(cfg)
-        elif manager is not None:
-            manager.update_hooks(
-                cfg.hooks,
-                workflow_dir=cfg.workflow_path.parent,
-                board_root=cfg.tracker.board_root,
-            )
-            manager.update_reuse_policy(cfg.workspace_reuse_policy)
-            manager.update_hook_env(self._workspace_hook_env(cfg))
+        if manager is not None and self._workspace_manager_key == key:
+            return manager
+        generation = self._aidt_worktree_generation
+        if manager is not None and getattr(generation, "config", None) is cfg:
+            return manager
+        return self._build_workspace_manager(cfg)
+
+    def _workspace_manager_publication_key(self, cfg: ServiceConfig) -> object:
+        return (
+            cfg.workspace_root.resolve(),
+            cfg.hooks,
+            cfg.workflow_path.parent,
+            cfg.tracker.board_root,
+            cfg.workspace_reuse_policy,
+            tuple(sorted(self._workspace_hook_env(cfg).items())),
+        )
 
     async def _on_tick(self) -> None:
         cfg, err = self._workflow_state.reload()
