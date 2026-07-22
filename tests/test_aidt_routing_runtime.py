@@ -252,9 +252,11 @@ def test_facade_exports_only_the_frozen_runtime_contract() -> None:
         "MAX_VALUE_BYTES",
         "AidtRoutingFailure",
         "AidtRoutingResult",
+        "AidtRouteDispatchContract",
         "canonical_fingerprint",
         "filter_routing_candidates",
         "load_routing_settings",
+        "load_route_dispatch_contract",
         "run_aidt_routing",
     ]
 
