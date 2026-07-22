@@ -306,6 +306,47 @@ def test_jql_requires_project_status_and_current_user() -> None:
         _client(handler, statuses=("Ready\nOR assignee is not EMPTY",)).fetch_assigned_inbox()
 
 
+def test_response_status_outside_actionable_allowlist_produces_zero_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _workflow_config(tmp_path, _enabled_raw(statuses=["Ready"]), monkeypatch)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/myself"):
+            return httpx.Response(200, json={"active": True, "accountId": ACCOUNT})
+        return httpx.Response(
+            200,
+            json={"isLast": True, "issues": [_row(status="Done")]},
+        )
+
+    tracker_configs: list[TrackerConfig] = []
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url=SITE) as http:
+        def client_factory(tracker: TrackerConfig) -> JiraClient:
+            tracker_configs.append(tracker)
+            return JiraClient(tracker, http_client=http)
+
+        with pytest.raises(JiraIntakeFailure) as raised:
+            run_jira_intake(cfg, jira_client_factory=client_factory)
+
+    assert raised.value.category == "invalid_response"
+    assert tracker_configs[0].active_states == ("Ready",)
+    assert requests[1].url.params["jql"] == (
+        'project = "A20" AND status in ("Ready") AND assignee = currentUser()'
+    )
+    assert list((tmp_path / "kanban").glob("*.md")) == []
+
+
+@pytest.mark.parametrize("response_status", ["ready", "Ready ", " Ready"])
+def test_response_status_allowlist_matching_is_exact(response_status: str) -> None:
+    client = _client(_jira_handler([_row(status=response_status)]))
+
+    with pytest.raises(JiraUnknownPayload):
+        client.fetch_assigned_inbox()
+
+
 def test_live_wire_uses_complete_fields_and_ignores_nested_transport_keys() -> None:
     requests: list[httpx.Request] = []
 
