@@ -337,6 +337,9 @@ points at Linear and needs an API key):
 cp WORKFLOW.file.example.md WORKFLOW.md
 ```
 
+For the default-off AIDT Jira resolver configuration interface, see
+[`examples/WORKFLOW.aidt.example.md`](examples/WORKFLOW.aidt.example.md).
+
 Four blocks matter for first-run sanity:
 
 ```yaml
