@@ -1,0 +1,21 @@
+{
+  "schema_version": 3,
+  "mode": "GREENFIELD",
+  "ticket": "004-delivery-stage-enforcement",
+  "phase": "Checkpoint after 004a GREEN",
+  "iteration": 0,
+  "max_iterations": 3,
+  "branches": {
+    "source_base_branch": "origin/dev",
+    "target_integration_branch": "dev",
+    "run_branch": "run/symphony-aidt-orchestrator-20260720",
+    "worktree_path": ".codex-worktrees/aidt-orchestrator-20260720",
+    "refs_verified": true
+  },
+  "unresolved_gates": [],
+  "blockers": [],
+  "regression_ledger": [],
+  "next_action": "Resume at 004b durable journal RED tests; do not activate the profile or claim Frontier 004 complete",
+  "forced_reflection": null,
+  "updated_at": "2026-07-22T18:24:00+09:00"
+}

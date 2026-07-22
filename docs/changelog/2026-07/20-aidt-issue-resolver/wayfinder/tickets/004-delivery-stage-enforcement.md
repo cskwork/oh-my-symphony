@@ -2,7 +2,7 @@
 
 Route: GREENFIELD
 
-Status: current - ready for planning
+Status: current - plan attacked and 004a contract green; 004b-004v pending
 
 Blocked by: none; 001, 002, and 003 are closed
 
