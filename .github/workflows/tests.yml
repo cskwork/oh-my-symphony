@@ -12,14 +12,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  pytest:
-    name: Python ${{ matrix.python-version }}
+  quality:
+    name: Static quality
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-          - "3.12"
 
     steps:
       - name: Check out repository
@@ -28,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
@@ -45,5 +40,104 @@ jobs:
       - name: Type check (pyright)
         run: symphony-pyright
 
-      - name: Run tests with coverage
-        run: python -m pytest -q --cov=src/symphony --cov-report=term --cov-fail-under=80
+  pytest:
+    name: Python 3.12 (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: Linux
+          - os: windows-latest
+            platform: Windows
+    env:
+      COVERAGE_FILE: .coverage.${{ matrix.platform }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run full test suite and record coverage
+        run: >-
+          python -m pytest -q
+          --cov=src/symphony
+          --cov-report=term
+          --cov-report=
+          --cov-fail-under=0
+
+      - name: Upload raw coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.platform }}
+          path: ${{ env.COVERAGE_FILE }}
+          if-no-files-found: error
+          include-hidden-files: true
+
+  coverage:
+    name: Combined coverage (100%)
+    runs-on: ubuntu-latest
+    needs: pytest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install coverage tooling
+        run: python -m pip install -e ".[dev]"
+
+      - name: Download raw coverage data
+        uses: actions/download-artifact@v5
+        with:
+          pattern: coverage-*
+          path: .coverage-data
+          merge-multiple: true
+
+      - name: Enforce zero missing lines
+        run: |
+          python -m coverage combine .coverage-data
+          python -m coverage report --fail-under=100
+          python -m coverage json -o coverage.json
+          python -c "import json; totals=json.load(open('coverage.json', encoding='utf-8'))['totals']; assert totals['missing_lines'] == 0 and totals['percent_covered'] == 100, totals"
+
+  browser-e2e:
+    name: Browser E2E (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies and Chromium
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,browser]"
+          python -m playwright install chromium
+
+      - name: Run browser E2E
+        env:
+          SYMPHONY_BROWSER_E2E: "1"
+        run: python -m pytest -q -m browser_e2e
