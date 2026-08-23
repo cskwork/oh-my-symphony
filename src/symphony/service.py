@@ -681,8 +681,6 @@ def _workspace_bound_process_pids(workspace_paths: list[Path]) -> list[int]:
         for path in workspace_paths
         if str(path)
     ]
-    if not needles:
-        return []
     enumerator = _WIN_PROCESS_ENUMERATOR if _IS_WIN32 else ["ps", "-axo", "pid=,command="]
     try:
         completed = subprocess.run(

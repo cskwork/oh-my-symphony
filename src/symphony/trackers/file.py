@@ -220,8 +220,6 @@ def _parse_front_matter_prefix_without_delimiters(
             break
         yaml_lines.append(line)
         body_start = index + 1
-    if not yaml_lines:
-        return None
 
     try:
         parsed = yaml.safe_load("\n".join(yaml_lines))
@@ -311,12 +309,9 @@ def _auto_heal_misindented_top_level_front_matter(
         parsed = yaml.safe_load("\n".join(yaml_lines))
     except yaml.YAMLError:
         return None
-    if parsed is None:
-        front: dict[str, Any] = {}
-    elif not isinstance(parsed, dict):
+    if not isinstance(parsed, dict):
         return None
-    else:
-        front = parsed
+    front = parsed
     body = "\n".join(lines[end + 1 :]).strip()
     return front, body
 

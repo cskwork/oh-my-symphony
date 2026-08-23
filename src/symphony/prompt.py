@@ -79,9 +79,7 @@ def _parse(text: str) -> list[Any]:
     if pos < len(text):
         tokens.append(("text", text[pos:]))
 
-    nodes, idx = _parse_block(tokens, 0, end_tags=())
-    if idx != len(tokens):
-        raise TemplateParseError("unexpected trailing tokens")
+    nodes, _ = _parse_block(tokens, 0, end_tags=())
     return nodes
 
 
@@ -113,11 +111,8 @@ def _parse_block(
                 tokens, idx + 1, end_tags=("elsif", "else", "endif")
             )
             branches.append((cond, body))
-            terminated = False
             while idx < len(tokens):
-                k2, v2 = tokens[idx]
-                if k2 != "tag":
-                    raise TemplateParseError("expected tag in if branches")
+                _, v2 = tokens[idx]
                 head2 = v2.split(None, 1)[0]
                 if head2 == "elsif":
                     sub_cond = v2[len(head2) :].strip()
@@ -132,12 +127,7 @@ def _parse_block(
                     else_body = body
                 elif head2 == "endif":
                     idx += 1
-                    terminated = True
                     break
-                else:
-                    raise TemplateParseError(f"unexpected tag in if: {v2}")
-            if not terminated:
-                raise TemplateParseError("unterminated if")
             nodes.append(_If(branches=branches, else_body=else_body))
             continue
         if head == "for":
@@ -146,8 +136,6 @@ def _parse_block(
             if not m:
                 raise TemplateParseError(f"malformed for tag: {value}")
             body, idx = _parse_block(tokens, idx + 1, end_tags=("endfor",))
-            if idx >= len(tokens):
-                raise TemplateParseError("unterminated for")
             nodes.append(_For(var_name=m.group(1), iterable_expr=m.group(2).strip(), body=body))
             idx += 1  # skip endfor
             continue

@@ -121,12 +121,14 @@ def format_bytes(size: int) -> str:
     if size < 1024:
         return f"{size} B"
     value = float(size)
-    for unit in ("KB", "MB", "GB"):
+    for unit in ("KB", "MB"):
         value /= 1024
-        if value < 1024 or unit == "GB":
+        if value < 1024:
             rendered = f"{value:.1f}".rstrip("0").rstrip(".")
             return f"{rendered} {unit}"
-    return f"{size} B"
+    value /= 1024
+    rendered = f"{value:.1f}".rstrip("0").rstrip(".")
+    return f"{rendered} GB"
 
 
 def _sha256_file(path: Path) -> str:

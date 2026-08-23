@@ -99,11 +99,9 @@ def _get_tracker(args: argparse.Namespace) -> TrackerConfig:
     cfg = _resolve_tracker(args)
     if cfg is not None:
         return cfg
-    if args.root is None:
-        # Default: ./board next to the workflow.
-        wf_path = resolve_workflow_path(args.workflow)
-        return _tracker_from_root(wf_path.parent / DEFAULT_BOARD_ROOT_NAME)
-    return _tracker_from_root(Path(args.root))
+    # Default: ./board next to the workflow.
+    wf_path = resolve_workflow_path(args.workflow)
+    return _tracker_from_root(wf_path.parent / DEFAULT_BOARD_ROOT_NAME)
 
 
 # ---------------------------------------------------------------------------

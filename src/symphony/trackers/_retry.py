@@ -49,28 +49,19 @@ def send_with_retry(
 
     # Tracker mutations set idempotent state; retryable responses mean not
     # accepted yet, not a semantic validation failure.
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
     sleep_func = sleep or sleep_with_jitter
-    last_response: httpx.Response | None = None
-    last_transport_error: httpx.TransportError | None = None
 
-    for attempt in range(max_attempts):
+    for attempt in range(max_attempts - 1):
         try:
             response = send()
-        except httpx.TransportError as exc:
-            last_transport_error = exc
-            if attempt == max_attempts - 1:
-                raise
+        except httpx.TransportError:
             sleep_func(_backoff_delay(attempt))
             continue
 
-        last_response = response
         if response.status_code not in RETRYABLE_STATUS_CODES:
-            return response
-        if attempt == max_attempts - 1:
             return response
         sleep_func(_backoff_delay(attempt, response))
 
-    if last_transport_error is not None:
-        raise last_transport_error
-    assert last_response is not None
-    return last_response
+    return send()
