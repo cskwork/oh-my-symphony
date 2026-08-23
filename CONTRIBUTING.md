@@ -38,9 +38,25 @@ symphony doctor ./WORKFLOW.md
 ```
 
 For backend adapter changes, include the most relevant targeted test command
-and any manual smoke evidence. Real Codex, Claude Code, Gemini, and Pi CLI
+and manual smoke evidence. Real Codex, Claude Code, Gemini, and Pi CLI
 integration checks are useful when available, but CI only requires the local
 test suite because contributors may not have every agent CLI installed.
+
+### Windows note
+
+Some tooling that launches the venv through a trampoline (wrappers, hidden
+consoles) can receive stray console Ctrl+C broadcasts that kill a full
+`pytest` run mid-suite (typically at `shutdown_default_executor`). If a
+full-suite run dies partway with a `KeyboardInterrupt`, run it detached
+from any console instead:
+
+```pwsh
+# PowerShell, from the repo root
+$env:SYMPHONY_BROWSER_E2E = '1'   # optional: include Playwright browser e2e
+Start-Process -FilePath ".venv\Scripts\python.exe" `
+  -ArgumentList "-m pytest -q --junitxml=pytest-results.xml" `
+  -WorkingDirectory "." -WindowStyle Hidden
+```
 
 ## Development Standards
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from symphony.cli import release
 
 from tests.test_release_contracts import _git, _write_valid_release
+from tests._win_skips import requires_symlink_privilege
 
 
 def _repo(
@@ -22,6 +23,10 @@ def _repo(
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.name", "Release Test")
     _git(repo, "config", "user.email", "release@example.test")
+    # Pin the repo to the line-ending behavior CI runs with: a host-wide
+    # `core.autocrlf=true` (common on Windows) rewrites blobs/worktrees and
+    # breaks the byte-exact contract comparisons these tests assert on.
+    _git(repo, "config", "core.autocrlf", "false")
     (repo / "app.txt").write_text("v1\n", encoding="utf-8")
     _git(repo, "add", "app.txt")
     _git(repo, "commit", "-m", "initial")
@@ -66,6 +71,7 @@ Release workflow.
     return repo, workflow, workspace
 
 
+@requires_symlink_privilege
 def test_release_check_json_passes_current_target(
     tmp_path: Path, capsys
 ) -> None:
@@ -89,6 +95,7 @@ def test_release_check_json_passes_current_target(
     assert payload["target_sha"] == _git(repo, "rev-parse", "main")
 
 
+@requires_symlink_privilege
 def test_release_check_accepts_copied_workflow_with_host_board_mount(
     tmp_path: Path, capsys
 ) -> None:
@@ -112,6 +119,7 @@ def test_release_check_accepts_copied_workflow_with_host_board_mount(
     assert payload["passed"] is True
 
 
+@requires_symlink_privilege
 def test_release_check_copied_workflow_preserves_file_board_default(
     tmp_path: Path, capsys
 ) -> None:
@@ -142,6 +150,7 @@ def test_release_check_copied_workflow_preserves_file_board_default(
         assert payload["passed"] is True
 
 
+@requires_symlink_privilege
 def test_release_check_rejects_copied_workflow_wrong_target_board_mount(
     tmp_path: Path, capsys
 ) -> None:
@@ -169,6 +178,7 @@ def test_release_check_rejects_copied_workflow_wrong_target_board_mount(
     assert any("workspace board mount" in item for item in payload["evidence_errors"])
 
 
+@requires_symlink_privilege
 def test_release_check_rejects_copied_workflow_board_traversal(
     tmp_path: Path, capsys
 ) -> None:
@@ -197,6 +207,7 @@ def test_release_check_rejects_copied_workflow_board_traversal(
     assert any("workspace board mount is unsafe" in item for item in payload["evidence_errors"])
 
 
+@requires_symlink_privilege
 def test_release_check_is_nonzero_for_stale_evidence(
     tmp_path: Path, capsys
 ) -> None:

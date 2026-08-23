@@ -18,6 +18,10 @@ from symphony.orchestrator.release_contracts import (
     validate_release_contract,
 )
 from symphony.utils.git_inspect import read_commit_blob, resolve_local_branch_commit
+from tests._win_skips import (
+    requires_symlink_privilege,
+    symlink_privilege_available,
+)
 
 
 _KINDS = (
@@ -54,6 +58,10 @@ def release_repo(tmp_path: Path) -> Path:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.name", "Release Test")
     _git(repo, "config", "user.email", "release@example.test")
+    # Pin the repo to the line-ending behavior CI runs with: a host-wide
+    # `core.autocrlf=true` (common on Windows) rewrites blobs/worktrees and
+    # breaks the byte-exact contract comparisons these tests assert on.
+    _git(repo, "config", "core.autocrlf", "false")
     (repo / "app.txt").write_text("v1\n", encoding="utf-8")
     _git(repo, "add", "app.txt")
     _git(repo, "commit", "-m", "initial")
@@ -229,6 +237,7 @@ def _workspace_target_errors(
     )
 
 
+@requires_symlink_privilege
 def test_configured_host_board_symlink_is_control_data(
     release_repo: Path, tmp_path: Path
 ) -> None:
@@ -245,6 +254,7 @@ def test_configured_host_board_symlink_is_control_data(
     ) == ()
 
 
+@requires_symlink_privilege
 def test_copied_workspace_accepts_exact_external_host_board_mount(
     release_repo: Path, tmp_path: Path
 ) -> None:
@@ -322,6 +332,7 @@ def test_same_name_real_product_directory_is_not_control_data(
     assert any("kanban" in error for error in errors)
 
 
+@requires_symlink_privilege
 def test_wrong_target_board_symlink_is_not_control_data(
     release_repo: Path, tmp_path: Path
 ) -> None:
@@ -364,6 +375,7 @@ def test_configured_real_board_directory_is_not_control_data(
     assert any("kanban" in error for error in errors)
 
 
+@requires_symlink_privilege
 def test_external_configured_board_symlink_is_not_control_data(
     release_repo: Path, tmp_path: Path
 ) -> None:
@@ -385,6 +397,7 @@ def test_external_configured_board_symlink_is_not_control_data(
     assert any("inside repository root" in error for error in errors)
 
 
+@requires_symlink_privilege
 def test_external_board_does_not_accept_stale_workspace_kanban_mount(
     release_repo: Path, tmp_path: Path
 ) -> None:
@@ -570,6 +583,7 @@ def test_workspace_contract_must_equal_exact_target_blob(release_repo: Path) -> 
     assert any("exact target" in error for error in result.evidence_errors)
 
 
+@requires_symlink_privilege
 def test_workspace_contract_symlink_cannot_escape_repository(
     release_repo: Path, tmp_path: Path
 ) -> None:
@@ -586,6 +600,7 @@ def test_workspace_contract_symlink_cannot_escape_repository(
     assert any("contained" in error or "unsafe" in error for error in result.evidence_errors)
 
 
+@requires_symlink_privilege
 @pytest.mark.parametrize("mode", ["verifier-root", "evidence-file"])
 def test_verifier_evidence_paths_cannot_escape_workspace(
     release_repo: Path, tmp_path: Path, mode: str
@@ -611,6 +626,7 @@ def test_verifier_evidence_paths_cannot_escape_workspace(
     )
 
 
+@requires_symlink_privilege
 def test_exact_commit_blob_reader_rejects_symlinks_and_unsafe_paths(
     release_repo: Path, tmp_path: Path
 ) -> None:
@@ -646,7 +662,20 @@ def test_release_target_must_be_an_actual_local_branch(release_repo: Path) -> No
     assert any("local branch" in error for error in result.evidence_errors)
 
 
-@pytest.mark.parametrize("mode", ["workspace-mismatch", "symlink", "command"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "workspace-mismatch",
+        pytest.param(
+            "symlink",
+            marks=pytest.mark.skipif(
+                not symlink_privilege_available(),
+                reason="symlink privilege not available on this host",
+            ),
+        ),
+        "command",
+    ],
+)
 def test_runner_authority_is_bound_to_target_and_contract(
     release_repo: Path, tmp_path: Path, mode: str
 ) -> None:

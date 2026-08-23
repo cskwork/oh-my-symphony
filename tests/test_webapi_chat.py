@@ -350,12 +350,18 @@ async def test_chat_numeric_project_choice_uses_server_owned_registration(
                     "content": [
                         {
                             "type": "text",
-                            "text": (
-                                "1. Create a separate Todo app.\n"
-                                '<symphony-project-setup>{"choice": 1, '
-                                '"name": "Todo App", '
-                                f'"path": "{target}"}}</symphony-project-setup>'
-                            ),
+                    "text": (
+                        "1. Create a separate Todo app.\n"
+                        "<symphony-project-setup>"
+                        + json.dumps(
+                            {
+                                "choice": 1,
+                                "name": "Todo App",
+                                "path": str(target),
+                            }
+                        )
+                        + "</symphony-project-setup>"
+                    ),
                         }
                     ]
                 },
@@ -420,10 +426,15 @@ async def test_chat_numeric_project_choice_uses_server_owned_registration(
                         {
                             "type": "text",
                             "text": (
-                                '<symphony-project-setup>{"choice": 2, '
-                                '"name": "Broken", '
-                                f'"path": "{broken_target}"}}'
-                                "</symphony-project-setup>"
+                                "<symphony-project-setup>"
+                                + json.dumps(
+                                    {
+                                        "choice": 2,
+                                        "name": "Broken",
+                                        "path": str(broken_target),
+                                    }
+                                )
+                                + "</symphony-project-setup>"
                             ),
                         }
                     ]

@@ -14,6 +14,12 @@ from symphony.service import ServiceRecord, save_record
 
 cli_main_mod = importlib.import_module("symphony.cli.main")
 
+# The agent command is parsed with POSIX shell rules and later executed
+# through bash; a native Windows interpreter path (`C:\...`) loses its
+# backslashes there, so tests that need the command to *run* use the
+# POSIX-styled rendering of the same executable.
+_PYTHON = Path(sys.executable).as_posix()
+
 
 def _workflow_text(
     *,
@@ -116,7 +122,7 @@ def test_port_conflict_prints_actionable_sentence_not_traceback(
     workflow = _board(
         tmp_path,
         _workflow_text(
-            codex_command=f"{sys.executable} -m symphony.mock_codex app-server",
+            codex_command=f"{_PYTHON} -m symphony.mock_codex app-server",
             workspace_root=str(tmp_path / "ws"),
         ),
     )
@@ -142,7 +148,7 @@ def test_port_conflict_names_this_workflow_service(
     workflow = _board(
         tmp_path,
         _workflow_text(
-            codex_command=f"{sys.executable} -m symphony.mock_codex app-server",
+            codex_command=f"{_PYTHON} -m symphony.mock_codex app-server",
             workspace_root=str(tmp_path / "ws"),
         ),
     ).resolve()

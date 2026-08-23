@@ -1090,7 +1090,32 @@ SYMPHONY_TRUSTED_ORIGINS=https://symphony.example.com symphony ./WORKFLOW.md --p
 Comma-separate several entries; a bare hostname matches any scheme and
 port, and `*` trusts every origin. Everything the tunnel exposes is
 reachable by whoever can reach the tunnel, so put authentication (for
-example Cloudflare Access) in front of it.
+example Cloudflare Access) in front of it. Symphony can also require a bearer
+token on every operator `/api/` request:
+
+```bash
+export SYMPHONY_TRUSTED_ORIGINS=https://symphony.example.com
+export SYMPHONY_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+symphony ./WORKFLOW.md --host 0.0.0.0 --port 9999
+
+curl -H "Authorization: Bearer $SYMPHONY_API_TOKEN" \
+  http://127.0.0.1:9999/api/v1/state
+```
+
+When the token is set, the built-in web app prompts after its first `401` and
+keeps the value in tab-scoped `sessionStorage`; API fetches and the Chat
+WebSocket then attach it automatically. An unset or blank value preserves the
+frictionless loopback default. Use one whitespace-free random value and keep it
+out of `WORKFLOW.md`, shell history, screenshots, and logs. `symphony doctor`
+reports whether the gate is enabled and warns about values that can never
+match. Browsers cannot set an Authorization header on a WebSocket handshake,
+so Chat sends the token once as `?token=`; configure proxies and access logs to
+omit or redact query strings, or put an upstream access layer in front.
+The managed-service controller uses a separate random per-launch capability
+only for `/api/v1/health`; it never persists or reuses the operator API token.
+Managed start generates this capability from 256 random bits. Health capability
+headers must also be URL-safe and 32–128 characters; short or malformed
+manually inherited service IDs never bypass bearer authentication.
 
 ### CLI Kanban TUI (primary UI)
 

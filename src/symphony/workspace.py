@@ -916,6 +916,7 @@ class WorkspaceManager:
             result = await asyncio.to_thread(_do_run)
         except subprocess.TimeoutExpired as exc:
             stdout = _coerce_output_bytes(exc.stdout)
+            stdout = _strip_shell_exit_trailer(stdout)
             stderr = _coerce_output_bytes(exc.stderr)
             artifact = self._write_hook_output_artifacts(
                 name=name,
@@ -937,7 +938,7 @@ class WorkspaceManager:
 
         rc = result.returncode or 0
         stderr_bytes = result.stderr or b""
-        stdout_bytes = result.stdout or b""
+        stdout_bytes = _strip_shell_exit_trailer(result.stdout or b"")
         artifact = self._write_hook_output_artifacts(
             name=name,
             cwd=cwd,
@@ -977,6 +978,21 @@ def _truncate(value: str, limit: int = 400) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...(truncated)"
+
+
+# Git for Windows bash appends this terminal-init clear sequence (cursor
+# home + erase screen + erase scrollback) to a login shell's stdout when
+# the script exits via the explicit `exit` builtin — even with
+# --noprofile/--norc, so it is the binary itself, not any profile. POSIX
+# bash never emits it. It is shell chrome, not hook output, so exactly
+# this trailer is stripped from the end of captured stdout.
+_SHELL_EXIT_TRAILER = b"\x1b[H\x1b[2J\x1b[3J"
+
+
+def _strip_shell_exit_trailer(stdout: bytes) -> bytes:
+    if stdout.endswith(_SHELL_EXIT_TRAILER):
+        return stdout[: -len(_SHELL_EXIT_TRAILER)]
+    return stdout
 
 
 def _coerce_output_bytes(value: bytes | str | None) -> bytes:

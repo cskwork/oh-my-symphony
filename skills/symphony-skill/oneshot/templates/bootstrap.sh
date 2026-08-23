@@ -36,7 +36,14 @@ if ! command -v symphony >/dev/null 2>&1; then
   exit 1
 fi
 
-PYTHON_BIN="$(command -v python3 || command -v python || true)"
+PYTHON_BIN=""
+for python_candidate in python3 python; do
+  candidate_path="$(command -v "$python_candidate" 2>/dev/null || true)"
+  if [ -n "$candidate_path" ] && "$candidate_path" -c 'pass' >/dev/null 2>&1; then
+    PYTHON_BIN="$candidate_path"
+    break
+  fi
+done
 
 port_free() {
   [ -n "$PYTHON_BIN" ] || return 1

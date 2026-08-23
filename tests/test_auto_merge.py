@@ -7,12 +7,14 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from symphony._shell import resolve_bash
+from tests._win_skips import requires_posix_filenames
 from symphony.utils.auto_merge import (
     AutoMergeResult,
     _build_script,
@@ -110,6 +112,10 @@ def _make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
+    # Pin the repo to the line-ending behavior CI runs with: a host-wide
+    # `core.autocrlf=true` (common on Windows) rewrites blobs/worktrees and
+    # changes the bytes these pathspec/merge assertions observe.
+    _git(repo, "config", "core.autocrlf", "false")
     (repo / "README.md").write_text("hello\n")
     _git(repo, "add", "README.md")
     _git(repo, "commit", "-q", "-m", "init")
@@ -756,7 +762,16 @@ def test_auto_merge_captures_untracked_paths(tmp_path: Path) -> None:
         ("T-ROOT", "kanban", "kanban", True),
         ("T-DESC", "kanban", "kanban/T-DESC.md", True),
         ("T-META", "work[1]", "work[1]/ticket.md", True),
-        ("T-ODD", "odd\tline\nroot", "odd\tline\nroot/ticket.md", True),
+        pytest.param(
+            "T-ODD",
+            "odd\tline\nroot",
+            "odd\tline\nroot/ticket.md",
+            True,
+            marks=pytest.mark.skipif(
+                sys.platform == "win32",
+                reason="NTFS forbids tab/newline in file names",
+            ),
+        ),
         ("T-PREFIX", "kanban", "kanban-copy/T-PREFIX.md", False),
     ],
     ids=["root", "descendant", "regex-metachar", "tab-newline", "prefix-near-miss"],
@@ -799,6 +814,7 @@ def test_auto_merge_exclusions_use_literal_pathspec_boundaries(
         assert changed.read_bytes() == b"branch bytes\n"
 
 
+@requires_posix_filenames
 def test_auto_merge_capture_stages_only_untracked_literal_paths(tmp_path: Path) -> None:
     repo, capture, tracked = _prepare_capture_repo(tmp_path, "T-CAPTURE")
     unusual = (
@@ -877,6 +893,7 @@ def test_auto_merge_partial_capture_add_failure_restores_repo(
     assert _capture_repo_state(repo, (tracked, first, second)) == before
 
 
+@requires_posix_filenames
 def test_auto_merge_commit_hook_failure_restores_captured_files(tmp_path: Path) -> None:
     repo, capture, tracked = _prepare_capture_repo(tmp_path, "T-HOOK")
     first = capture / "space name.txt"
@@ -933,6 +950,7 @@ def test_auto_merge_preserves_nonoverlapping_staged_change(tmp_path: Path) -> No
     assert _git_output(repo, "diff", "--cached", "--name-only") == "operator.txt"
 
 
+@requires_posix_filenames
 def test_auto_merge_preserves_nonoverlapping_partially_staged_unusual_path(
     tmp_path: Path,
 ) -> None:

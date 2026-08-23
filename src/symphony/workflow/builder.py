@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..errors import ConfigValidationError
@@ -105,6 +105,7 @@ from .constants import (
     SUPPORTED_WORKSPACE_REUSE_POLICIES,
 )
 from .parser import WorkflowDefinition
+from .presets import board_uses_default_contracts
 
 
 def _build_prompt_config(raw: Any, base_dir: Path) -> PromptConfig:
@@ -607,8 +608,16 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         preview_raw.get("enabled"), bool(preview_command), name="preview.enabled"
     )
     preview_cwd = _as_str(preview_raw.get("cwd"), ".").strip() or "."
-    cwd_path = Path(preview_cwd)
-    if cwd_path.is_absolute() or ".." in cwd_path.parts:
+    # Reject escapes under both POSIX and native path semantics. The
+    # workflow config's path space is POSIX-flavored: on Windows a drive-less
+    # `Path("/tmp/outside")` reports `is_absolute() == False`, which would
+    # let a leading-slash escape through, while a drive-absolute Windows path
+    # is only caught by the native check.
+    cwd_posix = PurePosixPath(preview_cwd)
+    cwd_native = Path(preview_cwd)
+    if cwd_posix.is_absolute() or cwd_native.is_absolute() or any(
+        part == ".." for part in (*cwd_posix.parts, *cwd_native.parts)
+    ):
         raise ConfigValidationError(
             "preview.cwd must be a relative path inside the preview checkout",
             value=preview_cwd,
@@ -968,8 +977,6 @@ def _log_stage_contracts_decision(agent: AgentConfig, tracker: TrackerConfig) ->
     customized board, but it must never be invisible — this is the product's
     evidence floor.
     """
-    from ..orchestrator.contracts import board_uses_default_contracts
-
     mode = (agent.stage_contracts or "auto").strip().lower()
     if agent.stage_contracts_enabled(tracker.active_states):
         return

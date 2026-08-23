@@ -21,10 +21,10 @@ import asyncio
 import json
 import os
 import shlex
-import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from .. import __version__
 from .._shell import resolve_bash, terminate_process_tree
 from ..errors import (
     CodexNotFound,
@@ -58,11 +58,10 @@ from . import (
     _is_valid_session_id,
 )
 from .approval_policy import dangerous_command_reason
+from .per_turn import MAX_LINE_BYTES, _emit_event
 
 
 log = get_logger()
-
-MAX_LINE_BYTES = 10 * 1024 * 1024  # upstream §10.1 — 10 MB
 
 # Codex app-server protocol (v2 of `codex app-server`, codex-cli ≥ 0.39).
 # Older releases used `v2/initialize`, `v2/threads.start`, `v2/threads.runTurn`
@@ -87,10 +86,6 @@ NOTIF_RATE_LIMITS = "account/rateLimits/updated"
 # Last-message preview is rendered in the dashboard / passed back as
 # `TurnResult.last_message`. 1000 chars matches what the legacy backend used.
 _ASSISTANT_MESSAGE_PREVIEW_CAP = 1000
-
-
-def _utc_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 # v2 turn/start `sandboxPolicy` is a tagged enum object, not a kebab-case
@@ -413,7 +408,7 @@ class CodexAppServerBackend(BaseAgentBackend):
         # plus optional `capabilities`. Tools are no longer declared at
         # initialize time — they're handled per-thread / per-turn now.
         params = {
-            "clientInfo": {"name": "symphony", "version": "0.2.0"},
+            "clientInfo": {"name": "symphony", "version": __version__},
         }
         return await self._request(METHOD_INITIALIZE, params)
 
@@ -984,22 +979,17 @@ class CodexAppServerBackend(BaseAgentBackend):
         )
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
-        ev_payload = payload if isinstance(payload, dict) else {"data": payload}
-        try:
-            await self._on_event(
-                {
-                    "event": event,
-                    "timestamp": _utc_iso(),
-                    "payload": ev_payload,
-                    "usage": dict(self._latest_usage),
-                    "rate_limits": dict(self._latest_rate_limits)
-                    if self._latest_rate_limits
-                    else None,
-                    "agent_pid": self.pid,
-                }
-            )
-        except Exception as exc:
-            log.warning("event_callback_failed", error=str(exc))
+        # No session redaction on the app-server protocol (thread ids are
+        # opaque handles, not secrets carried in evidence) — passing no
+        # `redact_session` is an identity in the shared helper.
+        await _emit_event(
+            self._on_event,
+            event,
+            payload,
+            usage=self._latest_usage,
+            rate_limits=self._latest_rate_limits,
+            agent_pid=self.pid,
+        )
 
 
 def _normalize_event_name(method: str) -> str:

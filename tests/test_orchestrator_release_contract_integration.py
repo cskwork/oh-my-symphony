@@ -44,6 +44,7 @@ from tests.test_orchestrator_contract_integration import (
     _seed_running_entry,
 )
 from tests.test_release_contracts import _git, _write_valid_release
+from tests._win_skips import requires_symlink_privilege
 
 
 def _setup_repo(tmp_path: Path) -> Path:
@@ -52,6 +53,10 @@ def _setup_repo(tmp_path: Path) -> Path:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.name", "Release Test")
     _git(repo, "config", "user.email", "release@example.test")
+    # Pin the repo to the line-ending behavior CI runs with: a host-wide
+    # `core.autocrlf=true` (common on Windows) rewrites blobs/worktrees and
+    # breaks the byte-exact contract comparisons these tests assert on.
+    _git(repo, "config", "core.autocrlf", "false")
     (repo / "app.txt").write_text("v1\n", encoding="utf-8")
     (repo / ".gitignore").write_text(
         ".symphony/\nkanban/\n", encoding="utf-8"
@@ -377,6 +382,7 @@ def _complete_current_release_finalizer(
     return completed, terminal_finalizer, completion_token
 
 
+@requires_symlink_privilege
 def test_app_release_gate_is_active_on_deep_custom_board_with_stage_contracts_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -396,6 +402,7 @@ def test_app_release_gate_is_active_on_deep_custom_board_with_stage_contracts_of
     assert "## App Release Gate Failure" not in body
 
 
+@requires_symlink_privilege
 def test_evidence_error_rewinds_without_creating_repairs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -447,6 +454,7 @@ def test_atomic_release_rewind_cannot_persist_note_without_state(
     assert "## App Release Gate Failure" not in body
 
 
+@requires_symlink_privilege
 def test_stale_evidence_verify_to_terminal_is_gated_before_worker_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -467,6 +475,7 @@ def test_stale_evidence_verify_to_terminal_is_gated_before_worker_exit(
     assert "## App Release Gate Failure" in body
 
 
+@requires_symlink_privilege
 def test_initial_app_release_signal_survives_persisted_label_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -490,6 +499,7 @@ def test_initial_app_release_signal_survives_persisted_label_loss(
     assert "## App Release Gate Failure" in body
 
 
+@requires_symlink_privilege
 def test_verify_to_active_is_gated_before_total_turn_budget_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -511,6 +521,7 @@ def test_verify_to_active_is_gated_before_total_turn_budget_exit(
     assert "## App Release Gate Failure" in body
 
 
+@requires_symlink_privilege
 def test_red_checks_group_repairs_create_fresh_verifier_and_link_finalizer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -571,6 +582,7 @@ def test_red_checks_group_repairs_create_fresh_verifier_and_link_finalizer(
     }
 
 
+@requires_symlink_privilege
 def test_concurrent_worker_and_reconcile_accept_one_exact_green_approval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -671,6 +683,7 @@ def test_concurrent_worker_and_reconcile_accept_one_exact_green_approval(
     assert persisted is not None and persisted.state == "Done"
 
 
+@requires_symlink_privilege
 def test_concurrent_worker_and_reconcile_create_one_red_release_lifecycle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -965,6 +978,7 @@ def test_finalizer_relink_preserves_other_release_lineage_blocker(
     }
 
 
+@requires_symlink_privilege
 def test_host_authority_restores_worker_changed_contract_hash_label(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1168,6 +1182,7 @@ def test_partial_fresh_verifier_is_fully_reconciled(tmp_path: Path) -> None:
     )
 
 
+@requires_symlink_privilege
 def test_repair_children_use_source_issue_backend_over_workflow_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1237,6 +1252,7 @@ def test_repair_children_use_source_issue_backend_over_workflow_default(
     assert captured == ["opencode"]
 
 
+@requires_symlink_privilege
 def test_partial_cycle_write_fails_closed_then_reconciles_without_duplicates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2027,6 +2043,7 @@ def test_host_release_authority_finalizer_dispatch_matrix(
     assert orchestrator._running == {}
 
 
+@requires_symlink_privilege
 def test_host_release_authority_green_verifier_approves_exact_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2398,6 +2415,7 @@ def test_startup_reopens_unapproved_terminal_release_without_workspace(
     assert "Startup" in (persisted.description or "")
 
 
+@requires_symlink_privilege
 def test_stale_finalizer_cannot_adopt_reapproved_cycle_between_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2596,6 +2614,7 @@ def test_reapproved_finalizer_refuses_stale_prior_cycle_workspace(
     assert persisted.state == "Document"
 
 
+@requires_symlink_privilege
 def test_superseded_verifier_label_loss_restart_remains_evidence_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3140,6 +3159,7 @@ def test_startup_cleanup_claim_blocks_release_gate_replacement(
     assert registry.get_release_gate("APP-FINAL") == approved
 
 
+@requires_symlink_privilege
 def test_normal_release_worker_exit_holds_lease_until_terminal_cleanup_finishes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3216,6 +3236,7 @@ def test_normal_release_worker_exit_holds_lease_until_terminal_cleanup_finishes(
     assert removed == [worker]
 
 
+@requires_symlink_privilege
 def test_reconcile_terminal_release_holds_lease_until_cleanup_finishes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3486,6 +3507,7 @@ def test_pending_contract_hash_drift_replaces_generation_and_requires_fresh_run(
 
 
 
+@requires_symlink_privilege
 def test_red_verifier_handoff_exits_normal_and_releases_its_slot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3565,6 +3587,7 @@ def test_red_verifier_handoff_exits_normal_and_releases_its_slot(
     assert removals == [worker]
 
 
+@requires_symlink_privilege
 def test_restart_recovers_only_exact_completed_red_handoff_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

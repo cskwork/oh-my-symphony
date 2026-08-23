@@ -742,7 +742,7 @@ def test_reconcile_force_ejects_claude_process_group_after_grace(
     monkeypatch.setattr(
         core_module,
         "kill_process_group",
-        lambda pid: killed.append(pid) or True,
+        lambda pid, **_kill_kw: killed.append(pid) or True,
     )
     monkeypatch.setattr(
         core_module.log,
@@ -807,7 +807,7 @@ def test_reconcile_force_eject_without_safe_pgid_releases_slot_and_retries(
     monkeypatch.setattr(
         core_module,
         "kill_process_group",
-        lambda pid: killed.append(pid) or True,
+        lambda pid, **_kill_kw: killed.append(pid) or True,
     )
 
     async def _run() -> None:
@@ -908,7 +908,9 @@ def test_reconcile_isolates_force_eject_cleanup_and_still_schedules_retry(
             monkeypatch.setattr(
                 core_module,
                 "kill_process_group",
-                lambda _pid: (_ for _ in ()).throw(RuntimeError("kill failed")),
+                lambda _pid, **_kill_kw: (_ for _ in ()).throw(
+                    RuntimeError("kill failed")
+                ),
             )
             monkeypatch.setattr(
                 orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: []
@@ -9792,10 +9794,12 @@ async def test_reload_refreshes_reuse_policy_and_hook_env_alongside_workflow_dir
     # observes all three at once via a single `after_create` hook.
     workspace_root = tmp_path / "ws"
     snapshot = tmp_path / "snapshot"
+    # The hook body runs through bash, where a raw Windows path's
+    # backslashes would be eaten as escapes — hand bash a POSIX-styled path.
     after_create = (
         f'echo "$SYMPHONY_WORKFLOW_DIR|'
         f'$SYMPHONY_FEATURE_BASE_BRANCH|'
-        f'$SYMPHONY_MERGE_TARGET_BRANCH" >> {snapshot}'
+        f'$SYMPHONY_MERGE_TARGET_BRANCH" >> {snapshot.as_posix()}'
     )
     old_cfg = _make_config(
         workflow_path=tmp_path / "old" / "WORKFLOW.md",
@@ -10317,3 +10321,239 @@ def test_dispatch_without_stage_kinds_still_stamps_agent_kind(tmp_path, monkeypa
 
     asyncio.run(_run())
     assert stamped == [("MT-1", "codex")]
+
+
+# ---------------------------------------------------------------------------
+# Off-loop reclaim (ITEM 1) + identity-gated shutdown kills (ITEM 2)
+# ---------------------------------------------------------------------------
+
+
+def test_async_ensure_reclaim_runs_kill_off_event_loop(tmp_path, monkeypatch):
+    """ITEM 1 — `_ensure_run_registry_async` moves the blocking kill+confirm
+    off the event loop while preserving completed-before-return and the
+    'reclaiming' fence observable mid-kill."""
+    import threading
+
+    import symphony.orchestrator.run_registry as run_registry_module
+
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws"
+    )
+    issue = _issue("MT-ASYNC-RECLAIM", state="Todo")
+    now = datetime.now(timezone.utc)
+    crashed = RunRegistry(
+        tmp_path / ".symphony" / "state.db",
+        lease_ttl=timedelta(minutes=5),
+        owner_pid=4242,
+        boot_id="crashed",
+    )
+    run_id = crashed.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+        now=now,
+    )
+    assert run_id
+    monkeypatch.setattr(run_registry_module, "process_identity", lambda _pid: "proc-1")
+    assert crashed.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        now=now + timedelta(seconds=1),
+        backend_agent_pid=4343,
+    )
+    crashed.close()
+
+    monkeypatch.setattr(core_module, "process_identity", lambda _pid: "proc-1")
+    monkeypatch.setattr(
+        core_module, "process_group_exists", lambda _pid: False
+    )
+    monkeypatch.setattr(run_registry_module, "_pid_alive", lambda _pid: False)
+
+    kills: list[tuple[int, object]] = []
+    kill_threads: list[int] = []
+
+    def fake_kill(pid, *, identity=None):
+        kill_threads.append(threading.get_ident())
+        kills.append((pid, identity))
+        # The SQLite fence must still read 'reclaiming' while the kill is
+        # running — the finalize only happens after this returns. Read
+        # through a fresh connection: this runs on a to_thread worker,
+        # and the orchestrator's own connection is thread-affine.
+        fence = RunRegistry(tmp_path / ".symphony" / "state.db")
+        try:
+            assert fence.get_run(run_id).status == "reclaiming"
+        finally:
+            fence.close()
+        return True
+
+    monkeypatch.setattr(core_module, "kill_process_group", fake_kill)
+
+    restarted = _orch()
+    loop_threads: list[int] = []
+
+    async def _run() -> None:
+        loop_threads.append(threading.get_ident())
+        await restarted._ensure_run_registry_async(cfg)
+
+    asyncio.run(_run())
+
+    assert kills == [(4343, None)], "reclaim kill must run exactly once"
+    assert len(kill_threads) == 1
+    assert kill_threads[0] != loop_threads[0], "kill must run off the event loop"
+    assert restarted._run_registry is not None
+    assert (
+        restarted._run_registry.get_run(run_id).status == "orphaned"
+    ), "kill+finalize must complete before _ensure_run_registry_async returns"
+
+
+def _orchestrator_with_identity_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    recorded_identity: str | None,
+) -> tuple[Orchestrator, ServiceConfig, Issue, str]:
+    """Seed one orchestrator whose registry recorded an agent pid (+identity)."""
+    import symphony.orchestrator.run_registry as run_registry_module
+
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws"
+    )
+    issue = _issue("MT-IDENTITY", state="Todo")
+    orch = _orch()
+    # The dead-owner reclaim at open must not fire for our own lease —
+    # self-owned (same boot id) rows are skipped, and we keep the real
+    # `_pid_alive` untouched.
+    monkeypatch.setattr(
+        run_registry_module,
+        "process_identity",
+        (lambda _pid: recorded_identity)
+        if recorded_identity is not None
+        else (lambda _pid: None),
+    )
+    orch._ensure_run_registry(cfg)
+    registry = orch._run_registry
+    assert registry is not None
+    run_id = registry.acquire_run(
+        issue,
+        workspace_path=tmp_path / "ws" / issue.identifier,
+        attempt=None,
+        attempt_kind="initial",
+        agent_kind="codex",
+    )
+    assert run_id
+    assert registry.heartbeat(
+        issue_id=issue.id,
+        run_id=run_id,
+        backend_agent_pid=4242,
+    )
+    return orch, cfg, issue, run_id
+
+
+def test_force_eject_kill_passes_recorded_identity(tmp_path, monkeypatch):
+    """ITEM 2 — the fingerprint captured at pid-record time flows to the kill."""
+    orch, cfg, issue, run_id = _orchestrator_with_identity_run(
+        tmp_path, monkeypatch, recorded_identity="fp-recorded"
+    )
+    captured: list[object] = []
+
+    def fake_kill(pid, *, identity=None):
+        captured.append((pid, identity))
+        return True
+
+    monkeypatch.setattr(core_module, "kill_process_group", fake_kill)
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,
+        workspace_path=tmp_path / "ws",
+        run_id=run_id,
+        agent_pgid=4242,
+    )
+    orch._running[issue.id] = entry
+
+    orch._force_eject_zombie(issue.id, entry, cfg)
+
+    assert captured == [(4242, "fp-recorded")]
+
+
+def test_kill_gate_skips_when_identity_mismatches(tmp_path, monkeypatch):
+    """ITEM 2 — a reused pid whose live fingerprint differs from the recorded
+    one is never signalled (the gate inside `kill_process_group` skips)."""
+    import symphony._shell as shell_module
+
+    orch, cfg, issue, run_id = _orchestrator_with_identity_run(
+        tmp_path, monkeypatch, recorded_identity="fp-recorded"
+    )
+    # The gate compares against the LIVE incarnation, resolved inside
+    # `_shell.kill_process_group` — a different fingerprint means pid reuse.
+    monkeypatch.setattr(shell_module, "process_identity", lambda _pid: "fp-reused")
+
+    attempted: list[int] = []
+    monkeypatch.setattr(
+        shell_module, "_taskkill_tree", lambda pid, **_kw: attempted.append(pid)
+        or True
+    )
+    monkeypatch.setattr(
+        shell_module,
+        "_signal_process_group",
+        lambda pid, sig: attempted.append(pid) or True,
+    )
+    # `shell_module.log` and `core_module.log` are the same shared logger —
+    # patch .warning ONCE and classify by event name.
+    log_events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        shell_module.log, "warning", lambda event, **f: log_events.append((event, f))
+    )
+
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,
+        workspace_path=tmp_path / "ws",
+        run_id=run_id,
+        agent_pgid=4242,
+    )
+    orch._running[issue.id] = entry
+
+    orch._force_eject_zombie(issue.id, entry, cfg)
+
+    assert attempted == [], "mismatched identity must never reach the OS kill"
+    assert "kill_process_group_identity_mismatch" in [
+        event for event, _fields in log_events
+    ]
+    eject = [fields for event, fields in log_events if event == "force_eject_killed_process_group"]
+    assert eject and eject[0].get("killed") is False
+
+
+def test_kill_without_recorded_identity_stays_ungated(tmp_path, monkeypatch):
+    """ITEM 2 — win32 (and any capture failure) records identity=None; the
+    kill must proceed exactly as before rather than be disabled."""
+    orch, cfg, issue, _run_id = _orchestrator_with_identity_run(
+        tmp_path, monkeypatch, recorded_identity=None
+    )
+    captured: list[object] = []
+
+    def fake_kill(pid, *, identity=None):
+        captured.append((pid, identity))
+        return True
+
+    monkeypatch.setattr(core_module, "kill_process_group", fake_kill)
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,
+        workspace_path=tmp_path / "ws",
+        run_id="",
+        agent_pgid=4242,
+    )
+    orch._running[issue.id] = entry
+
+    assert orch._agent_pid_identity(entry) is None
+    orch._force_eject_zombie(issue.id, entry, cfg)
+
+    assert captured == [(4242, None)], "identity=None must keep the kill ungated"

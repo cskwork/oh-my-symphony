@@ -634,7 +634,7 @@ wheels = [
 
 [[package]]
 name = "oh-my-symphony"
-version = "0.19.1"
+version = "0.20.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

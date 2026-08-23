@@ -19,6 +19,116 @@
 
   const API_BASE = '/api/v1';
 
+  // ------------------------------------------------------------------
+  // API token (SYMPHONY_API_TOKEN mode)
+  //
+  // When the server sets a token, every /api/ fetch needs
+  // `Authorization: Bearer <token>` and the chat WebSocket needs it as
+  // `?token=` (browsers cannot set WS headers). The value lives in
+  // sessionStorage — tab-scoped and cleared when the tab closes — and a
+  // dismissed banner stays hidden until a *new* 401 carries information
+  // (a rejected stored token), so the 5s poll cannot resurrect it.
+  // ------------------------------------------------------------------
+
+  const API_TOKEN_STORAGE_KEY = 'symphony.apiToken';
+
+  function storedApiToken() {
+    try {
+      return sessionStorage.getItem(API_TOKEN_STORAGE_KEY) || null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function storeApiToken(token) {
+    try {
+      if (token) sessionStorage.setItem(API_TOKEN_STORAGE_KEY, token);
+      else sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    } catch (_err) {
+      /* storage disabled — token lasts only for this render cycle */
+    }
+  }
+
+  function withAuthHeaders(headers) {
+    const token = storedApiToken();
+    return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+  }
+
+  let authBannerState = { open: false, dismissed: false };
+
+  function handleApiUnauthorized() {
+    const hadToken = Boolean(storedApiToken());
+    if (hadToken) {
+      // The stored token was rejected — drop it so the next save is the
+      // only way forward, and un-dismiss: rejection is new information.
+      storeApiToken(null);
+      authBannerState.dismissed = false;
+    }
+    if (!authBannerState.dismissed) showApiTokenBanner(hadToken);
+  }
+
+  function showApiTokenBanner(rejected) {
+    let root = document.getElementById('api-token-banner-root');
+    if (!root) {
+      root = el('div', { id: 'api-token-banner-root' });
+      const main = document.querySelector('.main');
+      if (!main) return;
+      main.insertBefore(root, main.firstChild);
+    }
+    clearNode(root);
+    const input = el('input', {
+      class: 'input api-token-input',
+      type: 'password',
+      autocomplete: 'off',
+      'aria-label': t('auth.tokenPlaceholder'),
+      placeholder: t('auth.tokenPlaceholder'),
+    });
+    const save = el('button', { class: 'btn btn-primary btn-sm', type: 'button' }, t('auth.tokenSave'));
+    save.addEventListener('click', async () => {
+      const token = input.value.trim();
+      if (!token) {
+        input.focus();
+        return;
+      }
+      storeApiToken(token);
+      authBannerState.dismissed = false;
+      hideApiTokenBanner();
+      showToast(t('auth.tokenSaved'), 'success');
+      // Re-run the board fetch immediately; a chat page also needs its
+      // WebSocket rebuilt so the handshake carries the new ?token=.
+      await refreshBoard();
+      if (state.route === 'chat') renderRoute();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save.click();
+    });
+    const dismiss = el('button', {
+      class: 'btn-icon',
+      type: 'button',
+      'aria-label': t('common.close'),
+      onClick: () => {
+        authBannerState.dismissed = true;
+        hideApiTokenBanner();
+      },
+    }, '✕');
+    root.appendChild(el('div', { class: 'banner banner-info api-token-banner', role: 'alert' }, [
+      el('div', { class: 'api-token-banner-copy' }, [
+        el('strong', null, t('auth.tokenBannerTitle')),
+        el('span', null, rejected ? t('auth.tokenRejected') : t('auth.tokenBannerHint')),
+      ]),
+      el('div', { class: 'api-token-banner-form' }, [input, save]),
+      dismiss,
+    ]));
+    authBannerState.open = true;
+    input.focus();
+  }
+
+  function hideApiTokenBanner() {
+    authBannerState.open = false;
+    const root = document.getElementById('api-token-banner-root');
+    if (root) root.remove();
+  }
+
   class ApiError extends Error {
     constructor(message, code, status, data = null) {
       super(message);
@@ -29,7 +139,7 @@
   }
 
   async function apiRequest(path, { method = 'GET', body, headers = {} } = {}) {
-    const init = { method, headers: { ...headers } };
+    const init = { method, headers: withAuthHeaders(headers) };
     if (body !== undefined) {
       init.body = body;
       init.headers['Content-Type'] = 'application/json';
@@ -45,6 +155,7 @@
       }
     }
     if (!res.ok) {
+      if (res.status === 401) handleApiUnauthorized();
       const err = data && data.error;
       throw new ApiError(
         (err && err.message) || t('api.requestFailed', { status: res.status }),
@@ -83,8 +194,11 @@
     },
     getRunDetail: (runId) => apiRequest(`/runs/${encodeURIComponent(runId)}`),
     downloadRunDiagnostic: async (runId) => {
-      const res = await fetch(`${API_BASE}/runs/${encodeURIComponent(runId)}/diagnostic`);
+      const res = await fetch(`${API_BASE}/runs/${encodeURIComponent(runId)}/diagnostic`, {
+        headers: withAuthHeaders({}),
+      });
       if (!res.ok) {
+        if (res.status === 401) handleApiUnauthorized();
         let message = t('api.requestFailed', { status: res.status });
         try {
           const payload = await res.json();
@@ -201,6 +315,10 @@
     // Remotes + gh availability decide which Git page actions are usable.
     gitRemote: null,
     connected: false,
+    // Timestamp of the last successful /board fetch. While polls fail,
+    // the age of this stamp drives the "updated Ns ago" label and the
+    // board-stale dimming, so a frozen snapshot never looks current.
+    lastSuccessfulPollAt: null,
     search: '',
     boardScope: 'active',
     boardView: 'lanes',
@@ -563,7 +681,8 @@
 
   function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
-    const toast = el('div', { class: `toast toast-${type}`, role: 'status' }, message);
+    // Errors are assertive (role=alert); success/info are polite status.
+    const toast = el('div', { class: `toast toast-${type}`, role: type === 'error' ? 'alert' : 'status' }, message);
     const dismiss = () => {
       toast.classList.add('toast-out');
       setTimeout(() => toast.remove(), 160);
@@ -1065,16 +1184,25 @@
   window.addEventListener('hashchange', handleRouteChange);
 
   // ------------------------------------------------------------------
-  // Sidebar connection indicator
+  // Sidebar connection indicator + board staleness
   // ------------------------------------------------------------------
+
+  // Past this age without a successful poll the board is treated as
+  // stale: content dims and stops taking pointer events so nobody acts
+  // on a frozen snapshot believing it is live.
+  const BOARD_STALE_MS = 15000;
 
   function updateConnectionIndicator() {
     const dot = document.getElementById('conn-dot');
     const text = document.getElementById('conn-text');
     dot.classList.toggle('online', state.connected);
     dot.classList.toggle('offline', !state.connected);
+    updateBoardStaleness();
     if (!state.connected) {
-      text.textContent = t('conn.unreachable');
+      const age = secondsSinceLastPoll();
+      text.textContent = age == null
+        ? t('conn.unreachable')
+        : `${t('conn.unreachable')} · ${t('conn.staleAgo', { n: age })}`;
       return;
     }
     const live = (state.board && state.board.live) || {};
@@ -1085,6 +1213,30 @@
       else if (live[key].status === 'retrying') retrying++;
     }
     text.textContent = t('conn.summary', { running, retrying });
+  }
+
+  function secondsSinceLastPoll() {
+    if (state.lastSuccessfulPollAt == null) return null;
+    return Math.max(0, Math.round((Date.now() - state.lastSuccessfulPollAt) / 1000));
+  }
+
+  function updateBoardStaleness() {
+    const main = document.querySelector('.main');
+    if (!main) return;
+    // Never dim before the first successful load — that state already
+    // shows skeletons, and dimming them adds no information.
+    const stale = !state.connected
+      && state.lastSuccessfulPollAt != null
+      && (Date.now() - state.lastSuccessfulPollAt) > BOARD_STALE_MS;
+    main.classList.toggle('board-stale', stale);
+  }
+
+  // Pointer events on a stale board are already blocked via CSS; keyboard
+  // activation must check the same flag or Enter/Space would act on data
+  // the operator has been told is frozen.
+  function boardIsStale() {
+    const main = document.querySelector('.main');
+    return Boolean(main && main.classList.contains('board-stale'));
   }
 
   // ------------------------------------------------------------------
@@ -1154,6 +1306,7 @@
       type: 'text',
       id: 'board-search',
       class: 'input search-input',
+      'aria-label': t('board.searchAria'),
       placeholder: t('board.searchPlaceholder'),
       value: state.search,
       oninput: (e) => {
@@ -1545,6 +1698,16 @@
         .filter((row) => row.issues.length > 0);
       if (terminalGroups.length) layout.appendChild(buildTerminalSectionEl(terminalGroups, live, board.read_only));
     }
+    // First-run affordance: when every rendered lane is empty (and no
+    // search filter is hiding cards), teach the two ways to add work.
+    // Skipped while filtering — an empty result there is the filter's doing.
+    if (!query) {
+      const renderedCounts = columnsToRender.map((col) => (byColumn.get(col.name) || []).length);
+      if (renderedCounts.length && renderedCounts.every((n) => n === 0)) {
+        layout.appendChild(el('div', { class: 'board-empty-hint' },
+          board.read_only ? t('board.emptyBoardReadonly') : t('board.emptyBoardHint')));
+      }
+    }
     scrollEl.appendChild(layout);
   }
 
@@ -1584,14 +1747,15 @@
     const dot = el('span', { class: 'state-dot', style: `background:${hashColor(col.name)}` });
     const actions = [];
     if (!readOnly) {
-      actions.push(el('button', { class: 'btn-icon', title: t('board.newIssue'), 'aria-label': `New issue in ${col.name}`, onClick: () => openIssueModal({ state: col.name }) }, '+'));
-      actions.push(el('button', { class: 'btn-icon', title: t('board.columnMenu'), 'aria-label': `${col.name} column menu`, onClick: (e) => { e.stopPropagation(); openColumnMenu(col, e.currentTarget); } }, '⋯'));
+      actions.push(el('button', { class: 'btn-icon', title: t('board.newIssue'), 'aria-label': t('board.newIssueInColumn', { name: col.name }), onClick: () => openIssueModal({ state: col.name }) }, '+'));
+      actions.push(el('button', { class: 'btn-icon', title: t('board.columnMenu'), 'aria-label': t('board.columnMenuAria', { name: col.name }), onClick: (e) => { e.stopPropagation(); openColumnMenu(col, e.currentTarget); } }, '⋯'));
     }
     const header = el('div', { class: 'column-header' }, [
       el('div', { class: 'column-title-wrap' }, [dot, el('span', { class: 'column-title' }, col.name), el('span', { class: 'column-count' }, String(issues.length))]),
       el('div', { class: 'column-actions' }, actions),
     ]);
     const body = el('div', { class: 'column-body' });
+    if (!issues.length) body.appendChild(el('div', { class: 'column-empty' }, t('board.noTickets')));
     for (const issue of issues) body.appendChild(buildCardEl(issue, live[issue.identifier], readOnly));
     const column = el('div', { class: `column${col.terminal ? ' terminal' : ''}` }, [header, body]);
     // Drop zone is the whole column (header + empty space included) — an
@@ -1648,7 +1812,19 @@
     const card = el('div', {
       class: `card${liveEntry && liveEntry.paused ? ' paused' : ''}`,
       draggable: !readOnly,
+      // Keyboard path to the drawer: the card is a real tab stop. The
+      // whole card stays a div (it nests the skip/recover buttons, which
+      // cannot live inside a <button>), so role+key handling stand in.
+      tabindex: '0',
+      role: 'button',
+      'aria-label': t('board.openTicketAria', { id: issue.identifier, title: issue.title }),
       onClick: () => openDrawer(issue.identifier),
+      onKeydown: (e) => {
+        if (boardIsStale()) return;
+        if (e.target !== card || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault();
+        openDrawer(issue.identifier);
+      },
     });
     if (!readOnly) {
       card.addEventListener('dragstart', (e) => {
@@ -1713,7 +1889,17 @@
     const statusLine = el('div', { class: 'live-status-line' });
     if (liveEntry.status === 'retrying') {
       statusLine.appendChild(el('span', { class: 'live-icon retry' }, '↻'));
-      statusLine.appendChild(el('span', null, 'retrying'));
+      // Say why it is retrying — the bare ↻ hid the error the API sends.
+      statusLine.appendChild(el('span', null,
+        liveEntry.attempt != null
+          ? t('issue.retryingAttempt', { n: liveEntry.attempt })
+          : t('common.retrying')));
+      if (liveEntry.error) {
+        statusLine.appendChild(el('span', {
+          class: 'live-error',
+          title: liveEntry.error,
+        }, truncate(liveEntry.error, 80)));
+      }
     } else {
       statusLine.appendChild(el('span', { class: 'live-dot' }));
       statusLine.appendChild(el('span', null, t('issue.turnCount', { n: liveEntry.turn_count ?? 0 })));
@@ -2174,6 +2360,7 @@
       const board = await api.getBoard();
       state.board = board;
       state.connected = true;
+      state.lastSuccessfulPollAt = Date.now();
       updateConnectionIndicator();
       if (state.route === 'board') renderBoardSurface(document.getElementById('board-scroll'));
     } catch (_err) {
@@ -2211,6 +2398,7 @@
       id: 'runs-search',
       class: 'input runs-search',
       type: 'search',
+      'aria-label': t('runs.searchAria'),
       placeholder: t('runs.searchPlaceholder'),
       onInput: () => applyRunFilters(page, { debounce: true }),
     });
@@ -2874,9 +3062,9 @@
 
   function buildTaskBranchRow(row, data, compareCard) {
     const badges = [];
-    if (row.merged) badges.push(el('span', { class: 'badge-merged' }, 'merged'));
+    if (row.merged) badges.push(el('span', { class: 'badge-merged' }, t('git.badgeMerged')));
     else if (row.ahead != null) badges.push(el('span', { class: 'ahead-behind' }, `↑${row.ahead} ↓${row.behind}`));
-    if (row.running) badges.push(el('span', { class: 'badge-running' }, 'running'));
+    if (row.running) badges.push(el('span', { class: 'badge-running' }, t('git.badgeRunning')));
     const compareBtn = el('button', {
       class: 'btn btn-ghost btn-sm',
       onClick: () => compareCard.load(row.branch),
@@ -3062,7 +3250,17 @@
     if (diffPanel) {
       attrs.class += ' clickable';
       attrs.title = t('git.showFileChanges');
+      // Keyboard parity with the click — a real tab stop so the commit's
+      // diff is reachable without a mouse.
+      attrs.tabindex = '0';
+      attrs.role = 'button';
       attrs.onClick = () => diffPanel.showCommit(commit);
+      attrs.onKeydown = (e) => {
+        if (boardIsStale()) return;
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        diffPanel.showCommit(commit);
+      };
     }
     return el('div', attrs, [
       el('span', { class: 'git-mono commit-sha' }, commit.short_sha),
@@ -3101,7 +3299,7 @@
         resultBox.appendChild(el('div', { class: 'git-target-line' }, [
           el('span', { class: 'git-mono' }, `${cmp.branch} → ${cmp.target}`),
           el('span', { class: 'ahead-behind' }, `↑${cmp.ahead == null ? '?' : cmp.ahead} ↓${cmp.behind == null ? '?' : cmp.behind}`),
-          cmp.merged ? el('span', { class: 'badge-merged' }, 'merged') : null,
+          cmp.merged ? el('span', { class: 'badge-merged' }, t('git.badgeMerged')) : null,
         ]));
         const commits = cmp.commits || [];
         for (const commit of commits) resultBox.appendChild(buildCommitRow(commit, diffPanel));
@@ -4089,7 +4287,13 @@
   function connectChatSocket(view) {
     closeChatSocket();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const query = chatState.currentId ? `?session=${encodeURIComponent(chatState.currentId)}` : '';
+    // The API guard cannot read headers browsers never send on a WS
+    // handshake, so token mode authenticates this one route via ?token=.
+    const params = [];
+    if (chatState.currentId) params.push(`session=${encodeURIComponent(chatState.currentId)}`);
+    const token = storedApiToken();
+    if (token) params.push(`token=${encodeURIComponent(token)}`);
+    const query = params.length ? `?${params.join('&')}` : '';
     const socket = new WebSocket(`${proto}://${location.host}/api/v1/chat/ws${query}`);
     chatState.socket = socket;
     socket.onopen = () => {
@@ -4755,6 +4959,7 @@
     try {
       const board = await api.getBoard();
       state.connected = true;
+      state.lastSuccessfulPollAt = Date.now();
       if (!holdRender) {
         const firstLoad = !state.board;
         state.board = board;

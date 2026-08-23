@@ -100,6 +100,8 @@ def _hermetic_project(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     fake_home.mkdir()
     env = dict(os.environ)
     env["HOME"] = str(fake_home)  # keep ~/symphony_workspaces inside the sandbox
+    if sys.platform == "win32":
+        env["USERPROFILE"] = str(fake_home)
 
     # Doctor's agent-CLI check needs `claude` on PATH; CI has no agent CLI, so
     # stub one (never invoked) and prepend it so the run stays self-contained.

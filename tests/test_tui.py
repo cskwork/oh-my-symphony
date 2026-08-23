@@ -508,6 +508,36 @@ def test_compact_card_renders_attention_label() -> None:
     assert "! Tracker error" in card._render_compact().plain
 
 
+def test_compact_card_shows_retry_error_and_agent_chip() -> None:
+    """M2 — the default compact density must not hide *why* a run retries,
+    nor which backend owns a live ticket."""
+    card = IssueCard.__new__(IssueCard)
+    card._issue = _issue("SMA-1")  # type: ignore[attr-defined]
+    card._status = _CardStatus(  # type: ignore[attr-defined]
+        runtime="retrying", error="exit 1 after long delay", agent_kind="codex"
+    )
+    card._stage_pos = None  # type: ignore[attr-defined]
+
+    plain = card._render_compact().plain
+    assert "↻" in plain
+    assert "exit 1 after long delay" in plain
+    assert "code" in plain  # 4-char colored agent chip (codex → "code")
+
+
+def test_compact_card_truncates_long_retry_error() -> None:
+    card = IssueCard.__new__(IssueCard)
+    card._issue = _issue("SMA-2")  # type: ignore[attr-defined]
+    card._status = _CardStatus(  # type: ignore[attr-defined]
+        runtime="retrying",
+        error="x" * 120,
+    )
+    card._stage_pos = None  # type: ignore[attr-defined]
+
+    plain = card._render_compact().plain
+    assert len(plain) < 200  # line-width discipline holds
+    assert "…" in plain
+
+
 def test_ticket_detail_modal_renders_attention_message_and_due_at() -> None:
     status = _CardStatus(
         attention={
@@ -591,6 +621,36 @@ async def test_q_quits_app(monkeypatch: Any) -> None:
         await pilot.press("q")
         await pilot.pause()
     # run_test() exits when the app does; the assertion is implicit.
+
+
+@pytest.mark.asyncio
+async def test_q_requires_second_press_while_workers_run(
+    monkeypatch: Any,
+) -> None:
+    """H1 — `q` on a busy board must not kill running agents unconfirmed.
+
+    First press arms a short confirmation window (and notifies); the
+    second press inside it quits. run_test() completing after the second
+    press is the exit assertion.
+    """
+    cfg = _make_config()
+    _stub_tracker(monkeypatch, [], [])
+    snap = {
+        "counts": {"running": 2, "retrying": 1},
+        "codex_totals": {},
+        "running": [],
+        "retrying": [],
+        "generated_at": "now",
+    }
+    app = KanbanApp(_StubOrchestrator(snapshot=snap), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("q")
+        await pilot.pause()
+        # Busy board: armed, not exited.
+        assert app._quit_armed is True  # noqa: SLF001
+        await pilot.press("q")
+        await pilot.pause()
 
 
 @pytest.mark.asyncio

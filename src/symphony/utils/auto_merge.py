@@ -92,8 +92,14 @@ async def auto_merge_on_done_best_effort(
     )
 
     def _do_run() -> subprocess.CompletedProcess[bytes]:
+        # The script must travel via stdin, not argv: Git Bash (MSYS) on
+        # Windows silently truncates a long *quoted* command-line argument
+        # at ~8 KB, so `bash -lc <script>` parses a truncated script and
+        # exits 2 with a syntax error. `bash -l -s` reads the same script
+        # from stdin with identical semantics on every platform.
         return subprocess.run(
-            [resolve_bash(), "-lc", script],
+            [resolve_bash(), "-l", "-s"],
+            input=script.encode("utf-8"),
             cwd=str(workflow_dir),
             capture_output=True,
             timeout=_AUTO_MERGE_TIMEOUT_S,

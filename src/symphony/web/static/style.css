@@ -45,6 +45,12 @@
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 10px;
+  /* Aliases consumed by the request-schedule view; each resolves to its
+     base token so both spellings stay in lockstep when the palette moves. */
+  --surface-1: var(--surface);
+  --text-primary: var(--text);
+  --text-tertiary: var(--text-faint);
+  --radius-md: var(--radius);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .04), 0 1px 1px rgba(0, 0, 0, .03);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, .08), 0 2px 4px rgba(0, 0, 0, .04);
   --shadow-lg: 0 16px 40px rgba(0, 0, 0, .14), 0 4px 10px rgba(0, 0, 0, .06);
@@ -258,7 +264,13 @@ a { color: inherit; }
   min-width: 0;
   display: flex;
   flex-direction: column;
+  transition: opacity .3s ease;
 }
+
+/* Polls failing past BOARD_STALE_MS: dim the content and drop pointer
+   events so a frozen snapshot neither looks current nor accepts edits.
+   The sidebar (with the connection label) stays fully interactive. */
+.main.board-stale { opacity: .55; pointer-events: none; }
 
 .view {
   flex: 1;
@@ -309,6 +321,23 @@ a { color: inherit; }
   color: #92400e;
   border-bottom: 1px solid #fde68a;
 }
+
+/* API token prompt (SYMPHONY_API_TOKEN mode): one modest inline banner
+   at the top of the main column — password input + connect button, using
+   the shared form/button classes. Dismissal hides it until a rejected
+   stored token makes it relevant again. */
+#api-token-banner-root .api-token-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.8889rem;
+  flex-wrap: wrap;
+  padding: 0.7407rem 1.1852rem;
+}
+.api-token-banner-copy { display: grid; gap: 0.1481rem; min-width: 0; flex: 1 1 14rem; }
+.api-token-banner-copy span { font-size: 0.8519rem; }
+.api-token-banner-form { display: flex; align-items: center; gap: 0.4444rem; flex: 0 0 auto; }
+.api-token-input { width: 14.8148rem; }
+.api-token-banner .btn-icon { color: inherit; flex: 0 0 auto; }
 
 .input, .textarea, .select {
   background: var(--surface);
@@ -494,6 +523,23 @@ a { color: inherit; }
   border-radius: var(--radius);
 }
 
+/* Muted placeholder inside a lane with no cards — an empty column body
+   otherwise reads as broken rather than intentionally empty. */
+.column-empty {
+  padding: 0.7407rem 0.5185rem;
+  color: var(--text-muted);
+  font-size: 0.8148rem;
+  text-align: center;
+}
+
+/* First-run hint under a fully empty board: teaches the two ways to add
+   work instead of presenting a silent wall of blank lanes. */
+.board-empty-hint {
+  padding: 2.963rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
 .add-column-ghost {
   width: 21.037rem;
   flex: 0 0 21.037rem;
@@ -593,7 +639,9 @@ a { color: inherit; }
 .card-id {
   font-family: var(--font-mono);
   font-size: 0.7778rem;
-  color: var(--text-faint);
+  /* text-muted (≈4.8:1), not text-faint (≈2.6:1) — ticket IDs are the
+     primary way operators reference work, so they must be legible. */
+  color: var(--text-muted);
   letter-spacing: .02em;
 }
 
@@ -723,6 +771,8 @@ a { color: inherit; }
 }
 
 .live-message { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Why a run is retrying, truncated to one line; full text on hover. */
+.live-error { color: var(--danger); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------------------------------------------------------------------- */
 /* Popover menu                                                            */
@@ -886,7 +936,7 @@ a { color: inherit; }
   justify-content: space-between;
 }
 
-.drawer-id { font-family: var(--font-mono); font-size: 0.8889rem; color: var(--text-faint); }
+.drawer-id { font-family: var(--font-mono); font-size: 0.8889rem; color: var(--text-muted); }
 
 .drawer-title-input {
   border: none;
@@ -1081,7 +1131,7 @@ a { color: inherit; }
 .live-message-block { font-size: 0.9259rem; color: var(--text-secondary); background: var(--surface); padding: 0.5926rem; border-radius: var(--radius-sm); }
 .live-actions { display: flex; justify-content: flex-end; }
 
-.drawer-meta { font-size: 0.8519rem; color: var(--text-faint); display: flex; flex-direction: column; gap: 0.1481rem; }
+.drawer-meta { font-size: 0.8519rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.1481rem; }
 
 /* ---------------------------------------------------------------------- */
 /* Toasts                                                                   */
@@ -1189,7 +1239,7 @@ a { color: inherit; }
 .chart-svg { width: 100%; height: 10.3704rem; display: block; }
 .chart-bar { fill: var(--accent); }
 .chart-labels { display: flex; justify-content: space-between; }
-.chart-label { font-size: 0.7407rem; color: var(--text-faint); }
+.chart-label { font-size: 0.7407rem; color: var(--text-muted); }
 
 .hbar-chart { display: flex; flex-direction: column; gap: 0.7407rem; }
 .hbar-row { display: grid; grid-template-columns: 8.8889rem 1fr 4.4444rem; align-items: center; gap: 0.5926rem; }
@@ -2136,12 +2186,25 @@ a { color: inherit; }
   background: var(--surface-1);
   overflow: hidden;
 }
-.request-node.status-running { border-left-color: var(--accent); }
-.request-node.status-ready { border-left-color: var(--success); }
+.request-node.status-running,
+.request-summary-card.status-running { border-left-color: var(--accent); }
+.request-node.status-ready,
+.request-summary-card.status-ready { border-left-color: var(--success); }
 .request-node.status-retrying,
-.request-node.status-waiting { border-left-color: var(--warning); }
-.request-node.status-needs_action { border-left-color: var(--danger); }
+.request-node.status-waiting,
+.request-summary-card.status-retrying,
+.request-summary-card.status-waiting { border-left-color: var(--warning); }
+.request-node.status-needs_action,
+.request-summary-card.status-needs_action { border-left-color: var(--danger); }
 .request-node.status-successful { opacity: .8; border-left-color: var(--success); }
+.request-summary-card.status-successful { border-left-color: var(--success); }
+/* Summary tiles keep full opacity; a thicker colored edge carries the tint. */
+.request-summary-card.status-running,
+.request-summary-card.status-ready,
+.request-summary-card.status-retrying,
+.request-summary-card.status-waiting,
+.request-summary-card.status-needs_action,
+.request-summary-card.status-successful { border-left-width: 3px; }
 .request-node-main {
   display: flex;
   align-items: center;

@@ -171,3 +171,30 @@ def guess_lane_preset(active_states: Iterable[str]) -> str | None:
         if current == tuple(s.lower() for s in preset.active_states):
             return preset.name
     return None
+
+
+# Lanes the shipped stage-contract validator (orchestrator/contracts.py)
+# enforces: the DEFAULT preset's active lanes plus the legacy `Learn`
+# name — the pre-rename spelling of Document that existing boards keep.
+# Boards with any other active lane (deep preset's Intake/Research/Plan/
+# Review/Build/QA, or user-defined lanes) carry their own prompt-encoded
+# gates, so enforcing the default section lists against them would rewind
+# tickets for sections their prompts never asked for.
+_CONTRACT_LANES = frozenset(
+    {state.lower() for state in DEFAULT_PRESET.active_states} | {"learn"}
+)
+
+
+def board_uses_default_contracts(
+    active_states: "tuple[str, ...] | list[str]",
+) -> bool:
+    """True when every active lane belongs to the default-preset lane set.
+
+    Workflow-domain concern (it validates lane names against the default
+    preset), so it lives here rather than in the orchestrator layer that
+    consumes it; `orchestrator/contracts.py` re-exports it for backwards
+    compatibility.
+    """
+    return all(
+        (state or "").strip().lower() in _CONTRACT_LANES for state in active_states
+    )

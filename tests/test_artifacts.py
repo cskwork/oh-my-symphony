@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import symphony.artifacts as artifacts_module
+from tests._win_skips import requires_symlink_privilege
 from symphony.artifacts import (
     DEFAULT_MAGIC_DIR,
     ArtifactStore,
@@ -125,6 +126,7 @@ class TestCollect:
         names = sorted(r.name for r in store.list_for("T-1"))
         assert names == ["a-2.txt", "a.txt"]
 
+    @requires_symlink_privilege
     def test_skips_hidden_and_symlinks(self, tmp_path: Path) -> None:
         workspace = _make_workspace(tmp_path, {"real.txt": b"x", ".hidden": b"h"})
         outside = tmp_path / "outside.txt"
@@ -352,6 +354,7 @@ def test_file_growing_during_copy_is_billed_and_capped(tmp_path: Path) -> None:
     assert not (store.root / "T-1" / "files" / "grow.bin").exists()
 
 
+@requires_symlink_privilege
 def test_sweep_skips_symlinked_ticket_directories(tmp_path: Path) -> None:
     """A planted link must not be followed — explicitly, not by rmtree luck."""
     store = _store(tmp_path)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -125,7 +126,30 @@ def test_health_reports_starting_before_first_tick() -> None:
 
     assert health["status"] == "starting"
     assert health["tick"]["last_completed_at"] is None
-    assert health["workflow_path"] == "/tmp/no.md"
+    # Rendered with native separators (`\tmp\no.md` on Windows).
+    assert health["workflow_path"] == str(Path("/tmp/no.md"))
+    assert health["service_instance_id"] is None
+
+
+def test_health_consumes_service_instance_id_and_reports_process_pid(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SYMPHONY_SERVICE_INSTANCE_ID", "instance-a")
+
+    health = _orch().health()
+
+    assert "SYMPHONY_SERVICE_INSTANCE_ID" not in os.environ
+    assert health["service_instance_id"] == "instance-a"
+    assert health["orchestrator_pid"] == os.getpid()
+
+
+def test_health_discards_oversized_service_instance_id(monkeypatch) -> None:
+    monkeypatch.setenv("SYMPHONY_SERVICE_INSTANCE_ID", "x" * 129)
+
+    health = _orch().health()
+
+    assert "SYMPHONY_SERVICE_INSTANCE_ID" not in os.environ
+    assert health["service_instance_id"] is None
 
 
 def test_snapshot_includes_health_summary() -> None:
@@ -246,7 +270,8 @@ async def test_lease_conflict_cancels_running_worker(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------
 
 
-async def test_health_endpoint_returns_status() -> None:
+async def test_health_endpoint_returns_status(monkeypatch) -> None:
+    monkeypatch.setenv("SYMPHONY_SERVICE_INSTANCE_ID", "instance-http")
     orch = _orch()
     app = build_app(orch)
     client = TestClient(TestServer(app))
@@ -256,7 +281,9 @@ async def test_health_endpoint_returns_status() -> None:
         assert resp.status == 200
         data = await resp.json()
         assert data["status"] == "starting"
-        assert data["workflow_path"] == "/tmp/no.md"
+        assert data["workflow_path"] == str(Path("/tmp/no.md"))
+        assert data["service_instance_id"] == "instance-http"
+        assert data["orchestrator_pid"] == os.getpid()
         assert data["version"]
         assert data["tick"]["alive"] is False
         assert data["counts"] == {"running": 0, "retrying": 0}

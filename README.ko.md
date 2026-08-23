@@ -761,6 +761,36 @@ JSON API 엔드포인트:
 | POST   | `/api/v1/{id}/pause` `/resume`    | 실행 중 워커 보류 / 재개                      |
 | POST   | `/api/v1/issues/{id}/skip-document` | idle Document 티켓을 Human Review로 이동 (구 별칭: `/skip-learn`) |
 
+#### 리버스 프록시·터널 보안
+
+cloudflared, ngrok, nginx 같은 프록시로 보드를 공개할 때는 공개 origin을
+허용하고 모든 운영자 `/api/` 요청에 bearer token을 요구하는 구성이 안전하다:
+
+```bash
+export SYMPHONY_TRUSTED_ORIGINS=https://symphony.example.com
+export SYMPHONY_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+symphony ./WORKFLOW.md --host 0.0.0.0 --port 9999
+
+curl -H "Authorization: Bearer $SYMPHONY_API_TOKEN" \
+  http://127.0.0.1:9999/api/v1/state
+```
+
+토큰이 설정되면 내장 웹 앱은 첫 `401` 응답 뒤 토큰을 요청하고, 현재 탭의
+`sessionStorage`에만 저장한 뒤 API 요청과 Chat WebSocket에 자동으로 붙인다.
+값이 없거나 공백뿐이면 기존 루프백 기본 동작을 유지한다. 공백 없는 임의의 강한
+값을 사용하고 `WORKFLOW.md`, 셸 기록, 스크린샷, 로그에는 남기지 않는다.
+`symphony doctor`에서 토큰 게이트 상태와 일치할 수 없는 값을 확인할 수 있다.
+여러 origin은 쉼표로 구분한다. 호스트 이름만 쓰면 모든 scheme/port와 일치하고,
+`*`는 모든 origin을 신뢰하므로 피하는 편이 안전하다. 브라우저는 WebSocket
+handshake에 Authorization 헤더를 넣을 수 없어 Chat 연결에서 토큰을 한 번
+`?token=`으로 전달한다. 프록시·접근 로그에서 query string을 제외하거나
+마스킹하고, 가능하면 Cloudflare Access 같은 상위 인증 계층도 함께 사용한다.
+관리형 서비스 제어기는 `/api/v1/health`에만 유효한 별도의 실행별 임의 capability를
+사용하며 운영자 API token을 저장하거나 재사용하지 않는다.
+관리형 시작은 이 capability를 256비트 임의 값으로 생성한다. health capability
+헤더는 URL-safe 32–128자만 허용하므로 짧거나 형식이 잘못된 수동 service ID는
+bearer 인증을 우회할 수 없다.
+
 ### CLI Kanban TUI (primary UI)
 
 ```bash

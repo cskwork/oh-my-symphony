@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -173,7 +174,59 @@ def clamp_run_history_limit(limit: int) -> int:
     return max(1, min(int(limit), 200))
 
 
+def _pid_alive_win32(pid: int) -> bool:
+    """Windows liveness probe: OpenProcess + GetExitCodeProcess.
+
+    ``os.kill(pid, 0)`` cannot answer this question on Windows — every
+    outcome lands in the generic ``OSError`` bucket, which the POSIX
+    mapping below reads as "alive". Probe the process object directly:
+
+    - ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`` fails with
+      ``ERROR_INVALID_PARAMETER`` (87) for a pid the kernel no longer
+      knows → dead. ``ERROR_ACCESS_DENIED`` (5) means the process
+      exists but belongs to another context → conservatively alive
+      (the safe direction for lease honoring is to wait out the TTL).
+    - ``GetExitCodeProcess == STILL_ACTIVE (259)`` → alive; any other
+      exit code means the process has terminated and only an open
+      handle keeps the pid resolvable → dead.
+
+    The theoretical "process legitimately exited with code 259" case
+    reads as alive; the lease then lapses via TTL — acceptable for a
+    best-effort liveness probe. Handles are always closed; the access
+    right is query-only, so no privilege escalation is involved.
+    """
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_ACCESS_DENIED = 5
+
+    # These attributes are only defined by ctypes on Windows. Resolve them
+    # dynamically so Linux Pyright can analyze this guarded helper; if an
+    # unusual Windows runtime lacks either API, conservatively honor the lease.
+    win_dll = getattr(ctypes, "WinDLL", None)
+    get_last_error = getattr(ctypes, "get_last_error", None)
+    if win_dll is None or get_last_error is None:
+        return True
+    kernel32 = win_dll("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION, False, ctypes.c_ulong(pid)
+    )
+    if not handle:
+        return get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            # Cannot prove dead — honor the lease until TTL.
+            return True
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _pid_alive_win32(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

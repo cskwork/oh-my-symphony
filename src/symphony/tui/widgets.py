@@ -154,8 +154,22 @@ class IssueCard(Static):
             line.append(" ●", style="bold green")
         elif status.runtime == "retrying":
             line.append(" ↻", style="bold yellow")
+            # The compact line is the operator's default view — a bare ↻
+            # hides why the run is retrying. Mirror the rich card's 40-char
+            # error preview so the cause is visible without flipping density.
+            if status.error:
+                line.append(f" {_truncate(status.error, 40)}", style="dim red")
         elif status.runtime == "completed":
             line.append(" ✓", style="bold green")
+        # Stage-routed boards dispatch different backends per lane; a short
+        # colored chip after the runtime marker says who is on the ticket.
+        # Four letters, not one — c/c would collide between codex/claude.
+        if (
+            status.runtime in ("running", "retrying")
+            and status.agent_kind
+        ):
+            agent_color = AGENT_COLOR.get(status.agent_kind, "white")
+            line.append(f" {status.agent_kind[:4]}", style=f"bold {agent_color}")
         if issue.priority:
             line.append(f" P{issue.priority}", style="bright_red bold")
         if status.attention:

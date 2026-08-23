@@ -92,7 +92,13 @@ def sanitize_artifact_name(raw: str) -> str:
     Path separators become ``__`` so nested workspace layouts stay
     distinguishable; anything outside a conservative charset becomes ``_``.
     """
-    parts = [p for p in Path(raw).parts if p not in ("", ".", "..", "/")]
+    # `pathlib` renders the root separator of a Windows path as "\\" in
+    # `parts` even when the input used "/", so filter both separators:
+    # a surviving root part would be rewritten to a stray "_" instead of
+    # being dropped (POSIX parts never contain a bare "\\").
+    parts = [
+        p for p in Path(raw).parts if p not in ("", ".", "..", "/", "\\")
+    ]
     flat = "__".join(parts) if parts else ""
     # NFC so the name written to disk, stored in the index, and asked for over
     # HTTP compare equal on byte-exact filesystems (macOS hands back NFD).

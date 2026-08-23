@@ -267,7 +267,9 @@ def test_web_chat_multi_session_contract() -> None:
     assert "listing.default_agent_kind" in js
     assert "function focusChatSocket(sessionId)" in js
     assert "JSON.stringify({ type: 'focus', session_id: sessionId || null })" in js
-    assert "?session=${encodeURIComponent(chatState.currentId)}" in js
+    # The WS URL builder encodes the focused session (and, in token mode,
+    # the `?token=` handshake credential) as query parameters.
+    assert "params.push(`session=${encodeURIComponent(chatState.currentId)}`)" in js
     assert ".chat-session-bar" in css
     assert ".chat-tab.active" in css
     assert ".chat-tab-dot.busy" in css
@@ -297,6 +299,46 @@ def test_web_chat_font_controls_contract() -> None:
     assert "function buildFontControls(view)" in js
     assert ".chat-font-controls" in css
     assert "font-size: inherit" in css
+
+
+def test_web_api_token_prompt_contract() -> None:
+    """M6 — SYMPHONY_API_TOKEN mode must not brick the shipped SPA.
+
+    The central fetch attaches a stored bearer on every request, the chat
+    WebSocket appends `?token=` (browsers cannot set WS headers), and a
+    401 surfaces a dismissible prompt instead of a silently dead board.
+    A rejected stored token is dropped and the prompt re-shown once.
+    """
+    js = _script_bundle()
+    css = (STATIC_ROOT / "style.css").read_text(encoding="utf-8")
+
+    assert "symphony.apiToken" in js
+    assert "function withAuthHeaders(headers)" in js
+    assert "Authorization: `Bearer ${token}`" in js
+    assert "if (res.status === 401) handleApiUnauthorized();" in js
+    # WS handshake carries the token as a query parameter.
+    assert "params.push(`token=${encodeURIComponent(token)}`)" in js
+    # Dismissible inline prompt: password input + connect, i18n'd both ways.
+    assert "id: 'api-token-banner-root'" in js
+    assert "type: 'password'" in js
+    assert "storeApiToken(null);" in js
+    assert "authBannerState.dismissed" in js
+    assert "'auth.tokenBannerTitle': 'This board requires an API token'" in js
+    assert "'auth.tokenBannerTitle': '이 보드에는 API 토큰이 필요합니다'" in js
+    assert "'auth.tokenSave': 'Connect'" in js
+    assert "'auth.tokenSave': '연결'" in js
+    assert ".api-token-banner" in css
+    assert ".api-token-input" in css
+
+
+def test_web_stale_board_gates_keyboard_activation() -> None:
+    """L4 — while the board is dimmed stale, Enter/Space on focusable
+    cards and commit rows must not act on frozen data (mouse is already
+    blocked via pointer-events)."""
+    js = _script_bundle()
+
+    assert "function boardIsStale()" in js
+    assert "if (boardIsStale()) return;" in js
 
 
 def test_blocked_recovery_ui_uses_fix_ticket_language() -> None:

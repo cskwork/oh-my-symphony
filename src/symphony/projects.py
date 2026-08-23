@@ -9,6 +9,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -622,6 +623,139 @@ def _validate_target_conflicts(repo: Path, workflow_path: Path) -> None:
         # Existing symlinks and real skill directories are never overwritten.
 
 
+def _mklink_junction(link: Path, target: Path) -> bool:
+    """Create a directory junction through ``cmd``'s ``mklink /J``.
+
+    The paths travel via a one-shot batch file taking ``"%~1"``/``"%~2"``
+    (the same trick ``scripts/symphony-setup-worktree.sh`` uses): batch
+    parameters keep properly quoted arguments — including spaces — intact,
+    while words interpolated inline into ``cmd /c mklink ...`` would be
+    re-parsed as cmd syntax.
+    """
+    fd, bat = tempfile.mkstemp(prefix="symphony-mklink-", suffix=".bat")
+    try:
+        with os.fdopen(fd, "w", newline="") as handle:
+            handle.write('@echo off\r\nmklink /J "%~1" "%~2"\r\n')
+        made = subprocess.run(
+            ["cmd", "/d", "/c", bat, str(link), str(target)],
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        try:
+            os.unlink(bat)
+        except OSError:
+            pass
+    return made.returncode == 0
+
+
+def _link_skill_dir(link: Path) -> bool:
+    """Expose ``skills/symphony-skill`` at ``.claude/skills/symphony-skill``.
+
+    Returns whether a link (or copy) was created. POSIX keeps the relative
+    symlink the source checkout ships (it may dangle until the bundle
+    exists). On Windows an unprivileged ``os.symlink`` fails with
+    ``WinError 1314`` (creating symlinks needs SeCreateSymbolicLinkPrivilege
+    or Developer Mode), so the same directory is linked with a junction
+    instead — junctions need no elevation but require an absolute, existing
+    target: a dangling junction is opaque to Git (unlike a dangling POSIX
+    symlink, which commits as a mode-120000 entry), so when the bundle is
+    absent no link is created at all. A verbatim tree copy is the last
+    resort when even junction creation is blocked.
+    """
+    relative = Path("../../skills/symphony-skill")
+    if os.name != "nt":
+        link.symlink_to(relative, target_is_directory=True)
+        return True
+    absolute = (link.parent / relative).resolve()
+    if not absolute.is_dir():
+        return False
+    try:
+        import _winapi
+    except ImportError:
+        # PyPy on win32 has no _winapi — fall through to mklink/copytree.
+        _winapi = None  # type: ignore[assignment]
+    if _winapi is not None:
+        try:
+            _winapi.CreateJunction(str(absolute), str(link))
+            return True
+        except OSError:
+            pass
+    if _mklink_junction(link, absolute):
+        return True
+    shutil.copytree(absolute, link)
+    return True
+
+
+def _write_runtime_git_excludes(repo: Path, workflow_path: Path) -> None:
+    """Keep per-machine runtime state out of ``git status`` for new projects.
+
+    * the file tracker's lock directory (``<board>/.locks/``) — created on
+      first board mutation, untracked operational state like the artifact
+      magic dir;
+    * on win32, the ``.claude/skills/symphony-skill`` junction — it exists
+      so Claude Code discovers the skill on this machine, and is relinked
+      per machine rather than committed.
+    """
+    entries: list[str] = []
+    board, _workspace = _workflow_resources(workflow_path, strict=False)
+    if board is not None and _inside(board, repo) and board != repo:
+        entries.append(f"/{board.relative_to(repo)}/.locks/")
+    else:
+        entries.append("/kanban/.locks/")
+    if os.name == "nt":
+        entries.append("/.claude/skills/symphony-skill")
+    _ensure_local_git_excludes(repo, tuple(entries))
+
+
+def _is_windows_skill_junction(repo: Path, path: Path) -> bool:
+    """True for the win32 ``.claude/skills/symphony-skill`` junction.
+
+    Git for Windows follows directory junctions when ``core.symlinks`` is
+    false (the default), so staging the junction commits the skill bundle's
+    *contents* under ``.claude/skills/...`` — diverging from POSIX, where
+    the link commits as a single mode-120000 entry. The junction stays
+    machine-local instead (see ``_ensure_local_git_excludes``).
+    """
+    if os.name != "nt":
+        return False
+    if path != repo / ".claude" / "skills" / "symphony-skill":
+        return False
+    try:
+        return path.is_junction()
+    except OSError:
+        return False
+
+
+def _ensure_local_git_excludes(repo: Path, entries: tuple[str, ...]) -> None:
+    """Append missing entries to the repository's local ``info/exclude``.
+
+    Same mechanism the orchestrator uses for the artifact magic dir: the
+    common-dir exclude covers the host checkout and every linked worktree
+    while leaving the user's checked-in .gitignore untouched. Best-effort —
+    a non-git or unwritable repository simply skips the rule.
+    """
+    try:
+        common = _git_common_dir(repo)
+    except ProjectError:
+        return
+    exclude = common / "info" / "exclude"
+    try:
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        lines = {line.strip() for line in existing.splitlines()}
+        additions = [entry for entry in entries if entry not in lines]
+        if not additions:
+            return
+        payload = existing
+        if payload and not payload.endswith("\n"):
+            payload += "\n"
+        payload += "".join(f"{entry}\n" for entry in additions)
+        common.joinpath("info").mkdir(parents=True, exist_ok=True)
+        exclude.write_text(payload, encoding="utf-8")
+    except OSError:
+        return
+
+
 def _bootstrap_missing(
     source: Path,
     repo: Path,
@@ -685,8 +819,8 @@ def _bootstrap_missing(
     _ensure_directory(skills_dir, created_dirs)
     link = skills_dir / "symphony-skill"
     if link not in tracked_paths and not link.exists() and not link.is_symlink():
-        link.symlink_to(Path("../../skills/symphony-skill"), target_is_directory=True)
-        created_files.append(link)
+        if _link_skill_dir(link):
+            created_files.append(link)
 
 
 def _workflow_resources(
@@ -743,6 +877,12 @@ def _cleanup_created(created_files: list[Path], created_dirs: list[Path]) -> Non
             path.unlink()
         except FileNotFoundError:
             pass
+        except OSError:
+            # The win32 copytree fallback for the skill link is a real
+            # directory, which unlink refuses. Cleanup must never mask
+            # the bootstrap error that brought us here, so failures are
+            # swallowed either way.
+            shutil.rmtree(path, ignore_errors=True)
     for path in reversed(created_dirs):
         try:
             path.rmdir()
@@ -903,8 +1043,16 @@ def _create_or_adopt_project_locked(
         if not workflow_path.is_file():
             raise ProjectError(f"workflow file not found: {workflow_path}")
         _validate_resource_ownership(workflow_path, repo, projects)
+        _write_runtime_git_excludes(repo, workflow_path)
 
-        relative_files = [str(path.relative_to(repo)) for path in created_files]
+        # The win32 skill junction is machine-local state, never content to
+        # publish: Git for Windows follows junctions and would commit the
+        # bundle contents (see _is_windows_skill_junction).
+        relative_files = [
+            str(path.relative_to(repo))
+            for path in created_files
+            if not _is_windows_skill_junction(repo, path)
+        ]
         if relative_files:
             # Existing repositories may intentionally ignore operator files.
             # Force-add only paths this operation created; unrelated ignored or

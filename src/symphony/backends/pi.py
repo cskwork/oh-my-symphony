@@ -37,7 +37,6 @@ import asyncio
 import json
 import os
 import shlex
-import time
 from collections import deque
 from typing import Any
 
@@ -68,6 +67,12 @@ from . import (
     _is_valid_session_id,
     redact_session_id,
 )
+from .per_turn import (
+    MAX_LINE_BYTES,
+    _emit_event,
+    _reap_process,
+    _stderr_tail_blob,
+)
 
 
 log = get_logger()
@@ -81,15 +86,6 @@ PENDING_SESSION_ID = "pending"
 _PROGRESS_EVENT_TYPES = frozenset(
     {"message_start", "message_update", "message_end", "turn_start", "turn_end"}
 )
-
-# StreamReader line-buffer limit for the subprocess pipes. The asyncio
-# default of 64 KiB overflows on JSON-mode events whose `message_update` or
-# tool-result payload exceeds that on a single line. Matches codex.py.
-MAX_LINE_BYTES = 10 * 1024 * 1024
-
-
-def _utc_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 class PiBackend(BaseAgentBackend):
@@ -534,10 +530,7 @@ class PiBackend(BaseAgentBackend):
 
     def _stderr_blob(self) -> str:
         """Compact stderr tail for inclusion in failure messages (≤400 chars)."""
-        if not self._stderr_tail:
-            return ""
-        joined = " | ".join(self._stderr_tail)
-        return joined if len(joined) <= 400 else joined[-400:]
+        return _stderr_tail_blob(self._stderr_tail)
 
     async def _raise_nonzero_exit(self, rc: int) -> None:
         """Turn a non-zero CLI status into a backend-specific failure."""
@@ -585,9 +578,7 @@ class PiBackend(BaseAgentBackend):
 
     async def _reap(self, proc: asyncio.subprocess.Process) -> None:
         """Tear down a process group or surface ambiguous cleanup."""
-        result = await terminate_process_tree(proc)
-        if result is None and proc.returncode is None:
-            raise RuntimeError("backend process cleanup could not be confirmed")
+        await _reap_process(proc)
 
     def _update_usage(self, usage: dict[str, Any]) -> None:
         """Accumulate Pi's per-message Usage into the running totals."""
@@ -605,22 +596,14 @@ class PiBackend(BaseAgentBackend):
         self._latest_usage["total_tokens"] += billed_in + out_t
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
-        try:
-            await self._on_event(
-                {
-                    "event": event,
-                    "timestamp": _utc_iso(),
-                    "payload": redact_session_id(
-                        payload if isinstance(payload, dict) else {"data": payload},
-                        None if event == EVENT_SESSION_STARTED else self._session_id,
-                    ),
-                    "usage": dict(self._latest_usage),
-                    "rate_limits": None,
-                    "agent_pid": self.pid,
-                }
-            )
-        except Exception as exc:
-            log.warning("event_callback_failed", error=str(exc))
+        await _emit_event(
+            self._on_event,
+            event,
+            payload,
+            usage=self._latest_usage,
+            agent_pid=self.pid,
+            redact_session=None if event == EVENT_SESSION_STARTED else self._session_id,
+        )
 
 
 def _extract_text(message: dict[str, Any]) -> str:

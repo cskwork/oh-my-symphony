@@ -128,6 +128,37 @@ def check_port(
     )
 
 
+def check_api_token_env(cfg: ServiceConfig) -> CheckResult:
+    """Advisory: `SYMPHONY_API_TOKEN` with internal whitespace never matches.
+
+    The bearer parse splits the Authorization header on whitespace and
+    requires exactly two words, so a token that itself contains a space or
+    tab can never authenticate — every request 401s and the web board sits
+    behind an unfixable prompt. Leading/trailing whitespace is fine (the
+    value is stripped); internal whitespace is the footgun. Kept as a
+    warning, not a failure: the env var still gates correctly for clients
+    that never authenticate, and the operator may be mid-edit.
+    """
+    name = "server.api_token"
+    del cfg  # env-only check; the signature keeps the common shape
+    raw = os.environ.get("SYMPHONY_API_TOKEN")
+    if raw is None:
+        return CheckResult(name, "pass", "unset (no credential gate)")
+    token = raw.strip()
+    if not token:
+        return CheckResult(name, "pass", "blank (behaves as unset)")
+    if any(ch.isspace() for ch in token):
+        return CheckResult(
+            name,
+            "warn",
+            "SYMPHONY_API_TOKEN contains internal whitespace — clients send"
+            " it as one bearer word, so this value can never match and every"
+            " /api/ request will 401; remove the inner spaces (or fix a"
+            " mis-quoted export)",
+        )
+    return CheckResult(name, "pass", "set; bearer token required on /api/")
+
+
 def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
     kind = cfg.agent.kind
     if kind == "codex":
@@ -151,7 +182,18 @@ def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
 
     name = f"agent.kind={kind}"
     try:
-        argv = shlex.split(command)
+        if _IS_WIN32:
+            # POSIX-mode shlex eats backslashes: `D:\tools\python.exe`
+            # would reach shutil.which as `D:toolspython.exe` and the
+            # preflight bogus-fails with "not on $PATH". Whitespace mode
+            # keeps backslashes (and the quotes shlex leaves attached to
+            # a quoted token), so strip those surrounding quotes from the
+            # binary before resolving it.
+            argv = shlex.split(command, posix=False)
+            if argv:
+                argv[0] = argv[0].strip("\"'")
+        else:
+            argv = shlex.split(command)
     except ValueError as exc:
         return CheckResult(name, "fail", f"command not parseable: {exc}")
     if not argv:
@@ -1023,6 +1065,7 @@ def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]
     return [
         check_source_repository(cfg),
         check_port(cfg, host=host),
+        check_api_token_env(cfg),
         check_shell(),
         check_stage_turn_budget(cfg),
         check_agent_cli(cfg),

@@ -7,6 +7,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator, RunningEntry
 from symphony.orchestrator.constants import ESCALATION_MAX_ATTEMPTS
@@ -408,3 +410,158 @@ async def test_skip_document_refuses_a_board_with_no_terminal_lane(monkeypatch):
 
     assert ok is False
     assert "no terminal lane" in message
+
+
+# ---------------------------------------------------------------------------
+# M7 — shared tracker client close-race protection
+# ---------------------------------------------------------------------------
+
+
+class _FakeTrackerClient:
+    """Duck-typed tracker client whose pool can be closed mid-flight."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.fetches = 0
+
+    def fetch_candidate_issues(self) -> list[Issue]:
+        if self.closed:
+            raise RuntimeError(
+                "Cannot send a request, as the client has been closed."
+            )
+        self.fetches += 1
+        return []
+
+    def record_agent_kind(self, identifier: str, agent_kind: str) -> None:
+        if self.closed:
+            raise RuntimeError(
+                "Cannot send a request, as the client has been closed."
+            )
+
+    def record_last_agent_kind(self, identifier: str, agent_kind: str) -> None:
+        if self.closed:
+            raise RuntimeError(
+                "Cannot send a request, as the client has been closed."
+            )
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_shared_tracker_client_reuses_and_rebuilds_on_cfg_change(monkeypatch):
+    """Hot reload (new ServiceConfig identity) still rebuilds the client."""
+    import symphony.orchestrator.core as core_module
+
+    orch = _orch()
+    cfg_a = _make_config()
+    cfg_b = _make_config()
+    built: list[_FakeTrackerClient] = []
+
+    def fake_build(_cfg):
+        client = _FakeTrackerClient()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(core_module, "build_tracker_client", fake_build)
+
+    first = orch._shared_tracker_client(cfg_a)
+    assert orch._shared_tracker_client(cfg_a) is first
+    assert orch._tracker_call_candidates(cfg_a) == []
+    assert first.fetches == 1
+
+    second = orch._shared_tracker_client(cfg_b)
+    assert second is not first
+    assert built == [first, second]
+
+
+def test_tracker_bridge_raises_clean_error_when_pool_closes_mid_call(monkeypatch):
+    """A stop() racing a bridge call surfaces a retryable error, logged once."""
+    import symphony.orchestrator.core as core_module
+    from symphony.orchestrator.core import _TrackerClientUnavailable
+
+    orch = _orch()
+    cfg = _make_config()
+    client = _FakeTrackerClient()
+    monkeypatch.setattr(core_module, "build_tracker_client", lambda _cfg: client)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        core_module.log, "warning", lambda event, **_f: warnings.append(event)
+    )
+
+    assert orch._tracker_call_candidates(cfg) == []
+
+    # stop() closed the pool while the bridge held the client reference.
+    client.closed = True
+    with pytest.raises(_TrackerClientUnavailable):
+        orch._tracker_call_candidates(cfg)
+    with pytest.raises(_TrackerClientUnavailable):
+        orch._tracker_call_candidates(cfg)
+
+    assert warnings == ["tracker_client_close_race"]
+
+
+def test_tracker_checkout_refuses_to_rebuild_after_stop(monkeypatch):
+    """The closing/closed generation flags block post-stop rebuilds."""
+    import symphony.orchestrator.core as core_module
+    from symphony.orchestrator.core import _TrackerClientUnavailable
+
+    orch = _orch()
+    cfg = _make_config()
+    built: list[_FakeTrackerClient] = []
+
+    def fake_build(_cfg):
+        client = _FakeTrackerClient()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(core_module, "build_tracker_client", fake_build)
+
+    assert orch._tracker_call_candidates(cfg) == []
+    assert len(built) == 1
+
+    # The stop() window: closing, not yet fully closed.
+    orch._tracker_client_closing = True
+    with pytest.raises(_TrackerClientUnavailable):
+        orch._tracker_call_candidates(cfg)
+    # Fully closed past stop().
+    orch._tracker_client_closed = True
+    with pytest.raises(_TrackerClientUnavailable):
+        orch._tracker_call_candidates(cfg)
+
+    # No rebuild raced the shutdown — the original client is the only one.
+    assert len(built) == 1
+
+
+def test_record_agent_kind_bridges_swallow_close_race(monkeypatch):
+    """Best-effort record calls are silently skipped when stop() races."""
+    import symphony.orchestrator.core as core_module
+
+    orch = _orch()
+    cfg = _make_config()
+    client = _FakeTrackerClient()
+    client.closed = True
+    monkeypatch.setattr(core_module, "build_tracker_client", lambda _cfg: client)
+
+    # Neither raises despite the closed pool underneath.
+    orch._tracker_call_record_agent_kind(cfg, "MT-1", "codex")
+    orch._tracker_call_record_last_agent_kind(cfg, "MT-1", "codex")
+
+
+async def test_stop_closes_shared_client_and_gates_late_bridges(monkeypatch):
+    """End to end: stop() closes the pool; late bridges fail retryably."""
+    import symphony.orchestrator.core as core_module
+    from symphony.orchestrator.core import _TrackerClientUnavailable
+
+    orch = _orch()
+    cfg = _make_config()
+    client = _FakeTrackerClient()
+    monkeypatch.setattr(core_module, "build_tracker_client", lambda _cfg: client)
+
+    assert await asyncio.to_thread(orch._tracker_call_candidates, cfg) == []
+    assert not client.closed
+
+    await orch.stop()
+
+    assert client.closed
+    with pytest.raises(_TrackerClientUnavailable):
+        await asyncio.to_thread(orch._tracker_call_candidates, cfg)

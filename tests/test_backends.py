@@ -15,12 +15,15 @@ import shutil
 import signal
 import shlex
 import subprocess
+import sys
 import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests._win_skips import requires_symlink_privilege
 
 import symphony._shell as shell_module
 import symphony.backends.claude_code as claude_module
@@ -414,6 +417,7 @@ async def test_codex_stop_reaps_with_safe_proc_wait(
     backend._process = proc  # type: ignore[assignment]
     calls: list[int] = []
     signals: list[tuple[int, int]] = []
+    taskkills: list[int] = []
 
     async def fake_safe_proc_wait(process, *, timeout=None):
         calls.append(process.pid)
@@ -426,13 +430,24 @@ async def test_codex_stop_reaps_with_safe_proc_wait(
         "_signal_process_group",
         lambda pid, sig: signals.append((pid, sig)) or True,
     )
+    if sys.platform == "win32":
+        # Stop the unit test from taskkill-ing an unrelated real pid.
+        monkeypatch.setattr(
+            shell_module,
+            "_taskkill_tree",
+            lambda pid, *, force=True: taskkills.append(pid) or True,
+        )
 
     await backend.stop()
 
-    assert proc.terminated is False
-    assert proc.killed is False
-    assert signals == [(proc.pid, signal.SIGTERM)]
     assert calls == [proc.pid]
+    if sys.platform == "win32":
+        assert taskkills == [proc.pid]
+        assert signals == []
+    else:
+        assert proc.terminated is False
+        assert proc.killed is False
+        assert signals == [(proc.pid, signal.SIGTERM)]
 
 
 @pytest.mark.asyncio
@@ -450,6 +465,7 @@ async def test_gemini_stop_reaps_with_safe_proc_wait(
     backend._active_proc = proc  # type: ignore[assignment]
     calls: list[int] = []
     signals: list[tuple[int, int]] = []
+    taskkills: list[int] = []
 
     async def fake_safe_proc_wait(process, *, timeout=None):
         calls.append(process.pid)
@@ -462,13 +478,24 @@ async def test_gemini_stop_reaps_with_safe_proc_wait(
         "_signal_process_group",
         lambda pid, sig: signals.append((pid, sig)) or True,
     )
+    if sys.platform == "win32":
+        # Stop the unit test from taskkill-ing an unrelated real pid.
+        monkeypatch.setattr(
+            shell_module,
+            "_taskkill_tree",
+            lambda pid, *, force=True: taskkills.append(pid) or True,
+        )
 
     await backend.stop()
 
-    assert proc.terminated is False
-    assert proc.killed is False
-    assert signals == [(proc.pid, signal.SIGTERM)]
     assert calls == [proc.pid]
+    if sys.platform == "win32":
+        assert taskkills == [proc.pid]
+        assert signals == []
+    else:
+        assert proc.terminated is False
+        assert proc.killed is False
+        assert signals == [(proc.pid, signal.SIGTERM)]
 
 
 @pytest.mark.asyncio
@@ -486,6 +513,7 @@ async def test_pi_stop_reaps_with_safe_proc_wait(
     backend._active_proc = proc  # type: ignore[assignment]
     calls: list[int] = []
     signals: list[tuple[int, int]] = []
+    taskkills: list[int] = []
 
     async def fake_safe_proc_wait(process, *, timeout=None):
         calls.append(process.pid)
@@ -498,13 +526,24 @@ async def test_pi_stop_reaps_with_safe_proc_wait(
         "_signal_process_group",
         lambda pid, sig: signals.append((pid, sig)) or True,
     )
+    if sys.platform == "win32":
+        # Stop the unit test from taskkill-ing an unrelated real pid.
+        monkeypatch.setattr(
+            shell_module,
+            "_taskkill_tree",
+            lambda pid, *, force=True: taskkills.append(pid) or True,
+        )
 
     await backend.stop()
 
-    assert proc.terminated is False
-    assert proc.killed is False
-    assert signals == [(proc.pid, signal.SIGTERM)]
     assert calls == [proc.pid]
+    if sys.platform == "win32":
+        assert taskkills == [proc.pid]
+        assert signals == []
+    else:
+        assert proc.terminated is False
+        assert proc.killed is False
+        assert signals == [(proc.pid, signal.SIGTERM)]
 
 
 @pytest.mark.parametrize(
@@ -680,6 +719,11 @@ async def test_claude_run_turn_cancellation_terminates_active_subprocess(
     monkeypatch.setattr(
         claude_module, "terminate_process_tree", fake_terminate_process_tree
     )
+    # claude's _reap helper routes through per_turn._reap_process, which
+    # resolves terminate_process_tree in per_turn's namespace.
+    monkeypatch.setattr(
+        per_turn_module, "terminate_process_tree", fake_terminate_process_tree
+    )
     backend = ClaudeCodeBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
@@ -743,6 +787,10 @@ async def test_terminal_success_does_not_complete_when_inline_reap_is_unconfirme
         events.append(event)
 
     monkeypatch.setattr(module, "terminate_process_tree", _unconfirmed)
+    # claude's inline reap routes through per_turn._reap_process, which
+    # resolves terminate_process_tree in per_turn's namespace (pi overrides
+    # run_turn and uses its own binding; the extra patch is a no-op there).
+    monkeypatch.setattr(per_turn_module, "terminate_process_tree", _unconfirmed)
     backend = backend_cls(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_capture)
     )
@@ -1112,6 +1160,11 @@ async def test_pi_run_turn_cancellation_terminates_active_subprocess(
         fake_create_subprocess_exec,
     )
     monkeypatch.setattr(pi_module, "terminate_process_tree", fake_terminate_process_tree)
+    # pi's _reap helper routes through per_turn._reap_process, which
+    # resolves terminate_process_tree in per_turn's namespace.
+    monkeypatch.setattr(
+        per_turn_module, "terminate_process_tree", fake_terminate_process_tree
+    )
     backend = PiBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
@@ -2042,6 +2095,7 @@ def test_sandbox_uses_workspace_write_negatives() -> None:
     assert _sandbox_uses_workspace_write() is False
 
 
+@requires_symlink_privilege
 def test_scan_workspace_symlinks_collects_resolved_targets(tmp_path: Path) -> None:
     host = tmp_path / "host"
     host.mkdir()
@@ -2066,6 +2120,7 @@ def test_scan_workspace_symlinks_empty_when_no_symlinks(tmp_path: Path) -> None:
     assert _scan_workspace_symlinks(tmp_path) == []
 
 
+@requires_symlink_privilege
 def test_scan_workspace_symlinks_dedupes_across_roots(tmp_path: Path) -> None:
     host = tmp_path / "host_docs"
     host.mkdir()
@@ -2241,6 +2296,7 @@ def test_inject_writable_roots_only_substitutes_first_codex_token() -> None:
     assert _inject_writable_roots(cmd, ["/a"]) == cmd
 
 
+@requires_symlink_privilege
 def test_codex_start_command_prep_injects_when_symlinks_exist(
     tmp_path: Path,
 ) -> None:
@@ -2286,6 +2342,7 @@ def test_codex_start_command_prep_injects_when_symlinks_exist(
     assert str(host_docs.resolve()) in env["SYMPHONY_CODEX_WRITABLE_ROOTS"]
 
 
+@requires_symlink_privilege
 def test_codex_turn_payload_carries_symlink_writable_roots(tmp_path: Path) -> None:
     host_docs = tmp_path / "host_docs"
     host_docs.mkdir()
@@ -2329,6 +2386,7 @@ def test_codex_turn_payload_carries_symlink_writable_roots(tmp_path: Path) -> No
     assert params["sandboxPolicy"]["writableRoots"] == [str(host_docs.resolve())]
 
 
+@requires_symlink_privilege
 def test_codex_start_command_prep_noop_when_not_workspace_write(
     tmp_path: Path,
 ) -> None:
@@ -2387,6 +2445,7 @@ def test_codex_start_command_prep_noop_when_no_symlinks(tmp_path: Path) -> None:
     assert "SYMPHONY_CODEX_WRITABLE_ROOTS" not in env
 
 
+@requires_symlink_privilege
 def test_codex_start_command_prep_uses_env_var_for_wrapper(tmp_path: Path) -> None:
     """Wrapper script case: -c arg injection can't reach codex, so the env
     var is the only signal the wrapper has to honor."""

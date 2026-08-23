@@ -32,6 +32,7 @@ Conventions:
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import tempfile
@@ -106,7 +107,31 @@ log = get_logger()
 
 @contextmanager
 def _exclusive_lock(path: Path) -> Iterator[None]:
-    if os.name != "posix" or fcntl is None:
+    if os.name == "nt":
+        # fcntl is POSIX-only; the same exclusive cross-process lock is
+        # expressed with the Windows byte-range lock so concurrent board
+        # mutations serialize on Windows too. LK_NBLCK is polled because
+        # LK_LOCK gives up after ~10 one-second attempts.
+        import msvcrt
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+b") as lock:
+            lock.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise
+                    time.sleep(0.02)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    if fcntl is None:  # pragma: no cover - non-Windows fallback
         yield
         return
     path.parent.mkdir(parents=True, exist_ok=True)

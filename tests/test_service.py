@@ -1,12 +1,15 @@
 """Persistent run-state helpers for `symphony service`."""
 
 from __future__ import annotations
-import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import json
+import os
+import secrets
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Thread
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +33,10 @@ from symphony.service import (
 )
 
 
+SERVICE_CAPABILITY = "a" * 43
+OTHER_SERVICE_CAPABILITY = "b" * 43
+
+
 def _workflow(tmp_path: Path) -> Path:
     workflow = tmp_path / "WORKFLOW.md"
     workflow.write_text("---\ntracker: {kind: file}\n---\nbody\n", encoding="utf-8")
@@ -50,7 +57,11 @@ def _issue(identifier: str = "SMA-1") -> Issue:
 
 
 def _record(
-    workflow_path: Path, *, pid: int | None = 1234, port: int = 9999
+    workflow_path: Path,
+    *,
+    pid: int | None = 1234,
+    port: int = 9999,
+    service_instance_id: str | None = None,
 ) -> ServiceRecord:
     workflow_dir = workflow_path.parent
     return ServiceRecord(
@@ -62,6 +73,7 @@ def _record(
         log_path=workflow_dir / "log" / "symphony.log",
         started_at="2026-05-16T00:00:00Z",
         orchestrator_command=["symphony", str(workflow_path), "--port", str(port)],
+        service_instance_id=service_instance_id,
     )
 
 
@@ -77,12 +89,53 @@ def test_record_path_is_inside_workflow_run_directory(tmp_path: Path) -> None:
 
 def test_save_and_load_record_round_trip(tmp_path: Path) -> None:
     workflow = _workflow(tmp_path)
-    record = _record(workflow)
+    record = _record(workflow, service_instance_id="instance-a")
 
     save_record(record)
 
     loaded = load_record(workflow)
     assert loaded == record
+
+
+def test_load_legacy_record_without_service_instance_id(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path)
+    record = _record(workflow)
+    save_record(record)
+    path = record_path_for(workflow)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("service_instance_id", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_record(workflow)
+
+    assert loaded is not None
+    assert loaded.service_instance_id is None
+
+
+@pytest.mark.parametrize(
+    "malformed_instance_id",
+    [
+        pytest.param(True, id="boolean"),
+        pytest.param(1234, id="integer"),
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+        pytest.param("x" * 129, id="oversized"),
+    ],
+)
+def test_load_record_normalizes_malformed_service_instance_id(
+    tmp_path: Path, malformed_instance_id: object
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow))
+    path = record_path_for(workflow)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["service_instance_id"] = malformed_instance_id
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_record(workflow)
+
+    assert loaded is not None
+    assert loaded.service_instance_id is None
 
 
 def test_stale_record_is_reported_stopped(tmp_path: Path) -> None:
@@ -137,6 +190,64 @@ def test_service_status_uses_current_process_checker(
     assert status.state == "running"
 
 
+def test_stale_service_status_uses_recorded_instance_for_health_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    seen: list[tuple[str, int, Path, str | None]] = []
+
+    def _reachable(
+        host: str,
+        port: int,
+        served_workflow: str | Path,
+        *,
+        service_instance_id: str | None = None,
+    ) -> bool:
+        seen.append((host, port, Path(served_workflow), service_instance_id))
+        return service_instance_id == "instance-a"
+
+    monkeypatch.setattr(
+        service_module, "is_symphony_workflow_reachable", _reachable
+    )
+
+    status = service_status(workflow, is_running=lambda _pid: False)
+
+    assert status.state == "running"
+    assert status.api_reachable is True
+    assert seen == [("127.0.0.1", 9999, workflow.resolve(), "instance-a")]
+
+
+def test_stale_port_owner_hint_uses_recorded_instance_for_health_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    seen: list[tuple[str, int, Path, str | None]] = []
+
+    def _reachable(
+        host: str,
+        port: int,
+        served_workflow: str | Path,
+        *,
+        service_instance_id: str | None = None,
+    ) -> bool:
+        seen.append((host, port, Path(served_workflow), service_instance_id))
+        return service_instance_id == "instance-a"
+
+    monkeypatch.setattr(
+        service_module, "is_symphony_workflow_reachable", _reachable
+    )
+
+    hint = service_module.port_owner_hint(
+        workflow, 9999, is_running=lambda _pid: False
+    )
+
+    assert hint is not None
+    assert "recorded Symphony API responds" in hint
+    assert seen == [("127.0.0.1", 9999, workflow.resolve(), "instance-a")]
+
+
 def test_exact_workflow_probe_uses_health_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -174,6 +285,239 @@ def test_exact_workflow_probe_uses_health_identity(
         "timeout": 0.5,
         "limit": 4096,
     }
+
+
+def test_service_identity_probe_accepts_exact_instance_and_serving_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path).resolve()
+    monkeypatch.setattr(
+        service_module,
+        "_probe_json",
+        lambda *_args: {
+            "workflow_path": str(workflow),
+            "service_instance_id": SERVICE_CAPABILITY,
+            "orchestrator_pid": 5678,
+        },
+    )
+
+    identity = service_module.probe_service_endpoint_identity(
+        "127.0.0.1", 9999, workflow, SERVICE_CAPABILITY
+    )
+
+    assert identity is not None
+    assert identity.orchestrator_pid == 5678
+
+
+def test_service_identity_probe_sends_instance_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path).resolve()
+    seen: dict[str, object] = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return json.dumps(
+                {
+                    "workflow_path": str(workflow),
+                    "service_instance_id": SERVICE_CAPABILITY,
+                    "orchestrator_pid": 5678,
+                }
+            ).encode()
+
+    class Opener:
+        def open(self, request: object, **_kwargs: object) -> Response:
+            seen["instance_header"] = request.get_header(  # type: ignore[attr-defined]
+                "X-symphony-service-instance"
+            )
+            return Response()
+
+    monkeypatch.setattr(
+        service_module.urllib.request,
+        "build_opener",
+        lambda *_handlers: Opener(),
+    )
+
+    identity = service_module.probe_service_endpoint_identity(
+        "127.0.0.1", 9999, workflow, SERVICE_CAPABILITY
+    )
+
+    assert identity is not None
+    assert identity.orchestrator_pid == 5678
+    assert seen == {"instance_header": SERVICE_CAPABILITY}
+
+
+def test_service_identity_probe_rejects_weak_instance_without_http_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path).resolve()
+    monkeypatch.setattr(
+        service_module,
+        "_probe_json",
+        lambda *_args: pytest.fail("weak service instance IDs must not be probed"),
+    )
+
+    assert (
+        service_module.probe_service_endpoint_identity(
+            "127.0.0.1", 9999, workflow, "instance-a"
+        )
+        is None
+    )
+
+
+def test_probe_json_does_not_send_short_service_instance_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b"{}"
+
+    class Opener:
+        def open(self, request: object, **_kwargs: object) -> Response:
+            seen["instance_header"] = request.get_header(  # type: ignore[attr-defined]
+                "X-symphony-service-instance"
+            )
+            return Response()
+
+    monkeypatch.setattr(
+        service_module.urllib.request,
+        "build_opener",
+        lambda *_handlers: Opener(),
+    )
+
+    assert service_module._probe_json(
+        "127.0.0.1", 9999, "/api/v1/health", "instance-a"
+    ) == {}
+    assert seen == {"instance_header": None}
+
+
+@pytest.mark.parametrize(
+    ("service_instance_id", "served_instance_id"),
+    [
+        pytest.param(SERVICE_CAPABILITY, None, id="missing"),
+        pytest.param(SERVICE_CAPABILITY, "", id="empty"),
+        pytest.param(SERVICE_CAPABILITY, True, id="boolean"),
+        pytest.param(
+            SERVICE_CAPABILITY,
+            OTHER_SERVICE_CAPABILITY,
+            id="mismatch",
+        ),
+        pytest.param(SERVICE_CAPABILITY, "x" * 129, id="oversized-served"),
+        pytest.param("", "", id="empty-expected"),
+        pytest.param("   ", "   ", id="whitespace-expected"),
+        pytest.param("x" * 129, "x" * 129, id="oversized-expected"),
+    ],
+)
+def test_service_identity_probe_rejects_invalid_or_mismatched_instance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    service_instance_id: str,
+    served_instance_id: object,
+) -> None:
+    workflow = _workflow(tmp_path).resolve()
+    monkeypatch.setattr(
+        service_module,
+        "_probe_json",
+        lambda *_args: {
+            "workflow_path": str(workflow),
+            "service_instance_id": served_instance_id,
+            "orchestrator_pid": 5678,
+        },
+    )
+
+    assert (
+        service_module.probe_service_endpoint_identity(
+            "127.0.0.1", 9999, workflow, service_instance_id
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "served_pid",
+    [
+        pytest.param(True, id="boolean"),
+        pytest.param("1234", id="string"),
+        pytest.param(1234.0, id="float"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+    ],
+)
+def test_service_identity_probe_rejects_invalid_orchestrator_pid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    served_pid: object,
+) -> None:
+    workflow = _workflow(tmp_path).resolve()
+    monkeypatch.setattr(
+        service_module,
+        "_probe_json",
+        lambda *_args: {
+            "workflow_path": str(workflow),
+            "service_instance_id": SERVICE_CAPABILITY,
+            "orchestrator_pid": served_pid,
+        },
+    )
+
+    assert (
+        service_module.probe_service_endpoint_identity(
+            "127.0.0.1", 9999, workflow, SERVICE_CAPABILITY
+        )
+        is None
+    )
+
+
+def test_service_identity_probe_rejects_other_workflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path).resolve()
+    monkeypatch.setattr(
+        service_module,
+        "_probe_json",
+        lambda *_args: {
+            "workflow_path": str(tmp_path / "other" / "WORKFLOW.md"),
+            "service_instance_id": SERVICE_CAPABILITY,
+            "orchestrator_pid": 5678,
+        },
+    )
+
+    assert (
+        service_module.probe_service_endpoint_identity(
+            "127.0.0.1", 9999, workflow, SERVICE_CAPABILITY
+        )
+        is None
+    )
+
+
+def test_exact_workflow_probe_keeps_legacy_three_argument_compatibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path).resolve()
+    monkeypatch.setattr(
+        service_module,
+        "_probe_json",
+        lambda *_args: {"workflow_path": str(workflow)},
+    )
+
+    assert is_symphony_workflow_reachable("127.0.0.1", 9999, workflow) is True
 
 
 def test_exact_workflow_probe_rejects_other_workflow(
@@ -451,6 +795,489 @@ def test_service_stop_keeps_record_when_process_survives(
     assert load_record(workflow) is not None
 
 
+def test_windows_service_stop_escalates_exact_instance_after_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    live_pids = {1234, 5678}
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(
+        service_module, "is_process_running", lambda pid: pid in live_pids
+    )
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda host, port, served_workflow, instance_id: (
+            SimpleNamespace(orchestrator_pid=5678)
+            if (host, port, Path(served_workflow), instance_id)
+            == ("127.0.0.1", 9999, workflow.resolve(), "instance-a")
+            else None
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_terminate_active_backend_processes",
+        lambda _record: pytest.fail("plain stop must not sweep backend processes"),
+    )
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        if force:
+            live_pids.discard(pid)
+            live_pids.discard(1234)
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 0
+    assert terminated == [(1234, False), (5678, True)]
+    assert load_record(workflow) is None
+
+
+@pytest.mark.parametrize("instance_id", [None, "instance-a"], ids=["legacy", "mismatch"])
+def test_windows_service_stop_does_not_force_unverified_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    instance_id: str | None,
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id=instance_id))
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(service_module, "is_process_running", lambda _pid: True)
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda *_args: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_terminate_active_backend_processes",
+        lambda _record: pytest.fail("plain stop must not sweep backend processes"),
+    )
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert terminated == [(1234, False)]
+    assert load_record(workflow) is not None
+
+
+def test_windows_service_stop_keeps_record_when_forced_taskkill_is_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    taskkills: list[tuple[int, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(service_module, "is_process_running", lambda _pid: True)
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda *_args: SimpleNamespace(orchestrator_pid=5678),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+
+    def _deny_taskkill(pid: int, *, force: bool = False) -> bool:
+        taskkills.append((pid, force))
+        return False
+
+    monkeypatch.setattr(service_module, "_taskkill_tree", _deny_taskkill)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert taskkills == [(1234, False), (5678, True)]
+    assert load_record(workflow) is not None
+
+
+def test_posix_service_stop_never_auto_forces_after_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234))
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", False)
+    monkeypatch.setattr(service_module, "is_process_running", lambda _pid: True)
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda *_args, **_kwargs: pytest.fail("POSIX stop must not probe for escalation"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert terminated == [(1234, False)]
+    assert load_record(workflow) is not None
+
+
+def test_windows_service_stop_does_not_force_when_target_exits_after_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    live_pids = {1234, 5678}
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(
+        service_module, "is_process_running", lambda pid: pid in live_pids
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+
+    def _authorize_and_exit(
+        host: str,
+        port: int,
+        served_workflow: str | Path,
+        instance_id: str,
+    ) -> object:
+        assert (host, port, Path(served_workflow), instance_id) == (
+            "127.0.0.1",
+            9999,
+            workflow.resolve(),
+            "instance-a",
+        )
+        live_pids.remove(5678)
+        return SimpleNamespace(orchestrator_pid=5678)
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        return True
+
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        _authorize_and_exit,
+        raising=False,
+    )
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert terminated == [(1234, False)]
+    assert load_record(workflow) is not None
+
+
+def test_windows_service_stop_retains_record_when_pid_exits_during_failed_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    live_pids = {1234}
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(
+        service_module, "is_process_running", lambda pid: pid in live_pids
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+
+    def _reject_after_exit(*_args: object, **_kwargs: object) -> None:
+        live_pids.remove(1234)
+        return None
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        return True
+
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        _reject_after_exit,
+        raising=False,
+    )
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert terminated == [(1234, False)]
+    assert load_record(workflow) is not None
+
+
+@pytest.mark.parametrize(
+    "health_payload",
+    [
+        pytest.param(None, id="unreachable"),
+        pytest.param(
+            {
+                "workflow_path": "__WORKFLOW__",
+                "service_instance_id": "instance-b",
+                "orchestrator_pid": 5678,
+            },
+            id="instance-mismatch",
+        ),
+        pytest.param(
+            {
+                "workflow_path": "__WORKFLOW__",
+                "service_instance_id": "instance-a",
+                "orchestrator_pid": "5678",
+            },
+            id="malformed-serving-pid",
+        ),
+    ],
+)
+def test_windows_service_stop_retains_token_record_when_launcher_is_absent_and_probe_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    health_payload: dict[str, object] | None,
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    payload = (
+        {
+            key: str(workflow.resolve()) if value == "__WORKFLOW__" else value
+            for key, value in health_payload.items()
+        }
+        if health_payload is not None
+        else None
+    )
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(service_module, "is_process_running", lambda _pid: False)
+    monkeypatch.setattr(service_module, "_probe_json", lambda *_args: payload)
+    monkeypatch.setattr(
+        service_module,
+        "terminate_process",
+        lambda *_args, **_kwargs: pytest.fail("an unproved PID must not be terminated"),
+    )
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert load_record(workflow) is not None
+
+
+def test_windows_service_stop_still_stops_proved_target_when_launcher_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    live_pids = {1234, 5678}
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(
+        service_module, "is_process_running", lambda pid: pid in live_pids
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+
+    def _prove_after_launcher_exit(*_args: object) -> object:
+        live_pids.remove(1234)
+        return SimpleNamespace(orchestrator_pid=5678)
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        if force:
+            live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        _prove_after_launcher_exit,
+    )
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 0
+    assert terminated == [(1234, False), (5678, True)]
+    assert load_record(workflow) is None
+
+
+def test_windows_service_stop_probes_after_initial_launcher_stop_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    live_pids = {1234, 5678}
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(
+        service_module, "is_process_running", lambda pid: pid in live_pids
+    )
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda *_args: SimpleNamespace(orchestrator_pid=5678),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 0
+    assert terminated == [(1234, False), (5678, True)]
+    assert load_record(workflow) is None
+
+
+def test_windows_service_stop_probes_when_launcher_is_already_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    live_pids = {5678}
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(
+        service_module, "is_process_running", lambda pid: pid in live_pids
+    )
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda *_args: SimpleNamespace(orchestrator_pid=5678),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "_wait_until",
+        lambda predicate, **_kwargs: predicate(),
+    )
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 0
+    assert terminated == [(5678, True)]
+    assert load_record(workflow) is None
+
+
+def test_posix_plain_stop_does_not_add_a_post_timeout_liveness_recheck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234))
+    running_checks: list[int | None] = []
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", False)
+
+    def _is_running(pid: int | None) -> bool:
+        running_checks.append(pid)
+        return len(running_checks) == 1
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        return True
+
+    monkeypatch.setattr(service_module, "is_process_running", _is_running)
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+    monkeypatch.setattr(service_module, "_wait_until", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda *_args, **_kwargs: pytest.fail("POSIX stop must not probe for escalation"),
+        raising=False,
+    )
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert running_checks == [1234]
+    assert terminated == [(1234, False)]
+    assert load_record(workflow) is not None
+
+
+def test_windows_service_stop_never_forces_reused_launcher_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=1234, service_instance_id="instance-a"))
+    live_pids = {1234, 5678}
+    terminated: list[tuple[int | None, bool]] = []
+    monkeypatch.setattr(service_module, "_IS_WIN32", True)
+    monkeypatch.setattr(
+        service_module, "is_process_running", lambda pid: pid in live_pids
+    )
+    monkeypatch.setattr(
+        service_module,
+        "probe_service_endpoint_identity",
+        lambda *_args: SimpleNamespace(orchestrator_pid=5678),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service_module, "_wait_until", lambda predicate, **_kwargs: predicate()
+    )
+
+    def _terminate(pid: int | None, *, force: bool = False) -> bool:
+        terminated.append((pid, force))
+        if force:
+            live_pids.discard(pid)
+        return True
+
+    monkeypatch.setattr(service_module, "terminate_process", _terminate)
+
+    rc = service_main(["stop", "--timeout", "0", str(workflow)])
+
+    assert rc == 1
+    assert terminated == [(1234, False), (5678, True)]
+    assert load_record(workflow) is not None
+
+
 def test_force_stop_terminates_active_backend_processes_from_registry(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -632,6 +1459,67 @@ def test_service_lock_blocks_second_start_for_same_workflow(tmp_path: Path) -> N
         with pytest.raises(ServiceLockError):
             with acquire_service_lock(workflow):
                 pass
+
+
+def test_popen_detached_overwrites_instance_only_in_child_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    class _Process:
+        pid = 1234
+
+    def _popen(command: list[str], **kwargs: object) -> _Process:
+        seen["command"] = command
+        seen["env"] = kwargs["env"]
+        return _Process()
+
+    monkeypatch.setenv("SYMPHONY_SERVICE_INSTANCE_ID", "stale-parent")
+    monkeypatch.setattr(service_module.subprocess, "Popen", _popen)
+
+    pid = service_module._popen_detached(
+        ["python", "-m", "symphony.cli"],
+        cwd=tmp_path,
+        log_path=tmp_path / "symphony.log",
+        env_overrides={"SYMPHONY_SERVICE_INSTANCE_ID": "instance-a"},
+    )
+
+    assert pid == 1234
+    assert seen["command"] == ["python", "-m", "symphony.cli"]
+    assert isinstance(seen["env"], dict)
+    assert seen["env"]["SYMPHONY_SERVICE_INSTANCE_ID"] == "instance-a"
+    assert os.environ["SYMPHONY_SERVICE_INSTANCE_ID"] == "stale-parent"
+
+
+def test_start_generates_and_persists_one_service_instance_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _workflow(tmp_path)
+    token_sizes: list[int] = []
+    child_environments: list[dict[str, str]] = []
+
+    def _token_urlsafe(size: int) -> str:
+        token_sizes.append(size)
+        return "instance-a"
+
+    def _spawn(*_args: object, **kwargs: object) -> int:
+        child_environments.append(kwargs["env_overrides"])  # type: ignore[arg-type]
+        return 1234
+
+    monkeypatch.setattr(secrets, "token_urlsafe", _token_urlsafe)
+    monkeypatch.setattr(service_module, "_popen_detached", _spawn)
+    monkeypatch.setattr(service_module, "_wait_until", lambda *_args, **_kwargs: True)
+
+    rc = service_main(["start", "--skip-doctor", str(workflow)])
+
+    assert rc == 0
+    assert token_sizes == [32]
+    assert child_environments == [
+        {"SYMPHONY_SERVICE_INSTANCE_ID": "instance-a"}
+    ]
+    record = load_record(workflow)
+    assert record is not None
+    assert record.service_instance_id == "instance-a"
 
 
 def test_start_clears_stale_record_before_doctor(

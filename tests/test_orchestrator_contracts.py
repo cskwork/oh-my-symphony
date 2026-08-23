@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from symphony.orchestrator.parsing import _parse_findings_rows
+from tests._win_skips import requires_symlink_privilege
 from symphony.orchestrator.contracts import (
     ContractResult,
     board_uses_default_contracts,
@@ -817,6 +818,7 @@ def test_board_uses_default_contracts_rejects_deep_and_custom_lanes() -> None:
     assert not board_uses_default_contracts(("Todo", "In Progress", "Staging"))
 
 
+@requires_symlink_privilege
 def test_done_artifact_gate_ignores_temp_files_and_symlinks(tmp_path: Path) -> None:
     """An interrupted copy or a planted symlink must not satisfy the gate.
 

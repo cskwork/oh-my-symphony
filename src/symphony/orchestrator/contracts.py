@@ -55,6 +55,14 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Moved to the workflow layer (it validates lane names against the default
+# preset — a workflow-domain concern, not an orchestrator one). Re-exported
+# here because `cli/doctor.py` and the contract tests import it from this
+# module; the redundant-alias form marks the intentional re-export.
+from ..workflow.presets import (
+    board_uses_default_contracts as board_uses_default_contracts,
+)
+
 
 @dataclass(frozen=True)
 class ContractFailure:
@@ -151,22 +159,6 @@ _NA_RESULT_TOKENS = frozenset({"n/a", "na"})
 # Matches a single Markdown inline-code span, e.g. the two spans in
 # "`qa/a.log`, `qa/b.log` (`test_name`)".
 _INLINE_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
-
-
-# The stage contracts below encode the DEFAULT preset's prompts
-# (Todo / In Progress / Verify / Document — plus the legacy Learn name).
-# Boards with any other active lane (deep preset's Intake/Research/Plan/
-# Review/Build/QA, or user-defined lanes) carry their own prompt-encoded
-# gates, so enforcing these section lists against them would rewind
-# tickets for sections their prompts never asked for.
-_CONTRACT_LANES = frozenset({"todo", "in progress", "verify", "document", "learn"})
-
-
-def board_uses_default_contracts(active_states: "tuple[str, ...] | list[str]") -> bool:
-    """True when every active lane belongs to the default-preset lane set."""
-    return all(
-        (state or "").strip().lower() in _CONTRACT_LANES for state in active_states
-    )
 
 
 def evaluate_contract(

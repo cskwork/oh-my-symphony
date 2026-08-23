@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -97,7 +98,7 @@ class _StubOrchestrator:
     def issue_snapshot(self, _identifier: str) -> dict[str, Any] | None:
         return None
 
-    def recent_runs(
+    async def recent_runs(
         self,
         issue_id: str | None = None,
         limit: int = 50,
@@ -132,7 +133,7 @@ class _StubOrchestrator:
             "failure_message": None,
         }
 
-    def run_detail(self, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    async def run_detail(self, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
         if run_id != "a" * 32:
             return None, None
         return {
@@ -153,8 +154,8 @@ class _StubOrchestrator:
             ],
         }, None
 
-    def run_diagnostic(self, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
-        detail, error = self.run_detail(run_id)
+    async def run_diagnostic(self, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
+        detail, error = await self.run_detail(run_id)
         return ({"schema_version": 1, **detail} if detail else None), error
 
     def request_refresh(self) -> bool:
@@ -515,10 +516,16 @@ class _FakeChatBackend:
         answer = _ANSWER
         if "offer a separate project" in prompt:
             target = self.init.cwd.parent / "chat-todo-app"
+            # Native Windows paths contain backslashes that are invalid as
+            # raw JSON escapes; chat's strict parser rejects such payloads,
+            # so the marker must be built with a real JSON encoder.
             answer = (
                 "1. Create and register a separate Todo app.\n"
-                '<symphony-project-setup>{"choice": 1, "name": "Todo App", '
-                f'"path": "{target}"}}</symphony-project-setup>'
+                "<symphony-project-setup>"
+                + json.dumps(
+                    {"choice": 1, "name": "Todo App", "path": str(target)}
+                )
+                + "</symphony-project-setup>"
             )
         await self._emit(EVENT_TURN_STARTED, {})
         if self.init.cfg.agent.kind == "prime-agent":

@@ -21,6 +21,8 @@ import textwrap
 
 import pytest
 
+from symphony._shell import resolve_bash
+
 # A trimmed copy of the WORKFLOW.md classifier — same logic, no I/O on the
 # staged diff (we feed STAGED_FILES directly). If you change the classifier
 # in WORKFLOW.md, mirror that change here.
@@ -69,8 +71,14 @@ def _classify(staged: str, *, rewind_scope: str | None = None) -> str:
     env = {**os.environ, "STAGED_FILES": staged}
     if rewind_scope is not None:
         env["SYMPHONY_REWIND_SCOPE"] = rewind_scope
+    # Use the product's bash resolution, not a bare PATH lookup: on a
+    # Windows host whose PATH only exposes the WSL launcher, a bare
+    # `bash -c` runs inside Linux where STAGED_FILES never arrives (env
+    # vars need WSLENV to cross that boundary) and every marker assert
+    # degrades to `'' == '[no-test]'`. resolve_bash() picks Git for
+    # Windows bash, which also runs the real hooks.
     out = subprocess.run(
-        ["bash", "-c", _CLASSIFIER],
+        [resolve_bash(), "-c", _CLASSIFIER],
         capture_output=True,
         text=True,
         env=env,

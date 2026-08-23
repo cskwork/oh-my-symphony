@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from aiohttp import web
 
 from .logging import get_logger
 from .orchestrator import Orchestrator
-from .webapi import BIND_HOST_KEY, register_web_routes
+from .webapi import BIND_HOST_KEY, _request_is_loopback, register_web_routes
 
 
 log = get_logger()
@@ -157,10 +158,18 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
     async def handle_method_not_allowed(request: web.Request) -> web.Response:
         return _error_response(405, "method_not_allowed", request.method)
 
-    async def handle_debug_tasks(_request: web.Request) -> web.Response:
+    async def handle_debug_tasks(request: web.Request) -> web.Response:
         # Dump every live asyncio task with its suspended coroutine stack.
         # `Task.get_stack()` returns the deepest frame the task is parked
         # at — exactly what py-spy can't show us across the await boundary.
+        # Live stacks and coroutine reprs can name local paths and prompt
+        # text, so this stays loopback-only like the run diagnostics.
+        if not _request_is_loopback(request):
+            return _error_response(
+                403,
+                "debug_tasks_local_only",
+                "task diagnostics are available only from the local machine",
+            )
         out = []
         for t in asyncio.all_tasks():
             stack_frames = []
@@ -203,8 +212,6 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
 
 
 def _now_iso() -> str:
-    import time
-
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 

@@ -170,7 +170,7 @@ class _StubOrchestrator:
             }
         return None
 
-    def recent_runs(
+    async def recent_runs(
         self,
         issue_id: str | None = None,
         limit: int = 50,
@@ -224,7 +224,7 @@ class _StubOrchestrator:
             filtered = [r for r in filtered if r["agent_kind"] == agent]
         return filtered[:limit], None
 
-    def run_detail(self, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    async def run_detail(self, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
         if run_id != "a" * 32:
             return None, None
         return {
@@ -241,8 +241,10 @@ class _StubOrchestrator:
             ],
         }, None
 
-    def run_diagnostic(self, run_id: str) -> tuple[dict[str, Any] | None, str | None]:
-        detail, error = self.run_detail(run_id)
+    async def run_diagnostic(
+        self, run_id: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        detail, error = await self.run_detail(run_id)
         if detail is None:
             return None, error
         return {"schema_version": 1, **detail}, None

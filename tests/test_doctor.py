@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+import types
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from symphony import service as service_module
 from symphony.service import ServiceRecord, save_record
 from symphony.cli.doctor import (
     check_after_create_hook,
+    check_api_token_env,
     check_app_release_contract,
     check_agy_state_dir,
     check_agent_cli,
@@ -238,6 +240,124 @@ def test_agent_cli_fail_for_missing_binary(tmp_path: Path) -> None:
     result = check_agent_cli(cfg)
     assert result.status == "fail"
     assert "not on $PATH" in result.message
+
+
+def _force_agent_cli_platform(
+    monkeypatch: pytest.MonkeyPatch, *, win32: bool, resolved: str = "/resolved/agent"
+) -> list[str]:
+    """Pin check_agent_cli's platform branch and stub the PATH lookup.
+
+    Returns the list the stubbed ``shutil.which`` records its binary
+    arguments in, so each test can assert exactly what reached the lookup.
+    """
+    from symphony.cli import doctor as doctor_module
+
+    seen: list[str] = []
+
+    def _which(binary: str) -> str:
+        seen.append(binary)
+        return resolved
+
+    monkeypatch.setattr(doctor_module, "_IS_WIN32", win32)
+    monkeypatch.setattr(doctor_module, "shutil", types.SimpleNamespace(which=_which))
+    return seen
+
+
+def test_agent_cli_windows_keeps_backslash_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """win32 branch: backslash command paths must survive parsing.
+
+    Regression: POSIX-mode shlex ate the backslashes, so
+    ``D:\\tools\\python.exe`` reached ``shutil.which`` as
+    ``D:toolspython.exe`` and the preflight bogus-failed with
+    "not on $PATH". Cross-platform: the win32 branch is forced and the
+    lookup stubbed, so the assert runs on every host.
+    """
+    seen = _force_agent_cli_platform(monkeypatch, win32=True)
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: 'D:\\tools\\python.exe -m symphony.mock_codex' }
+        """,
+    )
+
+    result = check_agent_cli(cfg)
+
+    assert result.status == "pass"
+    assert seen == ["D:\\tools\\python.exe"]
+
+
+def test_agent_cli_windows_strips_quotes_around_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """win32 branch: quotes shlex leaves on a quoted token are stripped.
+
+    Whitespace-mode splitting keeps the quotes attached to the token;
+    the binary handed to ``shutil.which`` must not carry them.
+    """
+    seen = _force_agent_cli_platform(monkeypatch, win32=True)
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: '"D:\\Program Files\\agent\\cli.exe" --serve' }
+        """,
+    )
+
+    result = check_agent_cli(cfg)
+
+    assert result.status == "pass"
+    assert seen == ["D:\\Program Files\\agent\\cli.exe"]
+
+
+def test_agent_cli_posix_branch_keeps_posix_splitting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-win32 branch stays byte-identical to plain ``shlex.split``.
+
+    POSIX commands use forward slashes, so backslash-eating there is the
+    documented shlex semantics this check has always had; the fix must
+    not alter it.
+    """
+    seen = _force_agent_cli_platform(monkeypatch, win32=False)
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: 'D:\\tools\\python.exe -m symphony.mock_codex' }
+        """,
+    )
+
+    result = check_agent_cli(cfg)
+
+    assert result.status == "pass"
+    assert seen == ["D:toolspython.exe"]
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="exercises the real win32 branch end to end with a native "
+    "backslash interpreter path that genuinely exists",
+)
+def test_agent_cli_windows_real_interpreter_path_passes(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        f"""
+        tracker: {{ kind: file, board_root: ./kanban }}
+        agent: {{ kind: codex }}
+        codex: {{ command: '{sys.executable} -m symphony.mock_codex' }}
+        """,
+    )
+
+    result = check_agent_cli(cfg)
+
+    assert result.status == "pass"
+    assert sys.executable in result.message
 
 
 def test_port_pass_when_unconfigured(tmp_path: Path) -> None:
@@ -528,18 +648,88 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
         """,
     )
     results = run_checks(cfg)
-    # protected repository + port + shell + max_turns + agent + pi_auth
-    # + prime_agent_auth + gemini_auth + agy_state + kiro_auth + prompts
-    # + after_create + workspace + git_history + agent_git_grant + tracker
-    # + board.reachable + deep_merge_contract + stage_contracts + board.cli
-    # + board.dependencies + app.release-contract + state.db = 23
-    assert len(results) == 23
+    # protected repository + port + api_token + shell + max_turns + agent
+    # + pi_auth + prime_agent_auth + gemini_auth + agy_state + kiro_auth
+    # + prompts + after_create + workspace + git_history + agent_git_grant
+    # + tracker + board.reachable + deep_merge_contract + stage_contracts
+    # + board.cli + board.dependencies + app.release-contract + state.db = 24
+    assert len(results) == 24
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",
         "workspace",
         "tracker",
     }
+
+
+def test_api_token_env_unset_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    monkeypatch.delenv("SYMPHONY_API_TOKEN", raising=False)
+    result = check_api_token_env(cfg)
+    assert result.status == "pass"
+    assert "unset" in result.message
+
+
+def test_api_token_env_internal_whitespace_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token with inner spaces can never match the two-word bearer
+    parse, so every /api/ request 401s — advisory, not a failure."""
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    monkeypatch.setenv("SYMPHONY_API_TOKEN", "sekrit token")
+    result = check_api_token_env(cfg)
+    assert result.status == "warn"
+    assert "whitespace" in result.message
+
+
+def test_api_token_env_surrounding_whitespace_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    monkeypatch.setenv("SYMPHONY_API_TOKEN", "  sekrit-token\t")
+    result = check_api_token_env(cfg)
+    assert result.status == "pass"
+    assert "required" in result.message
+
+
+def test_api_token_env_blank_passes_as_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    monkeypatch.setenv("SYMPHONY_API_TOKEN", "   ")
+    result = check_api_token_env(cfg)
+    assert result.status == "pass"
+    assert "unset" in result.message
 
 
 def test_pi_auth_skipped_for_non_pi(tmp_path: Path) -> None:

@@ -53,6 +53,9 @@ from .widgets import DetailPane, FilterBar, IssueCard, Lane, StatsBar
 
 log = get_logger()
 
+# Seconds the quit confirmation stays armed after a first `q` on a busy
+# board. A second `q` inside this window quits; outside it, `q` re-arms.
+QUIT_CONFIRM_WINDOW_S = 5.0
 
 
 class KanbanApp(App):
@@ -154,6 +157,11 @@ class KanbanApp(App):
         # restarting the TUI. Reset on relaunch — persistence belongs in
         # WORKFLOW.md / SYMPHONY_LANG, not in TUI state.
         self._language_override: str | None = None
+        # H1 — quit guard. `q` is the reflexive "close the viewer" key, but
+        # exiting the TUI stops the orchestrator and every in-flight agent.
+        # While workers are live the first press only arms a short
+        # confirmation window; see `action_quit`.
+        self._quit_armed: bool = False
 
     # ----- composition -------------------------------------------------
 
@@ -323,6 +331,47 @@ class KanbanApp(App):
         return replace(status, attention=attention)
 
     # ----- actions -----------------------------------------------------
+
+    def action_quit(self) -> None:
+        """Quit — with a guard rail while workers are live.
+
+        An idle board quits immediately, exactly as before. A board with
+        running or retrying workers requires a second `q` within
+        `QUIT_CONFIRM_WINDOW_S`: the first press only arms the
+        confirmation and says how many agents would be stopped, because
+        exiting the TUI tears down the orchestrator and aborts those
+        runs mid-turn.
+        """
+        busy = self._busy_worker_count()
+        if busy == 0 or self._quit_armed:
+            self.exit()
+            return
+        self._quit_armed = True
+        self.set_timer(QUIT_CONFIRM_WINDOW_S, self._disarm_quit)
+        plural = "" if busy == 1 else "s"
+        self.notify(
+            f"{busy} agent{plural} running — press q again to stop them and quit",
+            severity="warning",
+            timeout=QUIT_CONFIRM_WINDOW_S,
+        )
+
+    def _disarm_quit(self) -> None:
+        self._quit_armed = False
+
+    def _busy_worker_count(self) -> int:
+        """Running + retrying workers from the orchestrator snapshot.
+
+        A snapshot failure degrades to "idle" so a broken observer can
+        never trap the operator in the app — quitting then matches the
+        historical single-press behavior.
+        """
+        try:
+            counts = self._orch.snapshot().get("counts", {}) or {}
+        except Exception:
+            return 0
+        return int(counts.get("running", 0) or 0) + int(
+            counts.get("retrying", 0) or 0
+        )
 
     def action_refresh(self) -> None:
         self._kick_tracker_refresh()

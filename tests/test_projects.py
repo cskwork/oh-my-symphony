@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import get_context
 from pathlib import Path
@@ -797,3 +798,82 @@ def test_project_port_allocation_skips_unregistered_listener(
 
     assert record.port == 10002
     assert probed == [9999, 10000, 10001, 10002]
+
+
+def test_create_excludes_tracker_lock_dir_locally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The board's runtime ``.locks/`` dir must not pollute git status.
+
+    The file tracker creates ``<board>/.locks/`` on first mutation; without
+    a local exclude rule it shows up as untracked noise (visible on any
+    platform; reported on Windows boards). The rule lives in the shared
+    ``info/exclude`` — never the operator's checked-in .gitignore.
+    """
+    source = source_bundle(tmp_path / "source-locks")
+    registry_path = tmp_path / "projects.json"
+    monkeypatch.setenv("SYMPHONY_PROJECTS_FILE", str(registry_path))
+    monkeypatch.setattr(project_cli, "source_checkout", lambda: source)
+
+    assert (
+        project_cli.main(["create", "Locks App", "--id", "locks-app", "--port", "10110"])
+        == 0
+    )
+    target = tmp_path / "locks-app"
+    exclude = (target / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert "/kanban/.locks/" in exclude.splitlines()
+
+    # The rule actually silences the runtime directory.
+    (target / "kanban" / ".locks").mkdir()
+    (target / "kanban" / ".locks" / "allocator.lock").write_text("", encoding="utf-8")
+    status = git(target, "status", "--porcelain")
+    assert ".locks" not in status
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="exercises the win32 junction bootstrap end to end: Git for "
+    "Windows follows junctions where POSIX records a symlink entry",
+)
+def test_windows_skill_junction_stays_machine_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The skill junction must never publish the bundle's contents.
+
+    Regression (verified by repro): with Git for Windows' default
+    ``core.symlinks=false``, ``git add`` of the ``.claude/skills/
+    symphony-skill`` junction stages every file *inside* the link target —
+    ``.claude/skills/symphony-skill/SKILL.md`` etc. — where POSIX commits
+    a single mode-120000 symlink entry. The junction is therefore kept out
+    of the bootstrap commit and excluded locally so it relinks per machine.
+    """
+    source = source_bundle(tmp_path / "source-junction")
+    skill = source / "skills" / "symphony-skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("router skill\n", encoding="utf-8")
+    registry_path = tmp_path / "projects.json"
+    monkeypatch.setenv("SYMPHONY_PROJECTS_FILE", str(registry_path))
+    monkeypatch.setattr(project_cli, "source_checkout", lambda: source)
+
+    assert (
+        project_cli.main(
+            ["create", "Junction App", "--id", "junction-app", "--port", "10120"]
+        )
+        == 0
+    )
+    target = tmp_path / "junction-app"
+    link = target / ".claude" / "skills" / "symphony-skill"
+    assert link.is_junction()
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "router skill\n"
+
+    tracked = git(target, "ls-files").splitlines()
+    # The canonical bundle content is committed once...
+    assert "skills/symphony-skill/SKILL.md" in tracked
+    # ...and the junction never duplicates it under .claude/skills/.
+    assert not [name for name in tracked if name.startswith(".claude/")]
+
+    # Machine-local rule keeps the untracked junction out of git status.
+    exclude = (target / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert "/.claude/skills/symphony-skill" in exclude.splitlines()
+    status = git(target, "status", "--porcelain")
+    assert ".claude" not in status
