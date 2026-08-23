@@ -69,3 +69,7 @@ testpaths = ["tests"]
 markers = [
     "browser_e2e: browser-driven web UI tests; requires SYMPHONY_BROWSER_E2E=1 and Playwright browser binaries",
 ]
+
+[tool.coverage.run]
+source = ["src/symphony"]
+relative_files = true
