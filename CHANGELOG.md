@@ -10,6 +10,51 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-24 - Authenticated boards and safer Windows orchestration
+
+### Added
+
+- **Optional board API authentication.** Set `SYMPHONY_API_TOKEN` to require
+  bearer authentication on operator API requests. The web app keeps the token
+  in session storage, attaches it centrally, and uses the query token only for
+  the browser WebSocket handshake. `SYMPHONY_TRUSTED_ORIGINS` remains the
+  separate control for public proxy and tunnel origins.
+- **More usable board surfaces.** TUI quit confirmation protects active agents;
+  compact cards show retry and backend context; web cards and commit rows gain
+  keyboard operation, onboarding states, stale-board feedback, clearer request
+  status, accessible labels, and complete English/Korean translations.
+
+### Changed
+
+- Extract run-attempt phase transitions behind one immutable transaction seam,
+  preserving ownership, backend rebinding, tracker writes, and cleanup order
+  while making the orchestration path easier to reason about and test.
+- Consolidate duplicated per-turn backend lifecycle helpers, move blocking
+  cleanup off the event loop, reuse one tracker HTTP client safely, and close
+  it without racing in-flight work.
+
+### Fixed
+
+- **Reliable Windows shutdown.** Terminate full backend process trees, gate
+  stored-PID kills by process identity where available, reclaim dead leases
+  with a native liveness probe, and stop managed services through an exact
+  workflow plus strong per-launch health capability. Weak, stale, or legacy
+  identities fail closed and never authorize an automatic force-kill.
+- **Windows filesystem and command behavior.** Use native ticket locks,
+  machine-local skill junctions, safe long-command stdin, cross-platform path
+  validation, preserved backslash argv parsing, and robust workspace-process
+  discovery.
+- Keep SPA keyboard actions disabled while board data is stale, preserve the
+  WebSocket auth boundary, restrict `/api/v1/_debug/tasks` to loopback callers,
+  and prevent internal exception details from leaking through HTTP 500
+  responses.
+- Make OneShot select a Python interpreter that actually executes instead of a
+  broken Windows Store alias, and keep its Windows bootstrap E2E fully isolated
+  under the temporary test home.
+- Keep Linux type checking portable across guarded Windows-only `ctypes` APIs
+  and make the migration concurrency test assert the real exactly-once schema
+  invariant rather than one scheduling interleaving.
+
 ## [0.20.1] - 2026-08-13 - Proxied and tunnelled boards can manage projects
 
 ### Fixed
@@ -1478,7 +1523,8 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/cskwork/oh-my-symphony/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/cskwork/oh-my-symphony/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/cskwork/oh-my-symphony/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/cskwork/oh-my-symphony/compare/v0.19.1...v0.20.0
 [0.19.1]: https://github.com/cskwork/oh-my-symphony/compare/v0.19.0...v0.19.1
