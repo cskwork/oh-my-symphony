@@ -2544,6 +2544,105 @@ async def test_worker_finalizer_gate_loss_rewinds_before_accepting_state_change(
         assert entry.issue.state == "Document"
 
 
+@pytest.mark.asyncio
+async def test_worker_finalizer_valid_gate_tracks_active_rewind_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _issue("APP-FINAL", state="Document")
+    transitioned = replace(issue, state="Verify")
+    entry = _runtime_entry(
+        issue,
+        known_app_release=True,
+        known_app_release_finalizer=True,
+        release_gate_finalizer="APP-FINAL",
+    )
+    backend = _WorkerLoopBackend()
+    orchestrator, cfg, exits, _events = _configure_worker_loop(
+        monkeypatch,
+        tmp_path,
+        issue=issue,
+        entry=entry,
+        backend=backend,
+    )
+    gate = _approved_core_gate()
+    monkeypatch.setattr(orchestrator, "_heartbeat_run_lease", lambda *_a: True)
+    monkeypatch.setattr(
+        orchestrator, "_require_running_release_authority", lambda **_k: issue
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_refresh_issue_state",
+        lambda *_a: asyncio.sleep(0, result=transitioned),
+    )
+    monkeypatch.setattr(orchestrator, "_release_registry_call", lambda *_a: gate)
+    guarded: list[tuple[str, str | None]] = []
+
+    def guard(**kwargs: Any) -> Issue:
+        guarded.append((kwargs["gate"].finalizer_identifier, kwargs["rewind_state"]))
+        return transitioned
+
+    monkeypatch.setattr(orchestrator, "_guard_release_finalizer", guard)
+    monkeypatch.setattr(
+        orchestrator,
+        "_transition_agent_phase",
+        lambda **_k: asyncio.sleep(0, result=None),
+    )
+
+    await orchestrator._run_agent_attempt(issue, None, cfg)
+
+    assert guarded == [(gate.finalizer_identifier, "Document")]
+    assert entry.issue == transitioned
+    assert entry.release_finalizer_rewind_state == "Verify"
+    assert exits == [("normal", None)]
+
+
+@pytest.mark.asyncio
+async def test_worker_completed_verifier_handoff_stops_additional_turns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _issue("VERIFY-1", state="Verify")
+    transitioned = replace(issue, state="Done")
+    entry = _runtime_entry(
+        issue,
+        known_app_release=True,
+        known_release_cycle_verifier=True,
+    )
+    backend = _WorkerLoopBackend()
+    orchestrator, cfg, exits, _events = _configure_worker_loop(
+        monkeypatch,
+        tmp_path,
+        issue=issue,
+        entry=entry,
+        backend=backend,
+    )
+    monkeypatch.setattr(orchestrator, "_heartbeat_run_lease", lambda *_a: True)
+    monkeypatch.setattr(
+        orchestrator, "_require_running_release_authority", lambda **_k: issue
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_refresh_issue_state",
+        lambda *_a: asyncio.sleep(0, result=transitioned),
+    )
+
+    async def complete_handoff(**_kwargs: Any) -> tuple[Issue, bool]:
+        entry.release_verifier_handoff_complete = True
+        return transitioned, False
+
+    monkeypatch.setattr(
+        orchestrator, "_enforce_app_release_transition", complete_handoff
+    )
+
+    await orchestrator._run_agent_attempt(issue, None, cfg)
+
+    assert entry.release_verifier_handoff_complete
+    assert entry.issue == transitioned
+    assert backend.calls.count("run_turn") == 1
+    assert exits == [("normal", None)]
+
+
 @pytest.mark.parametrize("has_failure_lane", [False, True])
 @pytest.mark.asyncio
 async def test_worker_release_rewind_budget_escalates_or_holds_verifier(
