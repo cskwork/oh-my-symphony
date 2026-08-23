@@ -1,6 +1,8 @@
 """Coverage contracts for project creation and registry lifecycle."""
 # ruff: noqa: F405
 
+import builtins
+
 from tests.coverage_cases._surfaces_support import *  # noqa: F403
 
 
@@ -296,6 +298,27 @@ def test_project_windows_junction_fallbacks_are_bounded(
 
     monkeypatch.setattr(Path, "is_junction", broken_junction)
     assert projects._is_windows_skill_junction(repo, exact) is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PyPy compatibility is Windows-only")
+def test_project_pypy_windows_falls_back_when_winapi_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "skills" / "symphony-skill"
+    target.mkdir(parents=True)
+    link = tmp_path / ".claude" / "skills" / "symphony-skill"
+    link.parent.mkdir(parents=True)
+    original_import = builtins.__import__
+
+    def import_without_winapi(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "_winapi":
+            raise ImportError("PyPy does not provide _winapi")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_winapi)
+    monkeypatch.setattr(projects, "_mklink_junction", lambda *_args: True)
+
+    assert projects._link_skill_dir(link) is True
 
 
 def test_project_setup_rejects_invalid_source_target_and_registry_collisions(
