@@ -309,8 +309,9 @@ def _auto_heal_misindented_top_level_front_matter(
         parsed = yaml.safe_load("\n".join(yaml_lines))
     except yaml.YAMLError:
         return None
-    if not isinstance(parsed, dict):
-        return None
+    # A successful parse after moving a canonical key to the YAML root must
+    # itself be a root mapping. Conflicting scalar/list roots fail above.
+    assert isinstance(parsed, dict)
     front = parsed
     body = "\n".join(lines[end + 1 :]).strip()
     return front, body

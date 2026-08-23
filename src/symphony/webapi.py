@@ -33,6 +33,7 @@ chat WebSocket accept it.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import heapq
 import hmac
 import ipaddress
@@ -2727,15 +2728,13 @@ def _register_chat_routes(
     async def _pump(
         queue: asyncio.Queue[dict[str, Any] | None], ws: web.WebSocketResponse
     ) -> None:
-        while True:
-            row = await queue.get()
+        while (row := await queue.get()) is not None:
             try:
-                if row is None:
-                    await ws.close(code=WSCloseCode.GOING_AWAY, message=b"shutdown")
-                    break
                 await ws.send_json(row)
             except (ConnectionResetError, RuntimeError):
-                break
+                return
+        with suppress(ConnectionResetError, RuntimeError):
+            await ws.close(code=WSCloseCode.GOING_AWAY, message=b"shutdown")
 
     async def handle_chat_ws(request: web.Request) -> web.StreamResponse:
         bind = str(request.app.get(BIND_HOST_KEY) or "127.0.0.1").lower()
