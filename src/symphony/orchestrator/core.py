@@ -6056,10 +6056,9 @@ class Orchestrator:
         """Return `(other_identifier, overlapping_paths)` when claiming
         ``candidate`` would conflict with an in-flight ticket.
 
-        "In-flight" = currently in `_running` OR pending retry. Iterates
-        both, intersects each touched-file set against the candidate, and
-        returns the first overlap found (stable order: running before
-        retry, then insertion order within each).
+        "In-flight" means currently in `_running`. Pending retries no longer
+        retain an Issue body to inspect and re-evaluate conflicts when they
+        dispatch. Returns the first overlap in running insertion order.
         """
         candidate_files = self._touched_files_for(candidate)
         if not candidate_files:
@@ -6071,20 +6070,6 @@ class Orchestrator:
             overlap = candidate_files & other_files
             if overlap:
                 return entry.issue.identifier, overlap
-        for other_id, retry_entry in self._retry.items():
-            if other_id == candidate.id:
-                continue
-            # Retry entries don't carry the full Issue. Look up the
-            # last-known body via running history when present; the
-            # common case (retry of an exited ticket) leaves no body to
-            # inspect, and the retry path re-evaluates on its own tick.
-            running_entry = self._running.get(other_id)
-            if running_entry is None:
-                continue
-            other_files = self._touched_files_for(running_entry.issue)
-            overlap = candidate_files & other_files
-            if overlap:
-                return retry_entry.identifier, overlap
         return None
 
     async def _block_ticket_for_conflict(
@@ -6184,8 +6169,6 @@ class Orchestrator:
         ema: dict[str, float] = {}
         if isinstance(raw, dict):
             for key, value in raw.items():
-                if not isinstance(key, str):
-                    continue
                 try:
                     ema[key.lower()] = float(value)
                 except (TypeError, ValueError):
@@ -8573,6 +8556,7 @@ class Orchestrator:
     ) -> bool:
         if not target_state:
             return False
+        state_name = entry.issue.state
         if budget_kind == "tokens":
             budget_detail = (
                 f"({entry.codex_state_total_tokens}/"
@@ -8588,7 +8572,6 @@ class Orchestrator:
         elif budget_kind == "no_stage_change":
             debug = self._issue_debug.get(issue_id)
             count = debug.state_turn_count if debug is not None else 0
-            state_name = entry.issue.state
             if not state_name and debug is not None:
                 state_name = debug.state_turn_state
             limit = (
@@ -8601,7 +8584,7 @@ class Orchestrator:
             budget_detail = f"(max_total_turns={cfg.agent.max_total_turns})"
         note_body = (
             f"{budget_kind} budget exceeded {budget_detail} while state stayed "
-            f"{entry.issue.state}. Symphony moved this ticket to {target_state} "
+            f"{state_name}. Symphony moved this ticket to {target_state} "
             f"to prevent automatic re-dispatch."
         )
         try:

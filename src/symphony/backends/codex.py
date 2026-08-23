@@ -111,8 +111,6 @@ def _merge_writable_roots(
     for root in writable_roots:
         if root not in merged_roots:
             merged_roots.append(root)
-    if not merged_roots:
-        return payload
     return {**payload, "writableRoots": merged_roots}
 
 

@@ -403,9 +403,7 @@ class RunRegistry:
         if row is None:
             return None
         try:
-            checkpointed_at = _parse(str(row["checkpointed_at"]))
-            if checkpointed_at is None:
-                return None
+            checkpointed_at = cast(datetime, _parse(str(row["checkpointed_at"])))
             ContinuationCheckpoint(
                 resume_session_id=str(row["resume_session_id"]),
                 state=str(row["checkpoint_state"]),

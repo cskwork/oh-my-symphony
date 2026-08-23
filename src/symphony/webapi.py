@@ -2732,10 +2732,10 @@ def _register_chat_routes(
             try:
                 if row is None:
                     await ws.close(code=WSCloseCode.GOING_AWAY, message=b"shutdown")
-                    return
+                    break
                 await ws.send_json(row)
             except (ConnectionResetError, RuntimeError):
-                return
+                break
 
     async def handle_chat_ws(request: web.Request) -> web.StreamResponse:
         bind = str(request.app.get(BIND_HOST_KEY) or "127.0.0.1").lower()
