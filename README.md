@@ -698,14 +698,17 @@ artifacts:
 
 ### Machine gate for application releases
 
-Production application delivery is opt-in. Add `app-release` to the Verify
-ticket, add `app-release-finalizer` to the delivery ticket named by the
-contract, and commit `release-contract.yaml` at the project root. Symphony
-then resolves the configured target branch on the host, requires the workspace
-contract bytes to exactly match `release-contract.yaml` at that commit, and
-checks every declared runner source against both the target blob and workspace
-hash on every forward Verify transition, even when `agent.stage_contracts` is
-off. Non-app tickets keep the v0.19.0 behavior.
+Production application delivery is opt-in. To turn it on, add the
+`app-release` label to the Verify ticket, add `app-release-finalizer` to the
+delivery ticket the contract names, and commit `release-contract.yaml` at the
+project root.
+
+Symphony then does three things on every forward Verify transition, even when
+`agent.stage_contracts` is off. It resolves the configured target branch on the
+host. It requires the workspace contract bytes to match `release-contract.yaml`
+at that commit exactly. And it checks every declared runner source against both
+the target blob and the workspace hash. Tickets without the label keep the
+v0.19.0 behavior.
 
 ```yaml
 schema_version: 1
@@ -734,12 +737,14 @@ checks:
 ```
 
 Each verifier writes release outputs only below `docs/<VERIFIER>/qa/`. The
-manifest path is fixed at `release-evidence.json`; native results and cited
-artifacts sit beside it. The manifest binds the raw contract hash, full target
-SHA, runner output, exact check coverage, viewport coverage, and at least one
-contained non-empty hashed artifact per check. One check row is shown below
-for readability; a real evidence file must contain exactly one row for every
-contract check:
+manifest path is fixed at `release-evidence.json`. Native results and cited
+artifacts sit beside it.
+
+The manifest binds six things: the raw contract hash, the full target SHA, the
+runner output, the exact check coverage, the viewport coverage, and at least one
+contained, non-empty, hashed artifact per check. The example below shows a
+single check row to keep it readable. A real evidence file carries exactly one
+row for every contract check.
 
 ```json
 {
@@ -767,71 +772,87 @@ contract check:
 }
 ```
 
-The hashed native result is itself a JSON object with exact fields
+The hashed native result is itself a JSON object. Its fields are exactly
 `schema_version`, `verifier_ticket`, `contract_sha256`, `target_branch`,
-`target_sha`, and `checks`; each result check contains only `id` and `status`
-and must exactly match the evidence. Run the same host validator a transition
-uses:
+`target_sha`, and `checks`. Each result check carries only `id` and `status`,
+and it must match the evidence exactly. Run the same host validator that a
+transition uses:
 
 ```bash
 symphony release check ./WORKFLOW.md --ticket VERIFY-1 --workspace /path/to/verifier-workspace
 ```
 
-Missing, malformed, unsafe, or stale evidence rewinds the same verifier.
-The evidence runner command must exactly equal the contract command; its exit
-code is zero if and only if every exact native/evidence check status is PASS.
-A coherent nonzero RED creates only the product check, console/network, or
-ancestry repair groups. There is no derivative exit-code repair. Behavior,
-runtime, or ancestry failures are grouped into idempotent repair tickets and
-one fresh verifier before the finalizer may continue. The fresh verifier keeps
-the expected contract hash in a durable `release-contract-sha256-<hash>` label,
-binds its lineage with `release-finalizer-<ticket>`, and replaces only that
-finalizer's historical release-verifier blockers while preserving unrelated
-dependencies. App-release verifier execution and repair/fresh-verifier mutation
-currently require `tracker.kind: file`; Symphony refuses a labeled remote card
-before acquiring a run lease or starting an agent turn. Ordinary Linear/Jira
-boards that have not opted in remain unchanged and receive no doctor warning. Contracted source
-hashing makes the runner definition immutable for a verification cycle, but
-the declared external tooling and its runtime remain a deliberate trust
-boundary. Independent operator browser QA against the final target is still
-required.
+Evidence that is missing, malformed, unsafe, or stale rewinds the same
+verifier. The evidence runner command must equal the contract command exactly.
+Its exit code is zero if and only if every exact native and evidence check
+status is PASS.
 
-Labels opt in and aid diagnosis; they are not approval authority after the
-first dispatch. Symphony stores the verifier, finalizer, expected contract,
-unique cycle generation, and exact verifier/finalizer runs in
-`.symphony/state.db`. The finalizer cannot run until the verifier is in an
-explicit success terminal with no live lease, and it must record completion in
-the same bound run. The already bound live verifier run may continue after
-GREEN. If an approved verifier is redispatched after a restart or is returned
-to an active lane, Symphony creates a new pending generation, moves it back to
-Verify, and requires fresh evidence rather than lending old approval to a new
+A coherent nonzero RED creates only three kinds of repair group: product check,
+console/network, and ancestry. There is no derivative exit-code repair. Symphony
+groups behavior, runtime, and ancestry failures into idempotent repair tickets
+plus one fresh verifier, and the finalizer waits until those finish.
+
+The fresh verifier carries the expected contract hash in a durable
+`release-contract-sha256-<hash>` label and binds its lineage with
+`release-finalizer-<ticket>`. It replaces only that finalizer's historical
+release-verifier blockers, and leaves unrelated dependencies alone.
+
+App-release verifier runs, and repair or fresh-verifier mutation, currently need
+`tracker.kind: file`. Symphony refuses a labeled remote card before it acquires
+a run lease or starts an agent turn. A Linear or Jira board that has not opted
+in behaves as before and gets no doctor warning.
+
+Hashing the contracted sources freezes the runner definition for one
+verification cycle. The declared external tooling and its runtime stay outside
+that guarantee, and that is deliberate. An operator still has to run independent
+browser QA against the final target.
+
+Labels opt a ticket in and help you diagnose it. After the first dispatch they
+no longer grant approval. Symphony stores the verifier, the finalizer, the
+expected contract, the unique cycle generation, and the exact verifier and
+finalizer runs in `.symphony/state.db`.
+
+The finalizer cannot run until the verifier sits in an explicit success terminal
+with no live lease, and it must record completion in the same bound run. A
+verifier run that is already bound and live may continue after GREEN.
+
+Say an approved verifier is redispatched after a restart, or is returned to an
+active lane. Symphony then creates a new pending generation, moves it back to
+Verify, and requires fresh evidence. It never lends the old approval to a new
 run.
 
-Repair and fresh-verifier creation is also host-owned. Symphony reserves a
-deterministic file-board identifier in SQLite before creating each lifecycle
-ticket, then reconciles the exact reserved ticket. Process loss after the file
-write, concurrent services, or worker-edited labels cannot produce a second
-ticket for the same release fingerprint and repair key. Final delivery stores
-a completion token for the exact terminal ticket bytes and replacement
-generation; any later rewrite invalidates approval and starts a fresh Verify
-cycle.
+The host also owns repair and fresh-verifier creation. Symphony reserves a
+deterministic file-board identifier in SQLite before it creates each lifecycle
+ticket, then reconciles that exact reserved ticket. Three things cannot produce
+a second ticket for the same release fingerprint and repair key: losing the
+process after the file write, running concurrent services, and a worker editing
+labels.
 
-On startup, Symphony reopens stale or unproven terminal release state. It uses
-a dedicated cleanup lease before committing or removing a lingering evidence
-workspace, so a live peer run wins safely and a cleanup in progress fences gate
-replacement. Upgrading a database with pre-provenance release rows creates an
-online timestamped backup beside `.symphony/state.db`, assigns durable
-generations/evidence identity, and converts legacy pending or approved rows to
-fresh pending cycles. This deliberate invalidation is necessary because those
-rows cannot prove exact-run completion.
+Final delivery stores a completion token for the exact terminal ticket bytes and
+the replacement generation. Any later rewrite invalidates the approval and
+starts a fresh Verify cycle.
 
-Target resolution is local and read-only: `refs/heads/<target_branch>` in the
-workflow repository. Symphony does not fetch a remote, compare a deployed
-revision, or synchronize the branch for you. `symphony release check` validates
-evidence but does not grant host lifecycle authority. For a remote tracker,
-runtime refuses an opted-in release before a lease or agent turn and does not
-rewind the external card; an already-advanced card requires an operator rewind.
-Synchronize the local target and serialize external writers before release.
+On startup, Symphony reopens release state that is stale, or terminal but
+unproven. It takes a dedicated cleanup lease before it commits or removes a
+lingering evidence workspace. That way a live peer run wins safely, and a
+cleanup already in progress blocks a gate replacement.
+
+Upgrading a database that holds pre-provenance release rows writes a timestamped
+backup beside `.symphony/state.db` while the service runs, assigns durable
+generations and evidence identity, and converts legacy pending or approved rows
+to fresh pending cycles. That invalidation is deliberate. Those rows cannot
+prove exact-run completion.
+
+Symphony resolves the target locally and read-only, at
+`refs/heads/<target_branch>` in the workflow repository. It does not fetch a
+remote, compare a deployed revision, or synchronize the branch for you.
+`symphony release check` validates evidence. It does not grant host lifecycle
+authority.
+
+On a remote tracker, the runtime refuses an opted-in release before a lease or
+an agent turn, and it does not rewind the external card. A card that has already
+advanced needs an operator to rewind it. Synchronize the local target and
+serialize external writers before you release.
 
 ## Custom prompts
 
