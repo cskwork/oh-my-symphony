@@ -4,8 +4,8 @@ This document is the resident map of `src/symphony/`. It captures the
 public package surface, the responsibility of each submodule, and the
 import-order / monkeypatch indirection rules that the test suite relies
 on. Update it whenever a public surface or one of those indirection
-rules changes — drift here costs other engineers (and your future self)
-hours of greps.
+rules changes. Drift here costs other engineers, and your future self, hours
+of greps.
 
 ## Top-level layout
 
@@ -84,7 +84,7 @@ lanes, first-class cards, and modal detail screens; CLI continues to do
 | `app.py` | `KanbanApp` + `KanbanTUI`, keyboard write actions, API/TUI coordination |
 | `__init__.py` | re-exports the public surface |
 
-### Monkeypatch indirection — `_tui_pkg` (removed)
+### Monkeypatch indirection: `_tui_pkg` (removed)
 
 The former parent-package indirection is gone (architecture-improvement
 plan, initiative D). `app.py` imports `_fetch_candidates` /
@@ -116,14 +116,14 @@ modules.
 | `core.py` | the `Orchestrator` class, tick loop, dispatch, health, pause/resume, Document skip |
 | `__init__.py` | re-exports + monkeypatch-target bindings |
 
-### Monkeypatch indirection — `_pkg` (removed)
+### Monkeypatch indirection: `_pkg` (removed)
 
 The former parent-package indirection is gone (architecture-improvement
 plan, initiative D). `core.py` imports its collaborators directly and
 calls them through its own module globals, so tests patch the
 consumer's reference:
 
-- `symphony.orchestrator.core.build_backend` — also
+- `symphony.orchestrator.core.build_backend`, which is also
   constructor-injectable: `Orchestrator(state, build_backend=factory)`
 - `symphony.orchestrator.core.commit_workspace_on_done`
 - `symphony.orchestrator.core.auto_merge_on_done_best_effort`
@@ -140,15 +140,15 @@ These were already enforced by tests, but they are listed here because
 they are easy to regress and hard to spot in a diff:
 
 - `Orchestrator._on_worker_task_done` keeps the **task-identity check**
-  before mutating `_running` / `_retry` — a stale task callback must
-  not pop a newer task off the queue.
+  before mutating `_running` / `_retry`. A stale task callback must not pop a
+  newer task off the queue.
 - `Orchestrator._available_slots` subtracts **both `_running` and
   `_retry`** from the cap. Dropping `_retry` lets retries race the
   primary attempt.
 - `Orchestrator._reconcile_running` waits the full
   **`STALL_FORCE_EJECT_GRACE_S` (30s)** between cancel and force-eject.
 - `last_progress_timestamp` is filtered to **`type == "assistant"`**
-  events — tool-use events are not progress.
+  events. Tool-use events are not progress.
 - Module-level helpers are re-exported through every package
   `__init__.py` so that `monkeypatch.setattr("symphony.<pkg>.helper", …)`
   in tests reaches the live name.
@@ -171,14 +171,14 @@ product code itself. Full rubric and ticket contract live in
 `docs/continuous-improvement/ticket-template.md`; this section only maps
 the runtime surfaces.
 
-- **Config** — `continuous_improvement:` block in `WORKFLOW.md`
+- **Config.** The `continuous_improvement:` block in `WORKFLOW.md`
   (`ContinuousImprovementConfig` in `symphony.workflow.config`): `enabled`,
   `interval_ms`, `max_turns`, `agent_kind`, `ticket_prefix`,
   `max_tickets_per_run`, `require_idle_board`, plus the experimental
   `modes`, `mode_interval_hours`, and `max_improvement_tickets_per_run`.
   Only `enabled`, `interval_ms`, `max_turns`, `modes`, and `agent_kind` are
   browser-editable; the rest is trusted workflow configuration.
-- **Web API** — `GET /api/v1/workflow` gains a `continuous_improvement`
+- **Web API.** `GET /api/v1/workflow` gains a `continuous_improvement`
   field; `PUT /api/v1/workflow/continuous-improvement` mutates
   `enabled` / `interval_ms` / `max_turns` / `agent_kind` through
   `symphony.workflow.mutate`; `POST
@@ -186,44 +186,44 @@ the runtime surfaces.
   in-memory turn counter; `GET /api/v1/continuous-improvement/status`
   reports read-only run state (`turns_used`, `in_flight`,
   `last_result`, `next_due_at`, `skipped_reason`, etc.).
-- **Scheduler** — lives in `symphony.orchestrator.core.Orchestrator`,
+- **Scheduler.** Lives in `symphony.orchestrator.core.Orchestrator`,
   outside the tick loop: a bounded background task, gated by
   `require_idle_board` (never competes with normal dispatch for
   `max_concurrent_agents` slots) and by a durable cross-process lease
   (same family as `RunRegistry.acquire_run` in
   `orchestrator/run_registry.py`) so two orchestrator processes on the
   same workflow directory never run concurrent heartbeats.
-- **Runner** — `src/symphony/continuous_improvement.py` (new module):
+- **Runner.** `src/symphony/continuous_improvement.py` (new module)
   proves the baseline with Git commands that never change the host
   checkout. If `agent.auto_merge_target_branch` differs from the host
   branch, the runner creates a temporary detached worktree for that
   target, verifies/removes it after the run, and reports unresolved
   targets as `not_proven`. It then runs predefined `argv` checks
-  (`shell=False`, explicit timeouts, capped + redacted output) —
-  `pytest`, `ruff`, `pyright`, plus optional browser/DB probes that
-  report `not_available` when unconfigured.
-- **Report writer** — rewrites only the `<!-- ci:auto:* -->` sections of
+  (`shell=False`, explicit timeouts, capped and redacted output): `pytest`,
+  `ruff`, `pyright`, plus optional browser and DB probes that report
+  `not_available` when unconfigured.
+- **Report writer.** Rewrites only the `<!-- ci:auto:* -->` sections of
   `docs/continuous-improvement/latest.md`; everything outside those
   markers is operator content and is preserved. The machine-owned
   sections include summary, baseline, check table, evidence excerpts,
   created tickets, and run metadata.
-- **Registrar** — turns `failed` findings into tickets via
+- **Registrar.** Turns `failed` findings into tickets via
   `FileBoardTracker.create_with_next_identifier(prefix="CI")`,
   de-duplicated by a `CI Fingerprint: <hash>` line, capped at
   `max_tickets_per_run` new tickets per run, and stamped with
   `continuous_improvement.agent_kind` when configured. Trackers without a
   safe creation contract report `skipped_reason: unsupported_tracker`
   instead of crashing. The heartbeat never writes ticket Markdown
-  directly — only through tracker lock/compare-and-swap APIs — and never
-  edits files under `src/` or `tests/`.
-- **Improvement modes (experimental, opt-in)** — `modes:` extends the
+  directly. It goes through the tracker lock/compare-and-swap APIs, and it
+  never edits files under `src/` or `tests/`.
+- **Improvement modes (experimental, opt-in).** `modes:` extends the
   heartbeat past readiness into `blocked_fixes`, `security`,
   `market_research`, and `feature_improvements`. Per-mode cadence lives in
   `.symphony/continuous-improvement/mode-state.json`; the scheduler
   re-arms without spending a turn when nothing is due. Agent-driven modes
   need a backend turn, so the orchestrator injects an `AgentRunner`
-  callable (bound as a keyword partial onto `default_improvement_runner`)
-  — `continuous_improvement.py` must stay orchestrator-free. Their output
+  callable (bound as a keyword partial onto `default_improvement_runner`),
+  because `continuous_improvement.py` must stay orchestrator-free. Their output
   is a JSON proposal file the registrar turns into normal tickets: capped,
   de-duplicated by the `CI Proposal:` marker and open-ticket titles,
   labelled `ci`, and grouped under one `REQ-CI-<date>-<n>` request. See
@@ -242,7 +242,7 @@ the runtime surfaces.
    runtime changes. For documentation-only edits, run stale-string/static
    checks and any affected contract tests.
 
-## Historical Split Commits
+## Historical split commits
 
 The original package split came from these self-contained commits. Use them as
 history when auditing the split; prefer scoped reverts or follow-up fixes over
