@@ -3,7 +3,7 @@
 Thanks for helping improve Symphony. This repo is public, and external pull
 requests are welcome.
 
-## Branch And PR Target
+## Branch and PR target
 
 - Open pull requests against `dev` unless a maintainer asks for a different
   target.
@@ -12,7 +12,7 @@ requests are welcome.
 - Prefer small, focused PRs. Separate backend behavior, UI, docs, and release
   metadata when they are not part of the same user-visible change.
 
-## Local Setup
+## Local setup
 
 ```bash
 python3 -m venv .venv
@@ -20,7 +20,7 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
-## Required Verification
+## Required verification
 
 Run the full test suite and project checks after installing the development
 dependencies before opening or updating a PR:
@@ -58,7 +58,7 @@ Start-Process -FilePath ".venv\Scripts\python.exe" `
   -WorkingDirectory "." -WindowStyle Hidden
 ```
 
-## Development Standards
+## Development standards
 
 - Keep agent-specific protocol details inside `src/symphony/backends/`.
   The orchestrator should see normalized backend events, not raw CLI payloads.
@@ -71,7 +71,7 @@ Start-Process -FilePath ".venv\Scripts\python.exe" `
 - Update README or `docs/` when the user-facing behavior or operator workflow
   changes.
 
-## PR Checklist
+## PR checklist
 
 Before requesting review, make sure the PR includes:
 
