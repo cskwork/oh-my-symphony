@@ -21,7 +21,7 @@ from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
 )
-from symphony.errors import TurnFailed
+from symphony.errors import LinearUnknownPayload, TurnFailed
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import (
     STALL_FORCE_EJECT_GRACE_S,
@@ -119,13 +119,13 @@ def _make_config(
             stall_timeout_ms=300_000,
             resume_across_turns=True,
         ),
-prime_agent=PrimeAgentConfig(
-    command='prime-agent -p --mode json',
-    turn_timeout_ms=3_600_000,
-    read_timeout_ms=5_000,
-    stall_timeout_ms=300_000,
-    resume_across_turns=True,
-),
+        prime_agent=PrimeAgentConfig(
+            command="prime-agent -p --mode json",
+            turn_timeout_ms=3_600_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=300_000,
+            resume_across_turns=True,
+        ),
         server=ServerConfig(port=None),
         prompt_template="hi",
     )
@@ -166,8 +166,61 @@ def test_should_dispatch_basic():
     assert orch._should_dispatch(issue, cfg) is True
 
 
-def test_auto_triage_actionable_file_todo_moves_to_in_progress_without_dispatch(monkeypatch):
-    cfg = _make_config(tracker_kind="file", active_states=("Todo", "In Progress", "Verify"))
+def test_candidate_payload_failure_logs_and_returns_before_dispatch(monkeypatch):
+    cfg = _make_config()
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    dispatched: list[str] = []
+    post_fetch_scheduling: list[bool] = []
+    warnings: list[tuple[str, dict[str, object]]] = []
+
+    async def fail_candidates(_cfg):
+        raise LinearUnknownPayload("issue.inverseRelations incomplete")
+
+    async def skip_blocked_recovery(_cfg):
+        return None
+
+    def dispatch(issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(issue.identifier)
+
+    def record_post_fetch_sort(*_args, **_kwargs):
+        post_fetch_scheduling.append(True)
+        return []
+
+    monkeypatch.setattr(core_module, "validate_for_dispatch", lambda _cfg: None)
+    monkeypatch.setattr(
+        orch,
+        "_auto_reopen_sources_from_resolved_rcas",
+        skip_blocked_recovery,
+    )
+    monkeypatch.setattr(orch, "_fetch_candidates", fail_candidates)
+    monkeypatch.setattr(orch, "_sort_with_wait_age_bump", record_post_fetch_sort)
+    monkeypatch.setattr(orch, "_dispatch", dispatch)
+    monkeypatch.setattr(
+        core_module.log,
+        "warning",
+        lambda event, **fields: warnings.append((event, fields)),
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert dispatched == []
+    assert post_fetch_scheduling == []
+    assert orch._consecutive_candidate_fetch_failures == 1
+    assert any(
+        event == "candidate_fetch_failed"
+        and fields["error"]
+        == "linear_unknown_payload: issue.inverseRelations incomplete"
+        for event, fields in warnings
+    )
+
+
+def test_auto_triage_actionable_file_todo_moves_to_in_progress_without_dispatch(
+    monkeypatch,
+):
+    cfg = _make_config(
+        tracker_kind="file", active_states=("Todo", "In Progress", "Verify")
+    )
     issue = _issue(
         "MT-1",
         description="## Request\nBuild it.\n\n## Acceptance Criteria\n1. It works.",
@@ -196,7 +249,9 @@ def test_auto_triage_actionable_file_todo_moves_to_in_progress_without_dispatch(
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
     monkeypatch.setattr(orch, "_dispatch", _dispatch)
-    monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_append))
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_append_note", staticmethod(_append)
+    )
     monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
 
     import asyncio
@@ -204,12 +259,16 @@ def test_auto_triage_actionable_file_todo_moves_to_in_progress_without_dispatch(
     asyncio.run(orch._on_tick())
 
     assert dispatched == []
-    assert appended == [("MT-1", "Triage", "Ticket is actionable; routing to In Progress.")]
+    assert appended == [
+        ("MT-1", "Triage", "Ticket is actionable; routing to In Progress.")
+    ]
     assert moved == [("MT-1", "In Progress")]
 
 
 def test_auto_triage_skips_already_triaged_todo(monkeypatch):
-    cfg = _make_config(tracker_kind="file", active_states=("Todo", "In Progress", "Verify"))
+    cfg = _make_config(
+        tracker_kind="file", active_states=("Todo", "In Progress", "Verify")
+    )
     issue = _issue(
         "MT-1",
         description=(
@@ -242,7 +301,9 @@ def test_auto_triage_skips_already_triaged_todo(monkeypatch):
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
     monkeypatch.setattr(orch, "_dispatch", _dispatch)
-    monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_append))
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_append_note", staticmethod(_append)
+    )
     monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
 
     import asyncio
@@ -255,7 +316,9 @@ def test_auto_triage_skips_already_triaged_todo(monkeypatch):
 
 
 def test_auto_triage_skips_bug_tickets_so_reproduction_prompt_runs(monkeypatch):
-    cfg = _make_config(tracker_kind="file", active_states=("Todo", "Explore", "In Progress"))
+    cfg = _make_config(
+        tracker_kind="file", active_states=("Todo", "Explore", "In Progress")
+    )
     issue = _issue(
         "BUG-1",
         description="## Request\nFix it.\n\n## Acceptance Criteria\n1. Reproduced.",
@@ -344,9 +407,7 @@ def test_todo_with_done_blocker_waits_for_worker_finalization():
     orch._terminal_persist_pending.add(upstream.id)
     downstream = replace(
         downstream,
-        blocked_by=(
-            BlockerRef(id=upstream.id, identifier="MT-9", state="Done"),
-        ),
+        blocked_by=(BlockerRef(id=upstream.id, identifier="MT-9", state="Done"),),
     )
     assert orch._should_dispatch(downstream, cfg) is False
 
@@ -596,6 +657,7 @@ def test_retry_eligibility_classifies_all_contention_as_non_slot_wait(
     orch = _orch()
     issue = _issue("MT-1")
     if contention == "ci":
+
         class _PendingImprovement:
             def done(self) -> bool:
                 return False
@@ -677,8 +739,7 @@ def test_orchestrator_dispatch_prioritizes_ticket_registration_order():
     )
 
     ordered = [
-        issue.identifier
-        for issue in _sort_for_dispatch_fifo([todo, review], cfg)
+        issue.identifier for issue in _sort_for_dispatch_fifo([todo, review], cfg)
     ]
 
     assert ordered == ["OLV-002", "OLV-003"]
@@ -893,8 +954,7 @@ def test_reconcile_isolates_force_eject_cleanup_and_still_schedules_retry(
                 retry_attempt=None,
                 worker_task=None,
                 workspace_path=Path("/tmp"),
-                cancelled_at=now
-                - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 1),
+                cancelled_at=now - timedelta(seconds=STALL_FORCE_EJECT_GRACE_S + 1),
                 agent_pgid=4343,
             )
             orch._running[stalled.id] = RunningEntry(
@@ -1441,14 +1501,17 @@ def test_initialized_missing_registry_fails_closed_when_continuation_enabled(
     orch = _orch()
     orch._run_registry_initialized = True
 
-    assert orch._try_acquire_run_lease(
-        cfg=cfg,
-        issue=issue,
-        workspace_path=tmp_path / "ws" / issue.identifier,
-        attempt=None,
-        attempt_kind="initial",
-        agent_kind="codex",
-    ) is None
+    assert (
+        orch._try_acquire_run_lease(
+            cfg=cfg,
+            issue=issue,
+            workspace_path=tmp_path / "ws" / issue.identifier,
+            attempt=None,
+            attempt_kind="initial",
+            agent_kind="codex",
+        )
+        is None
+    )
 
     opted_out = replace(cfg, agent=replace(cfg.agent, crash_continuation=False))
     acquisition = orch._try_acquire_run_lease(
@@ -1465,7 +1528,9 @@ def test_initialized_missing_registry_fails_closed_when_continuation_enabled(
 
 def test_persisted_lease_blocks_fresh_orchestrator_dispatch(tmp_path, monkeypatch):
     """A crash-restarted process must not ignore another live lease."""
-    cfg = _make_config(workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws")
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws"
+    )
     issue = _issue("MT-1", state="Todo")
     state_db = tmp_path / ".symphony" / "state.db"
 
@@ -1540,9 +1605,13 @@ def test_unconfirmed_backend_cleanup_keeps_active_lease_for_startup_reap(tmp_pat
 
 
 def test_worker_exit_releases_persisted_lease(tmp_path, monkeypatch):
-    cfg = _make_config(workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws")
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws"
+    )
     issue = _issue("MT-1", state="Todo")
-    registry = RunRegistry(tmp_path / ".symphony" / "state.db", lease_ttl=timedelta(minutes=5))
+    registry = RunRegistry(
+        tmp_path / ".symphony" / "state.db", lease_ttl=timedelta(minutes=5)
+    )
     run_id = registry.acquire_run(
         issue,
         workspace_path=tmp_path / "ws" / issue.identifier,
@@ -1579,7 +1648,9 @@ def test_worker_exit_releases_persisted_lease(tmp_path, monkeypatch):
 
 
 def test_persisted_issue_flags_block_dispatch_after_restart(tmp_path):
-    cfg = _make_config(workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws")
+    cfg = _make_config(
+        workflow_path=tmp_path / "WORKFLOW.md", workspace_root=tmp_path / "ws"
+    )
     state_db = tmp_path / ".symphony" / "state.db"
     paused = _issue("MT-PAUSED", state="Todo")
     exhausted = _issue("MT-BUDGET", state="Todo")
@@ -1678,9 +1749,7 @@ def test_startup_reclaim_kills_recorded_orphan_agent_before_return(
     assert restarted._run_registry.get_run(run_id).status == "orphaned"
 
 
-def test_startup_reclaim_keeps_fence_when_kill_is_not_confirmed(
-    tmp_path, monkeypatch
-):
+def test_startup_reclaim_keeps_fence_when_kill_is_not_confirmed(tmp_path, monkeypatch):
     finalized: list[str] = []
 
     class _Registry:
@@ -1733,9 +1802,7 @@ def test_startup_reclaim_does_not_kill_reused_backend_pid(tmp_path, monkeypatch)
         agent_kind="codex",
     )
     assert run_id
-    assert crashed.heartbeat(
-        issue_id=issue.id, run_id=run_id, backend_agent_pid=4343
-    )
+    assert crashed.heartbeat(issue_id=issue.id, run_id=run_id, backend_agent_pid=4343)
     crashed.close()
 
     killed: list[int] = []
@@ -1934,9 +2001,12 @@ def test_service_stop_finalizes_active_run_as_shutdown_interrupted(
         assert saved.backend_agent_pid is None
         assert saved.checkpoint_state == issue.state
         assert saved.checkpoint_turn == 1
-        assert reopened.latest_continuation_source(
-            issue_id=issue.id, agent_kind="codex", state=issue.state
-        ) == run_id
+        assert (
+            reopened.latest_continuation_source(
+                issue_id=issue.id, agent_kind="codex", state=issue.state
+            )
+            == run_id
+        )
         flags = reopened.get_issue_flags(issue.id)
         assert flags is None or flags.paused is False
     finally:
@@ -2340,9 +2410,9 @@ def test_reconcile_first_stall_only_cancels():
             await orch._reconcile_running(cfg)
 
             assert issue.id in orch._running, "first stall must NOT eject"
-            assert (
-                orch._running[issue.id].cancelled_at is not None
-            ), "cancel must be flagged"
+            assert orch._running[issue.id].cancelled_at is not None, (
+                "cancel must be flagged"
+            )
         finally:
             worker_task.cancel()
             try:
@@ -2369,9 +2439,7 @@ def test_running_snapshot_includes_worker_task_stack():
         async def _parked_worker() -> None:
             await event.wait()
 
-        worker_task = asyncio.create_task(
-            _parked_worker(), name="symphony-worker-MT-1"
-        )
+        worker_task = asyncio.create_task(_parked_worker(), name="symphony-worker-MT-1")
         try:
             await asyncio.sleep(0)
             orch._running[issue.id] = RunningEntry(
@@ -2737,9 +2805,9 @@ def test_reconcile_stalls_on_progress_timestamp_not_codex_timestamp():
 
             await orch._reconcile_running(cfg)
 
-            assert (
-                orch._running[issue.id].cancelled_at is not None
-            ), "stall must trigger on stale last_progress_timestamp even if last_codex_timestamp is fresh"
+            assert orch._running[issue.id].cancelled_at is not None, (
+                "stall must trigger on stale last_progress_timestamp even if last_codex_timestamp is fresh"
+            )
         finally:
             worker_task.cancel()
             try:
@@ -2778,9 +2846,9 @@ def test_reconcile_stalls_from_start_when_only_codex_noise_seen():
 
             await orch._reconcile_running(cfg)
 
-            assert (
-                orch._running[issue.id].cancelled_at is not None
-            ), "stall must trigger from started_at until real progress exists"
+            assert orch._running[issue.id].cancelled_at is not None, (
+                "stall must trigger from started_at until real progress exists"
+            )
         finally:
             worker_task.cancel()
             try:
@@ -3053,8 +3121,8 @@ def test_codex_other_message_with_input_only_token_growth_does_not_advance_progr
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "payload": {"message": "reasoning..."},
                 "usage": {
-                    "input_tokens": 1_100_000,   # +100k (history re-send)
-                    "output_tokens": 500,        # unchanged — no model output
+                    "input_tokens": 1_100_000,  # +100k (history re-send)
+                    "output_tokens": 500,  # unchanged — no model output
                     "total_tokens": 1_100_500,
                 },
                 "rate_limits": None,
@@ -3080,7 +3148,7 @@ def test_codex_other_message_with_input_only_token_growth_does_not_advance_progr
                 "payload": {"message": "model output"},
                 "usage": {
                     "input_tokens": 1_100_000,
-                    "output_tokens": 750,        # +250 — real output
+                    "output_tokens": 750,  # +250 — real output
                     "total_tokens": 1_100_750,
                 },
                 "rate_limits": None,
@@ -3493,9 +3561,7 @@ def _stub_workflow_state_returning(
     monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
 
     async def _capture(path, *, identifier, title, **_):
-        captured.append(
-            {"path": path, "identifier": identifier, "title": title}
-        )
+        captured.append({"path": path, "identifier": identifier, "title": title})
 
     async def _capture_gate(path, *, identifier, title, **kwargs):
         await _capture(path, identifier=identifier, title=title)
@@ -3860,9 +3926,7 @@ def test_max_total_turns_exhaustion_persists_via_tracker_transition(monkeypatch)
         def _capture_update_state(cfg, captured_issue, target_state):
             transitions.append((captured_issue.identifier, target_state))
 
-        monkeypatch.setattr(
-            orch, "_tracker_call_update_state", _capture_update_state
-        )
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update_state)
         monkeypatch.setattr(
             orch, "_tracker_call_states_by_ids", lambda cfg, ids: [issue]
         )
@@ -3903,9 +3967,7 @@ def test_max_total_turns_exhaustion_no_transition_when_state_unset(monkeypatch):
         def _capture_update_state(cfg, captured_issue, target_state):
             transitions.append((captured_issue.identifier, target_state))
 
-        monkeypatch.setattr(
-            orch, "_tracker_call_update_state", _capture_update_state
-        )
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update_state)
         monkeypatch.setattr(
             orch, "_tracker_call_states_by_ids", lambda cfg, ids: [issue]
         )
@@ -4148,9 +4210,7 @@ def test_max_total_tokens_exhaustion_persists_via_tracker_transition(monkeypatch
         def _capture_update_state(cfg, captured_issue, target_state):
             transitions.append((captured_issue.identifier, target_state))
 
-        monkeypatch.setattr(
-            orch, "_tracker_call_update_state", _capture_update_state
-        )
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update_state)
         monkeypatch.setattr(
             orch,
             "_tracker_call_append_note",
@@ -4237,9 +4297,7 @@ def test_max_total_tokens_allows_continuation_when_ticket_advanced(monkeypatch):
         def _capture_update_state(cfg, captured_issue, target_state):
             transitions.append((captured_issue.identifier, target_state))
 
-        monkeypatch.setattr(
-            orch, "_tracker_call_update_state", _capture_update_state
-        )
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update_state)
 
         async def _noop() -> None:
             await asyncio.sleep(3600)
@@ -4482,11 +4540,14 @@ def test_auto_merge_done_gate_passes_local_only_policy(monkeypatch):
 
     monkeypatch.setattr(core_module, "auto_merge_on_done_best_effort", _capture_merge)
 
-    assert asyncio.run(
-        orch._auto_merge_done_gate_or_block(
-            cfg, issue, Path("/tmp/ws-fake"), debug_target=None
+    assert (
+        asyncio.run(
+            orch._auto_merge_done_gate_or_block(
+                cfg, issue, Path("/tmp/ws-fake"), debug_target=None
+            )
         )
-    ) is True
+        is True
+    )
     assert captured["push_target"] is False
 
 
@@ -4534,7 +4595,9 @@ def test_after_done_failure_policy_warn_removes_workspace(monkeypatch):
     asyncio.run(_run())
 
 
-def test_on_worker_exit_hit_max_turns_blocks_ticket_when_blocked_state_exists(monkeypatch):
+def test_on_worker_exit_hit_max_turns_blocks_ticket_when_blocked_state_exists(
+    monkeypatch,
+):
     """Per-attempt `max_turns` exhaustion should surface as a blocked ticket.
 
     Reproduces the issue Codex flagged 2026-05-16: `worker_run_loop` breaks
@@ -4564,8 +4627,12 @@ def test_on_worker_exit_hit_max_turns_blocks_ticket_when_blocked_state_exists(mo
         entry = _install_running_entry(orch, issue)
         entry.hit_max_turns = True  # simulate the worker_run_loop break path
         _stub_workflow_state_returning(orch, cfg, monkeypatch)
-        monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
-        monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_append))
+        monkeypatch.setattr(
+            Orchestrator, "_tracker_call_update_state", staticmethod(_move)
+        )
+        monkeypatch.setattr(
+            Orchestrator, "_tracker_call_append_note", staticmethod(_append)
+        )
 
         try:
             assert orch._retry == {}, "precondition: no retries scheduled"
@@ -4580,9 +4647,7 @@ def test_on_worker_exit_hit_max_turns_blocks_ticket_when_blocked_state_exists(mo
             assert moved == [("MT-MAX", "Blocked")]
             assert appended and appended[0][0:2] == ("MT-MAX", "Budget Exceeded")
             assert "max_turns=20/attempt" in appended[0][2]
-            assert "max_turns reached" in (
-                orch._issue_debug[issue.id].last_error or ""
-            )
+            assert "max_turns reached" in (orch._issue_debug[issue.id].last_error or "")
             assert "Blocked" in (orch._issue_debug[issue.id].last_error or "")
         finally:
             for retry in list(orch._retry.values()):
@@ -4610,8 +4675,7 @@ def test_on_worker_exit_normal_non_terminal_still_continues_when_no_max_turns():
         try:
             await orch._on_worker_exit(issue.id, reason="normal", error=None)
             assert len(orch._retry) == 1, (
-                "non-terminal + no max_turns flag must still schedule a "
-                "continuation"
+                "non-terminal + no max_turns flag must still schedule a continuation"
             )
         finally:
             for retry in list(orch._retry.values()):
@@ -4748,7 +4812,9 @@ def test_worker_exit_opencode_sigterm_schedules_retry_without_pause(tmp_path):
             assert flags.pause_reason is None
             assert orch.is_paused(issue.id) is False
             retry = orch._retry[issue.id]
-            assert retry.error == "turn_error: turn_failed: opencode failed with exit -15"
+            assert (
+                retry.error == "turn_error: turn_failed: opencode failed with exit -15"
+            )
             assert retry.kind == "retry"
         finally:
             for retry in list(orch._retry.values()):
@@ -4849,9 +4915,7 @@ def test_retry_timer_reparks_paused_ticket_without_dispatching(monkeypatch):
             assert reparked.holds_slot is True
             assert reparked.error == "worker error: turn_error: simulated"
             # Hold delay roughly matches PAUSED_RETRY_HOLD_MS.
-            expected_due = (
-                orch._loop.time() * 1000 + PAUSED_RETRY_HOLD_MS
-            )
+            expected_due = orch._loop.time() * 1000 + PAUSED_RETRY_HOLD_MS
             assert abs(reparked.due_at_ms - expected_due) < 500
         finally:
             for retry in list(orch._retry.values()):
@@ -4900,7 +4964,9 @@ async def _assert_blocked_retry_recovers(
 
 
 def test_retry_timer_waits_for_unresolved_blocker_then_recovers(monkeypatch):
-    cfg = _make_config(active_states=("In Progress", "Verify"), terminal_states=("Done",))
+    cfg = _make_config(
+        active_states=("In Progress", "Verify"), terminal_states=("Done",)
+    )
     orch = _orch()
     blocker = BlockerRef(id="MT-9", identifier="MT-9", state="Verify")
     issue = _issue("MT-1", state="In Progress", blocked_by=(blocker,))
@@ -4922,9 +4988,7 @@ def test_retry_timer_waits_for_unresolved_blocker_then_recovers(monkeypatch):
     monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
 
     asyncio.run(
-        _assert_blocked_retry_recovers(
-            orch, issue, released, candidates, dispatched
-        )
+        _assert_blocked_retry_recovers(orch, issue, released, candidates, dispatched)
     )
 
 
@@ -5216,7 +5280,6 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
             # Capture the call order of commit + remove.
             calls: list[str] = []
 
-
             async def _capture_commit(path, *, identifier, title, **_):
                 calls.append(f"commit:{identifier}")
 
@@ -5230,7 +5293,9 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
                 def path_for(self, ident):
                     return Path("/tmp/ws-rc")
 
-            monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
+            monkeypatch.setattr(
+                core_module, "commit_workspace_on_done", _capture_commit
+            )
             orch._workspace_manager = _StubWS()  # type: ignore[assignment]
 
             await orch._reconcile_running(cfg)
@@ -5240,7 +5305,9 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
 
             await orch._on_worker_exit(issue.id, reason="normal", error=None)
             assert calls == expected, "worker exit must not repeat reconcile cleanup"
-            assert orch._retry == {}, "terminal reconcile must not schedule continuation"
+            assert orch._retry == {}, (
+                "terminal reconcile must not schedule continuation"
+            )
         finally:
             worker_task.cancel()
             try:
@@ -5311,7 +5378,9 @@ def test_reconcile_terminal_grace_expires_despite_recent_heartbeat(monkeypatch):
                 def path_for(self, ident):
                     return Path("/tmp/ws-hb")
 
-            monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
+            monkeypatch.setattr(
+                core_module, "commit_workspace_on_done", _capture_commit
+            )
             orch._workspace_manager = _StubWS()  # type: ignore[assignment]
 
             await orch._reconcile_running(cfg)
@@ -5322,9 +5391,7 @@ def test_reconcile_terminal_grace_expires_despite_recent_heartbeat(monkeypatch):
 
             # Real model progress after the terminal transition must extend
             # the natural-exit window so Learn can finish its history gate.
-            entry.terminal_seen_at = datetime.now(timezone.utc) - timedelta(
-                seconds=61
-            )
+            entry.terminal_seen_at = datetime.now(timezone.utc) - timedelta(seconds=61)
             entry.last_codex_timestamp = datetime.now(timezone.utc)
             entry.last_progress_timestamp = entry.last_codex_timestamp
 
@@ -5395,7 +5462,6 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
                 orch, "_tracker_call_states_by_ids", lambda c, ids: [moved]
             )
 
-
             commit_calls: list[str] = []
             remove_calls: list[str] = []
 
@@ -5412,13 +5478,17 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
                 def path_for(self, ident):
                     return Path("/tmp/ws-off")
 
-            monkeypatch.setattr(core_module, "commit_workspace_on_done", _capture_commit)
+            monkeypatch.setattr(
+                core_module, "commit_workspace_on_done", _capture_commit
+            )
             orch._workspace_manager = _StubWS()  # type: ignore[assignment]
 
             await orch._reconcile_running(cfg_off)
 
             assert commit_calls == [], "auto_commit_on_done=False must skip commit"
-            assert remove_calls == [str(Path("/tmp/ws-off"))], "remove must still happen"
+            assert remove_calls == [str(Path("/tmp/ws-off"))], (
+                "remove must still happen"
+            )
         finally:
             worker_task.cancel()
             try:
@@ -5600,7 +5670,6 @@ def test_startup_terminal_cleanup_skips_done_workspace_when_branch_already_merge
 
     calls: list[str] = []
 
-
     async def _capture_commit(path, *, identifier, title, **_):
         calls.append(f"commit:{identifier}")
 
@@ -5662,7 +5731,6 @@ def test_startup_terminal_cleanup_preserves_unmerged_done_workspace_without_repl
     monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda c: [issue])
 
     calls: list[str] = []
-
 
     async def _capture_commit(path, *, identifier, title, **_):
         calls.append(f"commit:{identifier}")
@@ -5788,7 +5856,9 @@ def test_normal_exit_does_not_continue_after_total_turn_budget():
     cfg = _make_config()
     cfg = replace(
         cfg,
-        agent=replace(cfg.agent, max_turns=2, max_total_turns=2, auto_commit_on_done=False),
+        agent=replace(
+            cfg.agent, max_turns=2, max_total_turns=2, auto_commit_on_done=False
+        ),
     )
     orch._workflow_state._config = cfg
     entry = _install_running_entry(orch, issue)
@@ -5948,7 +6018,9 @@ def test_issue_attention_names_a_blocker_that_is_not_on_the_board():
     assert "symphony board update MT-BLOCKED" in attention["message"]
 
 
-def test_issue_attention_reports_failed_terminal_dependency(monkeypatch: pytest.MonkeyPatch):
+def test_issue_attention_reports_failed_terminal_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+):
     orch = _orch()
     cfg = _make_config(terminal_states=("Done", "Blocked"))
     monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
@@ -6113,10 +6185,9 @@ def test_tick_auto_recovery_skips_existing_blocked_rca_note(monkeypatch):
     monkeypatch.setattr(
         orch,
         "_tracker_call_create_blocked_rca_issue",
-        lambda _cfg, _issue, _rca_state, _reopen_state, _agent_kind: created.append(
-            _issue.identifier
-        )
-        or "RCA-2",
+        lambda _cfg, _issue, _rca_state, _reopen_state, _agent_kind: (
+            created.append(_issue.identifier) or "RCA-2"
+        ),
     )
 
     asyncio.run(orch._on_tick())
@@ -6153,10 +6224,9 @@ def test_tick_auto_recovery_respects_disabled_config(monkeypatch):
     monkeypatch.setattr(
         orch,
         "_tracker_call_create_blocked_rca_issue",
-        lambda _cfg, _issue, _rca_state, _reopen_state, _agent_kind: created.append(
-            _issue.identifier
-        )
-        or "RCA-1",
+        lambda _cfg, _issue, _rca_state, _reopen_state, _agent_kind: (
+            created.append(_issue.identifier) or "RCA-1"
+        ),
     )
 
     asyncio.run(orch._on_tick())
@@ -6217,7 +6287,9 @@ def test_tick_reopens_blocked_source_after_resolved_rca(monkeypatch, auto_recove
 
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
-    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source]
+    )
     monkeypatch.setattr(
         orch, "_tracker_call_active_rca_for_source", lambda *_args: None
     )
@@ -6266,7 +6338,9 @@ def test_tick_does_not_reopen_blocked_source_at_human_review(monkeypatch):
 
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
-    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source]
+    )
     monkeypatch.setattr(
         orch,
         "_tracker_call_update_state",
@@ -6328,9 +6402,7 @@ def test_tick_holds_proven_fix_when_source_reopen_write_fails(monkeypatch):
     monkeypatch.setattr(
         orch,
         "_tracker_call_append_note",
-        lambda _cfg, issue, heading, _body: notes.append(
-            (issue.identifier, heading)
-        ),
+        lambda _cfg, issue, heading, _body: notes.append((issue.identifier, heading)),
     )
     monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
 
@@ -6577,7 +6649,9 @@ def test_tick_does_not_reopen_blocked_source_after_failed_rca(monkeypatch):
 
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
-    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source]
+    )
     monkeypatch.setattr(
         orch,
         "_tracker_call_update_state",
@@ -6627,7 +6701,9 @@ def test_tick_does_not_reopen_source_when_rca_needs_operator_intervention(
 
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
-    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source]
+    )
     monkeypatch.setattr(
         orch,
         "_tracker_call_update_state",
@@ -6677,7 +6753,9 @@ def test_tick_does_not_reopen_source_with_recorded_operator_action(monkeypatch):
 
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch_candidates)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
-    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source])
+    monkeypatch.setattr(
+        orch, "_tracker_call_terminal_issues", lambda _cfg: [rca, source]
+    )
     monkeypatch.setattr(
         orch,
         "_tracker_call_update_state",
@@ -6747,9 +6825,7 @@ def test_recover_blocked_issue_links_source_to_new_fix(tmp_path):
     orch = _orch()
     orch._workflow_state._config = cfg
 
-    changed, _message, details = asyncio.run(
-        orch.recover_blocked_issue("MT-BLOCKED")
-    )
+    changed, _message, details = asyncio.run(orch.recover_blocked_issue("MT-BLOCKED"))
 
     assert changed is True
     assert details["fix_identifier"] == "FIX-MT-BLOCKED-1"
@@ -6901,7 +6977,10 @@ def test_recover_blocked_issue_opens_rca_ticket_and_keeps_source_blocked(monkeyp
     )
 
     assert changed is True
-    assert message == "FIX-MT-BLOCKED-1 opened to unblock MT-BLOCKED; MT-BLOCKED remains Blocked"
+    assert (
+        message
+        == "FIX-MT-BLOCKED-1 opened to unblock MT-BLOCKED; MT-BLOCKED remains Blocked"
+    )
     assert details == {
         "original_state": "Blocked",
         "target_state": "Todo",
@@ -6924,7 +7003,10 @@ def test_recover_blocked_issue_opens_rca_ticket_and_keeps_source_blocked(monkeyp
     ]
     assert notes == [("MT-BLOCKED", "Blocked Fix", notes[0][2])]
     assert "Fix ticket `FIX-MT-BLOCKED-1` opened" in notes[0][2]
-    assert "the source ticket still must pass the normal configured workflow" in notes[0][2]
+    assert (
+        "the source ticket still must pass the normal configured workflow"
+        in notes[0][2]
+    )
     assert moved == []
 
 
@@ -6937,9 +7019,15 @@ def test_blocked_rca_prompt_reopens_source_to_todo_then_full_workflow():
     assert "## Clarified Request" in description
     assert "append `## Fix Resolution` to both" in description
     assert "concrete, testable acceptance criteria" in description
-    assert "Ambiguity in the request or acceptance criteria is itself a blocker" in description
+    assert (
+        "Ambiguity in the request or acceptance criteria is itself a blocker"
+        in description
+    )
     assert "Do not skip the source ticket's normal workflow" in description
-    assert "it must pass through the configured Todo/In Progress/Verify/Document" in description
+    assert (
+        "it must pass through the configured Todo/In Progress/Verify/Document"
+        in description
+    )
 
 
 def test_recover_blocked_issue_rejects_non_blocked_ticket(monkeypatch):
@@ -7014,7 +7102,9 @@ def test_recover_blocked_issue_finds_active_rca_after_in_memory_loss(
     cfg = replace(cfg, tracker=replace(cfg.tracker, board_root=board_root))
     # This stale source snapshot has neither the persisted note nor the old
     # process's in-memory guard.  The active RCA on the board is authoritative.
-    issue = _issue("MT-BLOCKED", state="Blocked", description="## Blocker\n\nStill blocked.")
+    issue = _issue(
+        "MT-BLOCKED", state="Blocked", description="## Blocker\n\nStill blocked."
+    )
     orch = _orch()
     created: list[str] = []
     monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
@@ -7091,7 +7181,10 @@ def test_recover_blocked_issue_allows_new_rca_for_later_block_episode(
     changed, message, details = asyncio.run(orch.recover_blocked_issue("MT-BLOCKED"))
 
     assert changed is True
-    assert message == "FIX-MT-BLOCKED-2 opened to unblock MT-BLOCKED; MT-BLOCKED remains Blocked"
+    assert (
+        message
+        == "FIX-MT-BLOCKED-2 opened to unblock MT-BLOCKED; MT-BLOCKED remains Blocked"
+    )
     assert details["fix_identifier"] == "FIX-MT-BLOCKED-2"
     assert created == ["MT-BLOCKED"]
     assert notes == ["Blocked Fix"]
@@ -7347,7 +7440,9 @@ def test_turn_checkpoints_require_completion_event_and_workspace_hook(
         assert saved.checkpoint_turn is None
 
 
-def test_worker_loop_stops_before_starting_past_total_turn_budget(monkeypatch, tmp_path):
+def test_worker_loop_stops_before_starting_past_total_turn_budget(
+    monkeypatch, tmp_path
+):
     """`max_total_turns` must be enforced at the turn boundary, not only exit.
 
     Regression for OLV-150: the prompt said turn N of 60, but the worker kept
@@ -7426,7 +7521,9 @@ def test_worker_loop_stops_before_starting_past_total_turn_budget(monkeypatch, t
         _stub_workflow_state_returning(orch, cfg, monkeypatch)
         orch._workspace_manager = _StubWS()  # type: ignore[assignment]
         monkeypatch.setattr(core_module, "build_backend", lambda _init: _Backend())
-        monkeypatch.setattr(orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [issue])
+        monkeypatch.setattr(
+            orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [issue]
+        )
         monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
         monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
 
@@ -7523,9 +7620,7 @@ def test_no_stage_change_counter_resets_on_state_change():
     assert core_module._update_state_turn_counter(debug, "verify") == 1
 
 
-def test_worker_loop_no_stage_change_watchdog_blocks_and_pauses(
-    monkeypatch, tmp_path
-):
+def test_worker_loop_no_stage_change_watchdog_blocks_and_pauses(monkeypatch, tmp_path):
     orch = _orch()
     issue = _issue("MT-NOSTAGE", state="In Progress")
     cfg = _make_config(
@@ -7776,16 +7871,14 @@ def test_conflict_pre_check_blocks_overlapping_candidate(monkeypatch):
         "MT-1",
         state="In Progress",
         description=(
-            "## Brief\nfoo\n\n"
-            "## Touched Files\n- src/foo.py\n- src/util.py\n"
+            "## Brief\nfoo\n\n## Touched Files\n- src/foo.py\n- src/util.py\n"
         ),
     )
     candidate = _issue(
         "MT-2",
         state="Todo",
         description=(
-            "## Brief\nbar\n\n"
-            "## Touched Files\n- src/foo.py\n- src/other.py\n"
+            "## Brief\nbar\n\n## Touched Files\n- src/foo.py\n- src/other.py\n"
         ),
     )
 
@@ -7828,9 +7921,7 @@ def test_conflict_pre_check_blocks_overlapping_candidate(monkeypatch):
     monkeypatch.setattr(
         Orchestrator, "_tracker_call_append_note", staticmethod(_append)
     )
-    monkeypatch.setattr(
-        Orchestrator, "_tracker_call_update_state", staticmethod(_move)
-    )
+    monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
 
     asyncio.run(orch._on_tick())
 
@@ -7838,9 +7929,9 @@ def test_conflict_pre_check_blocks_overlapping_candidate(monkeypatch):
     assert moved == [("MT-2", "Blocked")], (
         "candidate must be moved to Blocked on overlap"
     )
-    assert appended == [
-        ("MT-2", "Conflict", appended[0][2])
-    ], "exactly one Conflict note must be appended"
+    assert appended == [("MT-2", "Conflict", appended[0][2])], (
+        "exactly one Conflict note must be appended"
+    )
     note_body = appended[0][2]
     assert "MT-1" in note_body, "Conflict note must name the other ticket"
     assert "src/foo.py" in note_body, "Conflict note must list overlap path"
@@ -8051,9 +8142,7 @@ def test_g2_empty_response_loop_escalates_after_three_consecutive_turns(monkeypa
     asyncio.run(_run())
 
 
-def test_g2_empty_response_loop_does_not_block_phase_transitions(
-    monkeypatch, tmp_path
-):
+def test_g2_empty_response_loop_does_not_block_phase_transitions(monkeypatch, tmp_path):
     """G2 — empty preview text is only a loop when the card stays put.
 
     Several real CLIs edit files successfully but return no assistant preview
@@ -8203,9 +8292,7 @@ def test_oversized_dependency_graph_degrades_without_unbounded_analysis(
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
     monkeypatch.setattr(orch, "_dispatch", _dispatch)
-    monkeypatch.setattr(
-        orch, "_available_slots", lambda _cfg: 0 if dispatched else 1
-    )
+    monkeypatch.setattr(orch, "_available_slots", lambda _cfg: 0 if dispatched else 1)
 
     asyncio.run(orch._on_tick())
 
@@ -8387,9 +8474,7 @@ def test_dag_policy_snapshot_order_matches_consumed_dispatch_order(monkeypatch):
     leaf = replace(
         _issue("TKT-021", state="Todo"),
         priority=1,
-        blocked_by=(
-            BlockerRef(id=root.id, identifier=root.identifier, state="Todo"),
-        ),
+        blocked_by=(BlockerRef(id=root.id, identifier=root.identifier, state="Todo"),),
     )
     urgent = replace(_issue("TKT-030", state="Todo"), priority=0)
     orch = _orch()
@@ -8410,9 +8495,7 @@ def test_dag_policy_snapshot_order_matches_consumed_dispatch_order(monkeypatch):
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
     monkeypatch.setattr(orch, "_dispatch", _dispatch)
-    monkeypatch.setattr(
-        orch, "_available_slots", lambda _cfg: 0 if dispatched else 1
-    )
+    monkeypatch.setattr(orch, "_available_slots", lambda _cfg: 0 if dispatched else 1)
 
     asyncio.run(orch._on_tick())
 
@@ -8605,12 +8688,8 @@ def test_g2_empty_response_loop_auto_pauses_to_block_redispatch(monkeypatch):
     async def _run() -> None:
         orch._loop = asyncio.get_running_loop()
         orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
-        monkeypatch.setattr(
-            orch, "_tracker_call_update_state", lambda *_a, **_k: None
-        )
-        monkeypatch.setattr(
-            orch, "_tracker_call_append_note", lambda *_a, **_k: None
-        )
+        monkeypatch.setattr(orch, "_tracker_call_update_state", lambda *_a, **_k: None)
+        monkeypatch.setattr(orch, "_tracker_call_append_note", lambda *_a, **_k: None)
 
         async def _noop() -> None:
             await asyncio.sleep(3600)
@@ -8681,7 +8760,8 @@ def test_g2_auto_pause_blocks_redispatch_through_eligible(monkeypatch):
     monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
     monkeypatch.setattr(orch, "_archive_sweep", _archive)
     monkeypatch.setattr(
-        orch, "_dispatch",
+        orch,
+        "_dispatch",
         lambda i, c, **k: dispatched.append(i.identifier),
     )
 
@@ -8710,12 +8790,8 @@ def test_g2_empty_response_loop_pause_reason_persists_and_rehydrates(
         orch._loop = asyncio.get_running_loop()
         orch._run_registry = registry
         orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
-        monkeypatch.setattr(
-            orch, "_tracker_call_update_state", lambda *_a, **_k: None
-        )
-        monkeypatch.setattr(
-            orch, "_tracker_call_append_note", lambda *_a, **_k: None
-        )
+        monkeypatch.setattr(orch, "_tracker_call_update_state", lambda *_a, **_k: None)
+        monkeypatch.setattr(orch, "_tracker_call_append_note", lambda *_a, **_k: None)
 
         async def _noop() -> None:
             await asyncio.sleep(3600)
@@ -8775,12 +8851,8 @@ def test_g2_resume_worker_clears_auto_pause(monkeypatch):
     async def _run() -> None:
         orch._loop = asyncio.get_running_loop()
         orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
-        monkeypatch.setattr(
-            orch, "_tracker_call_update_state", lambda *_a, **_k: None
-        )
-        monkeypatch.setattr(
-            orch, "_tracker_call_append_note", lambda *_a, **_k: None
-        )
+        monkeypatch.setattr(orch, "_tracker_call_update_state", lambda *_a, **_k: None)
+        monkeypatch.setattr(orch, "_tracker_call_append_note", lambda *_a, **_k: None)
 
         async def _noop():
             await asyncio.sleep(3600)
@@ -8828,7 +8900,9 @@ def test_g2_auto_pause_idempotent_on_subsequent_empty_turns(monkeypatch):
     persist double-fire; the pause path uses an `if not in` guard."""
     import asyncio
 
-    cfg = _replace_agent_field(_make_config(max_concurrent=1), budget_exhausted_state="Blocked")
+    cfg = _replace_agent_field(
+        _make_config(max_concurrent=1), budget_exhausted_state="Blocked"
+    )
     orch = _orch()
     issue = _issue("MT-LOOP-IDEM", state="In Progress")
 
@@ -8836,8 +8910,7 @@ def test_g2_auto_pause_idempotent_on_subsequent_empty_turns(monkeypatch):
         orch._loop = asyncio.get_running_loop()
         orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
         monkeypatch.setattr(
-            orch, "_persist_budget_exhausted_state",
-            lambda **kwargs: _async_true()
+            orch, "_persist_budget_exhausted_state", lambda **kwargs: _async_true()
         )
 
         async def _noop():
@@ -8900,9 +8973,7 @@ def test_g2_empty_response_loop_no_op_when_budget_state_unset(monkeypatch):
         orch._loop = asyncio.get_running_loop()
         orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
         monkeypatch.setattr(orch, "_tracker_call_update_state", _update_state)
-        monkeypatch.setattr(
-            orch, "_tracker_call_append_note", lambda *_a, **_k: None
-        )
+        monkeypatch.setattr(orch, "_tracker_call_append_note", lambda *_a, **_k: None)
 
         async def _noop() -> None:
             await asyncio.sleep(3600)
@@ -8949,7 +9020,9 @@ def test_g2_empty_loop_does_not_double_cancel_after_threshold(monkeypatch):
     guard prevents the persist path from re-firing."""
     import asyncio
 
-    cfg = _replace_agent_field(_make_config(max_concurrent=1), budget_exhausted_state="Blocked")
+    cfg = _replace_agent_field(
+        _make_config(max_concurrent=1), budget_exhausted_state="Blocked"
+    )
     orch = _orch()
     issue = _issue("MT-EMPTY-IDEM", state="In Progress")
 
@@ -9075,11 +9148,13 @@ def test_g_dispatch_stability_full_cycle_5_ticks(monkeypatch):
 
         # ---- Tick 1: conflict path adds candidate to `_claimed` ----
         held = _issue(
-            "MT-1", state="In Progress",
+            "MT-1",
+            state="In Progress",
             description="## Touched Files\n- src/foo.py\n",
         )
         cand = _issue(
-            "MT-2", state="Todo",
+            "MT-2",
+            state="Todo",
             description="## Touched Files\n- src/foo.py\n",
         )
         orch._running[held.id] = RunningEntry(
@@ -9102,15 +9177,18 @@ def test_g_dispatch_stability_full_cycle_5_ticks(monkeypatch):
         monkeypatch.setattr(orch, "_fetch_candidates", _fetch_t1)
         monkeypatch.setattr(orch, "_archive_sweep", _archive_noop)
         monkeypatch.setattr(
-            orch, "_dispatch",
+            orch,
+            "_dispatch",
             lambda i, c, **k: dispatched.append(i.identifier),
         )
         monkeypatch.setattr(
-            Orchestrator, "_tracker_call_append_note",
+            Orchestrator,
+            "_tracker_call_append_note",
             staticmethod(lambda *_a, **_k: None),
         )
         monkeypatch.setattr(
-            Orchestrator, "_tracker_call_update_state",
+            Orchestrator,
+            "_tracker_call_update_state",
             staticmethod(lambda *_a, **_k: None),
         )
 
@@ -9131,12 +9209,13 @@ def test_g_dispatch_stability_full_cycle_5_ticks(monkeypatch):
         fresh = _issue("MT-3", state="Todo")
         starved = _issue("MT-9", state="Todo")
         # Pre-age the starvation timestamp past WAIT_AGE_BUMP_MIN.
-        orch._claim_released_at[starved.id] = (
-            datetime.now(timezone.utc) - timedelta(minutes=15)
+        orch._claim_released_at[starved.id] = datetime.now(timezone.utc) - timedelta(
+            minutes=15
         )
         dispatched_t3: list[str] = []
         monkeypatch.setattr(
-            orch, "_dispatch",
+            orch,
+            "_dispatch",
             lambda i, c, **k: dispatched_t3.append(i.identifier),
         )
 
@@ -9180,8 +9259,11 @@ def test_g_dispatch_stability_full_cycle_5_ticks(monkeypatch):
                     "event": "turn_completed",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "payload": {},
-                    "usage": {"input_tokens": 100, "output_tokens": 0,
-                              "total_tokens": 100},
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 0,
+                        "total_tokens": 100,
+                    },
                 }
                 for _ in range(3):
                     await orch._on_codex_event(empty_issue.id, ev)
@@ -9199,6 +9281,7 @@ def test_g_dispatch_stability_full_cycle_5_ticks(monkeypatch):
         # ---- Tick 5: G5 strip on tracker restore ----
         from symphony.trackers.file import FileBoardTracker
         from symphony.workflow import TrackerConfig
+
         board_root = Path(tmp) / "board"
         fbt = FileBoardTracker(
             TrackerConfig(
@@ -9212,10 +9295,13 @@ def test_g_dispatch_stability_full_cycle_5_ticks(monkeypatch):
             )
         )
         fbt.create(
-            identifier="MT-5", title="t", state="Blocked",
+            identifier="MT-5",
+            title="t",
+            state="Blocked",
             description="Operator body.",
         )
         from symphony.trackers.file import issue_from_file
+
         issue_obj = issue_from_file(fbt.find_path("MT-5"))
         fbt.append_note(issue_obj, "Conflict", "Earlier conflict trace.")
         issue_obj = issue_from_file(fbt.find_path("MT-5"))
@@ -9300,7 +9386,11 @@ def test_g2_empty_response_loop_resets_on_non_empty_turn(monkeypatch):
                 "event": "turn_completed",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "payload": {"message": "actual model output here"},
-                "usage": {"input_tokens": 200, "output_tokens": 50, "total_tokens": 250},
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 50,
+                    "total_tokens": 250,
+                },
             }
             # 2 empty, 1 non-empty (resets counter), 2 more empty → still under threshold
             await orch._on_codex_event(issue.id, empty_event)
@@ -9480,7 +9570,11 @@ def test_g2_opencode_shaped_payload_resets_only_with_message_key(monkeypatch):
                 "event": "turn_completed",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "payload": {"result": "did real work", "response": "did real work"},
-                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                },
             }
             # Post-fix opencode shape: `message` added alongside `result`/`response`.
             with_message_event = {
@@ -9491,7 +9585,11 @@ def test_g2_opencode_shaped_payload_resets_only_with_message_key(monkeypatch):
                     "result": "did real work",
                     "response": "did real work",
                 },
-                "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                },
             }
 
             await orch._on_codex_event(issue.id, result_only_event)
@@ -9777,9 +9875,7 @@ async def test_reload_refreshes_workflow_dir_for_existing_workspace_manager(
 
     assert orch._workspace_manager is not None
     ws = await orch._workspace_manager.create_or_reuse("MT-WFDIR")
-    assert (ws.path / "wfdir").read_text().strip() == str(
-        new_cfg.workflow_path.parent
-    )
+    assert (ws.path / "wfdir").read_text().strip() == str(new_cfg.workflow_path.parent)
 
 
 @pytest.mark.asyncio
@@ -9798,7 +9894,7 @@ async def test_reload_refreshes_reuse_policy_and_hook_env_alongside_workflow_dir
     # backslashes would be eaten as escapes — hand bash a POSIX-styled path.
     after_create = (
         f'echo "$SYMPHONY_WORKFLOW_DIR|'
-        f'$SYMPHONY_FEATURE_BASE_BRANCH|'
+        f"$SYMPHONY_FEATURE_BASE_BRANCH|"
         f'$SYMPHONY_MERGE_TARGET_BRANCH" >> {snapshot.as_posix()}'
     )
     old_cfg = _make_config(
@@ -9930,9 +10026,7 @@ def test_max_turns_exhaustion_does_not_double_dispatch(
     monkeypatch.setattr(orch, "_fetch_candidates", _candidates)
 
     async def _run() -> None:
-        exit_task = asyncio.create_task(
-            orch._on_worker_exit(issue.id, "normal", None)
-        )
+        exit_task = asyncio.create_task(orch._on_worker_exit(issue.id, "normal", None))
         # Wait (bounded) until the persist's tracker write is in flight.
         for _ in range(500):
             if started.is_set():
@@ -10053,9 +10147,7 @@ def test_tick_recovers_sandbox_history_failure_instead_of_opening_rca(
         terminal_states=("Done", "Blocked"),
         workflow_path=repo / "WORKFLOW.md",
     )
-    issue = _issue(
-        "MT-BLOCKED", state="Blocked", description=_SANDBOX_HISTORY_FAILURE
-    )
+    issue = _issue("MT-BLOCKED", state="Blocked", description=_SANDBOX_HISTORY_FAILURE)
 
     created, notes, states = _run_blocked_sweep(monkeypatch, _orch(), cfg, issue)
 
@@ -10132,9 +10224,7 @@ def test_tick_recovers_a_blocked_rca_ticket_that_could_never_open_another_rca(
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git CLI required")
-def test_tick_escalates_a_second_identical_block_to_human_review(
-    monkeypatch, tmp_path
-):
+def test_tick_escalates_a_second_identical_block_to_human_review(monkeypatch, tmp_path):
     """One rescue per ticket — looping forever is worse than asking a human."""
     repo = _repo_with_ticket_branch(tmp_path, "MT-BLOCKED")
     cfg = _make_config(
@@ -10171,9 +10261,7 @@ def test_tick_still_opens_rca_when_the_blocker_is_not_a_sandbox_limit(
         terminal_states=("Done", "Blocked"),
         workflow_path=repo / "WORKFLOW.md",
     )
-    issue = _issue(
-        "MT-BLOCKED", state="Blocked", description=_REMOTE_HISTORY_FAILURE
-    )
+    issue = _issue("MT-BLOCKED", state="Blocked", description=_REMOTE_HISTORY_FAILURE)
 
     created, notes, states = _run_blocked_sweep(monkeypatch, _orch(), cfg, issue)
 
@@ -10192,9 +10280,7 @@ def test_tick_declines_recovery_when_no_delivery_branch_exists(monkeypatch, tmp_
         terminal_states=("Done", "Blocked"),
         workflow_path=repo / "WORKFLOW.md",
     )
-    issue = _issue(
-        "MT-BLOCKED", state="Blocked", description=_SANDBOX_HISTORY_FAILURE
-    )
+    issue = _issue("MT-BLOCKED", state="Blocked", description=_SANDBOX_HISTORY_FAILURE)
 
     created, notes, states = _run_blocked_sweep(monkeypatch, _orch(), cfg, issue)
 
@@ -10366,9 +10452,7 @@ def test_async_ensure_reclaim_runs_kill_off_event_loop(tmp_path, monkeypatch):
     crashed.close()
 
     monkeypatch.setattr(core_module, "process_identity", lambda _pid: "proc-1")
-    monkeypatch.setattr(
-        core_module, "process_group_exists", lambda _pid: False
-    )
+    monkeypatch.setattr(core_module, "process_group_exists", lambda _pid: False)
     monkeypatch.setattr(run_registry_module, "_pid_alive", lambda _pid: False)
 
     kills: list[tuple[int, object]] = []
@@ -10403,9 +10487,9 @@ def test_async_ensure_reclaim_runs_kill_off_event_loop(tmp_path, monkeypatch):
     assert len(kill_threads) == 1
     assert kill_threads[0] != loop_threads[0], "kill must run off the event loop"
     assert restarted._run_registry is not None
-    assert (
-        restarted._run_registry.get_run(run_id).status == "orphaned"
-    ), "kill+finalize must complete before _ensure_run_registry_async returns"
+    assert restarted._run_registry.get_run(run_id).status == "orphaned", (
+        "kill+finalize must complete before _ensure_run_registry_async returns"
+    )
 
 
 def _orchestrator_with_identity_run(
@@ -10493,8 +10577,7 @@ def test_kill_gate_skips_when_identity_mismatches(tmp_path, monkeypatch):
 
     attempted: list[int] = []
     monkeypatch.setattr(
-        shell_module, "_taskkill_tree", lambda pid, **_kw: attempted.append(pid)
-        or True
+        shell_module, "_taskkill_tree", lambda pid, **_kw: attempted.append(pid) or True
     )
     monkeypatch.setattr(
         shell_module,
@@ -10525,7 +10608,11 @@ def test_kill_gate_skips_when_identity_mismatches(tmp_path, monkeypatch):
     assert "kill_process_group_identity_mismatch" in [
         event for event, _fields in log_events
     ]
-    eject = [fields for event, fields in log_events if event == "force_eject_killed_process_group"]
+    eject = [
+        fields
+        for event, fields in log_events
+        if event == "force_eject_killed_process_group"
+    ]
     assert eject and eject[0].get("killed") is False
 
 

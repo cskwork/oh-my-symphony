@@ -59,6 +59,7 @@ from typing import Any
 import pytest
 
 import symphony.orchestrator.core as core_mod
+from symphony.errors import LinearUnknownPayload
 from symphony.issue import Issue
 from symphony.orchestrator import Orchestrator, RunningEntry
 from symphony.trackers.file import (
@@ -231,9 +232,7 @@ class _TicketMutatingBackend:
     async def initialize(self) -> None:
         self.calls.append(("initialize", {}))
 
-    async def start_session(
-        self, *, initial_prompt: str, issue_title: str
-    ) -> None:
+    async def start_session(self, *, initial_prompt: str, issue_title: str) -> None:
         self.session_id = f"fake-session-{self.init_id}"
         self.calls.append(
             (
@@ -253,9 +252,7 @@ class _TicketMutatingBackend:
         new_state, body = self.transitions.pop(0)
         front, _ = parse_ticket_file(self.ticket_path)
         front["state"] = new_state
-        front["updated_at"] = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         write_ticket_atomic(self.ticket_path, front, body)
 
     async def stop(self) -> None:
@@ -318,8 +315,7 @@ def _make_file_tracker_config(
     max_attempts: int = 3,
 ) -> ServiceConfig:
     template = (
-        "issue={{ issue.identifier }} state={{ issue.state }} "
-        "rewind={{ is_rewind }}"
+        "issue={{ issue.identifier }} state={{ issue.state }} rewind={{ is_rewind }}"
     )
     return ServiceConfig(
         workflow_path=Path("/tmp/WORKFLOW.md"),
@@ -372,13 +368,13 @@ def _make_file_tracker_config(
             stall_timeout_ms=300_000,
             resume_across_turns=True,
         ),
-prime_agent=PrimeAgentConfig(
-    command='prime-agent -p --mode json',
-    turn_timeout_ms=3_600_000,
-    read_timeout_ms=5_000,
-    stall_timeout_ms=300_000,
-    resume_across_turns=True,
-),
+        prime_agent=PrimeAgentConfig(
+            command="prime-agent -p --mode json",
+            turn_timeout_ms=3_600_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=300_000,
+            resume_across_turns=True,
+        ),
         server=ServerConfig(port=None),
         tui=TuiConfig(language="en", visible_lanes=5),
         prompts=PromptConfig(),
@@ -411,9 +407,7 @@ def _orch(workspace_path: Path) -> Orchestrator:
     return o
 
 
-def _seed_running_entry(
-    o: Orchestrator, issue: Issue, workspace_path: Path
-) -> None:
+def _seed_running_entry(o: Orchestrator, issue: Issue, workspace_path: Path) -> None:
     o._running[issue.id] = RunningEntry(
         issue=issue,
         started_at=datetime.now(timezone.utc),
@@ -474,9 +468,9 @@ def test_contract_passes_when_disk_has_required_sections(
     )
     cfg = _make_file_tracker_config(
         board_root=board_root,
-            active_states=("In Progress", "Verify", "Document"),
-            max_turns=2,
-        )
+        active_states=("In Progress", "Verify", "Document"),
+        max_turns=2,
+    )
 
     _install_file_tracker_backend(
         monkeypatch,
@@ -558,6 +552,71 @@ def test_contract_fails_when_disk_missing_sections(
     )
 
 
+def test_full_refresh_payload_failure_records_error_and_rewinds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_root = tmp_path / "board"
+    ticket_path = _write_initial_ticket(
+        board_root, state="In Progress", body=_IN_PROGRESS_BODY_COMPLETE
+    )
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("In Progress", "Verify", "Document"),
+        max_turns=2,
+    )
+    _install_file_tracker_backend(
+        monkeypatch,
+        ticket_path=ticket_path,
+        transitions=[("Verify", _IN_PROGRESS_BODY_COMPLETE)],
+    )
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "docs" / "MT-1" / "work").mkdir(parents=True)
+    (workspace_path / "docs" / "MT-1" / "work" / "notes.md").write_text("ok")
+    orchestrator = _orch(workspace_path)
+    issue = _make_issue_from_disk("In Progress", _IN_PROGRESS_BODY_COMPLETE)
+    _seed_running_entry(orchestrator, issue, workspace_path)
+
+    warnings: list[tuple[str, dict[str, Any]]] = []
+    recorded_errors: list[str] = []
+    recorded_descriptions: list[str | None] = []
+    original_record_tracker_error = orchestrator._record_tracker_error
+
+    def fail_full_refresh(*_args: Any) -> Issue:
+        raise LinearUnknownPayload("issue.inverseRelations incomplete")
+
+    def record_tracker_error(issue_id: str, exc: Exception | str) -> None:
+        recorded_errors.append(str(exc))
+        recorded_descriptions.append(orchestrator._running[issue_id].issue.description)
+        original_record_tracker_error(issue_id, exc)
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_full_by_id",
+        staticmethod(fail_full_refresh),
+    )
+    monkeypatch.setattr(orchestrator, "_record_tracker_error", record_tracker_error)
+    monkeypatch.setattr(
+        core_mod.log,
+        "warning",
+        lambda event, **fields: warnings.append((event, fields)),
+    )
+
+    asyncio.run(orchestrator._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert any(event == "issue_full_refresh_failed" for event, _fields in warnings)
+    assert any(
+        error == "linear_unknown_payload: issue.inverseRelations incomplete"
+        for error in recorded_errors
+    )
+    assert recorded_descriptions
+    assert all(description is None for description in recorded_descriptions)
+    assert _has_contract_failure_heading(final_body)
+    assert final_front["state"] == "In Progress"
+
+
 def test_qa_scorecard_fail_warns_without_rewind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -606,8 +665,7 @@ def test_qa_scorecard_fail_warns_without_rewind(
         "heading. Body was:\n" + final_body
     )
     assert not _has_contract_failure_heading(final_body), (
-        "Soft scorecard warning incorrectly escalated to a "
-        "## Contract Failure rewind."
+        "Soft scorecard warning incorrectly escalated to a ## Contract Failure rewind."
     )
     assert final_front["state"] != "Verify", (
         "Soft scorecard warning incorrectly rewound the ticket instead of "

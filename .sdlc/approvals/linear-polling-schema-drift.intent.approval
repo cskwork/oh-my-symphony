@@ -1,0 +1,7 @@
+stage: intent
+artifact: .sdlc/work/linear-polling-schema-drift/intent.md
+sha256: e6407205127d390f3fe533e7bba85262d96918b72319072fbb8dfdde096f64ea
+approved_by: danny
+approved_at: 2026-08-29T07:18:08Z
+mode: delegated-chat (agent-run on explicit human instruction)
+runner: agent

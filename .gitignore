@@ -36,3 +36,4 @@ kanban_demo_codex/
 tmp_workspaces/
 WORKFLOW.demo.*.md
 /.symphony*-demo/
+.sdlc/work/*/scratch/

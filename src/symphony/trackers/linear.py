@@ -53,11 +53,12 @@ query Candidates($projectSlug: String!, $states: [String!], $first: Int!, $after
       updatedAt
       state { name }
       labels { nodes { name } }
-      inverseRelations(filter: { type: { eq: "blocks" } }) {
+      inverseRelations(first: 50) {
         nodes {
           type
           issue { id identifier state { name } }
         }
+        pageInfo { hasNextPage }
       }
     }
   }
@@ -117,11 +118,12 @@ query ByIdFull($id: String!) {
     updatedAt
     state { name }
     labels { nodes { name } }
-    inverseRelations(filter: { type: { eq: "blocks" } }) {
+    inverseRelations(first: 50) {
       nodes {
         type
         issue { id identifier state { name } }
       }
+      pageInfo { hasNextPage }
     }
   }
 }
@@ -170,8 +172,25 @@ def _normalize_node(node: dict[str, Any], minimal: bool = False) -> Issue:
             updated_at=parse_iso_timestamp(node.get("updatedAt")),
         )
     label_nodes = ((node.get("labels") or {}).get("nodes")) or []
-    labels = normalize_labels([n.get("name") for n in label_nodes if isinstance(n, dict)])
-    inverse_nodes = ((node.get("inverseRelations") or {}).get("nodes")) or []
+    labels = normalize_labels(
+        [n.get("name") for n in label_nodes if isinstance(n, dict)]
+    )
+    inverse_relations = node.get("inverseRelations")
+    if not isinstance(inverse_relations, dict):
+        raise LinearUnknownPayload("issue.inverseRelations missing")
+    inverse_nodes = inverse_relations.get("nodes")
+    if not isinstance(inverse_nodes, list):
+        raise LinearUnknownPayload("issue.inverseRelations.nodes missing")
+    page_info = inverse_relations.get("pageInfo")
+    if not isinstance(page_info, dict):
+        raise LinearUnknownPayload("issue.inverseRelations.pageInfo missing")
+    has_next_page = page_info.get("hasNextPage")
+    if not isinstance(has_next_page, bool):
+        raise LinearUnknownPayload(
+            "issue.inverseRelations.pageInfo.hasNextPage missing"
+        )
+    if has_next_page:
+        raise LinearUnknownPayload("issue.inverseRelations incomplete")
     blockers: list[BlockerRef] = []
     for rel in inverse_nodes:
         if not isinstance(rel, dict):
@@ -210,7 +229,9 @@ class LinearClient:
     so the asyncio event loop is not blocked.
     """
 
-    def __init__(self, tracker: TrackerConfig, http_client: httpx.Client | None = None) -> None:
+    def __init__(
+        self, tracker: TrackerConfig, http_client: httpx.Client | None = None
+    ) -> None:
         self._tracker = tracker
         self._owns_client = http_client is None
         self._client = http_client or httpx.Client(
@@ -327,8 +348,8 @@ class LinearClient:
         payload = self._post(
             {"query": _ISSUE_TEAM_QUERY, "variables": {"id": issue_id}}
         )
-        node = ((payload.get("data") or {}).get("issue") or {})
-        team_id = ((node.get("team") or {}).get("id"))
+        node = (payload.get("data") or {}).get("issue") or {}
+        team_id = (node.get("team") or {}).get("id")
         if not isinstance(team_id, str) or not team_id:
             raise LinearUnknownPayload(
                 "could not resolve team for issue", issue_id=issue_id
@@ -344,13 +365,19 @@ class LinearClient:
         payload = self._post(
             {"query": _WORKFLOW_STATES_QUERY, "variables": {"teamId": team_id}}
         )
-        nodes = (((payload.get("data") or {}).get("workflowStates") or {}).get("nodes") or [])
+        nodes = ((payload.get("data") or {}).get("workflowStates") or {}).get(
+            "nodes"
+        ) or []
         for node in nodes:
             if not isinstance(node, dict):
                 continue
             name = node.get("name")
             sid = node.get("id")
-            if isinstance(name, str) and isinstance(sid, str) and name.lower() == state_name.lower():
+            if (
+                isinstance(name, str)
+                and isinstance(sid, str)
+                and name.lower() == state_name.lower()
+            ):
                 self._state_id_cache[key] = sid
                 return sid
         raise LinearUnknownPayload(
@@ -421,9 +448,7 @@ class LinearClient:
         if not isinstance(payload, dict):
             raise LinearUnknownPayload("payload is not an object")
         if payload.get("errors"):
-            raise LinearGraphQLErrors(
-                "graphql errors", errors=payload.get("errors")
-            )
+            raise LinearGraphQLErrors("graphql errors", errors=payload.get("errors"))
         return payload
 
     @staticmethod
@@ -445,5 +470,7 @@ class LinearClient:
         return [n for n in nodes if isinstance(n, dict)]
 
     # §10.5 linear_graphql tool extension support.
-    def execute_raw(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    def execute_raw(
+        self, query: str, variables: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return self._post({"query": query, "variables": variables or {}})
