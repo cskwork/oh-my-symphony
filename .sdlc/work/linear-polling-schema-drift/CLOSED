@@ -1,0 +1,6 @@
+state: shipped
+reason: Verified and pushed to origin/main as ea13231e5db0879f3c15019b5485821dde848e06
+closed_by: danny
+closed_at: 2026-08-29T10:38:29Z
+mode: delegated-chat (agent-run on explicit human instruction)
+runner: agent
