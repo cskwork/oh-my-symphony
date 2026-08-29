@@ -1,11 +1,11 @@
-# GEMINI.md — Gemini CLI entry point
+# GEMINI.md: Gemini CLI entry point
 
 This repo is **Symphony**, a polling orchestrator that dispatches coding
 agents (Codex / Claude Code / Gemini / AGY / Kiro / OpenCode / Pi) at a
 Kanban board. This file is
-the discovery point Gemini CLI reads on startup so the **operator** — the
-human or agent running `symphony` — has the same skill guidance Claude Code
-gets from `.claude/skills/`.
+the discovery point Gemini CLI reads on startup. It gives the operator,
+meaning the human or agent running `symphony`, the same skill guidance Claude
+Code gets from `.claude/skills/`.
 
 ## Skill activation
 
@@ -15,7 +15,7 @@ metadata: read the `description`, then load
 route table.
 
 Source of truth lives in `skills/symphony-skill/`. `.claude/skills/` is a thin
-symlink layer for Claude Code's native discovery only — do not edit through it.
+symlink layer for Claude Code's native discovery only. Do not edit through it.
 `skills/symphony-skill/oneshot/` and `skills/symphony-skill/monorepo/` are
 branch-specific subfolders for templates/scripts/references used by the
 router, not separate activation routes.
@@ -47,7 +47,7 @@ Dispatched Gemini workers (running inside a per-ticket workspace) do
 **not** consume these operator skills. Worker behavior comes from
 `WORKFLOW.md`'s `prompts.base` + `prompts.stages` map, which renders stage
 prompts from `docs/symphony-prompts/<flavor>/`. That prompt layer is
-already cross-platform — codex/claude/gemini/pi workers all receive the
+already cross-platform. Codex, Claude, Gemini, and Pi workers all receive the
 same rendered prompt for a given ticket state.
 
 ## Tool mapping
@@ -67,7 +67,7 @@ The skill files use Claude Code tool names (`Read`, `Bash`, `Edit`,
 ## Conventions for this repo
 
 - Read `WORKFLOW.md` and a couple of `kanban/*.md` files before any
-  recommendation — settings vary per fork.
+  recommendation. Settings vary per fork.
 - Run `symphony doctor ./WORKFLOW.md` before launching anything.
 - See the `BOOTSTRAP` route in `skills/symphony-skill/SKILL.md` for the full
   file set required when copying Symphony into another project.
