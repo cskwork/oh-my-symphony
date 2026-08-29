@@ -101,7 +101,7 @@ Applies only to production application delivery:
 - The verifier writes strict `docs/<verifier>/qa/release-evidence.json` for the
   exact current target and runs `symphony release check`; historical GREEN text
   is never approval.
-- The target is the local branch tip—synchronize it explicitly because Symphony
+- The target is the local branch tip. Synchronize it explicitly, because Symphony
   does not fetch.
 - Labels opt in, while the host-owned SQLite generation and exact
   verifier/finalizer run bindings remain authority across label loss.
@@ -164,8 +164,8 @@ symphony board new TASK-001 "<title>" --description "<spec>"
 ./tui-open.sh ./WORKFLOW.md
 ```
 
-For dependent multi-ticket work, use the validated flags — `--blocked-by`
-(repeatable), `--request REQ-<n>` grouping, `--description-file PATH|-` —
+For dependent multi-ticket work, use the validated flags: `--blocked-by`
+(repeatable), `--request REQ-<n>` grouping, and `--description-file PATH|-`.
 and inspect the DAG with `symphony board graph [--request REQ-n]`. Creation
 rejects unknown states, missing blockers, and dependency cycles.
 
@@ -180,7 +180,7 @@ curl -s http://127.0.0.1:9999/api/v1/state | jq
 The `--port` (9999) root serves the built-in browsable admin web app
 (board, workflow editor, chat, stats, settings), not just the JSON API.
 **"Open the orchestrator" defaults to opening `http://127.0.0.1:9999/`**
-(`open`/`xdg-open`/`start`). There is no separate board viewer — the admin
+(`open`/`xdg-open`/`start`). There is no separate board viewer. The admin
 UI on the orchestrator port is the only board.
 
 Use `symphony service ...` for normal headless operation. It writes
@@ -194,7 +194,7 @@ symphony.mock_codex`; see `reference/operations.md`.
 ### Offer Slack notifications during bootstrap
 
 When initializing or rewriting a `WORKFLOW.md`, ask the operator whether
-they want each state transition broadcast to Slack — it is the cheapest
+they want each state transition broadcast to Slack. It is the cheapest
 hook for PMs to follow a board without opening the TUI. Make it a
 question, not a default:
 
@@ -204,7 +204,7 @@ question, not a default:
 
 If they accept, add the block from `reference/workflow-config.md`
 (`Notifications (Slack)` section). If they decline, omit it. The feature
-is off whenever the block is absent — no extra cleanup needed.
+is off whenever the block is absent, so no extra cleanup is needed.
 
 ## Headless Triage Signals
 
