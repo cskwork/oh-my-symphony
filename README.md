@@ -7,25 +7,24 @@
 [![Tests](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/oh-my-symphony/actions/workflows/tests.yml)
 [![GitHub stars](https://img.shields.io/github/stars/cskwork/oh-my-symphony?style=social)](https://github.com/cskwork/oh-my-symphony/stargazers)
 
-> One control plane. One terminal. Multiple project boards. Eight AI coding agents
-> (**Codex**, **Claude Code**, **Gemini**, **AGY/Antigravity**, **Kiro**,
-> **OpenCode**, **Pi**, **Prime Agent**) — pick per ticket, run in parallel,
-> review Git changes, preview builds, and watch live.
+> One control plane. One terminal. Multiple project boards. Eight AI coding
+> agents: Codex, Claude Code, Gemini, AGY/Antigravity, Kiro, OpenCode, Pi, and
+> Prime Agent. Pick one per ticket, run them in parallel, review Git changes,
+> preview builds, and watch it live.
 
 ![Symphony 9999 admin UI screenshot](docs/admin-ui-screenshot.png)
 
-<sub>`symphony service start ./WORKFLOW.md --port 9999` — the built-in admin UI served at `http://127.0.0.1:9999/`: switch projects; manage issues and workflows; inspect live runs, stats, and Git changes; merge, push, or open PRs; use operator chat; and launch health-checked product previews. Screenshot uses sanitized demo data.</sub>
+<sub>`symphony service start ./WORKFLOW.md --port 9999`. The built-in admin UI is served at `http://127.0.0.1:9999/`: switch projects; manage issues and workflows; inspect live runs, stats, and Git changes; merge, push, or open PRs; use operator chat; and launch health-checked product previews. Screenshot uses sanitized demo data.</sub>
 
 ![symphony tui screenshot](docs/tui-screenshot.svg)
 
-<sub>`symphony tui ./WORKFLOW.md` — columns are your tracker's states; cards show the active agent, turn count, last event, and accumulated tokens. Live indicators: ● running, ↻ retry queued, ✓ done.</sub>
+<sub>`symphony tui ./WORKFLOW.md`. Columns are your tracker's states; cards show the active agent, turn count, last event, and accumulated tokens. Live indicators: ● running, ↻ retry queued, ✓ done.</sub>
 
 **Stop juggling AI coding CLIs.** Symphony hands each Kanban ticket to the
 agent you want, runs them concurrently in isolated `git worktree` workspaces,
-and shows live progress — turn counts, token usage, and rate-limit headroom
-when reported by the selected CLI — in
-the 9999 browser admin UI or a Jira-style TUI you never have to leave your
-terminal for.
+and shows live progress in the 9999 browser admin UI, or in a Jira-style TUI you
+never have to leave your terminal for. Progress here means turn counts, token
+usage, and whatever rate-limit headroom the selected CLI reports.
 
 [**Try it in 60 seconds, no AI CLI required →**](#try-it-in-60-seconds-no-agent-cli-required)
 
@@ -36,10 +35,10 @@ terminal for.
 - [Pick an agent](#pick-an-agent)
 - [Install](#install)
 - [Try it in 60 seconds](#try-it-in-60-seconds-no-agent-cli-required)
-- [Quickstart](#quickstart--your-first-task-end-to-end)
+- [Quickstart](#quickstart-your-first-task-end-to-end)
 - [Lane presets](#lane-presets)
-- [Chat intake](#chat-intake--type-a-request-the-board-delivers)
-- [Continuous improvement](#continuous-improvement--experimental-autonomous-upkeep)
+- [Chat intake](#chat-intake-type-a-request-the-board-delivers)
+- [Continuous improvement](#continuous-improvement-experimental-autonomous-upkeep)
 - [Run](#run)
 - [Layout](#layout)
 - [Tests](#tests)
@@ -54,7 +53,7 @@ terminal for.
   changing the orchestrator.
 - **See what your agents are actually doing.** Live Kanban shows turn count,
   last event, accumulated tokens, and provider-reported rate-limit headroom
-  when available. No more "is it stuck or just thinking?" — and no SaaS
+  when available. No more "is it stuck or just thinking?", and no SaaS
   dashboard to log into.
 - **Run dozens of tickets in parallel, unattended.** Concurrency is built in:
   every ticket gets its own `git worktree` workspace, so agents can't step on
@@ -64,17 +63,17 @@ terminal for.
 - **No SaaS, no API key, no signup to try.** File-based Markdown Kanban
   means tickets live in `git` next to your code. Linear and Jira are supported
   external trackers; you don't need either one to try Symphony.
-- **Battle-tested base, hardened for local operations.** Forked from
+- **Built on the upstream reference implementation.** Forked from
   [OpenAI's official Symphony reference implementation](https://github.com/openai/symphony).
   This fork keeps the file-first orchestration model, then adds eight agent
   backends, the TUI/web operator surfaces, SQLite run leases, restart-safe
   issue flags, and locked Markdown ticket writes.
-- **A real web app, not just a viewer.** The orchestrator port serves a
+- **A real web app, not a read-only viewer.** The orchestrator port serves a
   multi-project control plane: issue CRUD, drag-and-drop columns, per-column
   stage prompts, branch policy, pause / resume, lane presets, operator chat,
   stats, integrated Git review and delivery, and health-checked product
   previews. Workflow edits round-trip into `WORKFLOW.md` with comments intact.
-- **Operator-grade tooling out of the box.** `symphony doctor` catches the
+- **Tooling for the operator.** `symphony doctor` catches the
   five most common first-run failures (port collisions, missing CLIs,
   placeholder URLs, unwritable workspaces, missing board directories) in one
   pass. `symphony service
@@ -127,34 +126,34 @@ session inside a per-issue workspace. This fork keeps that orchestrator and
 adds:
 
 1. A pluggable **AgentBackend** layer with eight concrete adapters:
-   - **Codex** — `codex app-server` (JSON-RPC stdio, multi-turn) — original
-   - **Claude Code** — `claude -p --output-format stream-json --verbose`
+   - **Codex.** `codex app-server` (JSON-RPC stdio, multi-turn). The original.
+   - **Claude Code.** `claude -p --output-format stream-json --verbose`
      (NDJSON events, per-turn subprocess with `--resume`)
-   - **Gemini** — `gemini -p ""` (one-shot per turn, stdin prompt → stdout result)
-   - **AGY / Antigravity** — `agy --print "$(cat)"` (one-shot per turn, stdin prompt
+   - **Gemini.** `gemini -p ""` (one-shot per turn, stdin prompt → stdout result)
+   - **AGY / Antigravity.** `agy --print "$(cat)"` (one-shot per turn, stdin prompt
      -> stdout result; `agent.kind: antigravity` aliases to `agy`)
-   - **Kiro** — `kiro-cli chat --no-interactive --trust-all-tools ...`
+   - **Kiro.** `kiro-cli chat --no-interactive --trust-all-tools ...`
      (headless chat mode; prompt bridged into the chat input argument,
      accepts `KIRO_API_KEY` or `kiro-cli login`)
-   - **OpenCode** — `opencode run --format json --auto` (one-shot per turn,
+   - **OpenCode.** `opencode run --format json --auto` (one-shot per turn,
      prompt passed as the documented `message` argument; `--session` resume
      after OpenCode reports a session id)
-   - **Pi** — `pi --mode json -p ""` (JSONL events, per-turn subprocess with
+   - **Pi.** `pi --mode json -p ""` (JSONL events, per-turn subprocess with
      `--session` resume; supports Anthropic / OpenAI / Gemini / Bedrock backends
-     under one CLI — see [pi.dev](https://pi.dev))
-   - **Prime Agent** — `prime-agent -p --mode json` (same JSONL protocol as Pi,
+     under one CLI, see [pi.dev](https://pi.dev))
+   - **Prime Agent.** `prime-agent -p --mode json` (same JSONL protocol as Pi,
      per-turn subprocess with `--resume` continuity; supports subscriptions and
-     provider API keys — see [Prime Agent](https://github.com/cskwork/prime-agent))
+     provider API keys, see [Prime Agent](https://github.com/cskwork/prime-agent))
 2. A **Jira-style CLI Kanban TUI** built on [Textual](https://textual.textualize.io).
    Columns are tracker states; cards show the active agent, turn count, last
    event, and accumulated tokens. Cards are focusable, the mouse wheel
    scrolls each lane, `enter` opens a full-detail modal, `n` registers a new
    ticket with a multiline body, `e` edits the focused ticket, `S` skips Document,
    and `s` opens the stats screen.
-3. A **built-in web Kanban app** on the orchestrator port — issue CRUD with
+3. A **built-in web Kanban app** on the orchestrator port, with issue CRUD and
    drag-and-drop state moves, Document skip, column add/delete/rename, per-column
    prompt editing, branch policy, and a dedicated stats page.
-4. A **single-node reliability ledger** in `.symphony/state.db` — active run
+4. A **single-node reliability ledger** in `.symphony/state.db`. Active run
    leases block duplicate dispatch across restarts, dead-owner processes are
    fenced and reaped, and the next Run attempt can resume from the latest
    completed-turn checkpoint. Retry / pause / budget-exhausted flags also
@@ -257,11 +256,11 @@ Make the relevant CLI available on `$PATH`:
 | `codex`      | `codex` (with `app-server` subcommand) |
 | `claude`     | `claude` (Claude Code) |
 | `gemini`     | `gemini` (Gemini CLI)  |
-| `agy`        | `agy` (Antigravity CLI — install from Google Antigravity; Symphony appends `--dangerously-skip-permissions`) |
-| `kiro`       | `kiro-cli` (Kiro CLI — install from `https://cli.kiro.dev/install`; run `kiro-cli login` or set `KIRO_API_KEY` for headless runs) |
-| `opencode`   | `opencode` (OpenCode CLI — install with `npm install -g opencode-ai`; authenticate providers with `opencode auth login`) |
-| `pi`         | `pi` (Pi coding-agent — `npm i -g @earendil-works/pi-coding-agent` or `curl -fsSL https://pi.dev/install.sh \| sh`; sign in once via `pi` → `/login` (OAuth, credentials cached at `~/.pi/agent/auth.json`) — no env var needed) |
-| `prime-agent` | `prime-agent` (Prime Agent — install with `curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh \| sh`; sign in once via `prime-agent` → `/login`, or provide a provider API key; credentials cached at `~/.prime/agent/auth.json`) |
+| `agy`        | `agy` (Antigravity CLI, install from Google Antigravity; Symphony appends `--dangerously-skip-permissions`) |
+| `kiro`       | `kiro-cli` (Kiro CLI, install from `https://cli.kiro.dev/install`; run `kiro-cli login` or set `KIRO_API_KEY` for headless runs) |
+| `opencode`   | `opencode` (OpenCode CLI, install with `npm install -g opencode-ai`; authenticate providers with `opencode auth login`) |
+| `pi`         | `pi` (Pi coding-agent, `npm i -g @earendil-works/pi-coding-agent` or `curl -fsSL https://pi.dev/install.sh \| sh`; sign in once via `pi` → `/login` (OAuth, credentials cached at `~/.pi/agent/auth.json`), no env var needed) |
+| `prime-agent` | `prime-agent` (Prime Agent, install with `curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh \| sh`; sign in once via `prime-agent` → `/login`, or provide a provider API key; credentials cached at `~/.prime/agent/auth.json`) |
 
 ## Create or register a project
 
@@ -298,9 +297,8 @@ jobs.
 ## Try it in 60 seconds (no agent CLI required)
 
 Want to see the TUI move cards around before installing an agent CLI? Use
-the bundled **mock backend** — it speaks the same JSON-RPC protocol as
-Codex but does no real work, just simulates turns and emits token-usage
-ticks.
+the bundled mock backend. It speaks the same JSON-RPC protocol as Codex but
+does no real work, just simulates turns and emits token-usage ticks.
 
 ```bash
 git clone https://github.com/cskwork/oh-my-symphony.git
@@ -340,17 +338,17 @@ Within ~5 seconds TASK-1 grows a green ● indicator in the **Todo** column,
 with a turn counter and token totals climbing. Quit with `Ctrl-C` when
 you've seen enough; then proceed to the real walkthrough below.
 
-> Cards stay in their original column under the mock — only a real agent
+> Cards stay in their original column under the mock. Only a real agent
 > would rewrite `kanban/TASK-1.md` to move the card to **Done**. The mock
 > exists to prove the orchestrator → backend → workspace → hooks pipeline
 > end-to-end without an LLM call.
 
 > Tunables for the mock: `SYMPHONY_MOCK_TURN_SECONDS=12`,
-> `SYMPHONY_MOCK_FAIL_EVERY_N_TURNS=3`, etc. — see `src/symphony/mock_codex.py`.
+> `SYMPHONY_MOCK_FAIL_EVERY_N_TURNS=3`, and so on. See `src/symphony/mock_codex.py`.
 
 ---
 
-## Preflight — `symphony doctor`
+## Preflight with `symphony doctor`
 
 Before launching, sanity-check your setup:
 
@@ -373,7 +371,7 @@ itself can't be loaded. The doctor catches the most common first-run
 failures in one pass: port collision, missing CLI on `$PATH`, the shipped
 placeholder clone URL, unwritable workspace, missing board directory.
 
-## Prove It Works
+## Prove it works
 
 After `doctor` passes, prove the same workflow through the runtime surfaces:
 
@@ -390,7 +388,7 @@ board, static assets, issue CRUD, refresh, workflow, and stats.
 
 ---
 
-## Quickstart — your first task end-to-end
+## Quickstart: your first task end-to-end
 
 This walks from a registered project repository to a running ticket, using
 the file-based tracker and Claude Code as the agent. Do not perform these steps
@@ -457,7 +455,7 @@ prompts:
 > (the directory containing `WORKFLOW.md`) on a `symphony/<ID>` branch. The
 > host working tree is never disturbed; merge results back with
 > `git -C <host> merge symphony/<ID>` (or open a PR from that branch) when
-> you're satisfied — explicit operator action, never automatic.
+> you're satisfied. That is an explicit operator action, never automatic.
 >
 > If your code lives in a *different* remote than the WORKFLOW.md repo,
 > swap the hook for `git clone <remote> .` instead. While experimenting
@@ -517,19 +515,19 @@ Within one poll tick (`polling.interval_ms`, default 30s) the orchestrator
 dispatches a worker, the card grows a green ● indicator (with turn counter
 and token totals), and the agent runs. On success the agent rewrites
 `kanban/TASK-1.md` to set `state: Done` and append a `## Resolution`
-section — that file edit is what moves the card from the **Todo** column
+section. That file edit is what moves the card from the **Todo** column
 into **Done**. Quit with `Ctrl-C`.
 
 > Cards are placed in columns based on the ticket file's `state` field
 > (`tui.py` reads it on each tick). The green ● indicator is overlaid on
 > top of the card and does **not** change which column it sits in. So a
 > running ticket stays in **Todo** until the agent itself rewrites the
-> file — that's by design (the orchestrator only reads ticket files; the
-> agent owns writes).
+> file. That is by design: the orchestrator only reads ticket files, and the
+> agent owns the writes.
 
 > The TUI needs a real terminal (TTY). If you launch it from a script /
-> background process / non-interactive shell, the process exits silently —
-> always run it in a foreground terminal.
+> background process, or a non-interactive shell, the process exits silently.
+> Always run it in a foreground terminal.
 
 ### 4b. Headless mode + `WORKFLOW-PROGRESS.md`
 
@@ -570,8 +568,8 @@ progress:
   max_transitions: 20               # how many recent transitions to keep
 ```
 
-The mirror is read-only output — Symphony rewrites the file atomically;
-do not edit it by hand.
+The mirror is read-only output. Symphony rewrites the file atomically, so do
+not edit it by hand.
 
 #### macOS keep-awake
 
@@ -592,7 +590,7 @@ Non-macOS hosts log `keep_awake_skipped` and continue without a wake-lock.
 
 Opt in by setting a Slack incoming-webhook URL. With the block below in
 `WORKFLOW.md`, Symphony posts one message per tracker state transition.
-Omit the block and nothing is sent — the feature is fully off by default.
+Omit the block and nothing is sent. The feature is off by default.
 
 ```yaml
 notifications:
@@ -610,7 +608,7 @@ notifications:
 
 Template placeholders: `${identifier}` `${title}` `${prev_state}`
 `${next_state}` `${workflow}` `${reason}`. Bad templates render the unknown
-key literally — they never raise. Network errors are caught and logged
+key literally. They never raise. Symphony catches and logs network errors
 (`slack_notify_network_error`) so a Slack outage cannot block the
 orchestrator's transition path.
 
@@ -641,7 +639,7 @@ symphony board update TASK-1 --state Blocked --add-blocked-by BUG-7
 ```
 
 The orchestrator re-evaluates on the next poll tick. Manual transitions are
-for unsticking — normally the agent transitions tickets itself per the
+for unsticking. Normally the agent transitions tickets itself, following the
 stage-specific prompt files configured by `WORKFLOW.md`.
 
 ### How dispatch works in one diagram
@@ -672,8 +670,8 @@ Every artefact a ticket produces lives under `docs/<TICKET-ID>/<stage>/`. See [`
 ### Board deliverables
 
 Those `docs/` artefacts are committed evidence. Files a reviewer just wants to
-*open* — screenshots, exported reports, PDFs — go somewhere else: an agent saves
-them to `.symphony-artifacts/` at its workspace root, and after each turn
+*open*, such as screenshots, exported reports, and PDFs, go somewhere else. An
+agent saves them to `.symphony-artifacts/` at its workspace root, and after each turn
 Symphony copies new files to `.symphony/artifacts/<TICKET-ID>/` on the host.
 They then show up in the ticket drawer on the web board (images preview inline)
 and as an `## Artifacts` list on the ticket itself, and they survive the
@@ -783,7 +781,7 @@ Missing, malformed, unsafe, or stale evidence rewinds the same verifier.
 The evidence runner command must exactly equal the contract command; its exit
 code is zero if and only if every exact native/evidence check status is PASS.
 A coherent nonzero RED creates only the product check, console/network, or
-ancestry repair groups—there is no derivative exit-code repair. Behavior,
+ancestry repair groups. There is no derivative exit-code repair. Behavior,
 runtime, or ancestry failures are grouped into idempotent repair tickets and
 one fresh verifier before the finalizer may continue. The fresh verifier keeps
 the expected contract hash in a durable `release-contract-sha256-<hash>` label,
@@ -842,18 +840,18 @@ Synchronize the local target and serialize external writers before release.
 sends `base` plus only the prompt file for the ticket's current state,
 keeping each turn small. If the `prompts` block is absent, the inline body
 of `WORKFLOW.md` still works as the legacy fallback. Prompts are also
-editable in place from the web app's **Workflow** page — same files, no
+editable in place from the web app's **Workflow** page. Same files, no
 restart needed.
 
 ## Lane presets
 
 Boards start from a preset and stay fully customizable:
 
-- **default** — the succinct 4-lane board `Todo → In Progress → Verify →
+- **default.** The succinct 4-lane board `Todo → In Progress → Verify →
   Document`. Short stage prompts; the stage contracts in
   `orchestrator/contracts.py` are the mechanical gate. Complex work is
   expressed as a ticket DAG (`--blocked-by` / `--request`), not extra lanes.
-- **deep** — an optional 8-lane pipeline `Intake → Research → Plan → Review
+- **deep.** An optional 8-lane pipeline `Intake → Research → Plan → Review
   → Build → QA → Verify → Document` for complex deliveries. Each lane
   carries its own lean gate (Verify/Document run a literal
   `grep 'verdict: GREEN'` check); the Plan lane spawns the
@@ -876,7 +874,7 @@ agent:
 ```
 
 - The **orchestrator** merges a ticket's branch when the ticket reaches
-  `Done`. No lane merges by hand — Verify proves, Document documents.
+  `Done`. No lane merges by hand. Verify proves, Document documents.
 - `auto_merge_push_target` defaults to `true`, so a successful merge also
   pushes and verifies the target branch's configured upstream. Set it to
   `false` for a local-only release run: the same dirty-tree, conflict, and
@@ -908,10 +906,10 @@ The mechanical evidence floor (`orchestrator/contracts.py`) is gated by
 | `on`             | always enforce, whatever the lanes are called                    |
 | `off`            | never enforce; the stage prompts are the only gate               |
 
-Under `auto`, renaming a lane (`Document` → `Docs`) turns the validator off —
-your prompts become the gate. That is a legitimate choice, but it is never
-silent: the decision is logged as `stage_contracts_disabled` at every config
-load, reported by `symphony doctor` as `agent.stage_contracts`, exposed on
+Under `auto`, renaming a lane (`Document` → `Docs`) turns the validator off, and
+your prompts become the gate. That is a legitimate choice, and it is never
+silent. Symphony logs the decision as `stage_contracts_disabled` at every config
+load, `symphony doctor` reports it as `agent.stage_contracts`, it is exposed on
 `GET /api/v1/workflow` (`agent.stage_contracts_enabled`), and shown as a hint
 on the Settings page. Set `stage_contracts: on` to keep the shipped contracts
 on a renamed board.
@@ -921,10 +919,10 @@ Switch presets from the web app's **Settings** page, or via
 Applying a preset round-trips through the same comment-preserving
 `WORKFLOW.md` machinery as lane CRUD, so your comments and customizations
 survive; tickets in removed lanes migrate to a fallback state. Presets are
-starting points, not cages — lane add/delete/rename and per-column prompt
+starting points, not cages. Lane add, delete, rename, and per-column prompt
 editing keep working afterwards.
 
-## Skills — frontmatter-only power user instructions
+## Skills: frontmatter-only power user instructions
 
 Drop a skill next to `WORKFLOW.md` and attach it to any ticket:
 
@@ -945,15 +943,16 @@ the web/TUI issue forms; add them by hand in frontmatter when you need this
 advanced behavior. Unknown skill names are surfaced to the agent as "not
 found" instead of silently dropped.
 
-## Chat intake — type a request, the board delivers
+## Chat intake: type a request, the board delivers
 
 The admin UI ships a **Chat** page backed by the same agent CLIs. Each new
 session lets you choose Claude Code, Codex, Gemini CLI, AGY, Kiro, OpenCode,
 Pi, or Prime Agent; the workflow's configured agent is selected by default.
-Chat is not just Q&A: in edit mode the chat agent follows a board-intake protocol.
+Chat does more than answer questions. In edit mode the chat agent follows a
+board-intake protocol.
 Type a request; the agent confirms scope (at most two turns, and only when
 the request is ambiguous), then files tickets through the validated board
-tool — never freehand ticket markdown:
+tool, never freehand ticket markdown:
 
 - **simple request** → one ticket in the first active state;
 - **complex request** → a research → plan → plan-review → build → qa →
@@ -969,7 +968,7 @@ to edit mode. Chat converses; the board delivers.
 
 ---
 
-## Continuous improvement — experimental autonomous upkeep
+## Continuous improvement: experimental autonomous upkeep
 
 **Experimental and fully opt-in.** With no `continuous_improvement:` block in
 `WORKFLOW.md`, nothing here runs.
@@ -998,12 +997,12 @@ continuous_improvement:
 | `market_research` | One agent turn surveys current trends and competitor features for **this** app (from README/docs/wiki) and proposes improvements with evidence links. |
 | `feature_improvements` | One agent turn reviews UX and code health and proposes improvements. |
 
-`enabled: true` with no `modes:` means readiness only — exactly what the
+`enabled: true` with no `modes:` means readiness only, exactly what the
 heartbeat did before modes existed. Proposal tickets are capped per run,
 de-duplicated against open tickets, labelled `ci`, and grouped under one
 `REQ-CI-<date>-<n>` request. The agent-driven modes get a succinct prompt
 (overridable in `docs/symphony-prompts/ci/`) and may write nothing but their
-JSON proposal file — the heartbeat files the tickets. Modes and cadence are
+JSON proposal file. The heartbeat files the tickets. Modes and cadence are
 also editable from the web **Settings** page.
 
 ---
@@ -1020,9 +1019,9 @@ symphony ./WORKFLOW.md --port 9999
 `/` serves the built-in web Kanban app (no build step, no signup, loopback
 only). From the browser you can:
 
-- **Projects** — switch among independent project boards, inspect each
+- **Projects.** Switch among independent project boards, inspect each
   repository / workflow / issue-store path, and create or open projects.
-- **Board** — create / edit / delete issues, drag cards between columns,
+- **Board.** Create / edit / delete issues, drag cards between columns,
   watch live run badges (turn count, tokens), pause / resume workers, and
   skip Document for tickets that do not need wiki write-back. The board defaults
   to the four active agent lanes; `Human Review`, `Done`, `Blocked`, and
@@ -1031,23 +1030,23 @@ only). From the browser you can:
   scheduler-authored dependency execution list with queue ranks, waves, capacity
   waits, retry ownership, and final dispatch refusals. Full request graphs are
   file-board-only; Linear/Jira show an explicit unsupported state.
-- **Workflow** — add / delete / rename / reorder kanban columns and edit
+- **Workflow.** Add / delete / rename / reorder kanban columns and edit
   each column's stage prompt. Changes write back into `WORKFLOW.md`
   frontmatter with your comments preserved; tickets in renamed or removed
   columns migrate automatically.
-- **Git** — inspect history, task branches, comparisons, and diffs; delete
+- **Git.** Inspect history, task branches, comparisons, and diffs; delete
   branches; merge verified work; push branches; or open a pull request.
-- **Chat** — operator chat sessions with the board-intake protocol
-  (see [Chat intake](#chat-intake--type-a-request-the-board-delivers)).
-- **Preview** — start, restart, or stop a loopback-only product preview from
+- **Chat.** Operator chat sessions with the board-intake protocol
+  (see [Chat intake](#chat-intake-type-a-request-the-board-delivers)).
+- **Preview.** Start, restart, or stop a loopback-only product preview from
   a detached target-branch checkout, with a health check, URL, and bounded logs.
-- **Runs** — search and filter recorded attempts; inspect bounded, redacted
+- **Runs.** Search and filter recorded attempts; inspect bounded, redacted
   lifecycle timelines, token usage, workspace/branch/commit references, and
   download a diagnostic JSON bundle. Because this surface includes local paths
   and failure excerpts, its API is available only to loopback clients.
-- **Stats** — tokens per day, throughput, per-column dwell time, per-agent
+- **Stats.** Tokens per day, throughput, per-column dwell time, per-agent
   totals, average cycle time (from `.symphony/stats.jsonl`).
-- **Settings** — branch policy (feature base / merge target) from a real
+- **Settings.** Branch policy (feature base / merge target) from a real
   local-branch dropdown, plus lane presets and continuous-improvement controls.
 
 JSON API endpoints:
@@ -1055,7 +1054,7 @@ JSON API endpoints:
 | Method | Path                              | Purpose                                      |
 |--------|-----------------------------------|----------------------------------------------|
 | GET    | `/api/v1/health`                  | Tick-loop / tracker / run-registry health    |
-| GET    | `/api/v1/state`                   | Snapshot — running, retrying, totals, limits |
+| GET    | `/api/v1/state`                   | Snapshot of running, retrying, totals, limits |
 | GET    | `/api/v1/board`                   | Columns + issues + live run info             |
 | GET    | `/api/v1/requests`                | Request groups + scheduler summary (file board) |
 | GET    | `/api/v1/requests/{id}/schedule` | Read-only dependency graph + consumed scheduler decisions |
@@ -1150,9 +1149,9 @@ Columns are tracker states (`active_states` first, then `terminal_states`).
 Cards display issue identifier + title, priority, labels (or blockers), and a
 runtime indicator:
 
-- **● green** — currently running, shows `turn N`, last event, accumulated tokens
-- **↻ yellow** — in retry queue, shows `retry #N` and the last error
-- **✓ green** — completed in this session
+- **● green.** Currently running, shows `turn N`, last event, accumulated tokens
+- **↻ yellow.** In retry queue, shows `retry #N` and the last error
+- **✓ green.** Completed in this session
 
 Key bindings (`?` shows the full list; also auto-listed in the footer):
 
@@ -1219,8 +1218,8 @@ the alt-screen on top of unreadable preflight output.
 ### File-based Kanban tracker
 
 If you don't have Linear, use the local Markdown-file tracker
-(`tracker: { kind: file, board_root: ./kanban }`) — see the
-[Quickstart](#quickstart--your-first-task-end-to-end).
+(`tracker: { kind: file, board_root: ./kanban }`). See the
+[Quickstart](#quickstart-your-first-task-end-to-end).
 
 ## Layout
 
@@ -1285,7 +1284,7 @@ backend unit tests (factory, event normalization, per-CLI command/session
 handling), board-tool DAG validation, run-registry persistence, file-tracker
 locking, web API contracts, chat intake, lane presets, and Textual
 `Pilot`-driven TUI smoke tests. Subprocess-driven integration tests against
-real CLIs are intentionally not in CI — run them locally.
+real CLIs are kept out of CI on purpose. Run them locally.
 
 ## Design notes
 
@@ -1344,7 +1343,7 @@ What is intentionally out of scope:
 
 Inherited from upstream:
 
-- SSH worker extension — single-host only.
+- SSH worker extension. Single-host only.
 - Tracker adapters beyond Linear, Jira, and the file-based Kanban.
 
 Fork-specific gaps:
