@@ -113,6 +113,7 @@ modules.
 | `helpers.py` | pure helpers (`_sort_for_dispatch_fifo`, `_is_rewind_transition`, and related utilities) |
 | `contracts.py` | stage-contract evaluation for pipeline headings and evidence gates |
 | `run_registry.py` | SQLite WAL run leases, dead-owner reclaim, persisted retry / pause / budget flags |
+| `attempt.py` | the worker body (`run_agent_attempt`): startup, backend start, session open, turn loop, cleanup, exit hand-off; phases pass state explicitly (`_AttemptState`, `_AttemptExit`, `_TurnFlow`) |
 | `worker_exit.py` | the worker-exit state machine (`handle_worker_exit`): exit accounting, Done post-processing, continuation / retry / escalation, `worker_exit` emit; takes the orchestrator explicitly |
 | `core.py` | the `Orchestrator` class, tick loop, dispatch, health, pause/resume, Document skip |
 | `__init__.py` | re-exports + monkeypatch-target bindings |
