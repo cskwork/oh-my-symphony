@@ -37,7 +37,7 @@
 - [60초 체험](#try-it-in-60-seconds-no-agent-cli-required)
 - [첫 작업 Quickstart](#quickstart-your-first-task-end-to-end)
 - [레인 프리셋](#lane-presets)
-- [채팅 인테이크](#chat-intake-채팅에-요청하면-보드가-배달한다)
+- [채팅 인테이크](#chat-intake-채팅에-요청하고-intent-하나만-승인하면-보드가-배달한다)
 - [지속적 개선](#continuous-improvement-실험적-자율-유지보수)
 - [실행](#run)
 - [구조](#layout)
@@ -739,7 +739,7 @@ symphony ./WORKFLOW.md --port 9999
 - **Git.** 히스토리, 작업 브랜치, 비교와 diff를 확인하고, 브랜치를 삭제하며,
   검증된 작업을 병합·푸시하거나 PR을 연다.
 - **Chat.** 보드 인테이크 프로토콜을 따르는 운영자 채팅 세션
-  ([Chat intake](#chat-intake-채팅에-요청하면-보드가-배달한다) 참고).
+  ([Chat intake](#chat-intake-채팅에-요청하고-intent-하나만-승인하면-보드가-배달한다) 참고).
 - **Preview.** 분리된 대상 브랜치 체크아웃에서 루프백 전용 제품 미리보기를
   시작·재시작·중지하고, 상태 확인·URL·제한된 로그를 본다.
 - **Stats.** 일별 토큰, 처리량, 컬럼별 체류 시간, 에이전트별 합계, 평균

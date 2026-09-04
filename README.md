@@ -37,7 +37,7 @@ usage, and whatever rate-limit headroom the selected CLI reports.
 - [Try it in 60 seconds](#try-it-in-60-seconds-no-agent-cli-required)
 - [Quickstart](#quickstart-your-first-task-end-to-end)
 - [Lane presets](#lane-presets)
-- [Chat intake](#chat-intake-type-a-request-the-board-delivers)
+- [Chat intake](#chat-intake-type-a-request-approve-one-intent-the-board-delivers)
 - [Continuous improvement](#continuous-improvement-experimental-autonomous-upkeep)
 - [Run](#run)
 - [Layout](#layout)
@@ -1068,7 +1068,7 @@ only). From the browser you can:
 - **Git.** Inspect history, task branches, comparisons, and diffs; delete
   branches; merge verified work; push branches; or open a pull request.
 - **Chat.** Operator chat sessions with the intent gate (propose, approve once, the server files)
-  (see [Chat intake](#chat-intake-type-a-request-the-board-delivers)).
+  (see [Chat intake](#chat-intake-type-a-request-approve-one-intent-the-board-delivers)).
 - **Preview.** Start, restart, or stop a loopback-only product preview from
   a detached target-branch checkout, with a health check, URL, and bounded logs.
 - **Runs.** Search and filter recorded attempts; inspect bounded, redacted
