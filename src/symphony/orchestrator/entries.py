@@ -183,6 +183,9 @@ class RetryEntry:
     error: str | None = None
     kind: str = "retry"
     holds_slot: bool = True
+    # `## Touched Files` snapshot of the exited ticket so the C1 conflict
+    # pre-check can see retry-pending work (GitHub issue #28).
+    touched_files: frozenset[str] = frozenset()
 
 
 @dataclass

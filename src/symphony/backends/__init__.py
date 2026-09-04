@@ -123,6 +123,12 @@ class BackendInit:
     on_event: EventCallback
     on_process_started: Callable[[int], None] | None = None
     client_tools: list[ToolDescriptor] = field(default_factory=list)
+    # Per-dispatch environment overlaid on the inherited process environment
+    # when the backend spawns its subprocess (``SYMPHONY_TOKEN_EMA``,
+    # ``SYMPHONY_TOKEN_BUDGET``, ``SYMPHONY_REWIND_SCOPE``). Carrying it here
+    # instead of mutating ``os.environ`` keeps concurrent dispatches from
+    # clobbering each other's values (GitHub issue #29).
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @runtime_checkable

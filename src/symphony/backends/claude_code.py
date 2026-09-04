@@ -91,6 +91,7 @@ class ClaudeCodeBackend(BaseAgentBackend):
         validate_agent_cwd(init.cwd, init.workspace_root)
         self._claude = init.cfg.claude
         self._cwd = init.cwd
+        self._extra_env = dict(init.env)
         # Resolved once: the worktree layout cannot change mid-run, and
         # run_turn spawns a fresh subprocess every turn.
         self._git_roots = git_roots_outside(init.cwd, init.workspace_root)
@@ -201,6 +202,7 @@ class ClaudeCodeBackend(BaseAgentBackend):
         env = os.environ.copy()
         if self._git_roots:
             env[GIT_ROOTS_ENV_VAR] = os.pathsep.join(self._git_roots)
+        env.update(self._extra_env)
 
         try:
             proc = await asyncio.create_subprocess_exec(

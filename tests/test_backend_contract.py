@@ -588,3 +588,72 @@ def test_retry_markers_match_the_strings_backends_actually_emit() -> None:
             f"marker {marker!r} no longer appears in any backend — the retry "
             "list and the backends have drifted apart"
         )
+
+
+# ---------------------------------------------------------------------------
+# GitHub #29 — per-dispatch env travels in BackendInit, not os.environ
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ALL_KINDS)
+@pytest.mark.asyncio
+async def test_every_backend_overlays_backend_init_env_on_spawn(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`BackendInit.env` wins over the inherited process environment."""
+    if shutil.which("git") is None:
+        pytest.skip("git CLI required")
+    workspace_root = tmp_path / "workspaces"
+    cwd = workspace_root / "ws"
+    cwd.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=str(cwd),
+        env={"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "")},
+        check=True,
+        capture_output=True,
+    )
+    # A stale value from an earlier dispatch must not leak through.
+    monkeypatch.setenv("SYMPHONY_TOKEN_BUDGET", "stale")
+    monkeypatch.setenv("SYMPHONY_REWIND_SCOPE", "[]")
+    captured: dict[str, dict[str, str]] = {}
+    module = _SPAWN_MODULES[kind]
+
+    async def fake_create_subprocess_exec(*args: Any, **kwargs: Any):
+        del args
+        captured["env"] = dict(kwargs.get("env") or {})
+        return _FakeSubprocess(stdout_blob=b"", stderr_blob=b"", returncode=0)
+
+    async def fake_safe_proc_wait(proc: Any, *, timeout: Any = None) -> Any:
+        del timeout
+        return proc.returncode
+
+    monkeypatch.setattr(
+        module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    monkeypatch.setattr(module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    cfg = _make_cfg(kind, workspace_root=workspace_root)
+    backend = build_backend(
+        BackendInit(
+            cfg=cfg,
+            cwd=cwd,
+            workspace_root=workspace_root,
+            on_event=_async_noop,
+            env={"SYMPHONY_TOKEN_BUDGET": "4321", "SYMPHONY_TOKEN_EMA": "10"},
+        )
+    )
+    await backend.start()
+    if kind != "codex":
+        with contextlib.suppress(Exception):
+            await backend.run_turn(prompt="do the thing", is_continuation=False)
+    with contextlib.suppress(Exception):
+        await backend.stop()
+
+    assert "env" in captured, f"{kind} never spawned a subprocess"
+    assert captured["env"].get("SYMPHONY_TOKEN_BUDGET") == "4321"
+    assert captured["env"].get("SYMPHONY_TOKEN_EMA") == "10"
+    # Inherited keys the dispatch did not set stay inherited: the overlay is
+    # additive, it does not replace the environment.
+    assert captured["env"].get("SYMPHONY_REWIND_SCOPE") == "[]"
+    assert captured["env"].get("PATH") == os.environ.get("PATH")

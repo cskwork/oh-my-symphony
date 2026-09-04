@@ -6073,14 +6073,15 @@ class Orchestrator:
         for other_id, retry_entry in self._retry.items():
             if other_id == candidate.id:
                 continue
-            # Retry entries don't carry the full Issue. Look up the
-            # last-known body via running history when present; the
-            # common case (retry of an exited ticket) leaves no body to
-            # inspect, and the retry path re-evaluates on its own tick.
+            # A retry entry carries a snapshot of the exited ticket's
+            # `## Touched Files` taken when the retry was scheduled (#28);
+            # prefer the live body when the ticket is still running.
             running_entry = self._running.get(other_id)
-            if running_entry is None:
-                continue
-            other_files = self._touched_files_for(running_entry.issue)
+            other_files = (
+                self._touched_files_for(running_entry.issue)
+                if running_entry is not None
+                else set(retry_entry.touched_files)
+            )
             overlap = candidate_files & other_files
             if overlap:
                 return retry_entry.identifier, overlap
@@ -6335,49 +6336,47 @@ class Orchestrator:
     # A2-orch + C3 — backend subprocess env injection
     # ------------------------------------------------------------------
 
-    def _apply_dispatch_env(
+    def _dispatch_env_for(
         self,
         *,
         issue: Issue,
         cfg: ServiceConfig,
         is_rewind: bool,
-    ) -> None:
-        """Set per-dispatch env vars consumed by the backend subprocess.
+    ) -> dict[str, str]:
+        """Return the per-dispatch env vars for the backend subprocess.
 
-        Always sets:
+        Always includes:
           * ``SYMPHONY_TOKEN_EMA`` — rolling EMA of total tokens for the
             current state (rounded int), 0 when unseen.
           * ``SYMPHONY_TOKEN_BUDGET`` — hard cap for the current state
             (max_total_tokens_by_state with fallback to max_total_tokens).
 
-        On rewind dispatches also sets:
+        Rewind dispatches also include:
           * ``SYMPHONY_REWIND_SCOPE`` — JSON list of finding rows parsed
             from the latest applicable failure section (`## Review Findings`,
             `## QA Failure`, or `## Contract Failure`). Empty list when
             parsing fails (the env var is informational; an empty list
-            signals "rewind, no machine-readable scope" without unsetting).
+            signals "rewind, no machine-readable scope").
 
-        On forward dispatches the rewind scope env var is UNSET so a
-        previous-turn value can't bleed across.
-
-        Backends inherit `os.environ`, so this mutates process-global
-        state. Concurrent dispatches in the same tick are serialised by
-        the orchestrator's single event loop, and each backend spawns
-        its subprocess before the next dispatch lands.
+        Forward dispatches omit the rewind scope so a previous-turn value
+        cannot bleed across. The mapping travels in ``BackendInit.env`` and
+        is overlaid on the inherited environment at spawn time; nothing here
+        touches ``os.environ`` (GitHub issue #29).
         """
         ema_value = self._token_ema_for_state(issue.state)
         budget_value = self._token_budget_for_state(cfg, issue.state)
-        os.environ["SYMPHONY_TOKEN_EMA"] = str(ema_value)
-        os.environ["SYMPHONY_TOKEN_BUDGET"] = str(budget_value)
+        env = {
+            "SYMPHONY_TOKEN_EMA": str(ema_value),
+            "SYMPHONY_TOKEN_BUDGET": str(budget_value),
+        }
         if is_rewind:
             rows = _parse_findings_rows(issue.description)
             try:
                 payload = json.dumps(rows, ensure_ascii=False)
             except (TypeError, ValueError):
                 payload = "[]"
-            os.environ["SYMPHONY_REWIND_SCOPE"] = payload
-        else:
-            os.environ.pop("SYMPHONY_REWIND_SCOPE", None)
+            env["SYMPHONY_REWIND_SCOPE"] = payload
+        return env
 
     # ------------------------------------------------------------------
     # dispatch (§16.4)
@@ -6867,6 +6866,9 @@ class Orchestrator:
             if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
                 tools.append(linear_graphql_tool())
 
+            # Initial dispatch is always forward (no rewind). The env rides
+            # in BackendInit so the subprocess spawned by `client.start()`
+            # sees exactly this dispatch's values.
             client = self._build_agent_backend(
                 BackendInit(
                     cfg=cfg,
@@ -6879,16 +6881,13 @@ class Orchestrator:
                         self._sync_backend_agent_pid(issue_id, pid)
                     ),
                     client_tools=tools,
+                    env=self._dispatch_env_for(issue=issue, cfg=cfg, is_rewind=False),
                 )
             )
             # Expose the live backend to `_on_codex_event` so the stall-progress
             # predicate routes through `client.is_progress_event(...)`.
             running.client = client
             after_run_pending = False
-            # Initial dispatch is always forward (no rewind); the env
-            # mutation MUST land before `client.start()` because the
-            # backend subprocess inherits os.environ at fork time.
-            self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=False)
             try:
                 self._sync_backend_agent_pid(
                     running_issue_id, _backend_agent_pid(client)
@@ -7899,6 +7898,10 @@ class Orchestrator:
         tools: list[Any] = []
         if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
             tools.append(linear_graphql_tool())
+        # Per-dispatch env rides in BackendInit so the new backend's
+        # subprocess sees it. Forward phase transitions omit
+        # SYMPHONY_REWIND_SCOPE; rewinds carry the JSON of the latest
+        # finding rows.
         new_client = self._build_agent_backend(
             BackendInit(
                 cfg=cfg,
@@ -7911,12 +7914,9 @@ class Orchestrator:
                     self._sync_backend_agent_pid(issue_id, pid)
                 ),
                 client_tools=tools,
+                env=self._dispatch_env_for(issue=issue, cfg=cfg, is_rewind=is_rewind),
             )
         )
-        # Reset per-dispatch env BEFORE the new backend's subprocess spawns.
-        # Forward phase transitions unset SYMPHONY_REWIND_SCOPE; rewinds
-        # set it to the JSON of the latest finding rows.
-        self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=is_rewind)
         try:
             self._sync_backend_agent_pid(
                 running_issue_id, _backend_agent_pid(new_client)
@@ -9817,6 +9817,7 @@ class Orchestrator:
                     delay_ms=CONTINUATION_RETRY_DELAY_MS,
                     error=None,
                     kind="continuation",
+                    touched_files=frozenset(self._touched_files_for(entry.issue)),
                 )
             elif entry.hit_max_turns:
                 # `max_turns` exhausted without a terminal transition: stop
@@ -9896,6 +9897,7 @@ class Orchestrator:
                 delay_ms=delay_ms,
                 error=cleaned_failure,
                 kind="retry",
+                touched_files=frozenset(self._touched_files_for(entry.issue)),
             )
         log.info(
             "worker_exit",
@@ -9971,6 +9973,7 @@ class Orchestrator:
                 attempt=next_attempt,
                 delay_ms=delay_ms,
                 error="force_ejected_zombie",
+                touched_files=frozenset(self._touched_files_for(entry.issue)),
             )
             debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
             debug.last_workspace = entry.workspace_path
@@ -9990,6 +9993,7 @@ class Orchestrator:
         error: str | None,
         kind: str | None = None,
         holds_slot: bool = True,
+        touched_files: frozenset[str] = frozenset(),
     ) -> None:
         if self._loop is None:
             return
@@ -10004,6 +10008,7 @@ class Orchestrator:
             error=error,
             kind=retry_kind,
             holds_slot=holds_slot,
+            touched_files=touched_files,
         )
 
     def _retry_cap_exceeded(
@@ -10054,6 +10059,7 @@ class Orchestrator:
         error: str | None,
         kind: str,
         holds_slot: bool,
+        touched_files: frozenset[str] = frozenset(),
     ) -> None:
         assert self._loop is not None
         due = self._loop.time() + delay_ms / 1000.0
@@ -10075,6 +10081,7 @@ class Orchestrator:
                 error=error,
                 kind=kind,
                 holds_slot=holds_slot,
+                touched_files=touched_files,
             ),
         )
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
@@ -10238,6 +10245,7 @@ class Orchestrator:
             error=error,
             kind=retry.kind,
             holds_slot=True,
+            touched_files=retry.touched_files,
         )
 
     async def _process_retry(self, retry: RetryEntry, cfg: ServiceConfig) -> None:
@@ -10308,6 +10316,7 @@ class Orchestrator:
             error=_clean_board_error_message(reason)[:300],
             kind=retry.kind,
             holds_slot=holds_slot,
+            touched_files=retry.touched_files,
         )
 
     def _release_retry_ownership(

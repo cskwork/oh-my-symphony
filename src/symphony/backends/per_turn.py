@@ -145,6 +145,7 @@ class PerTurnCliBackend(BaseAgentBackend):
         self._agent_name = agent_name
         self._turn_timeout_ms = turn_timeout_ms
         self._cwd = init.cwd
+        self._extra_env = dict(init.env)
         self._on_event = init.on_event
         self._on_process_started = init.on_process_started
         self._session_id: str | None = None
@@ -301,7 +302,7 @@ class PerTurnCliBackend(BaseAgentBackend):
                 else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, **git_roots_env(self._cwd)},
+                env={**os.environ, **git_roots_env(self._cwd), **self._extra_env},
                 limit=MAX_LINE_BYTES,
                 # Own process group so terminate/kill reaches the agent CLI
                 # behind the bash wrapper (POSIX only).
