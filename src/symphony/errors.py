@@ -187,3 +187,15 @@ class ChatProjectAuthorizationError(SymphonyError):
     """A project action lacks its browser-held confirmation capability."""
 
     code = "chat_project_confirmation_forbidden"
+
+
+class ChatIntentActionError(SymphonyError):
+    """A requested Intent approval cannot proceed."""
+
+    code = "chat_intent_action"
+
+
+class ChatIntentAuthorizationError(SymphonyError):
+    """An Intent approval lacks its browser-held confirmation capability."""
+
+    code = "chat_intent_confirmation_forbidden"

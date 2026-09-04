@@ -59,11 +59,20 @@ from .backends import (
 from .errors import (
     ChatBusyError,
     ChatBackendUnavailableError,
+    ChatIntentActionError,
+    ChatIntentAuthorizationError,
     ChatNoSessionError,
     ChatProjectActionError,
     ChatProjectAuthorizationError,
     ChatSessionExistsError,
     SymphonyError,
+)
+from .intent import (
+    IntentAction,
+    IntentFiler,
+    file_intent_request,
+    parse_intent_marker,
+    strict_json_object,
 )
 from .logging import get_logger
 from .projects import ProjectTargetExpectation, project_target_expectation
@@ -124,9 +133,8 @@ QA_PREAMBLE = (
     "You are chatting with the operator of the repository at {path}. "
     "Answer questions about this repository by reading its files. "
     "Q&A mode: do not create, modify or delete any files. "
-    "For a software request, describe the tickets you would file (ids, "
-    "states, blocked-by DAG) and ask the operator to switch the chat to "
-    "edit mode to file them.\n{board}\n"
+    "Software requests go through the intent gate described below; you "
+    "never file the request ticket yourself, in any mode.\n{board}\n"
 )
 EDIT_PREAMBLE = (
     "You are pair-working with the operator of the repository at {path}. "
@@ -163,42 +171,62 @@ _PROJECT_SETUP_TTL = timedelta(minutes=15)
 # same-UID process; that threat requires OS/network/process isolation.
 _CHAT_CONFIRMATION_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
 _MAX_PROJECT_ACTIONS_PER_SESSION = 20
+_MAX_INTENT_ACTIONS_PER_SESSION = 20
+_INTENT_TERMINAL_STATUSES = frozenset({"approved", "expired", "superseded"})
 
 
-# Build-request protocol taught to the chat agent. Rendered with the
-# board's ACTUAL active states; the routing paragraph differs between the
-# 4-lane default board (chat files the stage-ticket DAG itself) and a
-# deep-preset board with an Intake lane (the pipeline decomposes).
+# Board protocol taught to the chat agent. Rendered with the board's ACTUAL
+# active states. Software requests never become tickets by the agent's hand:
+# the agent proposes an intent, the operator approves it (the cycle's single
+# human gate), and the server files the request ticket. The routing line
+# tells the agent where that ticket lands so it can explain the next steps.
 _BOARD_PREAMBLE = (
     "This project runs a Symphony kanban board at {board_root} "
-    "(active states: {states}). Questions: just answer. Software requests "
-    "(build/fix/feature/refactor): confirm scope in at most 2 short turns, "
-    "and only if genuinely ambiguous; then file tickets with the validated "
-    "CLI — NEVER hand-write ticket markdown files:\n"
-    '  ${{SYMPHONY_CLI:-symphony}} board new <ID> "<title>" --state <state> '
-    "--request REQ-<n> --blocked-by <ID> --description-file -\n"
-    "(SYMPHONY_CLI is exported by the orchestrator; use it when `symphony` "
-    "is not on PATH. `${{SYMPHONY_CLI:-symphony}} board update <ID> "
-    "--state <state> --add-blocked-by <ID>` edits an existing ticket.)\n"
-    "(description on stdin; the CLI validates ids, states and DAG "
-    "acyclicity; use the next free REQ-<n> as the request id).\n"
+    "(active states: {states}). Questions: just answer.\n"
+    "{intent}"
     "{routing}"
-    "Each description is a self-contained worker prompt: Goal / Scope "
-    "in-out / Acceptance criteria / Evidence expected — succinct. After "
-    "filing, reply with the ticket ids and a one-line DAG summary; the "
-    "orchestrator picks them up automatically."
+    "Operator-directed edits to EXISTING tickets (edit mode only) use the "
+    "validated CLI — NEVER hand-write ticket markdown files:\n"
+    '  ${{SYMPHONY_CLI:-symphony}} board new <ID> "<title>" --state <state> '
+    "--request <request> --blocked-by <ID> --description-file -\n"
+    "  ${{SYMPHONY_CLI:-symphony}} board update <ID> --state <state> "
+    "--add-blocked-by <ID>\n"
+    "(SYMPHONY_CLI is exported by the orchestrator; use it when `symphony` "
+    "is not on PATH; description on stdin; the CLI validates ids, states "
+    "and DAG acyclicity.)"
+)
+
+# The intent gate. Braces here are literal: this text is substituted into
+# `_BOARD_PREAMBLE` as a value, never passed through `str.format` itself.
+_INTENT_PROTOCOL = (
+    "Software requests (build/fix/feature/refactor/new app) go through ONE "
+    "human gate: the intent. Ask at most two short clarifying turns, only "
+    "when the request is genuinely ambiguous. Then write a plain-language "
+    "summary for the operator and append exactly one machine-readable "
+    "proposal:\n"
+    '<symphony-intent>{"slug": "kebab-case-id", "title": "<one line>", '
+    '"track": "full", "intent": "<markdown>"}</symphony-intent>\n'
+    "The intent markdown uses these headings in order: `## Problem`, "
+    "`## Evidence` (label each claim `[verified: how]` or `[assumed: why]`), "
+    "`## Success criteria` (checkbox lines `- [ ]`, each observable by a "
+    "command, a file, or visible behavior), `## Out of scope`, "
+    "`## Constraints`, `## Open questions`. Use track `micro` only when the "
+    "exact files and symbols are known and success is checkable by an "
+    "existing command; otherwise `full`. The operator approves the card (or "
+    "replies `approve`); the server then files the request ticket and the "
+    "pipeline runs unattended. Do NOT run `symphony board new` for the "
+    "request and never claim a ticket was filed. If the operator replies "
+    "with changes instead, propose a revised intent.\n"
 )
 
 _DEFAULT_ROUTING = (
-    "SIMPLE task: one ticket in {first_state} with goal + acceptance "
-    "criteria. COMPLEX task (new app, multi-file feature, unclear domain): "
-    "a stage-ticket DAG chained via --blocked-by under one --request — "
-    "research -> plan -> adversarial plan-review -> build ticket(s) -> qa "
-    "-> document, titled accordingly (e.g. 'REQ-3 research: ...').\n"
+    "After approval the request ticket lands in {first_state}; that lane "
+    "triages it and the later lanes plan, implement, verify and document.\n"
 )
 _DEEP_ROUTING = (
-    "This board runs the deep pipeline: file ONE Intake ticket per request "
-    "and let the pipeline decompose it.\n"
+    "This board runs the deep pipeline: after approval the request ticket "
+    "lands in Intake and the pipeline decomposes it (research, plan, "
+    "adversarial review, build, QA, verify, document).\n"
 )
 
 
@@ -211,9 +239,11 @@ QA_MODE_NOTICE = (
 )
 EDIT_MODE_NOTICE = (
     "[Chat mode changed to edit: you may now create and modify files in "
-    "this working tree as requested, including filing board tickets with "
-    "`${SYMPHONY_CLI:-symphony} board new`. A separate project still requires "
-    "the explicit server-owned project-setup proposal below.]\n\n"
+    "this working tree as requested, including operator-directed edits to "
+    "existing board tickets with `${SYMPHONY_CLI:-symphony} board new` / "
+    "`board update`. Software requests still go through the intent card; a "
+    "separate project still requires the explicit server-owned project-setup "
+    "proposal below.]\n\n"
     + _PROJECT_SETUP_PREAMBLE
     + "\n\n"
 )
@@ -234,6 +264,7 @@ def _board_preamble(cfg: ServiceConfig) -> str:
     return _BOARD_PREAMBLE.format(
         board_root=cfg.tracker.board_root,
         states=", ".join(states),
+        intent=_INTENT_PROTOCOL,
         routing=routing,
     )
 
@@ -389,15 +420,7 @@ def _project_setup_operation(expectation: ProjectTargetExpectation) -> str:
     return "adopt" if expectation.git_common_dir is not None else "initialize"
 
 
-def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Reject duplicate JSON members at every object depth."""
-
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("duplicate JSON member")
-        value[key] = item
-    return value
+_strict_json_object = strict_json_object
 
 
 def _project_setup_spec(text: str) -> tuple[str, ProjectSetupAction | None]:
@@ -530,6 +553,13 @@ class ChatSession:
     # edit-mode response. They are process-local: restart/reattach intentionally
     # drops them rather than trusting the agent-writable transcript/index.
     project_setup_actions: dict[str, ProjectSetupAction] = field(default_factory=dict)
+    # Intent proposals are likewise process-local and created only from the
+    # strict intent marker; approval is the cycle's single human gate.
+    intent_actions: dict[str, IntentAction] = field(default_factory=dict)
+    # Server-side facts the agent must learn on its next turn (for example
+    # "the operator approved intent X; ticket Y exists"). Consumed by
+    # `send_message`, which prepends them to the operator's text.
+    pending_notices: list[str] = field(default_factory=list)
 
     def budget(self) -> dict[str, Any]:
         return {
@@ -648,6 +678,7 @@ class ChatManager:
         config_provider: Callable[[], ServiceConfig],
         request_refresh: Callable[[], object] | None = None,
         project_creator: ProjectSetupCreator | None = None,
+        intent_filer: IntentFiler | None = None,
     ) -> None:
         self._config_provider = config_provider
         # Called after each turn so board tickets the chat agent files (edit mode
@@ -657,6 +688,9 @@ class ChatManager:
         # Project setup is deliberately injected at the control-plane boundary.
         # Backends never receive a shell capability for global registry writes.
         self._project_creator = project_creator or _default_project_creator
+        # Intent approval files the request ticket server-side; the agent
+        # only proposes. Injectable so tests and other trackers can swap it.
+        self._intent_filer: IntentFiler = intent_filer or file_intent_request
         self._sessions: dict[str, ChatSession] = {}
         self._active_id: str | None = None
         # queue -> focused session id. Numbered frames go to every
@@ -944,10 +978,25 @@ class ChatManager:
             prompt = notice + text
         session.pending_mode_notice = False
         session.pending_preamble = False
+        if session.pending_notices:
+            # Server-side facts land right before the operator's text so the
+            # agent reads them in the same turn, whatever prefix applied.
+            notices = "".join(session.pending_notices)
+            session.pending_notices = []
+            prompt = prompt[: len(prompt) - len(text)] + notices + text
         # Any ordinary message ends the bare-numeric selection window. The
         # visible action card remains explicitly confirmable until its expiry;
         # this prevents a later unrelated ``1`` from mutating the registry.
         self._close_project_setup_choice_windows(session, reason="an ordinary message")
+        # An ordinary message is feedback on the proposal: pending intents are
+        # superseded so the agent can propose a revised one.
+        for action in self._supersede_pending_intents(session):
+            self._broadcast(
+                session,
+                "intent_status",
+                f"intent {action.slug} superseded by an ordinary message",
+                meta={"intent": action.as_dict()},
+            )
         # Counted at send time, not on completion: the turn's tokens are
         # already committed, and `turn_completed` carries a budget snapshot
         # that would otherwise be one turn stale. Must follow the preamble
@@ -1007,6 +1056,7 @@ class ChatManager:
         if session is None:
             return {"active": False}
         self._prune_project_setup_actions(session)
+        self._prune_intent_actions(session)
         return {
             **_session_meta(session),
             "active": True,
@@ -1015,6 +1065,9 @@ class ChatManager:
             ],
             "project_setup_actions": [
                 action.as_dict() for action in session.project_setup_actions.values()
+            ],
+            "intent_actions": [
+                action.as_dict() for action in session.intent_actions.values()
             ],
         }
 
@@ -1090,6 +1143,183 @@ class ChatManager:
             del session.project_setup_actions[stale_id]
             removed.append(stale_id)
         return removed
+
+    # ------------------------------------------------------------------
+    # server-owned intent proposals (the single human gate)
+    # ------------------------------------------------------------------
+
+    def _expire_intent_actions(self, session: ChatSession) -> None:
+        for action in session.intent_actions.values():
+            if action.status in {"pending", "failed"} and action.is_expired():
+                action.status = "expired"
+
+    def _supersede_pending_intents(self, session: ChatSession) -> list[IntentAction]:
+        """Mark every pending proposal superseded; return what changed."""
+
+        changed: list[IntentAction] = []
+        for action in session.intent_actions.values():
+            if action.status == "pending" and action.task is None:
+                action.status = "superseded"
+                changed.append(action)
+        return changed
+
+    def _prune_intent_actions(
+        self, session: ChatSession, *, reserve: int = 0
+    ) -> list[str]:
+        """Bound live intent state without evicting an approvable card."""
+
+        self._expire_intent_actions(session)
+        removed: list[str] = []
+        target = max(_MAX_INTENT_ACTIONS_PER_SESSION - reserve, 0)
+        while len(session.intent_actions) > target:
+            stale_id = next(
+                (
+                    action_id
+                    for action_id, action in session.intent_actions.items()
+                    if action.status in _INTENT_TERMINAL_STATUSES
+                ),
+                None,
+            )
+            if stale_id is None:
+                return removed
+            del session.intent_actions[stale_id]
+            removed.append(stale_id)
+        return removed
+
+    def _approvable_intents(self, session: ChatSession) -> list[IntentAction]:
+        self._expire_intent_actions(session)
+        return [
+            action
+            for action in session.intent_actions.values()
+            if action.status in {"pending", "failed"} and not action.is_expired()
+        ]
+
+    def intent_for_reply(
+        self, text: str, session_id: str | None = None
+    ) -> IntentAction | None:
+        """Return the proposal a bare ``approve`` / ``approve <slug>`` reply selects.
+
+        Anything else is ordinary conversation. Two live proposals with no
+        slug given is ambiguous and selects nothing.
+        """
+
+        session = self._resolve(session_id)
+        words = text.strip().lower().split()
+        if not words or words[0] != "approve" or len(words) > 2:
+            return None
+        live = self._approvable_intents(session)
+        if len(words) == 2:
+            live = [action for action in live if action.slug == words[1]]
+        return live[0] if len(live) == 1 else None
+
+    async def confirm_intent(
+        self,
+        action_id: str,
+        session_id: str | None = None,
+        confirmation_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Approve one Intent proposal: file its request ticket server-side.
+
+        Same authority model as project setup: the browser-held confirmation
+        capability, expiry checked at confirmation time, and an in-flight
+        approval shared by concurrent requests so the ticket is filed once.
+        """
+
+        session = self._resolve(session_id)
+        action = session.intent_actions.get(action_id)
+        if action is None:
+            raise ChatIntentActionError(f"unknown intent action {action_id!r}")
+        token_hash = _confirmation_token_hash(confirmation_token)
+        if (
+            session.confirmation_token_hash is None
+            or token_hash is None
+            or not hmac.compare_digest(session.confirmation_token_hash, token_hash)
+        ):
+            raise ChatIntentAuthorizationError(
+                "intent approval requires confirmation from its originating browser"
+            )
+        if action.status == "approved":
+            return action.as_dict()
+        if action.task is not None:
+            await asyncio.shield(action.task)
+            return action.as_dict()
+        if action.status == "superseded":
+            raise ChatIntentActionError(
+                f"intent {action.slug} was superseded; ask for a fresh proposal"
+            )
+        if action.status == "expired" or action.is_expired():
+            action.status = "expired"
+            self._broadcast(
+                session,
+                "intent_status",
+                f"intent {action.slug} expired before approval",
+                meta={"intent": action.as_dict()},
+            )
+            raise ChatIntentActionError("intent proposal has expired")
+        action.status = "running"
+        action.error = None
+        self._broadcast(
+            session,
+            "intent_status",
+            f"approving intent {action.slug}",
+            meta={"intent": action.as_dict()},
+        )
+        action.task = asyncio.create_task(
+            self._run_intent_approval(session, action),
+            name=f"symphony-chat-intent-{action.action_id}",
+        )
+        await asyncio.shield(action.task)
+        return action.as_dict()
+
+    async def _run_intent_approval(
+        self, session: ChatSession, action: IntentAction
+    ) -> None:
+        cfg = self._config_provider()
+        approved_at = _utc_iso()
+        try:
+            ticket = await asyncio.to_thread(
+                self._intent_filer,
+                cfg,
+                action,
+                approved_at=approved_at,
+                session_id=session.session_id,
+            )
+        except Exception as exc:
+            action.status = "failed"
+            action.error = _project_setup_error(exc)
+            log.warning(
+                "chat_intent_approval_failed",
+                action_id=action.action_id,
+                slug=action.slug,
+                error=action.error,
+            )
+            self._broadcast(
+                session,
+                "intent_status",
+                f"could not file intent {action.slug}",
+                meta={"intent": action.as_dict()},
+            )
+        else:
+            action.status = "approved"
+            action.ticket = ticket
+            identifier = str(ticket.get("identifier", ""))
+            state = str(ticket.get("state", ""))
+            self._broadcast(
+                session,
+                "intent_status",
+                f"intent {action.slug} approved; filed {identifier} in {state}",
+                meta={"intent": action.as_dict()},
+            )
+            session.pending_notices.append(
+                f"[The operator approved intent '{action.slug}'. The server filed "
+                f"request ticket {identifier} in state {state}; the pipeline owns "
+                "it now. Do not file that request again.]\n\n"
+            )
+            if self._request_refresh is not None:
+                self._request_refresh()
+        finally:
+            action.task = None
+            self._save_index()
 
     def project_setup_for_choice(
         self, choice_text: str, session_id: str | None = None
@@ -1298,6 +1528,35 @@ class ChatManager:
                     proposal = None
                     unavailable = "Project setup could not be safely prepared."
                     visible = f"{visible}\n\n{unavailable}".strip()
+        intent: IntentAction | None = None
+        superseded: list[IntentAction] = []
+        intent_removed: list[str] = []
+        cfg = self._config_provider()
+        if cfg.tracker.kind == "file" and cfg.tracker.board_root is not None:
+            visible, intent = parse_intent_marker(visible)
+        if intent is not None:
+            self._expire_intent_actions(session)
+            if session.confirmation_token_hash is None:
+                intent = None
+                visible = (
+                    f"{visible}\n\n"
+                    "Intent approval is unavailable in this session: it was not "
+                    "started from the board, so no confirmation capability exists."
+                ).strip()
+            else:
+                # A fresh proposal replaces earlier pending ones: the operator
+                # approves the latest card, never a stale draft.
+                superseded = self._supersede_pending_intents(session)
+                intent_removed = self._prune_intent_actions(session, reserve=1)
+                if len(session.intent_actions) < _MAX_INTENT_ACTIONS_PER_SESSION:
+                    session.intent_actions[intent.action_id] = intent
+                else:
+                    intent = None
+                    visible = (
+                        f"{visible}\n\n"
+                        "Intent proposal could not be prepared: too many "
+                        "unresolved proposals in this session."
+                    ).strip()
         # The explanation must precede its control in the live stream just as
         # it does in the model response and accessibility reading order.
         if visible:
@@ -1315,6 +1574,21 @@ class ChatManager:
                 "project_setup_action",
                 "",
                 meta={"project_setup": proposal.as_dict()},
+            )
+        for action_id in intent_removed:
+            self._broadcast(
+                session, "intent_removed", "", meta={"intent_action_id": action_id}
+            )
+        for old in superseded:
+            self._broadcast(
+                session,
+                "intent_status",
+                f"intent {old.slug} superseded by a newer proposal",
+                meta={"intent": old.as_dict()},
+            )
+        if intent is not None:
+            self._broadcast(
+                session, "intent_action", "", meta={"intent": intent.as_dict()}
             )
         # Keep the raw backend message for terminal-event de-duplication. The
         # visible string intentionally has the protocol marker removed.

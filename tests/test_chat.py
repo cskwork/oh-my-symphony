@@ -258,8 +258,9 @@ async def test_send_message_preamble_and_continuation(
     assert "do not create, modify or delete" in prompt
     assert "Symphony kanban board at" in prompt
     assert "kanban" in prompt
-    # Q&A mode describes tickets and defers filing to edit mode.
-    assert "switch the chat to edit mode" in prompt
+    # Q&A mode never files the request ticket: the intent gate does.
+    assert "never file the request ticket yourself" in prompt
+    assert "<symphony-intent>" in prompt
     # Board protocol: validated CLI with the board's actual states, never
     # hand-written ticket markdown.
     assert "${SYMPHONY_CLI:-symphony} board new" in prompt
@@ -1770,7 +1771,7 @@ def test_board_cli_fallback_runs_with_stripped_path() -> None:
     assert "board" in result.stdout.lower()
 
 
-def test_board_preamble_default_board_routes_by_complexity(tmp_path: Path) -> None:
+def test_board_preamble_default_board_teaches_the_intent_gate(tmp_path: Path) -> None:
     preamble = _board_preamble(_cfg(tmp_path))
     # Validated CLI protocol, rendered with the board's actual states.
     assert "${SYMPHONY_CLI:-symphony} board new" in preamble
@@ -1779,20 +1780,27 @@ def test_board_preamble_default_board_routes_by_complexity(tmp_path: Path) -> No
     assert "board update <ID>" in preamble
     assert "--description-file -" in preamble
     assert "Todo, Doing" in preamble
-    assert "SIMPLE task: one ticket in Todo" in preamble
-    assert "research -> plan -> adversarial plan-review" in preamble
+    # The single human gate: the agent proposes, the operator approves, the
+    # server files. The agent must never file the request itself.
+    assert "ONE human gate" in preamble
+    assert '<symphony-intent>{"slug": "kebab-case-id"' in preamble
+    assert "## Success criteria" in preamble
+    assert "Do NOT run `symphony board new` for the request" in preamble
+    assert "After approval the request ticket lands in Todo" in preamble
     # No freehand ticket-markdown instruction survives.
     assert "<IDENTIFIER>.md" not in preamble
     assert "front matter" not in preamble
+    assert "research -> plan -> adversarial plan-review" not in preamble
 
 
-def test_board_preamble_deep_board_files_one_intake_ticket(tmp_path: Path) -> None:
+def test_board_preamble_deep_board_routes_to_intake(tmp_path: Path) -> None:
     cfg = _cfg_with_states(
         tmp_path,
         "[Intake, Research, Plan, Review, Build, QA, Verify, Document]",
     )
     preamble = _board_preamble(cfg)
-    assert "ONE Intake ticket" in preamble
+    assert "lands in Intake and the pipeline decomposes it" in preamble
     assert "Intake, Research, Plan" in preamble
-    # On a deep board the pipeline decomposes; chat does not build the DAG.
-    assert "adversarial plan-review" not in preamble
+    assert "<symphony-intent>" in preamble
+    # On a deep board the pipeline decomposes; chat never builds the DAG.
+    assert "After approval the request ticket lands in Todo" not in preamble
