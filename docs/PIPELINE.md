@@ -24,6 +24,19 @@ plus the current state's stage prompt for each fresh turn.
 | Done | reporter | `## As-Is -> To-Be Report` with goal, evidence, residual risk, and how to re-run |
 | Blocked | agent or operator | `## Blocker` describing the missing input or failed gate |
 
+## The intent gate
+
+A request may enter the board from the web chat. The chat agent never files
+the request itself: it proposes an intent card (Problem, Evidence, Success
+criteria, Out of scope, Constraints, Open questions, Track), the operator
+approves it once, and the server files the request ticket and records
+`.sdlc/work/<slug>/intent.md`. On this default board the ticket lands in
+`Todo`; on the deep preset it lands in `Intake`, whose prompt consumes the
+intent instead of re-asking (`docs/symphony-prompts/file/deep/intake.md`).
+The ticket description carries the whole intent, so every lane treats it as
+the scope of record and never reopens the ask with the operator; `Human
+Review` stays reserved for a real blocker.
+
 ## Why four stages
 
 The old eight-stage flow spread one delivery story across too many agent

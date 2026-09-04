@@ -267,6 +267,14 @@
         headers: { 'X-Symphony-Chat-Confirmation': confirmationToken },
       }
     ),
+    approveChatIntent: (sessionId, actionId, confirmationToken) => apiRequest(
+      `/chat/sessions/${encodeURIComponent(sessionId)}/intent/${encodeURIComponent(actionId)}/approve`,
+      {
+        method: 'POST',
+        body: '{}',
+        headers: { 'X-Symphony-Chat-Confirmation': confirmationToken },
+      }
+    ),
     reattachChatSession: (id, confirmationToken) => apiRequest(
       `/chat/sessions/${encodeURIComponent(id)}/reattach`,
       {
@@ -3474,6 +3482,9 @@
     // tells the socket which one so only its deltas are streamed.
     currentId: null, sessions: null, autoCreatePromise: null, projectSetupActions: {},
     projectSetupExpiryTimers: {}, confirmationTokens: {}, lifecycleBusy: false,
+    // Intent proposals are the cycle's single human gate; like project
+    // setup they are server-owned cards keyed by action id.
+    intentActions: {}, intentExpiryTimers: {},
   };
 
   const CHAT_AGENT_LABELS = {
@@ -3711,16 +3722,144 @@
     }
   }
 
+  function rememberChatIntent(action) {
+    if (!action || !action.action_id) return;
+    chatState.intentActions[action.action_id] = action;
+    if (chatState.snapshot) {
+      chatState.snapshot.intent_actions = Object.values(chatState.intentActions);
+    }
+  }
+
+  function forgetChatIntent(actionId) {
+    if (!actionId) return;
+    const timer = chatState.intentExpiryTimers[actionId];
+    if (timer) clearTimeout(timer);
+    delete chatState.intentExpiryTimers[actionId];
+    delete chatState.intentActions[actionId];
+    if (chatState.snapshot) {
+      chatState.snapshot.intent_actions = Object.values(chatState.intentActions);
+    }
+  }
+
+  function renderChatIntentAction(view, action) {
+    if (!action || !action.action_id) return;
+    const existing = view.transcript.querySelector(`[data-intent-id="${action.action_id}"]`);
+    const node = buildChatIntentNode(view, action);
+    if (existing) {
+      // A status change replaces the card in place; keep the operator's
+      // place if they were reading the proposal body.
+      const body = existing.querySelector('details');
+      if (body && body.open) node.querySelector('details').open = true;
+      existing.replaceWith(node);
+    } else {
+      view.transcript.appendChild(node);
+    }
+  }
+
+  function clearChatIntentActions(view) {
+    for (const timer of Object.values(chatState.intentExpiryTimers)) clearTimeout(timer);
+    chatState.intentExpiryTimers = {};
+    chatState.intentActions = {};
+    if (chatState.snapshot) chatState.snapshot.intent_actions = [];
+    for (const node of view.transcript.querySelectorAll('[data-intent-id]')) {
+      node.remove();
+    }
+  }
+
+  function reconcileChatIntentActions(view, snapshot) {
+    if (!snapshot || !snapshot.active) {
+      clearChatIntentActions(view);
+      return;
+    }
+    const actions = {};
+    for (const action of snapshot.intent_actions || []) {
+      if (action && action.action_id) actions[action.action_id] = action;
+    }
+    for (const actionId of Object.keys(chatState.intentActions)) {
+      if (!actions[actionId]) {
+        const timer = chatState.intentExpiryTimers[actionId];
+        if (timer) clearTimeout(timer);
+        delete chatState.intentExpiryTimers[actionId];
+      }
+    }
+    chatState.intentActions = actions;
+    snapshot.intent_actions = Object.values(actions);
+    for (const node of view.transcript.querySelectorAll('[data-intent-id]')) {
+      if (!actions[node.dataset.intentId]) node.remove();
+    }
+    for (const action of Object.values(actions)) renderChatIntentAction(view, action);
+  }
+
+  // Mirrors the server's `intent_for_reply`: a bare "approve" (or
+  // "approve <slug>") selects the one live proposal it names. The browser
+  // routes it through the approve endpoint so the confirmation capability
+  // travels with it; the plain message route would be refused.
+  function chatIntentForReply(text) {
+    if (!chatState.snapshot || !chatState.snapshot.active) return null;
+    const words = text.trim().toLowerCase().split(/\s+/);
+    if (!words.length || words[0] !== 'approve' || words.length > 2) return null;
+    let live = Object.values(chatState.intentActions).filter((action) =>
+      action && (action.status === 'pending' || action.status === 'failed') &&
+      !chatIntentExpired(action)
+    );
+    if (words.length === 2) live = live.filter((action) => action.slug === words[1]);
+    return live.length === 1 ? live[0] : null;
+  }
+
+  async function approveChatIntent(view, action) {
+    const sessionId = chatState.currentId;
+    if (!sessionId) throw new ApiError(t('chat.noSessionSelected'), 'chat_no_session', 404);
+    const confirmationToken = chatConfirmationToken(sessionId);
+    if (!confirmationToken) {
+      throw new ApiError(
+        t('chat.intentConfirmationUnavailable'),
+        'chat_intent_confirmation_forbidden',
+        403
+      );
+    }
+    try {
+      const result = await api.approveChatIntent(sessionId, action.action_id, confirmationToken);
+      if (chatState.currentId !== sessionId) return result && result.action || action;
+      if (result && result.action) {
+        rememberChatIntent(result.action);
+        renderChatIntentAction(view, result.action);
+      }
+      return chatState.intentActions[action.action_id] || action;
+    } catch (err) {
+      if (chatState.currentId === sessionId) {
+        const failedAction = err.data && err.data.action;
+        if (failedAction) {
+          rememberChatIntent(failedAction);
+          renderChatIntentAction(view, failedAction);
+        }
+        try {
+          const snapshot = await api.getChatSessionById(sessionId);
+          if (chatState.currentId === sessionId) {
+            chatState.snapshot = snapshot;
+            reconcileChatIntentActions(view, snapshot);
+          }
+        } catch (_refreshErr) { /* preserve the original approval error */ }
+      }
+      throw err;
+    }
+  }
+
   async function sendChatMessage(view) {
     const text = view.input.value.trim();
     const sessionId = chatState.currentId;
     if (!text) return;
     try {
       const action = chatProjectSetupForChoice(text);
+      const intent = action ? null : chatIntentForReply(text);
       if (action) {
         await selectChatProjectSetup(view, action);
         if (chatState.currentId === sessionId) {
           showToast(t('chat.projectSetupSelected'), 'success');
+        }
+      } else if (intent) {
+        await approveChatIntent(view, intent);
+        if (chatState.currentId === sessionId) {
+          showToast(t('chat.intentApproved'), 'success');
         }
       } else if (sessionId) {
         await api.postChatMessageTo(sessionId, { text });
@@ -3996,11 +4135,13 @@
       chatState.snapshot = snapshot;
       chatState.busy = Boolean(snapshot.busy);
       reconcileChatProjectSetupActions(view, snapshot);
+      reconcileChatIntentActions(view, snapshot);
     } catch (_err) {
       if (chatState.currentId !== sessionId) return;
       chatState.snapshot = { active: false };
       chatState.busy = false;
       clearChatProjectSetupActions(view);
+      clearChatIntentActions(view);
     }
     renderChatControls(view);
     updateChatComposer(view);
@@ -4012,6 +4153,10 @@
     chatState.projectSetupExpiryTimers = {};
     chatState.projectSetupActions = {};
     for (const action of snapshot.project_setup_actions || []) rememberChatProjectSetup(action);
+    for (const timer of Object.values(chatState.intentExpiryTimers)) clearTimeout(timer);
+    chatState.intentExpiryTimers = {};
+    chatState.intentActions = {};
+    for (const action of snapshot.intent_actions || []) rememberChatIntent(action);
     if (snapshot.session_id) chatState.currentId = snapshot.session_id;
     chatState.busy = Boolean(snapshot.busy);
     chatState.seqSeen = 0;
@@ -4023,6 +4168,9 @@
     for (const msg of tail) appendChatMessage(view, msg, true);
     for (const action of Object.values(chatState.projectSetupActions)) {
       renderChatProjectSetupAction(view, action);
+    }
+    for (const action of Object.values(chatState.intentActions)) {
+      renderChatIntentAction(view, action);
     }
     if (!snapshot.active && !tail.length) {
       view.transcript.appendChild(el('div', { class: 'empty-state' }, t('chat.startHint')));
@@ -4126,6 +4274,31 @@
         view.transcript.scrollTop = view.transcript.scrollHeight;
       }
       return;
+    }
+    if (msg.type === 'intent_removed') {
+      if (!fromSnapshot) {
+        const actionId = msg.meta && msg.meta.intent_action_id;
+        if (actionId) {
+          forgetChatIntent(actionId);
+          view.transcript.querySelector(`[data-intent-id="${actionId}"]`)?.remove();
+        }
+      }
+      return;
+    }
+    if (msg.type === 'intent_action' || msg.type === 'intent_status') {
+      let action = msg.meta && msg.meta.intent;
+      if (action && fromSnapshot) {
+        // Same rule as project setup: on replay only the live server
+        // snapshot may render an approvable card.
+        action = chatState.intentActions[action.action_id] || null;
+      }
+      if (action) {
+        if (!fromSnapshot) rememberChatIntent(action);
+        renderChatIntentAction(view, action);
+        view.transcript.scrollTop = view.transcript.scrollHeight;
+      }
+      // `intent_status` also carries a transcript line; `intent_action`
+      // falls through to a null node because the card is the content.
     }
     if (msg.type === 'user_message') {
       chatState.busy = true;
@@ -4253,6 +4426,102 @@
     return node;
   }
 
+  function chatIntentExpired(action) {
+    const expiresAt = Date.parse(action.expires_at || '');
+    return !Number.isFinite(expiresAt) || expiresAt <= Date.now();
+  }
+
+  function chatIntentStatus(action) {
+    const statuses = {
+      pending: t('chat.intentPending'),
+      running: t('chat.intentRunning'),
+      approved: t('chat.intentApprovedStatus'),
+      failed: t('chat.intentFailed'),
+      expired: t('chat.intentExpired'),
+      superseded: t('chat.intentSuperseded'),
+    };
+    return statuses[action.status] || action.status;
+  }
+
+  function scheduleChatIntentExpiry(view, action) {
+    if (!action || !action.action_id) return;
+    const existing = chatState.intentExpiryTimers[action.action_id];
+    if (existing) clearTimeout(existing);
+    delete chatState.intentExpiryTimers[action.action_id];
+    if (action.status !== 'pending' && action.status !== 'failed') return;
+    const expiresAt = Date.parse(action.expires_at || '');
+    const delay = expiresAt - Date.now();
+    if (!Number.isFinite(delay) || delay <= 0 || delay > 2_147_000_000) return;
+    chatState.intentExpiryTimers[action.action_id] = setTimeout(() => {
+      delete chatState.intentExpiryTimers[action.action_id];
+      const current = chatState.intentActions[action.action_id];
+      if (current && chatIntentExpired(current)) {
+        renderChatIntentAction(view, current);
+      }
+    }, delay + 1);
+  }
+
+  function buildChatIntentNode(view, action) {
+    const expired = chatIntentExpired(action);
+    const status = expired && (action.status === 'pending' || action.status === 'failed')
+      ? 'expired' : (action.status || 'pending');
+    const ticket = action.ticket || null;
+    const approvable = status === 'pending' || status === 'failed';
+    const hasToken = Boolean(chatConfirmationToken(chatState.currentId));
+    const canApprove = approvable && hasToken;
+    const approveButton = el('button', {
+      class: 'btn btn-primary btn-sm chat-intent-approve',
+      type: 'button',
+      disabled: !canApprove,
+      onClick: async (event) => {
+        const button = event.currentTarget;
+        const sessionId = chatState.currentId;
+        button.disabled = true;
+        try {
+          await approveChatIntent(view, action);
+          if (chatState.currentId === sessionId) {
+            showToast(t('chat.intentApproved'), 'success');
+          }
+        } catch (err) {
+          if (chatState.currentId === sessionId) {
+            showToast(err.message, 'error');
+            button.disabled = false;
+          }
+        }
+      },
+    }, t('chat.intentApprove'));
+    const body = el('div', { class: 'chat-intent-markdown' });
+    body.appendChild(renderMarkdown(action.intent));
+    const node = el('section', {
+      class: `chat-intent ${status}`,
+      'data-intent-id': action.action_id,
+      'aria-live': 'polite',
+    }, [
+      el('div', { class: 'chat-intent-heading' }, [
+        el('strong', null, `${t('chat.intentTitle')}: ${action.title}`),
+        el('span', { class: `chat-intent-status ${status}` },
+          chatIntentStatus({ ...action, status })),
+      ]),
+      el('div', { class: 'chat-intent-meta' }, [
+        el('code', { class: 'chat-intent-slug' }, action.slug),
+        el('span', { class: `chat-intent-track ${action.track}` },
+          action.track === 'micro' ? t('chat.intentTrackMicro') : t('chat.intentTrackFull')),
+      ]),
+      el('details', { class: 'chat-intent-body' }, [
+        el('summary', null, t('chat.intentShowBody')),
+        body,
+      ]),
+      status === 'approved' && ticket ? el('p', { class: 'chat-intent-result' },
+        t('chat.intentFiled', { id: ticket.identifier, state: ticket.state })) : null,
+      action.error ? el('p', { class: 'chat-intent-error', role: 'alert' }, action.error) : null,
+      approvable ? el('p', { class: 'chat-intent-hint' },
+        hasToken ? t('chat.intentReplyHint') : t('chat.intentConfirmationUnavailable')) : null,
+      approveButton,
+    ]);
+    scheduleChatIntentExpiry(view, action);
+    return node;
+  }
+
   function buildChatMessageNode(msg) {
     switch (msg.type) {
       case 'user_message':
@@ -4272,7 +4541,12 @@
       case 'turn_failed':
         return el('div', { class: 'chat-msg chat-error' }, msg.text || t('chat.turnFailed'));
       case 'session_status':
+      case 'intent_status':
         return msg.text ? el('div', { class: 'chat-status' }, msg.text) : null;
+      case 'intent_action':
+      case 'intent_removed':
+        // The card is rendered from action state, not from the transcript.
+        return null;
       default:
         return null;
     }

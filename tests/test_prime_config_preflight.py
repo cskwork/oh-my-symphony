@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import symphony.backends.pi as pi_module
+import symphony.backends.per_turn as per_turn_module
 from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
@@ -114,7 +114,7 @@ async def test_prime_backend_contract_uses_prime_resume_flag(
 
     commands = _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -168,7 +168,7 @@ async def test_prime_backend_timeout_error_uses_prime_label(
     process = _FakeSubprocess(returncode=0)
     process.stdout = _BlockingStream()
     process.stderr = _BlockingStream()
-    _install_subprocess_double(monkeypatch, pi_module, [process])
+    _install_subprocess_double(monkeypatch, per_turn_module, [process])
 
     async def on_event(event: dict[str, object]) -> None:
         del event

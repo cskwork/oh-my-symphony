@@ -119,3 +119,15 @@ A deterministic projection of current scheduler order, dispatch position, and de
 ## Critical path
 
 The longest remaining downstream dependency chain from a ticket through active work. In DAG scheduling it is a tie-breaker after declared priority, so work that unlocks a longer chain is preferred without overriding starvation recovery.
+
+## Intent proposal
+
+A server-owned chat action created only from the strict `<symphony-intent>` marker the chat agent emits after its human explanation. It holds a slug, a title, a Track, and the intent markdown in the sdlc-kit stage-1 shape (Problem, Evidence, Success criteria, Out of scope, Constraints, Open questions). It expires after thirty minutes, and any ordinary reply supersedes it so the agent can propose a revision. Prose that is not the exact marker never becomes a proposal.
+
+## Intent approval
+
+The operator's explicit confirmation of one Intent proposal, from the card or a bare `approve` reply carrying the session's browser-held confirmation capability. It is the only human gate of the chat-to-delivery cycle. Approval makes the server, never the agent, file the request ticket through the tracker API and record `.sdlc/work/<slug>/intent.md` with an `## Approval` section. Concurrent approvals of one proposal file exactly one ticket.
+
+## Track
+
+The delivery depth frozen by Intent approval. `full` walks every lane of the board. `micro` is allowed only when the exact files and symbols are known and success is checkable by an existing command; on the deep preset it lets Intake skip Research and move straight to Plan.
