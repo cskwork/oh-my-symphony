@@ -10,6 +10,39 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Chat intent gate (dark-factory cycle).** Software requests typed into
+  the web chat become a strict, server-owned intent card (Problem, Evidence,
+  Success criteria, Out of scope, Constraints, Open questions, Track). One
+  approval from the card or a bare `approve` reply makes the server file the
+  request ticket and record `.sdlc/work/<slug>/intent.md`; the agent never
+  files the request itself. Deep boards receive the ticket in `Intake`,
+  default boards in the first active state. Works in Q&A and edit mode.
+- Project-setup proposals accept `preset: deep`, so a new application asked
+  for in chat is born on the eight-lane pipeline; the preset is applied
+  before the initial commit.
+- The deep `Intake` prompt consumes the approved intent instead of
+  re-asking; `Track: micro` skips Research.
+
+### Changed
+
+- The chat board preamble teaches the intent protocol; `symphony board new`
+  / `board update` remain for operator-directed edits to existing tickets.
+- Per-dispatch environment (`SYMPHONY_TOKEN_EMA`, `SYMPHONY_TOKEN_BUDGET`,
+  `SYMPHONY_REWIND_SCOPE`) travels in `BackendInit.env` and is overlaid at
+  spawn time instead of mutating `os.environ` (#29).
+
+### Fixed
+
+- Retry-pending tickets keep their `## Touched Files` snapshot, so the
+  conflict pre-check no longer lets an overlapping candidate dispatch past a
+  ticket waiting on a retry (#28).
+- `.symphony/token_ema.json` and `done_count.json` renames retry on a held
+  handle (Windows `WinError 32`) before logging, and are namespaced per
+  workflow file so sibling workflows in one directory stop overwriting each
+  other (#30, #32).
+
 ## [0.21.0] - 2026-08-24 - Authenticated boards and safer Windows orchestration
 
 ### Added

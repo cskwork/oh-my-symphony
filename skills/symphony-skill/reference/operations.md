@@ -126,6 +126,25 @@ symphony board mv TASK-1 Blocked
 
 Use this only to unstick — the agent normally transitions tickets itself.
 
+### Approve an intent from chat
+
+Software requests typed into the web **Chat** page become an intent card,
+not tickets. The operator approves once (button, or a bare `approve` /
+`approve <slug>` reply from the same browser); the server files the request
+ticket with `request: <slug>` and writes `.sdlc/work/<slug>/intent.md`.
+
+```bash
+# Same call the Approve button makes; the confirmation header is the
+# browser-held capability created when the session started.
+curl -X POST "http://127.0.0.1:9999/api/v1/chat/sessions/<session>/intent/<action_id>/approve" \
+  -H "X-Symphony-Chat-Confirmation: <token>" -H "Content-Type: application/json" -d '{}'
+```
+
+Deep-preset boards receive the ticket in `Intake`; default boards in the first
+active state. A proposal expires after 30 minutes and is superseded by any
+ordinary reply. New applications: ask in edit mode and the agent proposes a
+separate project with `preset: deep`.
+
 ## Running the orchestrator
 
 ### Managed service (normal headless mode)

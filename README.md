@@ -964,28 +964,38 @@ the web/TUI issue forms; add them by hand in frontmatter when you need this
 advanced behavior. Unknown skill names are surfaced to the agent as "not
 found" instead of silently dropped.
 
-## Chat intake: type a request, the board delivers
+## Chat intake: type a request, approve one intent, the board delivers
 
 The admin UI ships a **Chat** page backed by the same agent CLIs. Each new
 session lets you choose Claude Code, Codex, Gemini CLI, AGY, Kiro, OpenCode,
 Pi, or Prime Agent; the workflow's configured agent is selected by default.
-Chat does more than answer questions. In edit mode the chat agent follows a
-board-intake protocol.
-Type a request; the agent confirms scope (at most two turns, and only when
-the request is ambiguous), then files tickets through the validated board
-tool, never freehand ticket markdown:
+Chat does more than answer questions: it is the front door of a delivery
+cycle with exactly one human gate.
 
-- **simple request** → one ticket in the first active state;
-- **complex request** → a research → plan → plan-review → build → qa →
-  document stage-ticket DAG, chained via `--blocked-by` under one
-  `--request REQ-<n>` group;
-- **deep-preset board** (an `Intake` lane exists) → one Intake ticket; the
-  pipeline itself decomposes the work.
+1. **Propose.** Type a request. The agent asks at most two clarifying
+   questions, only when the request is genuinely ambiguous, then writes a
+   plain-language summary and an **intent card**: Problem, Evidence (each
+   claim labelled verified or assumed), Success criteria as checkboxes,
+   Out of scope, Constraints, Open questions, and a track (`full`, or
+   `micro` when the exact files are known and an existing command proves
+   success).
+2. **Approve.** Press **Approve intent** on the card or reply `approve`.
+   Any other reply supersedes the card so the agent can propose a revision.
+   This approval is the only human decision in the cycle.
+3. **Deliver.** The server, never the agent, files the request ticket
+   through the validated board tool and records
+   `.sdlc/work/<slug>/intent.md` (the sdlc-kit stage-1 artifact, with an
+   `## Approval` section). On a deep-preset board the ticket lands in
+   `Intake` and the pipeline researches, plans, red-teams the plan, builds,
+   QAs, verifies and documents unattended. On the default four-lane board
+   it lands in the first active state and Todo triage routes it.
 
-Every ticket passes `symphony board new` validation (unique id, legal
-state, existing blockers, acyclic DAG). In Q&A mode the agent describes
-the tickets it would file and defers filing until you switch the session
-to edit mode. Chat converses; the board delivers.
+Asking for a **new application** in edit mode makes the agent propose a
+separate project with `preset: deep`, so the new board is born with the
+eight-lane pipeline. Existing tickets can still be edited in edit mode with
+`symphony board new` / `board update`; the request itself is never filed by
+the agent, and the intent card works in Q&A mode too. Chat converses; you
+approve once; the board delivers.
 
 ---
 

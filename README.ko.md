@@ -645,29 +645,38 @@ artifacts:
 폴백 상태로 마이그레이션된다. 프리셋은 시작점이지 감옥이 아니다. 이후에도
 레인 추가/삭제/이름변경과 컬럼별 프롬프트 편집은 그대로 동작한다.
 
-## Chat intake: 채팅에 요청하면, 보드가 배달한다
+## Chat intake: 채팅에 요청하고, intent 하나만 승인하면, 보드가 배달한다
 
 어드민 UI에는 같은 에이전트 CLI가 뒷받침하는 **Chat** 페이지가 있다. 새
 세션마다 Claude Code, Codex, Gemini CLI, AGY, Kiro, OpenCode, Pi, Prime Agent 중
 하나를 선택할 수 있으며, 기본값은 워크플로에 설정된 에이전트다. 채팅은 단순
-질의응답만 하는 것이 아니다. edit 모드에서 채팅 에이전트는 보드 인테이크
-프로토콜을 따른다. 요청을 입력하면 에이전트가 (요청이 모호할 때만, 최대 두 턴으로)
-범위를 확인한 뒤, 검증된 보드 도구를 통해 티켓을 등록한다. 자유 형식
-티켓 markdown은 쓰지 않는다.
+질의응답이 아니라, 사람의 결정이 딱 한 번만 필요한 전달 사이클의 현관이다.
 
-- **단순 요청** → 첫 active 상태에 티켓 한 장;
-- **복잡한 요청** → research → plan → plan-review → build → qa → document
-  스테이지 티켓 DAG를 `--blocked-by`로 연결해 하나의 `--request REQ-<n>`
-  그룹 아래 등록;
-- **deep 프리셋 보드** (`Intake` 레인이 있으면) → Intake 티켓 한 장;
-  분해는 파이프라인이 알아서 한다.
+1. **제안.** 요청을 입력한다. 에이전트는 요청이 정말 모호할 때만 최대 두 번
+   되묻고, 이어서 쉬운 말로 된 요약과 **intent 카드**를 만든다. 카드에는
+   Problem, Evidence(각 주장에 verified/assumed 라벨), 체크박스 형태의
+   Success criteria, Out of scope, Constraints, Open questions, 그리고 track
+   (`full`, 또는 대상 파일이 명확하고 기존 명령으로 성공을 확인할 수 있으면
+   `micro`)이 담긴다.
+2. **승인.** 카드의 **Approve intent** 버튼을 누르거나 `approve`라고 답한다.
+   다른 답을 하면 카드는 superseded 처리되고 에이전트가 수정안을 다시
+   제안한다. 이 승인이 사이클에서 사람이 내리는 유일한 결정이다.
+3. **전달.** 에이전트가 아니라 서버가 검증된 보드 도구로 요청 티켓을
+   등록하고, `.sdlc/work/<slug>/intent.md`(sdlc-kit 1단계 산출물, `## Approval`
+   섹션 포함)를 남긴다. deep 프리셋 보드에서는 티켓이 `Intake`에 들어가
+   파이프라인이 조사, 계획, 계획 red-team, 구현, QA, 검증, 문서화를 사람
+   개입 없이 진행한다. 기본 4레인 보드에서는 첫 active 상태에 들어가 Todo
+   triage가 라우팅한다.
 
-모든 티켓은 `symphony board new` 검증(고유 id, 유효한 상태, 존재하는
-blocker, 비순환 DAG)을 통과한다. Q&A 모드에서는 에이전트가 등록할 티켓을
-설명만 하고, 세션을 edit 모드로 바꿀 때까지 등록을 미룬다. 채팅은 대화하고,
+edit 모드에서 **새 애플리케이션**을 요청하면 에이전트는 `preset: deep`이 붙은
+별도 프로젝트를 제안하므로, 새 보드는 처음부터 8레인 파이프라인으로
+태어난다. 기존 티켓은 edit 모드에서 `symphony board new` / `board update`로
+여전히 손볼 수 있지만, 요청 자체를 에이전트가 등록하는 일은 없다. intent
+카드는 Q&A 모드에서도 동작한다. 채팅은 대화하고, 사람은 한 번 승인하고,
 보드가 배달한다.
 
 ---
+
 ## Continuous improvement: 실험적 자율 유지보수
 
 **실험 기능이며 전부 opt-in이다.** `WORKFLOW.md`에 `continuous_improvement:`
