@@ -1067,7 +1067,7 @@ only). From the browser you can:
   columns migrate automatically.
 - **Git.** Inspect history, task branches, comparisons, and diffs; delete
   branches; merge verified work; push branches; or open a pull request.
-- **Chat.** Operator chat sessions with the board-intake protocol
+- **Chat.** Operator chat sessions with the intent gate (propose, approve once, the server files)
   (see [Chat intake](#chat-intake-type-a-request-the-board-delivers)).
 - **Preview.** Start, restart, or stop a loopback-only product preview from
   a detached target-branch checkout, with a health check, URL, and bounded logs.
@@ -1286,7 +1286,7 @@ src/symphony/
   server.py          aiohttp server, health/state/refresh routes
   projects.py        multi-project registry + managed service metadata
   product_preview.py detached target-branch preview lifecycle
-  chat.py            operator chat sessions + board-intake protocol
+  chat.py            operator chat sessions + intent gate (intent.py files the ticket)
   continuous_improvement.py  idle-time improvement-proposal loop
   i18n.py            TUI/doc language switching
   stats.py           .symphony/stats.jsonl aggregation

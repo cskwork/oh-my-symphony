@@ -947,7 +947,7 @@ src/symphony/
   server.py          aiohttp server, health/state/refresh routes
   projects.py        multi-project registry + managed service metadata
   product_preview.py detached target-branch preview lifecycle
-  chat.py            operator chat sessions + board-intake protocol
+  chat.py            operator chat sessions + intent gate (intent.py files the ticket)
   continuous_improvement.py  idle-time improvement-proposal loop
   i18n.py            TUI/doc language switching
   stats.py           .symphony/stats.jsonl aggregation

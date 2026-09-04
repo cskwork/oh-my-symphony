@@ -178,8 +178,8 @@ The admin UI is not read-only: running cards expose Pause / Resume buttons,
 the header refresh button triggers an orchestrator `poll + reconcile`, local
 git branch dropdowns control `agent.feature_base_branch` and
 `agent.auto_merge_target_branch`, the settings page switches lane presets
-(default 4-lane ↔ deep 8-lane), and the Chat page files validated ticket
-DAGs through the board-intake protocol.
+(default 4-lane ↔ deep 8-lane), and the Chat page turns software requests
+into intent cards that one approval files as validated request tickets.
 
 ### TUI mode (interactive)
 
