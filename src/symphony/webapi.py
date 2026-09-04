@@ -2534,9 +2534,15 @@ def _register_chat_routes(
     manager = ChatManager(
         ctx.config,
         request_refresh=orchestrator.request_refresh,
-        project_creator=lambda name, path, *, expected_target: (
+        project_creator=lambda name, path, *, expected_target, preset="default": (
             _create_or_adopt_registered_project(
-                project_registry, name=name, path=path, expected_target=expected_target
+                project_registry,
+                name=name,
+                path=path,
+                expected_target=expected_target,
+                # Only a non-default preset travels, so seams that predate
+                # the option (tests, forks) keep their signature.
+                **({"preset": preset} if preset != "default" else {}),
             )
         ),
     )
@@ -3039,6 +3045,7 @@ def _create_or_adopt_registered_project(
     name: str,
     path: Path,
     expected_target: ProjectTargetExpectation | None = None,
+    preset: str = "default",
 ) -> Project:
     """Keep the web boundary thin around the shared project setup service."""
     from .projects import create_or_adopt_project, source_checkout
@@ -3049,6 +3056,7 @@ def _create_or_adopt_registered_project(
         registry=registry,
         name=name,
         expected_target=expected_target,
+        preset=preset,
     )
 
 

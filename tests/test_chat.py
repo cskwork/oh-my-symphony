@@ -1804,3 +1804,118 @@ def test_board_preamble_deep_board_routes_to_intake(tmp_path: Path) -> None:
     assert "<symphony-intent>" in preamble
     # On a deep board the pipeline decomposes; chat never builds the DAG.
     assert "After approval the request ticket lands in Todo" not in preamble
+
+
+# ---------------------------------------------------------------------------
+# project setup proposals can pick a lane preset (dark-factory app maker)
+# ---------------------------------------------------------------------------
+
+
+def test_project_setup_marker_accepts_deep_preset(tmp_path: Path) -> None:
+    visible, action = chat_module._project_setup_spec(
+        "1. New app.\n"
+        + _setup_marker(
+            {"choice": 1, "name": "Todo App", "path": str(tmp_path / "todo"), "preset": "deep"}
+        )
+    )
+    assert action is not None and action.preset == "deep"
+    assert action.as_dict()["preset"] == "deep"
+    assert visible == "1. New app."
+    _, plain = chat_module._project_setup_spec(
+        _setup_marker({"choice": 1, "name": "Todo App", "path": str(tmp_path / "todo")})
+    )
+    assert plain is not None and plain.preset == "default"
+
+
+@pytest.mark.parametrize("preset", ["", "DEEP", "wide", 3, None])
+def test_project_setup_marker_rejects_unknown_presets(tmp_path: Path, preset: Any) -> None:
+    raw = _setup_marker(
+        {"choice": 1, "name": "Todo App", "path": str(tmp_path / "todo"), "preset": preset}
+    )
+    assert chat_module._project_setup_spec(raw) == (raw, None)
+
+
+async def test_project_setup_passes_preset_only_when_requested(
+    tmp_path: Path, fake_backends: list[_FakeBackend]
+) -> None:
+    cfg = _cfg(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def create_project(name: str, path: Path, **kwargs: Any):
+        calls.append(kwargs)
+        from symphony.projects import Project
+
+        return Project("p", name, str(path), str(path / "WORKFLOW.md"), "127.0.0.1", 10000)
+
+    manager = ChatManager(lambda: cfg, project_creator=create_project)
+    await manager.start_session("edit", confirmation_token=CONFIRMATION_TOKEN)
+    session = manager.active_session
+    assert session is not None
+    manager._record_agent_message(
+        session,
+        _setup_marker({"choice": 1, "name": "Plain", "path": str(tmp_path / "plain")}),
+    )
+    manager._record_agent_message(
+        session,
+        _setup_marker(
+            {"choice": 2, "name": "Deep", "path": str(tmp_path / "deep"), "preset": "deep"}
+        ),
+    )
+    plain = manager.project_setup_for_choice("1")
+    deep = manager.project_setup_for_choice("2")
+    assert plain is not None and deep is not None
+    await manager.confirm_project_setup(plain.action_id, confirmation_token=CONFIRMATION_TOKEN)
+    await manager.confirm_project_setup(deep.action_id, confirmation_token=CONFIRMATION_TOKEN)
+    assert "preset" not in calls[0]
+    assert calls[1]["preset"] == "deep"
+    await manager.stop_session()
+
+
+async def test_deep_project_setup_creates_a_deep_board(
+    tmp_path: Path, fake_backends: list[_FakeBackend], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `preset: deep` proposal yields a board the pipeline can run unattended."""
+    from symphony.cli.doctor import check_deep_preset_merge_contract
+    from symphony.projects import ProjectRegistry
+    from symphony.workflow.presets import DEEP_PRESET, guess_lane_preset
+
+    registry_path = tmp_path / "projects.json"
+    monkeypatch.setenv("SYMPHONY_PROJECTS_FILE", str(registry_path))
+    source = tmp_path / "source"
+    source.mkdir()
+    cfg = _cfg(source)
+    target = tmp_path / "todo-app"
+    manager = ChatManager(lambda: cfg)
+    await manager.start_session("edit", confirmation_token=CONFIRMATION_TOKEN)
+    session = manager.active_session
+    assert session is not None
+    manager._record_agent_message(
+        session,
+        _setup_marker(
+            {"choice": 1, "name": "Todo App", "path": str(target), "preset": "deep"}
+        ),
+    )
+    action = manager.project_setup_for_choice("1")
+    assert action is not None and action.preset == "deep"
+    result = await manager.confirm_project_setup(
+        action.action_id, confirmation_token=CONFIRMATION_TOKEN
+    )
+    assert result["status"] == "succeeded", result
+    state = WorkflowState(target / "WORKFLOW.md")
+    created, err = state.reload()
+    assert err is None and created is not None
+    assert guess_lane_preset(created.tracker.active_states) == "deep"
+    assert tuple(created.tracker.active_states) == DEEP_PRESET.active_states
+    assert check_deep_preset_merge_contract(created).status == "pass"
+    # The preset lanes are what the project's history starts with.
+    log = subprocess.run(
+        ["git", "-C", str(target), "show", "--stat", "--oneline", "HEAD"],
+        text=True, capture_output=True, check=True,
+    ).stdout
+    assert "WORKFLOW.md" in log
+    assert not subprocess.run(
+        ["git", "-C", str(target), "status", "--porcelain"],
+        text=True, capture_output=True, check=True,
+    ).stdout
+    assert [project.id for project in ProjectRegistry().load()] == ["todo-app"]
+    await manager.stop_session()

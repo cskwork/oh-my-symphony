@@ -77,6 +77,7 @@ from .intent import (
 from .logging import get_logger
 from .projects import ProjectTargetExpectation, project_target_expectation
 from .workflow import SUPPORTED_AGENT_KINDS, ServiceConfig
+from .workflow.presets import preset_names
 
 log = get_logger()
 
@@ -152,8 +153,12 @@ _PROJECT_SETUP_PREAMBLE = (
     "files yourself, or claim it was registered. Instead include exactly one "
     "machine-readable proposal for that option, after the human explanation:\n"
     '<symphony-project-setup>{"choice": 1, "name": "Project name", '
-    '"path": "/absolute/project/path"}</symphony-project-setup>\n'
+    '"path": "/absolute/project/path", "preset": "deep"}</symphony-project-setup>\n'
     "Use a positive option number, a non-empty name, and an absolute path. "
+    '"preset" is optional: "deep" when the request is a new application the '
+    "pipeline should research, plan, build, verify and document end to end "
+    '(the dark-factory default for app requests); omit it or use "default" '
+    "for a plain 4-lane board. "
     "The server shows the choice and creates/registers it only if the operator "
     "selects that number. It reports the authoritative result; do not auto-start "
     "or switch to the new project, and do not file work on its board until the "
@@ -393,6 +398,9 @@ class ProjectSetupAction:
     project: dict[str, Any] | None = None
     error: str | None = None
     choice_active: bool = True
+    # Lane preset applied to the freshly bootstrapped board ("default" keeps
+    # the 4-lane example; "deep" is the autonomous app-delivery pipeline).
+    preset: str = "default"
     expires_at: str = field(default_factory=_project_setup_expiry)
     task: asyncio.Task[None] | None = field(default=None, repr=False, compare=False)
     target_expectation: ProjectTargetExpectation | None = field(
@@ -411,6 +419,7 @@ class ProjectSetupAction:
             "error": self.error,
             "choice_active": self.choice_active,
             "expires_at": self.expires_at,
+            "preset": self.preset,
         }
 
 
@@ -447,11 +456,19 @@ def _project_setup_spec(text: str) -> tuple[str, ProjectSetupAction | None]:
         value = json.loads(payload, object_pairs_hook=_strict_json_object)
     except (json.JSONDecodeError, RecursionError, ValueError):
         return text, None
-    if not isinstance(value, dict) or set(value) != {"choice", "name", "path"}:
+    required = {"choice", "name", "path"}
+    if (
+        not isinstance(value, dict)
+        or not required <= set(value)
+        or not set(value) <= required | {"preset"}
+    ):
         return text, None
     choice = value.get("choice")
     name = value.get("name")
     raw_path = value.get("path")
+    preset = value.get("preset", "default")
+    if not isinstance(preset, str) or preset not in preset_names():
+        return text, None
     if (
         not isinstance(choice, int)
         or isinstance(choice, bool)
@@ -488,6 +505,7 @@ def _project_setup_spec(text: str) -> tuple[str, ProjectSetupAction | None]:
         path=path,
         operation=_project_setup_operation(target_expectation),
         target_expectation=target_expectation,
+        preset=preset,
     )
 
 
@@ -633,6 +651,7 @@ def _default_project_creator(
     path: Path,
     *,
     expected_target: ProjectTargetExpectation | None = None,
+    preset: str = "default",
 ) -> Any:
     """Use the same guarded domain operation as CLI and project management."""
 
@@ -644,6 +663,7 @@ def _default_project_creator(
         registry=ProjectRegistry(),
         name=name,
         expected_target=expected_target,
+        preset=preset,
     )
 
 
@@ -656,6 +676,7 @@ class ProjectSetupCreator(Protocol):
         path: Path,
         *,
         expected_target: ProjectTargetExpectation,
+        preset: str = "default",
     ) -> Any: ...
 
 
@@ -1422,8 +1443,13 @@ class ChatManager:
                         "project setup target binding is unavailable; request a new proposal"
                     )
                 target = _project_setup_target_at_confirmation(expectation)
+                # Creators predating the preset option keep working: the
+                # keyword is only passed when the proposal asked for one.
+                extra: dict[str, Any] = (
+                    {"preset": action.preset} if action.preset != "default" else {}
+                )
                 return self._project_creator(
-                    action.name, target, expected_target=expectation
+                    action.name, target, expected_target=expectation, **extra
                 )
 
             project = await asyncio.to_thread(create_checked)

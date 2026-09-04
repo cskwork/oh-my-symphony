@@ -909,6 +909,7 @@ def _create_or_adopt_project_locked(
     registry: ProjectRegistry | None = None,
     expected_repo: str | Path | None = None,
     expected_target: ProjectTargetExpectation | None = None,
+    preset: str = "default",
 ) -> Project:
     """Create or safely adopt a repository and register it.
 
@@ -922,6 +923,12 @@ def _create_or_adopt_project_locked(
     source_path = Path(source).expanduser().resolve()
     candidate = Path(target).expanduser().resolve()
     _validate_source_bundle(source_path)
+    from .workflow.presets import preset_names
+
+    if preset not in preset_names():
+        raise ProjectError(
+            f"unknown lane preset {preset!r}; expected one of {', '.join(preset_names())}"
+        )
     if candidate.exists() and not candidate.is_dir():
         raise ProjectError(f"project path is not a directory: {candidate}")
 
@@ -1042,6 +1049,8 @@ def _create_or_adopt_project_locked(
         )
         if not workflow_path.is_file():
             raise ProjectError(f"workflow file not found: {workflow_path}")
+        if preset != "default":
+            _apply_bootstrap_preset(workflow_path, preset, created_files)
         _validate_resource_ownership(workflow_path, repo, projects)
         _write_runtime_git_excludes(repo, workflow_path)
 
@@ -1150,12 +1159,15 @@ def create_or_adopt_project(
     registry: ProjectRegistry | None = None,
     expected_repo: str | Path | None = None,
     expected_target: ProjectTargetExpectation | None = None,
+    preset: str = "default",
 ) -> Project:
     """Serialize and perform one complete project create/adopt transaction.
 
     ``expected_repo`` binds a prior confirmation to an exact canonical root.
     ``expected_target`` additionally binds its Git/non-Git identity. Both are
     checked inside the registry transaction before any setup mutation.
+    ``preset`` names the lane preset applied to a workflow this setup creates
+    (``"deep"`` for the autonomous app-delivery pipeline).
     """
     resolved_registry = registry or ProjectRegistry()
     with resolved_registry.transaction():
@@ -1170,4 +1182,28 @@ def create_or_adopt_project(
             registry=resolved_registry,
             expected_repo=expected_repo,
             expected_target=expected_target,
+            preset=preset,
         )
+
+
+def _apply_bootstrap_preset(
+    workflow_path: Path, preset: str, created_files: list[Path]
+) -> None:
+    """Switch a workflow this setup just created to a shipped lane preset.
+
+    Runs before the initial commit so the preset lanes are what the project
+    starts its history with. An adopted board keeps its lanes: re-laning an
+    existing board migrates tickets and is an operator action on the board,
+    not a side effect of registration.
+    """
+    from .workflow.mutate import WorkflowMutationError, apply_lane_preset
+
+    if workflow_path not in created_files:
+        raise ProjectError(
+            f"lane preset {preset!r} applies only to a workflow this setup "
+            f"creates; {workflow_path} already existed"
+        )
+    try:
+        apply_lane_preset(workflow_path, preset)
+    except WorkflowMutationError as exc:
+        raise ProjectError(str(exc)) from exc

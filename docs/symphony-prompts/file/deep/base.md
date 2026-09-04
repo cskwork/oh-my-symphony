@@ -37,6 +37,7 @@ unprompted in this preset — the lane gates live in the lane prompts.
 - Vault: `docs/req/{{ issue.request }}/` when this ticket has a `request` group, else `docs/{{ issue.identifier }}/`. Lane outputs (`brief.md`, `research.md`, `plan.md`, `contracts.md`, `claims.md`, `qa-report.md`, `verification.md`, `delivery.md`) live there. `claims.md` and `verification.md` are append-only.
 - `docs/llm-wiki/` is the reusable knowledge base: read `INDEX.md` before broad repo search; Document writes back.
 - Ticket file: `kanban/{{ issue.identifier }}.md`. Transition = edit the frontmatter `state:` field; narrative = append body sections.
+- The request ticket's description is the approved intent: the cycle's single human gate. It is the source of truth for scope. Do not reopen the ask with the operator; record assumptions in the vault instead.
 - Honour the hard gate of your lane before closing. Never silence failing tests or invent evidence; use `Not proven` and cite the artifact path for every claim. Fix root cause or set `Blocked`.
 - Use `Human Review` only for a real critical/manual intervention.
 {% if token_budget %}
