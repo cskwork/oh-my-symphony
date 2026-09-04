@@ -10,6 +10,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-05 - Chat intent gate and orchestrator extractions
+
 ### Added
 
 - **Chat intent gate (dark-factory cycle).** Software requests typed into
