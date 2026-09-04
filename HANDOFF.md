@@ -31,6 +31,42 @@ Every gate is green on the branch:
 | Debt | `orchestrator/worker_exit.py` (worker-exit state machine, 1009 lines) and `orchestrator/attempt.py` (`_run_agent_attempt` phases, 1095 lines) extracted from `core.py` (11349 → 9815 lines); claude and pi backends now subclass `per_turn.JsonlStreamBackend` (claude_code.py 503 → 267, pi.py 666 → 386) |
 | Docs | README (en/ko) "Chat intake" section, `CONTEXT.md` (Intent proposal, Intent approval, Track), `docs/PIPELINE.md` intent gate, `skills/symphony-skill/reference/operations.md`, `docs/architecture.md` module table, CHANGELOG |
 
+## End-to-end run (2026-09-05, scratch project, real agents)
+
+Scratch registry: `SYMPHONY_PROJECTS_FILE=/tmp/symphony-intent-smoke.ntna/projects.json`;
+the deep project lives at `/tmp/symphony-intent-smoke.ntna/todo-app`
+(service port 9999, log `log/symphony.log`, stop with
+`symphony service stop ./WORKFLOW.md` from that directory). The pipeline was
+still finishing when this handoff was written; check the board there.
+
+| Step | What happened | Evidence |
+|---|---|---|
+| Deep project from chat | On the default smoke board, an edit-mode codex chat proposed a separate project with `preset: deep`; one confirmation created and registered `todo-cli` with the eight lanes | `e2e-step2-codex.log`, `projects.json` |
+| Intent gate | On the new board, a Q&A codex chat produced the intent card from one request; a bare `approve` reply filed `REQ-1` in `Intake` with `request: python-cli-todo` and wrote `.sdlc/work/python-cli-todo/intent.md` | `e2e-step3.log`, `kanban/REQ-1.md` |
+| Request lanes | `REQ-1` walked Intake → Research → Plan → Review → Done with no operator question; Review passed; the branch merged (`auto_merge_completed`) | `log/symphony.log` |
+| Decomposition | Plan spawned `BUILD-1..3`, `QA-1`, `VERIFY-1`, `DOCUMENT-1` and wrote `docs/req/python-cli-todo/{brief,research,plan,contracts,review}.md` plus `release-contract.yaml` | scratch `main` |
+| Builds | `BUILD-1`, `BUILD-2`, `BUILD-3` each reached Done and merged in order; `QA-1` reached Done at 23:10 UTC; `VERIFY-1` and `DOCUMENT-1` were still pending | monitor log |
+| Delivered app | `git archive main` of the scratch project: `todo.py` (`$TODO_FILE` override, JSON next to the script), `tests/test_{storage,cli,readme}.py`, README; `pytest -q` → 26 passed; `todo.py add "buy milk"` then `list` prints `[ ] 1. buy milk` | export run at 23:09 UTC |
+
+Findings from the run (not code defects in Symphony unless noted):
+
+- The claude CLI hit the account's session limit; the chat turn failed
+  cleanly (`turn_failed` in the transcript) and no card was produced.
+- codex hit its usage limit mid-Plan; the worker was auto-paused
+  (`worker_error_auto_paused`). Recovery that worked: edit
+  `agent.kind` in `WORKFLOW.md` **and** the ticket's own `agent.kind`
+  (the file tracker stamps the dispatched kind on the ticket and it
+  overrides the board default), then `POST /api/v1/REQ-1/resume`.
+  `WORKFLOW.md` edits are picked up live; no restart was needed.
+- `~/.opencode/bin/opencode` on this host is a symlink to a broken npm
+  postinstall stub; the real 1.18.18 binary is `~/.opencode/bin/opencode1`.
+  The scratch workflow uses that absolute path in `opencode.command`.
+  Product follow-up worth considering: `symphony doctor` could run
+  `<agent> --version` for the configured kind and flag a non-zero exit.
+- Wall clock: intent approval 22:29 UTC → REQ-1 Done 22:59 → three builds
+  merged by 23:07 → QA Done 23:10, with ~20 minutes lost to the two quota
+  failures.
+
 ## Open questions / next steps
 
 1. **#31 codex sandbox vs symlinked board files.** Current code already
