@@ -59,6 +59,16 @@ Every gate is green on the branch:
    in every full-suite run on this branch; rerun it alone before treating a
    failure as a regression.
 
+7. **Parallel test suite (pytest-xdist) is not isolation-clean yet.**
+   `pytest -n auto` finishes in ~72 s instead of ~234 s, but two tests fail
+   under parallel load and pass serially:
+   `tests/test_workspace.py::test_setup_worktree_script_supports_linked_workflow_dir[mkdir]`
+   and
+   `tests/test_orchestrator_release_contract_integration.py::test_reconcile_terminal_release_holds_lease_until_cleanup_finishes`
+   (an `asyncio` timeout). Make those two load-tolerant before adding
+   `pytest-xdist` to the dev extra and `-n auto` to CI; nothing in the repo
+   depends on xdist today.
+
 ## Environment notes
 
 - Run tests with `.venv/bin/python -m pytest -q` (bare `python` is not the
