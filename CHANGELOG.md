@@ -32,6 +32,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Per-dispatch environment (`SYMPHONY_TOKEN_EMA`, `SYMPHONY_TOKEN_BUDGET`,
   `SYMPHONY_REWIND_SCOPE`) travels in `BackendInit.env` and is overlaid at
   spawn time instead of mutating `os.environ` (#29).
+- `orchestrator/core.py` shrinks from 11.3k to 9.8k lines: the worker-exit
+  state machine moved to `orchestrator/worker_exit.py` and the
+  `_run_agent_attempt` body to `orchestrator/attempt.py`, both as
+  behavior-preserving extractions gated on the full suite.
+- The claude and pi backends subclass the shared per-turn skeleton through
+  `per_turn.JsonlStreamBackend` instead of carrying their own copies of the
+  spawn, stream, reap, and emit lifecycle.
 
 ### Fixed
 
