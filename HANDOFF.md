@@ -69,6 +69,21 @@ Findings from the run (not code defects in Symphony unless noted):
 
 ## Open questions / next steps
 
+0. **Deep boards from the example workflow cannot dispatch the app-release
+   verifier (found in the E2E, 23:11 UTC).** `WORKFLOW.file.example.md` ships
+   `feature_base_branch: ""` and `auto_merge_target_branch: ""` (meaning "the
+   current branch"); `symphony doctor` accepts that for the deep preset
+   (`'' == ''`), but `orchestrator/release_contracts.py` refuses to bind the
+   verifier: `release_dispatch_refused ... configured target_branch must name
+   a resolvable local branch: ''`, every tick, while `VERIFY-1` sits in
+   `Verify` and the finalizer waits on it. Setting both keys to `"main"` in
+   the scratch workflow (live reload) dispatched `VERIFY-1` within a tick.
+   Fix candidates: resolve an empty configured target to the repository's
+   current branch inside the binder (matching auto-merge semantics), or have
+   the `preset: deep` bootstrap write the repository's initial branch into
+   both keys; either way `check_deep_preset_merge_contract` and the binder
+   must agree. Add a regression test that binds a verifier on a board whose
+   configured target is empty.
 1. **#31 codex sandbox vs symlinked board files.** Current code already
    injects resolved symlink targets and git admin dirs
    (`backends/codex.py:_scan_workspace_symlinks`). The 2026-05 failure has no
