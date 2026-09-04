@@ -39,7 +39,6 @@ import pytest
 import symphony.backends.claude_code as claude_module
 import symphony.backends.codex as codex_module
 import symphony.backends.per_turn as per_turn_module
-import symphony.backends.pi as pi_module
 from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
@@ -290,7 +289,7 @@ class PerTurnBackendContract:
 
 class TestClaudeBackendContract(PerTurnBackendContract):
     kind = "claude"
-    module = claude_module
+    module = per_turn_module
     canonical_message = "done"
 
     def success_processes(self) -> list[_FakeSubprocess]:
@@ -357,7 +356,7 @@ class TestOpenCodeBackendContract(PerTurnBackendContract):
 
 class TestPiBackendContract(PerTurnBackendContract):
     kind = "pi"
-    module = pi_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [
@@ -372,8 +371,7 @@ class TestPiBackendContract(PerTurnBackendContract):
 
 class TestPrimeAgentBackendContract(PerTurnBackendContract):
     kind = "prime-agent"
-    # PrimeAgentBackend inherits PiBackend's subprocess globals.
-    module = pi_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [
@@ -403,15 +401,18 @@ class TestPrimeAgentBackendContract(PerTurnBackendContract):
 # `failed to insert into database` block that stalls a board.
 # ---------------------------------------------------------------------------
 
+# Every per-turn adapter (claude and the pi family included) spawns and
+# reaps through the `per_turn` skeleton, so that is where the subprocess
+# names get doubled; codex keeps its own persistent-process machinery.
 _SPAWN_MODULES = {
     "codex": codex_module,
-    "claude": claude_module,
+    "claude": per_turn_module,
     "gemini": per_turn_module,
     "agy": per_turn_module,
     "kiro": per_turn_module,
     "opencode": per_turn_module,
-    "pi": pi_module,
-    "prime-agent": pi_module,
+    "pi": per_turn_module,
+    "prime-agent": per_turn_module,
 }
 
 
@@ -578,9 +579,11 @@ def test_retry_markers_match_the_strings_backends_actually_emit() -> None:
     import symphony.backends.pi as pi_module
     from symphony.orchestrator.core import _RETRYABLE_WORKER_ERROR_MARKERS
 
+    # claude and pi now emit the stream-unreadable message from the shared
+    # streaming base in per_turn, so that module is part of the contract.
     sources = "\n".join(
         Path(mod.__file__).read_text(encoding="utf-8")
-        for mod in (claude_module, codex_module, pi_module)
+        for mod in (claude_module, codex_module, pi_module, per_turn_module)
     )
     for marker in ("stream unreadable", "no result event"):
         assert marker in _RETRYABLE_WORKER_ERROR_MARKERS

@@ -16,53 +16,33 @@ Stream-JSON event shape (one line of JSON per event):
 
 Errors surface as `result` events with `is_error:true` and a `subtype`
 indicating the failure mode (e.g. `error_max_turns`).
+
+The spawn / prompt / stream / reap lifecycle lives in
+``per_turn.JsonlStreamBackend``; this module only supplies the claude
+command line, the stream-json frame handling, and the result interpretation.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import shlex
-from collections import deque
 from typing import Any, Sequence
 
-from .._shell import resolve_bash, safe_proc_wait, terminate_process_tree
-from ..errors import (
-    PortExit,
-    ResponseError,
-    TurnFailed,
-    TurnTimeout,
-)
+from ..errors import TurnFailed
 from ..logging import get_logger
 from ..utils.git_sandbox import GIT_ROOTS_ENV_VAR, git_roots_outside
-from ..workspace import validate_agent_cwd
 from . import (
-    EVENT_MALFORMED,
     EVENT_OTHER_MESSAGE,
-    EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
-    EVENT_TURN_STARTED,
-    MALFORMED_LINE_LIMIT,
-    POST_STREAM_REAP_TIMEOUT_S,
     BackendInit,
-    BaseAgentBackend,
     TurnResult,
-    _is_valid_session_id,
-    redact_session_id,
 )
-from .per_turn import (
-    MAX_LINE_BYTES,
-    _emit_event,
-    _reap_process,
-    _stderr_tail_blob,
-)
+from .per_turn import JsonlStreamBackend
 
 
 log = get_logger()
-
-PENDING_SESSION_ID = "pending"
 
 
 def _inject_add_dirs(command: str, dirs: Sequence[str]) -> str:
@@ -84,70 +64,31 @@ def _inject_add_dirs(command: str, dirs: Sequence[str]) -> str:
     return f"{leading_ws}claude {flags}{rest}"
 
 
-class ClaudeCodeBackend(BaseAgentBackend):
+class ClaudeCodeBackend(JsonlStreamBackend):
     """One subprocess per turn; speaks Claude Code stream-json."""
 
+    _resume_flag = "--resume"
+
     def __init__(self, init: BackendInit) -> None:
-        validate_agent_cwd(init.cwd, init.workspace_root)
-        self._claude = init.cfg.claude
-        self._cwd = init.cwd
-        self._extra_env = dict(init.env)
+        cfg = init.cfg.claude
+        super().__init__(init, agent_name="claude", turn_timeout_ms=cfg.turn_timeout_ms)
+        self._claude = cfg
         # Resolved once: the worktree layout cannot change mid-run, and
         # run_turn spawns a fresh subprocess every turn.
         self._git_roots = git_roots_outside(init.cwd, init.workspace_root)
         if self._git_roots:
             log.info("claude_git_roots_granted", roots=self._git_roots)
-        self._on_event = init.on_event
-        self._on_process_started = init.on_process_started
-        self._session_id: str | None = None
-        self._resume_on_next_turn = False
-        self._expected_resume_session_id: str | None = None
-        self._resume_session_confirmed = False
-        self._closed = False
-        self._active_proc: asyncio.subprocess.Process | None = None
-        self._latest_usage: dict[str, int] = {
+        self._latest_usage = {
             "input_tokens": 0,
             "cache_input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
         }
         self._latest_rate_limits: dict[str, Any] | None = None
-        self._last_message: str = ""
-        # Bounded stderr ring buffer — see PiBackend for the rationale.
-        self._stderr_tail: deque[str] = deque(maxlen=20)
-        # Last bad line when MALFORMED_LINE_LIMIT consecutive lines failed
-        # to parse; run_turn turns it into a precise TurnFailed.
-        self._stream_corrupt: str | None = None
 
     # ------------------------------------------------------------------
     # AgentBackend lifecycle
     # ------------------------------------------------------------------
-
-    async def start(self) -> None:
-        # No persistent process — subprocesses are per-turn.
-        return None
-
-    async def stop(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        proc = self._active_proc
-        if proc is not None and proc.returncode is None:
-            result = await terminate_process_tree(proc)
-            if result is None and proc.returncode is None:
-                raise RuntimeError("backend process cleanup could not be confirmed")
-
-    @property
-    def session_id(self) -> str | None:
-        return self._session_id
-
-    @property
-    def pid(self) -> int | None:
-        return self._active_proc.pid if self._active_proc is not None else None
-
-    @property
-    def latest_usage(self) -> dict[str, int]:
-        return dict(self._latest_usage)
 
     @property
     def latest_rate_limits(self) -> dict[str, Any] | None:
@@ -169,261 +110,95 @@ class ClaudeCodeBackend(BaseAgentBackend):
     async def initialize(self) -> dict[str, Any]:
         return {"agent": "claude_code"}
 
-    async def start_session(
-        self, *, initial_prompt: str, issue_title: str | None
-    ) -> str:
-        # Claude Code creates the session implicitly on the first `claude -p`
-        # invocation. Return a placeholder; the real session id arrives in the
-        # init event of the first run_turn and triggers `session_started`.
-        del initial_prompt, issue_title
-        return PENDING_SESSION_ID
+    # ------------------------------------------------------------------
+    # per-turn hooks
+    # ------------------------------------------------------------------
 
-    async def resume_session(self, session_id: str) -> bool:
-        """Select an exact Claude session for the next per-turn process."""
-        if self._closed or not _is_valid_session_id(session_id):
-            return False
-        self._session_id = session_id
-        self._expected_resume_session_id = session_id
-        self._resume_session_confirmed = False
-        self._resume_on_next_turn = True
-        return True
+    def _git_roots_env(self) -> dict[str, str]:
+        if not self._git_roots:
+            return {}
+        return {GIT_ROOTS_ENV_VAR: os.pathsep.join(self._git_roots)}
 
-    async def run_turn(self, *, prompt: str, is_continuation: bool) -> TurnResult:
-        if self._closed:
-            raise ResponseError("backend is closed")
-
+    def _command_for_turn(self, *, prompt: str, is_continuation: bool) -> str:
+        del prompt  # travels via stdin
         cmd = _inject_add_dirs(self._claude.command, self._git_roots)
-        if self._session_id and self._session_id != PENDING_SESSION_ID and (
-            self._resume_on_next_turn
-            or (is_continuation and self._claude.resume_across_turns)
-        ):
-            cmd = f"{cmd} --resume {shlex.quote(self._session_id)}"
+        return cmd + self._resume_args(
+            is_continuation=is_continuation,
+            resume_across_turns=self._claude.resume_across_turns,
+        )
 
-        env = os.environ.copy()
-        if self._git_roots:
-            env[GIT_ROOTS_ENV_VAR] = os.pathsep.join(self._git_roots)
-        env.update(self._extra_env)
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                resolve_bash(),
-                "-lc",
-                cmd,
-                cwd=str(self._cwd),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                limit=MAX_LINE_BYTES,
-                # Own process group so terminate/kill reaches the agent CLI
-                # behind the bash wrapper (POSIX only).
-                start_new_session=os.name == "posix",
-            )
-        except FileNotFoundError as exc:
-            raise PortExit("bash not available", error=str(exc)) from exc
-        self._resume_on_next_turn = False
-
-        if self._on_process_started is not None:
-            self._on_process_started(proc.pid)
-        self._active_proc = proc
-        # `stop()` may have flipped `_closed` while we awaited spawn — in that
-        # case the process is orphaned because `stop()` only inspects
-        # `_active_proc` and we hadn't published yet. Reap and bail.
-        if self._closed:
-            await self._reap(proc)
-            self._active_proc = None
-            raise ResponseError("backend closed during spawn")
-        try:
-            await self._emit(EVENT_TURN_STARTED, {})
-            assert proc.stdin is not None and proc.stdout is not None
-            try:
-                proc.stdin.write(prompt.encode("utf-8"))
-                await proc.stdin.drain()
-                proc.stdin.close()
-            except (BrokenPipeError, ConnectionResetError) as exc:
-                raise PortExit("claude stdin closed", error=str(exc)) from exc
-
-            timeout_s = self._claude.turn_timeout_ms / 1000.0
-            try:
-                terminal = await asyncio.wait_for(
-                    self._consume_stream(proc), timeout=timeout_s
-                )
-            except asyncio.TimeoutError as exc:
-                await self._reap(proc)
-                await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
-                raise TurnTimeout("claude turn timed out") from exc
-
-            rc = await safe_proc_wait(proc, timeout=POST_STREAM_REAP_TIMEOUT_S)
-            if rc is None and proc.returncode is None:
-                # stdout closed but the process lingers — reap the tree
-                # instead of hanging the turn on an unbounded wait.
-                await self._reap(proc)
-            if self._stream_corrupt is not None:
-                err_msg = (
-                    f"claude stream unreadable: {MALFORMED_LINE_LIMIT} consecutive "
-                    f"malformed lines (last: {self._stream_corrupt[:200]!r})"
-                )
-                await self._emit(
-                    EVENT_TURN_FAILED,
-                    {"reason": err_msg, "stderr_tail": list(self._stderr_tail)},
-                )
-                raise TurnFailed(err_msg)
-            if terminal is None:
-                # Stream ended without a `result` event — treat as failure.
-                stderr_blob = self._stderr_blob()
-                err_msg = (
-                    f"claude exited with no result event (rc={proc.returncode})"
-                    + (f"; stderr: {stderr_blob}" if stderr_blob else "")
-                )
-                await self._emit(
-                    EVENT_TURN_FAILED,
-                    {"reason": err_msg, "stderr_tail": list(self._stderr_tail)},
-                )
-                raise TurnFailed(err_msg)
-
-            if _is_error_result(terminal):
-                reason = _error_result_message(terminal)
-                payload = {
-                    **terminal,
-                    "reason": reason,
-                    "stderr_tail": list(self._stderr_tail),
-                }
-                await self._emit(EVENT_TURN_FAILED, payload)
-                raise TurnFailed(reason)
-
-            if self._expected_resume_session_id is not None:
-                if not self._resume_session_confirmed:
-                    reason = "claude did not confirm the requested recovered session"
-                    await self._emit(EVENT_TURN_FAILED, {"reason": reason})
-                    raise TurnFailed(reason)
-                self._expected_resume_session_id = None
-                self._resume_session_confirmed = False
-
-            message = str(terminal.get("result") or "").strip() or self._last_message
-            self._last_message = message[:400]
-            await self._emit(
-                EVENT_TURN_COMPLETED,
-                {**terminal, "message": message},
-            )
-            return TurnResult(
-                status=EVENT_TURN_COMPLETED,
-                turn_id=str(terminal.get("session_id") or self._session_id or ""),
-                last_message=self._last_message,
-            )
-        except asyncio.CancelledError:
-            await self._reap(proc)
-            raise
-        finally:
-            if proc.returncode is not None:
-                self._active_proc = None
-
-    # ------------------------------------------------------------------
-    # stream-json parsing
-    # ------------------------------------------------------------------
-
-    async def _consume_stream(
-        self, proc: asyncio.subprocess.Process
+    async def _handle_stream_event(
+        self, msg: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Read stream-json events; return the terminal `result` event or None."""
-        assert proc.stdout is not None
-        terminal: dict[str, Any] | None = None
-        self._stream_corrupt = None
-        malformed_streak = 0
-        stderr_task = asyncio.create_task(self._drain_stderr(proc))
-        try:
-            while True:
-                try:
-                    line = await proc.stdout.readline()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    log.error("claude_stdout_read_error", error=str(exc))
-                    break
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace").strip()
-                if not text:
-                    continue
-                try:
-                    msg = json.loads(text)
-                except json.JSONDecodeError:
-                    await self._emit(EVENT_MALFORMED, {"raw": text[:500]})
-                    malformed_streak += 1
-                    if malformed_streak >= MALFORMED_LINE_LIMIT:
-                        self._stream_corrupt = text
-                        break
-                    continue
-                malformed_streak = 0
-                if not isinstance(msg, dict):
-                    continue
-                kind = msg.get("type")
-                if kind == "system" and msg.get("subtype") == "init":
-                    sid = msg.get("session_id")
-                    if isinstance(sid, str) and sid:
-                        await self._observe_session_id(sid)
-                elif kind == "assistant":
-                    # Mid-stream `usage` deltas are ignored; the terminal
-                    # `result` event is the source of truth for accumulation.
-                    last_text = _extract_text(msg.get("message") or {})
-                    if last_text:
-                        self._last_message = last_text[:400]
-                    await self._emit(EVENT_OTHER_MESSAGE, msg)
-                elif kind == "user":
-                    await self._emit(EVENT_OTHER_MESSAGE, msg)
-                elif kind == "result":
-                    self._update_usage_absolute(msg.get("usage") or {})
-                    sid = msg.get("session_id")
-                    if isinstance(sid, str) and sid:
-                        await self._observe_session_id(sid)
-                    terminal = msg
-                else:
-                    await self._emit(EVENT_OTHER_MESSAGE, msg)
-        finally:
-            stderr_task.cancel()
-            try:
-                await stderr_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        return terminal
+        kind = msg.get("type")
+        if kind == "system" and msg.get("subtype") == "init":
+            sid = msg.get("session_id")
+            if isinstance(sid, str) and sid:
+                await self._observe_session_id(sid)
+        elif kind == "assistant":
+            # Mid-stream `usage` deltas are ignored; the terminal
+            # `result` event is the source of truth for accumulation.
+            last_text = _extract_text(msg.get("message") or {})
+            if last_text:
+                self._last_message = last_text[:400]
+            await self._emit(EVENT_OTHER_MESSAGE, msg)
+        elif kind == "user":
+            await self._emit(EVENT_OTHER_MESSAGE, msg)
+        elif kind == "result":
+            self._update_usage_absolute(msg.get("usage") or {})
+            sid = msg.get("session_id")
+            if isinstance(sid, str) and sid:
+                await self._observe_session_id(sid)
+            return msg
+        else:
+            await self._emit(EVENT_OTHER_MESSAGE, msg)
+        return None
 
-    async def _drain_stderr(self, proc: asyncio.subprocess.Process) -> None:
-        if proc.stderr is None:
-            return
-        while True:
-            try:
-                line = await proc.stderr.readline()
-            except (asyncio.CancelledError, Exception):
-                break
-            if not line:
-                break
-            text = line.decode("utf-8", errors="replace").rstrip()
-            text = redact_session_id(text, self._session_id)
-            if text:
-                self._stderr_tail.append(text)
-            log.debug("claude_stderr", line=text)
-
-    def _stderr_blob(self) -> str:
-        """Compact stderr tail for failure messages (≤400 chars)."""
-        return _stderr_tail_blob(self._stderr_tail)
-
-    async def _observe_session_id(self, session_id: str) -> None:
-        expected = self._expected_resume_session_id
-        if expected is not None:
-            if session_id != expected:
-                reason = "claude returned a different recovered session"
-                await self._emit(EVENT_TURN_FAILED, {"reason": reason})
-                raise TurnFailed(reason)
-            self._resume_session_confirmed = True
-        if session_id != self._session_id:
-            self._session_id = session_id
-            await self._emit(
-                EVENT_SESSION_STARTED,
-                {"session_id": session_id, "thread_id": session_id},
+    async def _complete_stream_turn(
+        self,
+        proc: asyncio.subprocess.Process,
+        terminal: dict[str, Any] | None,
+        rc: int | None,
+    ) -> TurnResult:
+        # Claude reports failure through the `result` event, not the exit
+        # status; the status only decorates the no-result diagnostic.
+        del rc
+        if terminal is None:
+            # Stream ended without a `result` event — treat as failure.
+            stderr_blob = self._stderr_blob()
+            err_msg = (
+                f"claude exited with no result event (rc={proc.returncode})"
+                + (f"; stderr: {stderr_blob}" if stderr_blob else "")
             )
+            await self._emit(
+                EVENT_TURN_FAILED,
+                {"reason": err_msg, "stderr_tail": list(self._stderr_tail)},
+            )
+            raise TurnFailed(err_msg)
 
-    async def _reap(self, proc: asyncio.subprocess.Process) -> None:
-        """Tear down a process group or surface ambiguous cleanup."""
-        await _reap_process(proc)
+        if _is_error_result(terminal):
+            reason = _error_result_message(terminal)
+            payload = {
+                **terminal,
+                "reason": reason,
+                "stderr_tail": list(self._stderr_tail),
+            }
+            await self._emit(EVENT_TURN_FAILED, payload)
+            raise TurnFailed(reason)
+
+        await self._require_resume_confirmation()
+
+        message = str(terminal.get("result") or "").strip() or self._last_message
+        self._last_message = message[:400]
+        await self._emit(
+            EVENT_TURN_COMPLETED,
+            {**terminal, "message": message},
+        )
+        return TurnResult(
+            status=EVENT_TURN_COMPLETED,
+            turn_id=str(terminal.get("session_id") or self._session_id or ""),
+            last_message=self._last_message,
+        )
 
     def _update_usage_absolute(self, usage: dict[str, Any]) -> None:
         # Each `result` event reports usage for that one turn — accumulate.
@@ -438,17 +213,6 @@ class ClaudeCodeBackend(BaseAgentBackend):
         self._latest_usage["cache_input_tokens"] += cache_t
         self._latest_usage["output_tokens"] += out_t
         self._latest_usage["total_tokens"] += in_t + cache_t + out_t
-
-    async def _emit(self, event: str, payload: dict[str, Any]) -> None:
-        await _emit_event(
-            self._on_event,
-            event,
-            payload,
-            usage=self._latest_usage,
-            rate_limits=self._latest_rate_limits,
-            agent_pid=self.pid,
-            redact_session=None if event == EVENT_SESSION_STARTED else self._session_id,
-        )
 
 
 def _extract_text(message: dict[str, Any]) -> str:

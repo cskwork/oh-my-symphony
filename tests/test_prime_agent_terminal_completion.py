@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import symphony.backends.pi as pi_module
+import symphony.backends.per_turn as per_turn_module
 from symphony.backends import EVENT_TURN_COMPLETED, BackendInit
 from symphony.backends.prime_agent import PrimeAgentBackend
 from symphony.errors import TurnFailed
@@ -44,7 +44,7 @@ async def _run_empty_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, rc
 
     _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[b'{"type":"session","id":"s1"}\n'], returncode=rc

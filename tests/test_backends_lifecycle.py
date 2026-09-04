@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 
 import symphony._shell as shell_module
-import symphony.backends.claude_code as claude_module
 import symphony.backends.per_turn as per_turn_module
 from symphony.backends import (
     EVENT_TURN_COMPLETED,
@@ -451,14 +450,9 @@ async def test_claude_bounded_post_stream_reap_terminates_lingering_process(
         return 0
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-    monkeypatch.setattr(claude_module, "safe_proc_wait", fake_safe_proc_wait)
-    monkeypatch.setattr(
-        claude_module,
-        "terminate_process_tree",
-        fake_terminate_process_tree,
-    )
-    # claude's _reap helper routes through per_turn._reap_process, which
-    # resolves terminate_process_tree in per_turn's namespace.
+    # claude streams through per_turn.JsonlStreamBackend, so both the
+    # bounded post-stream wait and the reap resolve in per_turn's namespace.
+    monkeypatch.setattr(per_turn_module, "safe_proc_wait", fake_safe_proc_wait)
     monkeypatch.setattr(
         per_turn_module,
         "terminate_process_tree",
