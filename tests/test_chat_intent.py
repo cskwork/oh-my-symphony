@@ -21,13 +21,17 @@ from symphony.errors import ChatIntentActionError, ChatIntentAuthorizationError
 from symphony.intent import IntentAction, parse_intent_marker
 from symphony.workflow import ServiceConfig, WorkflowState
 
-from tests.test_chat import (  # noqa: F401  (fixtures are re-exported on purpose)
+from tests.test_chat import (
     CONFIRMATION_TOKEN,
     WORKFLOW_TEXT,
     _cfg,
     _wait_turn,
     fake_backends,
 )
+
+# pytest discovers the imported fixture by name; the tuple marks it used so
+# ruff does not flag the test parameters as redefinitions (F811).
+_SHARED_FIXTURES = (fake_backends,)
 
 INTENT_BODY = (
     "## Problem\n\nOperators cannot see failed turns.\n\n"

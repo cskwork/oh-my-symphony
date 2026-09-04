@@ -16,13 +16,17 @@ from symphony.server import build_app
 from symphony.workflow import ServiceConfig, WorkflowState
 
 from tests.test_chat_intent import INTENT_BODY
-from tests.test_webapi_chat import (  # noqa: F401  (fixtures re-exported on purpose)
+from tests.test_webapi_chat import (
     CONFIRMATION_TOKEN,
     _FakeBackend,
     _StubOrchestrator,
     board_dir,
     fake_backends,
 )
+
+# pytest discovers the imported fixtures by name; the tuple marks them used so
+# ruff does not flag the test parameters as redefinitions (F811).
+_SHARED_FIXTURES = (board_dir, fake_backends)
 
 
 def _intent_frame(slug: str = "todo-app") -> dict[str, Any]:
