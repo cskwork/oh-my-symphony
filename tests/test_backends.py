@@ -26,10 +26,8 @@ import pytest
 from tests._win_skips import requires_symlink_privilege
 
 import symphony._shell as shell_module
-import symphony.backends.claude_code as claude_module
 import symphony.backends.codex as codex_module
 import symphony.backends.opencode as opencode_module
-import symphony.backends.pi as pi_module
 import symphony.backends.per_turn as per_turn_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
@@ -550,9 +548,9 @@ async def test_pi_stop_reaps_with_safe_proc_wait(
     ("kind", "backend_cls", "module", "process_attr"),
     [
         ("codex", CodexAppServerBackend, codex_module, "_process"),
-        ("claude", ClaudeCodeBackend, claude_module, "_active_proc"),
+        ("claude", ClaudeCodeBackend, per_turn_module, "_active_proc"),
         ("gemini", GeminiBackend, per_turn_module, "_active_proc"),
-        ("pi", PiBackend, pi_module, "_active_proc"),
+        ("pi", PiBackend, per_turn_module, "_active_proc"),
     ],
 )
 @pytest.mark.asyncio
@@ -660,7 +658,7 @@ async def test_claude_success_subtype_with_is_error_true_fails_turn(
     events: list[dict] = []
     _install_subprocess_double(
         monkeypatch,
-        claude_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -712,15 +710,10 @@ async def test_claude_run_turn_cancellation_terminates_active_subprocess(
         return -15
 
     monkeypatch.setattr(
-        claude_module.asyncio,
+        per_turn_module.asyncio,
         "create_subprocess_exec",
         fake_create_subprocess_exec,
     )
-    monkeypatch.setattr(
-        claude_module, "terminate_process_tree", fake_terminate_process_tree
-    )
-    # claude's _reap helper routes through per_turn._reap_process, which
-    # resolves terminate_process_tree in per_turn's namespace.
     monkeypatch.setattr(
         per_turn_module, "terminate_process_tree", fake_terminate_process_tree
     )
@@ -743,7 +736,7 @@ async def test_claude_run_turn_cancellation_terminates_active_subprocess(
     [
         (
             "claude",
-            claude_module,
+            per_turn_module,
             ClaudeCodeBackend,
             [
                 b'{"type":"system","subtype":"init","session_id":"s1"}\n',
@@ -753,7 +746,7 @@ async def test_claude_run_turn_cancellation_terminates_active_subprocess(
         ),
         (
             "pi",
-            pi_module,
+            per_turn_module,
             PiBackend,
             [
                 b'{"type":"session","id":"s1"}\n',
@@ -787,10 +780,6 @@ async def test_terminal_success_does_not_complete_when_inline_reap_is_unconfirme
         events.append(event)
 
     monkeypatch.setattr(module, "terminate_process_tree", _unconfirmed)
-    # claude's inline reap routes through per_turn._reap_process, which
-    # resolves terminate_process_tree in per_turn's namespace (pi overrides
-    # run_turn and uses its own binding; the extra patch is a no-op there).
-    monkeypatch.setattr(per_turn_module, "terminate_process_tree", _unconfirmed)
     backend = backend_cls(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_capture)
     )
@@ -812,7 +801,7 @@ async def test_claude_same_state_continuation_adds_resume_flag(
     cwd.mkdir()
     commands = _install_subprocess_double(
         monkeypatch,
-        claude_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -850,7 +839,7 @@ async def test_claude_fresh_backend_first_turn_does_not_resume(
     cwd.mkdir()
     commands = _install_subprocess_double(
         monkeypatch,
-        claude_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -929,7 +918,7 @@ async def test_pi_same_state_continuation_adds_session_flag(
     cwd.mkdir()
     commands = _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -966,7 +955,7 @@ async def test_pi_fresh_backend_first_turn_does_not_reuse_session(
     cwd.mkdir()
     commands = _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -1013,7 +1002,7 @@ async def test_json_backend_missing_agent_end_uses_only_current_turn_message(
 
     commands = _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -1069,7 +1058,7 @@ async def test_json_backend_nonzero_exit_fails_with_backend_diagnostics(
 
     _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -1113,7 +1102,7 @@ async def test_json_backend_reads_assistant_message_from_agent_end(
     cwd.mkdir()
     _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -1155,13 +1144,10 @@ async def test_pi_run_turn_cancellation_terminates_active_subprocess(
         return -15
 
     monkeypatch.setattr(
-        pi_module.asyncio,
+        per_turn_module.asyncio,
         "create_subprocess_exec",
         fake_create_subprocess_exec,
     )
-    monkeypatch.setattr(pi_module, "terminate_process_tree", fake_terminate_process_tree)
-    # pi's _reap helper routes through per_turn._reap_process, which
-    # resolves terminate_process_tree in per_turn's namespace.
     monkeypatch.setattr(
         per_turn_module, "terminate_process_tree", fake_terminate_process_tree
     )
@@ -3475,7 +3461,7 @@ async def test_claude_resume_session_uses_exact_id_on_next_turn(
     exact_id = "claude session;$(literal)"
     commands = _install_subprocess_double(
         monkeypatch,
-        claude_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -3545,7 +3531,7 @@ async def test_pi_family_resume_session_uses_exact_id_on_next_turn(
     exact_id = f"{kind} session;$(literal)"
     commands = _install_subprocess_double(
         monkeypatch,
-        pi_module,
+        per_turn_module,
         [
             _FakeSubprocess(
                 stdout_lines=[
@@ -3623,9 +3609,9 @@ async def test_opencode_resume_session_uses_exact_id_on_next_turn(
 @pytest.mark.parametrize(
     ("kind", "backend_cls", "spawn_module"),
     [
-        ("claude", ClaudeCodeBackend, claude_module),
-        ("pi", PiBackend, pi_module),
-        ("prime-agent", PrimeAgentBackend, pi_module),
+        ("claude", ClaudeCodeBackend, per_turn_module),
+        ("pi", PiBackend, per_turn_module),
+        ("prime-agent", PrimeAgentBackend, per_turn_module),
         ("opencode", OpenCodeBackend, per_turn_module),
     ],
 )
@@ -3750,7 +3736,7 @@ async def test_pi_family_synthetic_success_requires_resume_confirmation(
         ],
         returncode=0,
     )
-    _install_subprocess_double(monkeypatch, pi_module, [proc])
+    _install_subprocess_double(monkeypatch, per_turn_module, [proc])
     cfg = _make_cfg(kind, workspace_root=tmp_path)
     cwd = tmp_path / "ws"
     cwd.mkdir()
@@ -3787,13 +3773,13 @@ async def test_resumed_cli_failure_redacts_private_session_id(
     cwd = tmp_path / "ws"
     cwd.mkdir()
     if kind == "claude":
-        module = claude_module
+        module = per_turn_module
         backend = ClaudeCodeBackend(
             BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_capture)
         )
         process = _FakeSubprocess(stderr_blob=stderr, returncode=1)
     elif kind == "pi":
-        module = pi_module
+        module = per_turn_module
         backend = PiBackend(
             BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_capture)
         )

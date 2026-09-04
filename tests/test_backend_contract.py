@@ -39,7 +39,6 @@ import pytest
 import symphony.backends.claude_code as claude_module
 import symphony.backends.codex as codex_module
 import symphony.backends.per_turn as per_turn_module
-import symphony.backends.pi as pi_module
 from symphony.backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
@@ -290,7 +289,7 @@ class PerTurnBackendContract:
 
 class TestClaudeBackendContract(PerTurnBackendContract):
     kind = "claude"
-    module = claude_module
+    module = per_turn_module
     canonical_message = "done"
 
     def success_processes(self) -> list[_FakeSubprocess]:
@@ -357,7 +356,7 @@ class TestOpenCodeBackendContract(PerTurnBackendContract):
 
 class TestPiBackendContract(PerTurnBackendContract):
     kind = "pi"
-    module = pi_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [
@@ -372,8 +371,7 @@ class TestPiBackendContract(PerTurnBackendContract):
 
 class TestPrimeAgentBackendContract(PerTurnBackendContract):
     kind = "prime-agent"
-    # PrimeAgentBackend inherits PiBackend's subprocess globals.
-    module = pi_module
+    module = per_turn_module
 
     def success_processes(self) -> list[_FakeSubprocess]:
         return [
@@ -403,15 +401,18 @@ class TestPrimeAgentBackendContract(PerTurnBackendContract):
 # `failed to insert into database` block that stalls a board.
 # ---------------------------------------------------------------------------
 
+# Every per-turn adapter (claude and the pi family included) spawns and
+# reaps through the `per_turn` skeleton, so that is where the subprocess
+# names get doubled; codex keeps its own persistent-process machinery.
 _SPAWN_MODULES = {
     "codex": codex_module,
-    "claude": claude_module,
+    "claude": per_turn_module,
     "gemini": per_turn_module,
     "agy": per_turn_module,
     "kiro": per_turn_module,
     "opencode": per_turn_module,
-    "pi": pi_module,
-    "prime-agent": pi_module,
+    "pi": per_turn_module,
+    "prime-agent": per_turn_module,
 }
 
 
@@ -578,9 +579,11 @@ def test_retry_markers_match_the_strings_backends_actually_emit() -> None:
     import symphony.backends.pi as pi_module
     from symphony.orchestrator.core import _RETRYABLE_WORKER_ERROR_MARKERS
 
+    # claude and pi now emit the stream-unreadable message from the shared
+    # streaming base in per_turn, so that module is part of the contract.
     sources = "\n".join(
         Path(mod.__file__).read_text(encoding="utf-8")
-        for mod in (claude_module, codex_module, pi_module)
+        for mod in (claude_module, codex_module, pi_module, per_turn_module)
     )
     for marker in ("stream unreadable", "no result event"):
         assert marker in _RETRYABLE_WORKER_ERROR_MARKERS
@@ -588,3 +591,72 @@ def test_retry_markers_match_the_strings_backends_actually_emit() -> None:
             f"marker {marker!r} no longer appears in any backend — the retry "
             "list and the backends have drifted apart"
         )
+
+
+# ---------------------------------------------------------------------------
+# GitHub #29 — per-dispatch env travels in BackendInit, not os.environ
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ALL_KINDS)
+@pytest.mark.asyncio
+async def test_every_backend_overlays_backend_init_env_on_spawn(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`BackendInit.env` wins over the inherited process environment."""
+    if shutil.which("git") is None:
+        pytest.skip("git CLI required")
+    workspace_root = tmp_path / "workspaces"
+    cwd = workspace_root / "ws"
+    cwd.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=str(cwd),
+        env={"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "")},
+        check=True,
+        capture_output=True,
+    )
+    # A stale value from an earlier dispatch must not leak through.
+    monkeypatch.setenv("SYMPHONY_TOKEN_BUDGET", "stale")
+    monkeypatch.setenv("SYMPHONY_REWIND_SCOPE", "[]")
+    captured: dict[str, dict[str, str]] = {}
+    module = _SPAWN_MODULES[kind]
+
+    async def fake_create_subprocess_exec(*args: Any, **kwargs: Any):
+        del args
+        captured["env"] = dict(kwargs.get("env") or {})
+        return _FakeSubprocess(stdout_blob=b"", stderr_blob=b"", returncode=0)
+
+    async def fake_safe_proc_wait(proc: Any, *, timeout: Any = None) -> Any:
+        del timeout
+        return proc.returncode
+
+    monkeypatch.setattr(
+        module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+    )
+    monkeypatch.setattr(module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    cfg = _make_cfg(kind, workspace_root=workspace_root)
+    backend = build_backend(
+        BackendInit(
+            cfg=cfg,
+            cwd=cwd,
+            workspace_root=workspace_root,
+            on_event=_async_noop,
+            env={"SYMPHONY_TOKEN_BUDGET": "4321", "SYMPHONY_TOKEN_EMA": "10"},
+        )
+    )
+    await backend.start()
+    if kind != "codex":
+        with contextlib.suppress(Exception):
+            await backend.run_turn(prompt="do the thing", is_continuation=False)
+    with contextlib.suppress(Exception):
+        await backend.stop()
+
+    assert "env" in captured, f"{kind} never spawned a subprocess"
+    assert captured["env"].get("SYMPHONY_TOKEN_BUDGET") == "4321"
+    assert captured["env"].get("SYMPHONY_TOKEN_EMA") == "10"
+    # Inherited keys the dispatch did not set stay inherited: the overlay is
+    # additive, it does not replace the environment.
+    assert captured["env"].get("SYMPHONY_REWIND_SCOPE") == "[]"
+    assert captured["env"].get("PATH") == os.environ.get("PATH")

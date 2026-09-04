@@ -393,3 +393,93 @@ def test_deep_build_ticket_is_released_only_after_the_request_reaches_done(
     released = {i.identifier: i for i in tracker.scan_all()}["BUILD-1"]
     decision = orch._eligibility_decision(released, cfg, owning_retry=False)
     assert decision.disposition is core_mod._EligibilityDisposition.READY
+
+
+# ---------------------------------------------------------------------------
+# dark-factory cycle: an approved chat intent is what enters Intake
+# ---------------------------------------------------------------------------
+
+
+def test_approved_intent_ticket_walks_the_deep_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`file_intent_request` produces a request ticket the deep pipeline runs.
+
+    The chat gate files the ticket server-side; from there the walk is the
+    same as any deep request: Intake -> Research -> Plan -> Review -> Done,
+    with the Plan lane spawning the Build/Verify DAG.
+    """
+    from symphony.intent import IntentAction, file_intent_request
+
+    from tests.test_chat_intent import INTENT_BODY
+
+    board_root = tmp_path / "kanban"
+    board_root.mkdir()
+    cfg = replace(_deep_config(board_root), workflow_path=tmp_path / "WORKFLOW.md")
+    action = IntentAction(
+        action_id="intent-" + "a" * 32,
+        slug="todo-app",
+        title="Build a Todo app",
+        track="full",
+        intent=INTENT_BODY,
+    )
+    filed = file_intent_request(
+        cfg, action, approved_at="2026-09-05T10:00:00Z", session_id="20260905-100000-abcdef"
+    )
+    assert filed["identifier"] == "REQ-1" and filed["state"] == "Intake"
+    ticket_path = Path(filed["path"])
+    assert (tmp_path / ".sdlc" / "work" / "todo-app" / "intent.md").is_file()
+    front, body = parse_ticket_file(ticket_path)
+    assert front["state"] == "Intake" and front["request"] == "todo-app"
+    assert "## Problem" in body and "## Track\n\nfull" in body
+
+    script = [
+        ("Research", body + "\n\n## Brief\n\nfeature, full track"),
+        ("Plan", "## Research\n\nevidence"),
+        ("Review", "## Plan Summary\n\nBUILD-1, VERIFY-1"),
+        ("Done", "## Objections\n\nnone; verdict: PASS"),
+    ]
+    backends: list[_DeepBackend] = []
+
+    def _factory(init: Any) -> _DeepBackend:
+        backend = _DeepBackend(
+            ticket_path=ticket_path,
+            transitions=script,
+            board_root=board_root,
+            spawn_at_state="Plan",
+        )
+        backends.append(backend)
+        return backend
+
+    monkeypatch.setattr(core_mod, "build_backend", _factory)
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    orch = Orchestrator(WorkflowState(Path("/tmp/no.md")))
+    orch._workspace_manager = _FakeWorkspaceManager(workspace_path)  # type: ignore[assignment]
+    tracker = FileBoardTracker(_tracker_cfg(board_root))
+    [issue] = [i for i in tracker.scan_all() if i.identifier == "REQ-1"]
+    orch._running[issue.id] = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=workspace_path,
+    )
+
+    asyncio.run(orch._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    front, _ = parse_ticket_file(ticket_path)
+    assert front["state"] == "Done", f"ended at {front['state']!r}"
+    assert len(backends) >= 4
+    board = {i.identifier: i for i in tracker.scan_all()}
+    assert {"BUILD-1", "VERIFY-1"} <= set(board)
+
+
+def test_deep_intake_prompt_consumes_the_approved_intent() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs" / "symphony-prompts" / "file" / "deep"
+    intake = (root / "intake.md").read_text(encoding="utf-8")
+    assert "Do NOT re-ask" in intake
+    assert "## Track" in intake and "`micro`" in intake
+    assert "set state to `Plan` directly" in intake
+    base = (root / "base.md").read_text(encoding="utf-8")
+    assert "approved intent" in base and "single human gate" in base

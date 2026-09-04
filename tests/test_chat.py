@@ -258,8 +258,9 @@ async def test_send_message_preamble_and_continuation(
     assert "do not create, modify or delete" in prompt
     assert "Symphony kanban board at" in prompt
     assert "kanban" in prompt
-    # Q&A mode describes tickets and defers filing to edit mode.
-    assert "switch the chat to edit mode" in prompt
+    # Q&A mode never files the request ticket: the intent gate does.
+    assert "never file the request ticket yourself" in prompt
+    assert "<symphony-intent>" in prompt
     # Board protocol: validated CLI with the board's actual states, never
     # hand-written ticket markdown.
     assert "${SYMPHONY_CLI:-symphony} board new" in prompt
@@ -1770,7 +1771,7 @@ def test_board_cli_fallback_runs_with_stripped_path() -> None:
     assert "board" in result.stdout.lower()
 
 
-def test_board_preamble_default_board_routes_by_complexity(tmp_path: Path) -> None:
+def test_board_preamble_default_board_teaches_the_intent_gate(tmp_path: Path) -> None:
     preamble = _board_preamble(_cfg(tmp_path))
     # Validated CLI protocol, rendered with the board's actual states.
     assert "${SYMPHONY_CLI:-symphony} board new" in preamble
@@ -1779,20 +1780,142 @@ def test_board_preamble_default_board_routes_by_complexity(tmp_path: Path) -> No
     assert "board update <ID>" in preamble
     assert "--description-file -" in preamble
     assert "Todo, Doing" in preamble
-    assert "SIMPLE task: one ticket in Todo" in preamble
-    assert "research -> plan -> adversarial plan-review" in preamble
+    # The single human gate: the agent proposes, the operator approves, the
+    # server files. The agent must never file the request itself.
+    assert "ONE human gate" in preamble
+    assert '<symphony-intent>{"slug": "kebab-case-id"' in preamble
+    assert "## Success criteria" in preamble
+    assert "Do NOT run `symphony board new` for the request" in preamble
+    assert "After approval the request ticket lands in Todo" in preamble
     # No freehand ticket-markdown instruction survives.
     assert "<IDENTIFIER>.md" not in preamble
     assert "front matter" not in preamble
+    assert "research -> plan -> adversarial plan-review" not in preamble
 
 
-def test_board_preamble_deep_board_files_one_intake_ticket(tmp_path: Path) -> None:
+def test_board_preamble_deep_board_routes_to_intake(tmp_path: Path) -> None:
     cfg = _cfg_with_states(
         tmp_path,
         "[Intake, Research, Plan, Review, Build, QA, Verify, Document]",
     )
     preamble = _board_preamble(cfg)
-    assert "ONE Intake ticket" in preamble
+    assert "lands in Intake and the pipeline decomposes it" in preamble
     assert "Intake, Research, Plan" in preamble
-    # On a deep board the pipeline decomposes; chat does not build the DAG.
-    assert "adversarial plan-review" not in preamble
+    assert "<symphony-intent>" in preamble
+    # On a deep board the pipeline decomposes; chat never builds the DAG.
+    assert "After approval the request ticket lands in Todo" not in preamble
+
+
+# ---------------------------------------------------------------------------
+# project setup proposals can pick a lane preset (dark-factory app maker)
+# ---------------------------------------------------------------------------
+
+
+def test_project_setup_marker_accepts_deep_preset(tmp_path: Path) -> None:
+    visible, action = chat_module._project_setup_spec(
+        "1. New app.\n"
+        + _setup_marker(
+            {"choice": 1, "name": "Todo App", "path": str(tmp_path / "todo"), "preset": "deep"}
+        )
+    )
+    assert action is not None and action.preset == "deep"
+    assert action.as_dict()["preset"] == "deep"
+    assert visible == "1. New app."
+    _, plain = chat_module._project_setup_spec(
+        _setup_marker({"choice": 1, "name": "Todo App", "path": str(tmp_path / "todo")})
+    )
+    assert plain is not None and plain.preset == "default"
+
+
+@pytest.mark.parametrize("preset", ["", "DEEP", "wide", 3, None])
+def test_project_setup_marker_rejects_unknown_presets(tmp_path: Path, preset: Any) -> None:
+    raw = _setup_marker(
+        {"choice": 1, "name": "Todo App", "path": str(tmp_path / "todo"), "preset": preset}
+    )
+    assert chat_module._project_setup_spec(raw) == (raw, None)
+
+
+async def test_project_setup_passes_preset_only_when_requested(
+    tmp_path: Path, fake_backends: list[_FakeBackend]
+) -> None:
+    cfg = _cfg(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def create_project(name: str, path: Path, **kwargs: Any):
+        calls.append(kwargs)
+        from symphony.projects import Project
+
+        return Project("p", name, str(path), str(path / "WORKFLOW.md"), "127.0.0.1", 10000)
+
+    manager = ChatManager(lambda: cfg, project_creator=create_project)
+    await manager.start_session("edit", confirmation_token=CONFIRMATION_TOKEN)
+    session = manager.active_session
+    assert session is not None
+    manager._record_agent_message(
+        session,
+        _setup_marker({"choice": 1, "name": "Plain", "path": str(tmp_path / "plain")}),
+    )
+    manager._record_agent_message(
+        session,
+        _setup_marker(
+            {"choice": 2, "name": "Deep", "path": str(tmp_path / "deep"), "preset": "deep"}
+        ),
+    )
+    plain = manager.project_setup_for_choice("1")
+    deep = manager.project_setup_for_choice("2")
+    assert plain is not None and deep is not None
+    await manager.confirm_project_setup(plain.action_id, confirmation_token=CONFIRMATION_TOKEN)
+    await manager.confirm_project_setup(deep.action_id, confirmation_token=CONFIRMATION_TOKEN)
+    assert "preset" not in calls[0]
+    assert calls[1]["preset"] == "deep"
+    await manager.stop_session()
+
+
+async def test_deep_project_setup_creates_a_deep_board(
+    tmp_path: Path, fake_backends: list[_FakeBackend], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `preset: deep` proposal yields a board the pipeline can run unattended."""
+    from symphony.cli.doctor import check_deep_preset_merge_contract
+    from symphony.projects import ProjectRegistry
+    from symphony.workflow.presets import DEEP_PRESET, guess_lane_preset
+
+    registry_path = tmp_path / "projects.json"
+    monkeypatch.setenv("SYMPHONY_PROJECTS_FILE", str(registry_path))
+    source = tmp_path / "source"
+    source.mkdir()
+    cfg = _cfg(source)
+    target = tmp_path / "todo-app"
+    manager = ChatManager(lambda: cfg)
+    await manager.start_session("edit", confirmation_token=CONFIRMATION_TOKEN)
+    session = manager.active_session
+    assert session is not None
+    manager._record_agent_message(
+        session,
+        _setup_marker(
+            {"choice": 1, "name": "Todo App", "path": str(target), "preset": "deep"}
+        ),
+    )
+    action = manager.project_setup_for_choice("1")
+    assert action is not None and action.preset == "deep"
+    result = await manager.confirm_project_setup(
+        action.action_id, confirmation_token=CONFIRMATION_TOKEN
+    )
+    assert result["status"] == "succeeded", result
+    state = WorkflowState(target / "WORKFLOW.md")
+    created, err = state.reload()
+    assert err is None and created is not None
+    assert guess_lane_preset(created.tracker.active_states) == "deep"
+    assert tuple(created.tracker.active_states) == DEEP_PRESET.active_states
+    assert check_deep_preset_merge_contract(created).status == "pass"
+    # The preset lanes are what the project's history starts with.
+    log = subprocess.run(
+        ["git", "-C", str(target), "show", "--stat", "--oneline", "HEAD"],
+        text=True, capture_output=True, check=True,
+    ).stdout
+    assert "WORKFLOW.md" in log
+    assert not subprocess.run(
+        ["git", "-C", str(target), "status", "--porcelain"],
+        text=True, capture_output=True, check=True,
+    ).stdout
+    assert [project.id for project in ProjectRegistry().load()] == ["todo-app"]
+    await manager.stop_session()

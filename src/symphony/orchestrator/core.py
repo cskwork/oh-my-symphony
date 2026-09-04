@@ -26,7 +26,6 @@ import re
 import subprocess
 import threading
 import time
-import traceback
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -53,14 +52,9 @@ from ..backends import build_backend
 from ..chat import cfg_for_mode
 from ..utils import git_inspect
 from ..utils.archive import select_archivable
+from ..utils.atomic_json import state_file_name, write_json_atomic
 from ..backends.codex import linear_graphql_tool
-from ..errors import (
-    SymphonyError,
-    TurnFailed,
-    TurnInputRequired,
-    TurnTimeout,
-    TurnCancelled,
-)
+from ..errors import SymphonyError
 from ..continuous_improvement import (
     AgentTask,
     FileLease,
@@ -72,7 +66,7 @@ from ..continuous_improvement import (
 )
 from ..issue import BlockerRef, Issue, normalize_state
 from ..logging import get_logger
-from ..prompt import build_continuation_prompt, build_first_turn_prompt
+from ..prompt import build_first_turn_prompt
 from ..runtime_safety import ensure_workflow_repo_is_safe
 from ..service_identity import SERVICE_INSTANCE_ENV, normalize_service_instance_id
 from ..skills import render_skill_block
@@ -91,17 +85,18 @@ from ..utils.auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
 from ..utils.git_sandbox import SANDBOX_WRITE_DENIED, classify_history_failure
 from ..workspace import (
     HISTORY_PUSH_FAILED,
-    HistoryGateResult,
     WorkspaceManager,
     commit_workspace_on_done,
-    finalize_delivery_history,
+    # Only `worker_exit` calls this now, and it reads it through this
+    # module's globals so `symphony.orchestrator.core.finalize_delivery_history`
+    # stays the documented monkeypatch seam (see module docstring).
+    finalize_delivery_history,  # noqa: F401
     verify_branch_history,
 )
 from .constants import (
     ARCHIVE_SWEEP_INTERVAL_SEC,
     AUTO_TRIAGE_NOTE,
     AUTO_TRIAGE_TARGET_STATE,
-    CONTINUATION_RETRY_DELAY_MS,
     EMPTY_TURN_LOOP_THRESHOLD,
     ESCALATION_MAX_ATTEMPTS,
     ESCALATION_RETRY_DELAY_MS,
@@ -131,7 +126,6 @@ from .release_cycle import (
     is_release_success_state as _is_release_success_state,
     is_release_evidence_issue as _is_release_evidence_issue,
     is_release_finalizer as _is_release_finalizer,
-    release_failure_target_state as _release_failure_target_state,
     release_ticket_version_token as _release_ticket_version_token,
     release_verifier_state as _release_verifier_state,
 )
@@ -147,7 +141,6 @@ from .helpers import (
     _is_auto_triage_todo_candidate,
     _is_rewind_transition,
     _human_review_target_state,
-    _max_turns_exhausted_target_state,
     _rewind_budget_target_state,
     _notify_state_transition,
     _requested_agent_kind,
@@ -172,6 +165,8 @@ from .run_registry import (
     RunRegistry,
     registry_path_for_workflow,
 )
+from . import attempt as agent_attempt
+from . import worker_exit
 
 
 # Initiative D — the former ``_pkg.<name>`` parent-package indirection is
@@ -3593,7 +3588,11 @@ class Orchestrator:
 
     def _done_count_path(self, cfg: ServiceConfig) -> Path:
         """On-disk location for the persisted Done counter."""
-        return cfg.workflow_path.parent / ".symphony" / "done_count.json"
+        return (
+            cfg.workflow_path.parent
+            / ".symphony"
+            / state_file_name(cfg.workflow_path, "done_count")
+        )
 
     def _load_done_count(self, cfg: ServiceConfig) -> None:
         """Restore the Done counter across orchestrator restarts.
@@ -3620,13 +3619,7 @@ class Orchestrator:
         """Best-effort flush; mirrors `_persist_token_ema`."""
         path = self._done_count_path(cfg)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps({"done_count": self._done_count}, indent=2),
-                encoding="utf-8",
-            )
-            tmp.replace(path)
+            write_json_atomic(path, {"done_count": self._done_count})
         except OSError as exc:
             log.warning("done_count_persist_failed", path=str(path), error=str(exc))
 
@@ -4873,55 +4866,6 @@ class Orchestrator:
             manual=True,
         )
 
-    async def _flag_unpublished_history(
-        self, cfg: ServiceConfig, issue: Issue, result: HistoryGateResult
-    ) -> None:
-        """Downgrade a card whose commit landed locally but never reached the remote.
-
-        `Human Review` rather than `Blocked`: the work is committed and cannot
-        be lost, so there is nothing for an RCA agent to root-cause — only a
-        remote an operator has to settle. Blocking here would stall the queue
-        over a publishing problem the pipeline already survived.
-        """
-        note = (
-            "The delivery commit was recorded locally but Symphony could not "
-            "verify it on the remote, so this card is not `Done` yet.\n\n"
-            f"- branch: `{result.branch or '(unknown)'}`\n"
-            f"- local commit: `{result.local_sha[:12] or 'none'}`\n"
-            f"- remote tip: `{result.remote_sha[:12] or 'not found'}`\n"
-            f"- classification: `{result.failure_kind}`\n\n"
-            "Workspace preserved. Publish the branch and move the card to "
-            "`Done`, or say why it should not be published.\n\n"
-            f"```\n{result.detail[:1000]}\n```"
-        )
-        try:
-            await asyncio.to_thread(
-                self._tracker_call_append_note,
-                cfg,
-                issue,
-                "History Not Published",
-                note,
-            )
-            await asyncio.to_thread(
-                self._tracker_call_update_state, cfg, issue, "Human Review"
-            )
-        except Exception as exc:
-            log.warning(
-                "history_gate_downgrade_failed",
-                identifier=issue.identifier,
-                branch=result.branch,
-                error=str(exc),
-            )
-            return
-        log.warning(
-            "history_gate_unpublished",
-            identifier=issue.identifier,
-            branch=result.branch,
-            local_sha=result.local_sha,
-            remote_sha=result.remote_sha,
-        )
-        self.request_refresh()
-
     async def _recover_blocked_history_gate(
         self, cfg: ServiceConfig, issue: Issue
     ) -> bool:
@@ -6074,14 +6018,15 @@ class Orchestrator:
         for other_id, retry_entry in self._retry.items():
             if other_id == candidate.id:
                 continue
-            # Retry entries don't carry the full Issue. Look up the
-            # last-known body via running history when present; the
-            # common case (retry of an exited ticket) leaves no body to
-            # inspect, and the retry path re-evaluates on its own tick.
+            # A retry entry carries a snapshot of the exited ticket's
+            # `## Touched Files` taken when the retry was scheduled (#28);
+            # prefer the live body when the ticket is still running.
             running_entry = self._running.get(other_id)
-            if running_entry is None:
-                continue
-            other_files = self._touched_files_for(running_entry.issue)
+            other_files = (
+                self._touched_files_for(running_entry.issue)
+                if running_entry is not None
+                else set(retry_entry.touched_files)
+            )
             overlap = candidate_files & other_files
             if overlap:
                 return retry_entry.identifier, overlap
@@ -6156,7 +6101,11 @@ class Orchestrator:
 
     def _token_ema_path(self, cfg: ServiceConfig) -> Path:
         """Return the on-disk location for the persisted EMA snapshot."""
-        return cfg.workflow_path.parent / ".symphony" / "token_ema.json"
+        return (
+            cfg.workflow_path.parent
+            / ".symphony"
+            / state_file_name(cfg.workflow_path, "token_ema")
+        )
 
     def _load_token_ema(self, cfg: ServiceConfig) -> None:
         """Load `_token_ema` from disk on `start()`. Missing file = empty.
@@ -6197,13 +6146,7 @@ class Orchestrator:
         """Best-effort flush to disk via tmp+rename. Failures only log."""
         path = self._token_ema_path(cfg)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(self._token_ema, sort_keys=True, indent=2),
-                encoding="utf-8",
-            )
-            tmp.replace(path)
+            write_json_atomic(path, self._token_ema)
         except OSError as exc:
             log.warning(
                 "token_ema_persist_failed",
@@ -6338,49 +6281,47 @@ class Orchestrator:
     # A2-orch + C3 — backend subprocess env injection
     # ------------------------------------------------------------------
 
-    def _apply_dispatch_env(
+    def _dispatch_env_for(
         self,
         *,
         issue: Issue,
         cfg: ServiceConfig,
         is_rewind: bool,
-    ) -> None:
-        """Set per-dispatch env vars consumed by the backend subprocess.
+    ) -> dict[str, str]:
+        """Return the per-dispatch env vars for the backend subprocess.
 
-        Always sets:
+        Always includes:
           * ``SYMPHONY_TOKEN_EMA`` — rolling EMA of total tokens for the
             current state (rounded int), 0 when unseen.
           * ``SYMPHONY_TOKEN_BUDGET`` — hard cap for the current state
             (max_total_tokens_by_state with fallback to max_total_tokens).
 
-        On rewind dispatches also sets:
+        Rewind dispatches also include:
           * ``SYMPHONY_REWIND_SCOPE`` — JSON list of finding rows parsed
             from the latest applicable failure section (`## Review Findings`,
             `## QA Failure`, or `## Contract Failure`). Empty list when
             parsing fails (the env var is informational; an empty list
-            signals "rewind, no machine-readable scope" without unsetting).
+            signals "rewind, no machine-readable scope").
 
-        On forward dispatches the rewind scope env var is UNSET so a
-        previous-turn value can't bleed across.
-
-        Backends inherit `os.environ`, so this mutates process-global
-        state. Concurrent dispatches in the same tick are serialised by
-        the orchestrator's single event loop, and each backend spawns
-        its subprocess before the next dispatch lands.
+        Forward dispatches omit the rewind scope so a previous-turn value
+        cannot bleed across. The mapping travels in ``BackendInit.env`` and
+        is overlaid on the inherited environment at spawn time; nothing here
+        touches ``os.environ`` (GitHub issue #29).
         """
         ema_value = self._token_ema_for_state(issue.state)
         budget_value = self._token_budget_for_state(cfg, issue.state)
-        os.environ["SYMPHONY_TOKEN_EMA"] = str(ema_value)
-        os.environ["SYMPHONY_TOKEN_BUDGET"] = str(budget_value)
+        env = {
+            "SYMPHONY_TOKEN_EMA": str(ema_value),
+            "SYMPHONY_TOKEN_BUDGET": str(budget_value),
+        }
         if is_rewind:
             rows = _parse_findings_rows(issue.description)
             try:
                 payload = json.dumps(rows, ensure_ascii=False)
             except (TypeError, ValueError):
                 payload = "[]"
-            os.environ["SYMPHONY_REWIND_SCOPE"] = payload
-        else:
-            os.environ.pop("SYMPHONY_REWIND_SCOPE", None)
+            env["SYMPHONY_REWIND_SCOPE"] = payload
+        return env
 
     # ------------------------------------------------------------------
     # dispatch (§16.4)
@@ -6774,837 +6715,7 @@ class Orchestrator:
     async def _run_agent_attempt(
         self, issue: Issue, attempt: int | None, cfg: ServiceConfig
     ) -> None:
-        running_issue_id = issue.id
-        outcome: str = "normal"
-        error: str | None = None
-        try:
-            running = self._running.get(running_issue_id)
-            if running is not None and not running.release_authority_resolved:
-                try:
-                    release_authority = self._prepare_release_dispatch(issue, cfg)
-                except SymphonyError as exc:
-                    outcome = "error"
-                    error = str(exc)
-                    log.error(
-                        "release_execution_refused",
-                        issue_id=issue.id,
-                        identifier=issue.identifier,
-                        tracker_kind=cfg.tracker.kind,
-                        error=error,
-                    )
-                    return
-                issue = release_authority.issue
-                running.issue = issue
-                running.known_app_release = release_authority.app_release
-                running.known_release_cycle_verifier = release_authority.cycle_verifier
-                running.known_app_release_finalizer = release_authority.finalizer
-                if release_authority.gate is not None:
-                    running.release_gate_finalizer = (
-                        release_authority.gate.finalizer_identifier
-                    )
-                    running.release_gate_expected_contract_sha256 = (
-                        release_authority.gate.expected_contract_sha256
-                    )
-                    running.release_gate_cycle_fingerprint = (
-                        release_authority.gate.cycle_fingerprint
-                    )
-                    running.release_gate_generation = release_authority.gate.generation
-                if release_authority.finalizer:
-                    running.release_finalizer_rewind_state = issue.state
-                running.release_authority_resolved = True
-            # Keep the *unrouted* workflow config: `agent.stage_kinds` must be
-            # re-resolved at every in-run phase transition, and re-resolving
-            # against an already-routed cfg would pin the first lane's backend
-            # for the whole dispatch (the normal Todo→…→Document path).
-            base_cfg = cfg
-            cfg = _config_for_issue_agent(base_cfg, issue)
-            running = self._running.get(running_issue_id)
-            if running is not None:
-                running.agent_kind = cfg.agent.kind
-            assert self._workspace_manager is not None
-            workspace = await self._workspace_manager.create_or_reuse(issue.identifier)
-            running = self._running.get(running_issue_id)
-            if running is None:
-                # Slot was reclaimed externally between dispatch and the
-                # first await completing. Surface the orphan path instead
-                # of crashing on `KeyError(running_issue_id)` — that crash
-                # was the source of the worker_task_finished_without_cleanup
-                # cascade observed on OLV-002.
-                outcome = "orphaned"
-                error = "running entry vanished before workspace bind"
-                log.warning(
-                    "worker_running_entry_vanished",
-                    issue_id=running_issue_id,
-                    site="workspace_bind",
-                )
-                return
-            running.workspace_path = workspace.path
-            if (
-                running.known_app_release
-                or running.known_release_cycle_verifier
-                or running.known_app_release_finalizer
-            ):
-                if not self._heartbeat_run_lease(running_issue_id, running):
-                    outcome = "release_authority_error"
-                    error = "application release lease was lost before workspace use"
-                    return
-                try:
-                    running.issue = self._require_running_release_authority(
-                        cfg=cfg,
-                        entry=running,
-                        workspace_path=workspace.path,
-                    )
-                    issue = running.issue
-                except Exception as exc:
-                    outcome = "release_authority_error"
-                    error = str(exc)
-                    return
-            try:
-                await self._workspace_manager.before_run(workspace.path)
-            except Exception as exc:
-                outcome = "before_run_error"
-                error = str(exc)
-                return
-
-            tools = []
-            if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
-                tools.append(linear_graphql_tool())
-
-            client = self._build_agent_backend(
-                BackendInit(
-                    cfg=cfg,
-                    cwd=workspace.path,
-                    workspace_root=cfg.workspace_root,
-                    on_event=lambda ev, issue_id=running_issue_id: self._on_codex_event(
-                        issue_id, ev
-                    ),
-                    on_process_started=lambda pid, issue_id=running_issue_id: (
-                        self._sync_backend_agent_pid(issue_id, pid)
-                    ),
-                    client_tools=tools,
-                )
-            )
-            # Expose the live backend to `_on_codex_event` so the stall-progress
-            # predicate routes through `client.is_progress_event(...)`.
-            running.client = client
-            after_run_pending = False
-            # Initial dispatch is always forward (no rewind); the env
-            # mutation MUST land before `client.start()` because the
-            # backend subprocess inherits os.environ at fork time.
-            self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=False)
-            try:
-                self._sync_backend_agent_pid(
-                    running_issue_id, _backend_agent_pid(client)
-                )
-                try:
-                    await client.start()
-                finally:
-                    self._sync_backend_agent_pid(
-                        running_issue_id, _backend_agent_pid(client)
-                    )
-                await client.initialize()
-
-                turn_number = 1
-                debug = self._issue_debug.setdefault(running_issue_id, _IssueDebug())
-                # `cfg.tui.language` is the operator-chosen language for
-                # both TUI chrome AND artefact docs. Resolution already
-                # honours `SYMPHONY_LANG` (build_service_config call).
-                doc_language = cfg.tui.language
-                # Skill files are read off-loop; dispatch shares the event
-                # loop with every other running worker.
-                skill_context = await asyncio.to_thread(
-                    render_skill_block, cfg.workflow_path.parent, issue.skills
-                )
-                first_prompt, _ = build_first_turn_prompt(
-                    prompt_template=cfg.prompt_template_for_state(issue.state),
-                    issue=issue,
-                    attempt=attempt,
-                    language=doc_language,
-                    turn_number=debug.completed_turn_count + turn_number,
-                    max_turns=cfg.agent.max_total_turns,
-                    max_attempts=cfg.agent.max_attempts,
-                    auto_merge_on_done=cfg.agent.auto_merge_on_done,
-                    token_ema=self._token_ema_for_state(issue.state),
-                    token_budget=self._token_budget_for_state(cfg, issue.state),
-                    rewind_scope=None,
-                    compact_issue_context=cfg.agent.compact_issue_context,
-                    full_ticket_path=self._ticket_prompt_path(cfg, issue),
-                    artifacts_dir=self._prompt_artifacts_dir(cfg),
-                    extra_context=skill_context,
-                )
-                resumed_checkpoint = False
-                checkpoint = running.continuation_checkpoint
-                if checkpoint is not None:
-                    try:
-                        resumed_checkpoint = await client.resume_session(
-                            checkpoint.resume_session_id
-                        )
-                    except Exception as exc:
-                        log.error(
-                            "session_continuation_resume_error",
-                            issue_id=running_issue_id,
-                            issue_identifier=issue.identifier,
-                            agent_kind=cfg.agent.kind,
-                            error_type=type(exc).__name__,
-                        )
-                        raise SymphonyError(
-                            "exact session continuation failed before turn start"
-                        ) from None
-                    running.recovery_session_resumed = resumed_checkpoint
-                    if resumed_checkpoint:
-                        running.resume_session_id = checkpoint.resume_session_id
-                        self._append_run_event(running, "session_started", {})
-                        log.info(
-                            "session_continuation_resumed",
-                            issue_id=running_issue_id,
-                            issue_identifier=issue.identifier,
-                            checkpoint_turn=checkpoint.turn,
-                        )
-                    else:
-                        log.info(
-                            "session_continuation_fresh_fallback",
-                            issue_id=running_issue_id,
-                            issue_identifier=issue.identifier,
-                            checkpoint_turn=checkpoint.turn,
-                            agent_kind=cfg.agent.kind,
-                        )
-                if not resumed_checkpoint:
-                    await client.start_session(
-                        initial_prompt=first_prompt,
-                        issue_title=f"{issue.identifier}: {issue.title}",
-                    )
-
-                # Track which kanban state the backend is currently
-                # operating on. When the issue moves to a new state mid-run
-                # we tear the backend down and rebuild it so the next phase
-                # starts with a fresh context — shared knowledge flows only
-                # through the markdown artefacts under
-                # `docs/<identifier>/<stage>/` plus the ticket body.
-                prev_phase_state = normalize_state(issue.state)
-                # Canonical-cased mirror of `prev_phase_state`. Trackers
-                # like Linear and Jira match state names case-sensitively
-                # on writes, so a contract-failure rewind needs the
-                # original casing rather than the lowercased form.
-                prev_phase_state_raw = issue.state or ""
-                # Minimal state refreshes intentionally omit labels. Retain
-                # the last full-body app-release signal until the next full
-                # refresh so stage-contracts=off cannot erase the machine gate.
-                running_entry = self._running.get(running_issue_id)
-                known_app_release = (
-                    running_entry.known_app_release
-                    if running_entry is not None
-                    else False
-                ) or _has_app_release_label(issue)
-
-                while True:
-                    # Operator pause gate — `pause_worker` clears the event,
-                    # `resume_worker` sets it. Honoured at the turn boundary
-                    # so we never tear down a turn the model is mid-way
-                    # through. On resume, re-fetch issue state because the
-                    # operator may have moved the ticket while it was held.
-                    pause_event = self._pause_events.get(running_issue_id)
-                    if pause_event is not None and not pause_event.is_set():
-                        log.info(
-                            "worker_paused",
-                            issue_id=running_issue_id,
-                            identifier=issue.identifier,
-                            turn=turn_number,
-                        )
-                        await pause_event.wait()
-                        log.info(
-                            "worker_resumed",
-                            issue_id=running_issue_id,
-                            identifier=issue.identifier,
-                            turn=turn_number,
-                        )
-                        refreshed = await self._refresh_issue_state(
-                            cfg, running_issue_id
-                        )
-                        if refreshed is not None:
-                            issue = refreshed
-                            running_entry = self._running.get(running_issue_id)
-                            if running_entry is not None:
-                                running_entry.issue = issue
-
-                    current_state = normalize_state(issue.state)
-                    debug = self._issue_debug.setdefault(
-                        running_issue_id, _IssueDebug()
-                    )
-                    if (
-                        cfg.agent.max_total_turns > 0
-                        and debug.completed_turn_count + turn_number
-                        > cfg.agent.max_total_turns
-                    ):
-                        log.warning(
-                            "worker_total_turn_budget_boundary",
-                            issue_id=running_issue_id,
-                            issue_identifier=issue.identifier,
-                            completed_turns=debug.completed_turn_count,
-                            next_turn=turn_number,
-                            max_total_turns=cfg.agent.max_total_turns,
-                        )
-                        break
-                    is_phase_transition = (
-                        turn_number > 1 and current_state != prev_phase_state
-                    )
-
-                    if is_phase_transition:
-                        try:
-                            transition = await self._transition_agent_phase(
-                                phase_state=_AgentPhaseState(
-                                    issue=issue,
-                                    cfg=cfg,
-                                    client=client,
-                                    first_prompt=first_prompt,
-                                    current_state=current_state,
-                                    known_app_release=known_app_release,
-                                ),
-                                running_issue_id=running_issue_id,
-                                base_cfg=base_cfg,
-                                workspace_path=workspace.path,
-                                attempt=attempt,
-                                doc_language=doc_language,
-                                producing_state=prev_phase_state,
-                                producing_state_raw=prev_phase_state_raw,
-                                turn_number=turn_number,
-                            )
-                            if transition is None:
-                                break
-                            phase_state = transition.state
-                            issue = phase_state.issue
-                            cfg = phase_state.cfg
-                            client = phase_state.client
-                            first_prompt = phase_state.first_prompt
-                            current_state = phase_state.current_state
-                            known_app_release = phase_state.known_app_release
-                            is_rewind = transition.is_rewind
-                            running_entry = self._running.get(running_issue_id)
-                            log.info(
-                                "worker_phase_transition",
-                                issue_id=issue.id,
-                                identifier=issue.identifier,
-                                from_state=prev_phase_state,
-                                to_state=current_state,
-                                turn=turn_number,
-                                attempt=attempt,
-                                is_rewind=is_rewind,
-                                workspace=str(workspace.path),
-                            )
-                            if running_entry is not None:
-                                self._append_run_event(
-                                    running_entry,
-                                    "phase_transition",
-                                    {
-                                        "from_state": prev_phase_state,
-                                        "to_state": current_state,
-                                        "turn": turn_number,
-                                        "attempt": attempt,
-                                        "is_rewind": is_rewind,
-                                    },
-                                )
-                            self._record_stats_transition(
-                                issue.identifier, prev_phase_state, current_state
-                            )
-                        except Exception as exc:
-                            outcome = "phase_transition_error"
-                            error = str(exc)
-                            return
-
-                    running_entry = self._running.get(running_issue_id)
-                    if (
-                        running_entry is not None
-                        and running_entry.hit_empty_response_loop
-                    ):
-                        await self._escalate_empty_response_loop(
-                            cfg=cfg,
-                            entry=running_entry,
-                            issue_id=running_issue_id,
-                            cancel_worker=False,
-                        )
-                        break
-
-                    is_continuation = (
-                        (running.recovery_session_resumed and turn_number == 1)
-                        or (turn_number > 1 and not is_phase_transition)
-                    )
-                    if is_continuation:
-                        debug = self._issue_debug.setdefault(
-                            running_issue_id, _IssueDebug()
-                        )
-                        prompt = build_continuation_prompt(
-                            language=doc_language,
-                            turn_number=debug.completed_turn_count + turn_number,
-                            max_turns=cfg.agent.max_total_turns,
-                        )
-                    else:
-                        prompt = first_prompt
-
-                    running = self._running.get(running_issue_id)
-                    if running is None:
-                        outcome = "orphaned"
-                        error = "running entry vanished before turn start"
-                        log.warning(
-                            "worker_running_entry_vanished",
-                            issue_id=running_issue_id,
-                            site="turn_start",
-                        )
-                        return
-                    running.turn_count = turn_number
-                    if (
-                        running.known_app_release
-                        or running.known_release_cycle_verifier
-                        or running.known_app_release_finalizer
-                    ):
-                        if not self._heartbeat_run_lease(running_issue_id, running):
-                            outcome = "release_authority_error"
-                            error = (
-                                "application release lease was lost before agent turn"
-                            )
-                            return
-                        try:
-                            running.issue = self._require_running_release_authority(
-                                cfg=cfg,
-                                entry=running,
-                            )
-                            issue = running.issue
-                        except Exception as exc:
-                            outcome = "release_authority_error"
-                            error = str(exc)
-                            return
-                    # Capture the state THIS turn is starting in. C3 EMA
-                    # samples need the source state, not the destination
-                    # the agent flips to mid-turn — without this, every
-                    # stage's tokens get attributed to the next stage.
-                    running.state_at_turn_start = (running.issue.state or "").lower()
-                    # Symmetry with worker_turn_completed — a single line per
-                    # turn-start so multi-turn runs (especially slow ones
-                    # like gemini -p where a single turn can take 60-90s)
-                    # don't look stuck between turns.
-                    log.info(
-                        "worker_turn_started",
-                        issue_id=running_issue_id,
-                        identifier=running.issue.identifier,
-                        turn=turn_number,
-                        max_turns=cfg.agent.max_turns,
-                        is_continuation=is_continuation,
-                    )
-                    self._append_run_event(
-                        running,
-                        "turn_started",
-                        {
-                            "turn": turn_number,
-                            "state": running.issue.state,
-                            "continuation": is_continuation,
-                        },
-                    )
-                    if turn_number > 1:
-                        try:
-                            await self._workspace_manager.before_run(workspace.path)
-                        except Exception as exc:
-                            outcome = "before_run_error"
-                            error = str(exc)
-                            return
-                    self._sync_backend_agent_pid(
-                        running_issue_id, _backend_agent_pid(client)
-                    )
-                    after_run_pending = True
-                    try:
-                        await client.run_turn(
-                            prompt=prompt, is_continuation=is_continuation
-                        )
-                    except (
-                        TurnTimeout,
-                        TurnFailed,
-                        TurnCancelled,
-                        TurnInputRequired,
-                    ) as exc:
-                        outcome = "turn_error"
-                        error = str(
-                            redact_session_id(str(exc), running.resume_session_id)
-                        )
-                        return
-                    finally:
-                        self._sync_backend_agent_pid(
-                            running_issue_id, _backend_agent_pid(client)
-                        )
-
-                    # Synchronous log on the worker's hot path — the
-                    # listener-side `agent_turn_completed` log fires from
-                    # `_on_codex_event` via the EVENT_TURN_COMPLETED emit,
-                    # but reconcile can cancel the worker between the emit
-                    # and the listener running, swallowing the visibility
-                    # signal. Logging here guarantees one line per
-                    # successful turn even when reconcile races us.
-                    running_entry = self._running.get(running_issue_id)
-                    if running_entry is not None:
-                        log.info(
-                            "worker_turn_completed",
-                            issue_id=running_issue_id,
-                            identifier=running_entry.issue.identifier,
-                            turn=turn_number,
-                            input_tokens=running_entry.codex_input_tokens,
-                            cache_input_tokens=running_entry.codex_cache_input_tokens,
-                            output_tokens=running_entry.codex_output_tokens,
-                            total_tokens=running_entry.codex_total_tokens,
-                        )
-
-                    await self._workspace_manager.after_run_best_effort(workspace.path)
-                    after_run_pending = False
-                    # Collect before the next loop iteration evaluates the
-                    # stage contract, so `artifacts.require_for_done` sees
-                    # this turn's deliverables, and before Done removes the
-                    # workspace they live in.
-                    await self._collect_ticket_artifacts(
-                        cfg,
-                        identifier=issue.identifier,
-                        workspace_path=workspace.path,
-                        run_id=(
-                            running_entry.run_id if running_entry is not None else ""
-                        ),
-                        turn=turn_number,
-                    )
-                    # The hook may commit or amend the turn's changes. Resolve
-                    # HEAD only after it finishes so the explorer never reports
-                    # the base/prior-turn commit as this turn's result.
-                    commit_sha = None
-                    if (workspace.path / ".git").exists():
-                        commit_sha = await asyncio.to_thread(
-                            git_inspect.resolve_commit, workspace.path, "HEAD"
-                        )
-                    if commit_sha:
-                        running_entry = self._running.get(running_issue_id)
-                        if running_entry is not None:
-                            self._append_run_event(
-                                running_entry,
-                                "workspace_updated",
-                                {"turn": turn_number, "commit_sha": commit_sha},
-                            )
-
-                    running_entry = self._running.get(running_issue_id)
-                    registry = self._run_registry
-                    if (
-                        cfg.agent.crash_continuation
-                        and registry is not None
-                        and running_entry is not None
-                        and running_entry.run_id
-                        and running_entry.resume_session_id
-                        and running_entry.last_completed_turn_event == turn_number
-                        and not running_entry.known_app_release
-                        and not running_entry.known_release_cycle_verifier
-                        and not running_entry.known_app_release_finalizer
-                    ):
-                        checkpoint_turn = debug.completed_turn_count + turn_number
-                        checkpoint_registry = cast(RunRegistry, registry)
-                        checkpoint_run_id = running_entry.run_id
-                        checkpoint_session_id = running_entry.resume_session_id
-                        checkpoint_state = running_entry.issue.state
-                        self._registry_guard(
-                            "checkpoint_completed_turn",
-                            lambda: checkpoint_registry.checkpoint_completed_turn(
-                                issue_id=running_issue_id,
-                                run_id=checkpoint_run_id,
-                                resume_session_id=checkpoint_session_id,
-                                state=checkpoint_state,
-                                turn=checkpoint_turn,
-                            ),
-                            False,
-                        )
-
-                    # Record the state the backend just operated on so the
-                    # next iteration can detect a phase transition against
-                    # the freshly refreshed state below.
-                    prev_phase_state = current_state
-                    prev_phase_state_raw = (
-                        running.issue.state if running is not None else issue.state
-                    ) or ""
-
-                    # Refresh issue state.
-                    refreshed = await self._refresh_issue_state(cfg, running_issue_id)
-                    if refreshed is None:
-                        outcome = "issue_state_refresh_failed"
-                        error = "could not refresh issue state"
-                        return
-                    issue = refreshed
-                    running = self._running.get(running_issue_id)
-                    if running is None:
-                        outcome = "orphaned"
-                        error = "running entry vanished after issue refresh"
-                        log.warning(
-                            "worker_running_entry_vanished",
-                            issue_id=running_issue_id,
-                            site="post_refresh",
-                        )
-                        return
-                    running.issue = issue
-                    state = normalize_state(issue.state)
-                    active = {s.lower() for s in cfg.tracker.active_states}
-                    release_rewound = False
-                    if (
-                        running.known_app_release_finalizer
-                        and state != prev_phase_state
-                    ):
-                        try:
-                            finalizer_identifier = (
-                                running.release_gate_finalizer or issue.identifier
-                            )
-                            finalizer_gate = cast(
-                                ReleaseGate | None,
-                                self._release_registry_call(
-                                    cfg,
-                                    "read_finalizer_gate_after_turn",
-                                    lambda registry: registry.get_release_gate(
-                                        finalizer_identifier
-                                    ),
-                                ),
-                            )
-                            if finalizer_gate is None:
-                                raise SymphonyError(
-                                    "application release finalizer authority disappeared",
-                                    finalizer=issue.identifier,
-                                )
-                            issue = self._guard_release_finalizer(
-                                cfg=cfg,
-                                issue=issue,
-                                gate=finalizer_gate,
-                                rewind_state=(prev_phase_state_raw or prev_phase_state),
-                                expected_run_id=running.run_id,
-                                require_run_authority=True,
-                            )
-                        except Exception as exc:
-                            try:
-                                issue = await self._rewind_app_release_transition(
-                                    cfg=cfg,
-                                    issue=issue,
-                                    producing_state=(
-                                        prev_phase_state_raw or prev_phase_state
-                                    ),
-                                    note_body=(
-                                        "Final delivery was stopped because the "
-                                        f"host-owned release approval is invalid: {exc}"
-                                    ),
-                                )
-                                running.issue = issue
-                            except Exception as rewind_exc:
-                                log.error(
-                                    "release_finalizer_rewind_failed",
-                                    issue_id=issue.id,
-                                    identifier=issue.identifier,
-                                    gate_error=str(exc),
-                                    rewind_error=str(rewind_exc),
-                                )
-                            outcome = "phase_transition_error"
-                            error = str(exc)
-                            return
-                        if state in active:
-                            running.release_finalizer_rewind_state = issue.state
-                    if (
-                        state != prev_phase_state
-                        and prev_phase_state == "verify"
-                        and not _is_rewind_transition(
-                            prev_phase_state,
-                            state,
-                            cfg.tracker.active_states,
-                        )
-                    ):
-                        try:
-                            (
-                                issue,
-                                release_rewound,
-                            ) = await self._enforce_app_release_transition(
-                                cfg=cfg,
-                                issue=issue,
-                                workspace_path=workspace.path,
-                                producing_state=(
-                                    prev_phase_state_raw or prev_phase_state
-                                ),
-                                known_app_release=known_app_release,
-                                running_entry=running,
-                            )
-                        except Exception as exc:
-                            outcome = "phase_transition_error"
-                            error = str(exc)
-                            return
-                        known_app_release = known_app_release or _has_app_release_label(
-                            issue
-                        )
-                        running.issue = issue
-                        state = normalize_state(issue.state)
-                    if running.release_verifier_handoff_complete:
-                        break
-                    if release_rewound:
-                        debug.rewind_count += 1
-                        if (
-                            cfg.agent.max_attempts > 0
-                            and debug.rewind_count > cfg.agent.max_attempts
-                        ):
-                            rewind_target = _release_failure_target_state(cfg)
-                            if rewind_target:
-                                await asyncio.to_thread(
-                                    self._tracker_call_update_state,
-                                    cfg,
-                                    issue,
-                                    rewind_target,
-                                )
-                                issue = replace(issue, state=rewind_target)
-                                running.issue = issue
-                            else:
-                                running.release_gate_exhausted = True
-                            log.warning(
-                                "rewind_budget_exceeded",
-                                issue_id=issue.id,
-                                identifier=issue.identifier,
-                                from_state=prev_phase_state,
-                                to_state=state,
-                                rewind_count=debug.rewind_count,
-                                max_attempts=cfg.agent.max_attempts,
-                                target_state=rewind_target or "(none)",
-                            )
-                        break
-                    if state not in active:
-                        break
-                    state_turn_count = _update_state_turn_counter(debug, state)
-                    max_state_turns = self._max_state_turns_for_state(cfg, state)
-                    if max_state_turns > 0 and state_turn_count >= max_state_turns:
-                        running.hit_no_stage_change = True
-                        log.warning(
-                            "no_stage_change_watchdog",
-                            issue_id=running_issue_id,
-                            issue_identifier=running.issue.identifier,
-                            state=running.issue.state,
-                            state_turn_count=state_turn_count,
-                            effective_max_state_turns=max_state_turns,
-                            global_max_state_turns=cfg.agent.max_state_turns,
-                        )
-                        break
-                    if turn_number >= cfg.agent.max_turns:
-                        # Per-attempt ceiling reached without a terminal
-                        # transition. Mark explicitly so `_on_worker_exit`
-                        # doesn't auto-schedule a continuation — the ticket
-                        # waits for operator action instead of looping
-                        # silently against the ceiling.
-                        running.hit_max_turns = True
-                        log.warning(
-                            "worker_max_turns_exhausted",
-                            issue_id=running_issue_id,
-                            issue_identifier=running.issue.identifier,
-                            turns=turn_number,
-                            max_turns=cfg.agent.max_turns,
-                        )
-                        break
-                    turn_number += 1
-            finally:
-                # Defensive: a phase transition may have left `client`
-                # pointing to a half-initialized backend, or to one whose
-                # earlier `stop()` already failed. Either way, exiting the
-                # worker without after_run_best_effort would leak workspace
-                # state, so swallow stop() errors here too.
-                try:
-                    await client.stop()
-                except Exception as stop_exc:
-                    running = self._running.get(running_issue_id)
-                    if running is not None:
-                        running.backend_cleanup_unconfirmed = True
-                    log.warning(
-                        "worker_final_stop_failed",
-                        issue_id=issue.id,
-                        identifier=issue.identifier,
-                        error=str(stop_exc),
-                    )
-                else:
-                    running = self._running.get(running_issue_id)
-                    if running is not None and running.backend_cleanup_unconfirmed:
-                        log.warning(
-                            "worker_final_stop_cleanup_unconfirmed",
-                            issue_id=issue.id,
-                            identifier=issue.identifier,
-                            pid=running.agent_pgid,
-                        )
-                    else:
-                        self._sync_backend_agent_pid(running_issue_id, None)
-                if after_run_pending:
-                    await self._workspace_manager.after_run_best_effort(workspace.path)
-                # Salvage deliverables written before an abnormal exit (turn
-                # timeout, TurnFailed, stall eviction). The per-turn call runs
-                # only on the success path, and the workspace is torn down at
-                # Done, so without this the file is gone for good — worst
-                # under `artifacts.require_for_done`, where the deliverable
-                # turn is the long, timeout-prone one. Unshielded and
-                # best-effort, exactly like the `after_run` hook above.
-                entry_for_run = self._running.get(running_issue_id)
-                await self._collect_ticket_artifacts(
-                    cfg,
-                    identifier=issue.identifier,
-                    workspace_path=workspace.path,
-                    run_id=entry_for_run.run_id if entry_for_run else "",
-                    turn=None,  # salvage pass: the turn it came from is unknown
-                )
-        except asyncio.CancelledError:
-            outcome = "shutdown_interrupted" if self._stopping else "cancelled"
-            error = None
-            raise
-        except SymphonyError as exc:
-            outcome = "error"
-            running = self._running.get(running_issue_id)
-            private_session_id = running.resume_session_id if running is not None else None
-            error = str(redact_session_id(str(exc), private_session_id))
-        except Exception as exc:
-            outcome = "error"
-            running = self._running.get(running_issue_id)
-            private_session_id = running.resume_session_id if running is not None else None
-            error = str(redact_session_id(str(exc), private_session_id))
-            log.error(
-                "worker_unhandled_error",
-                issue_id=running_issue_id,
-                error=error,
-                exc_type=type(exc).__name__,
-                traceback=str(
-                    redact_session_id(traceback.format_exc(), private_session_id)
-                ),
-            )
-        finally:
-            # Diagnostic marker — pairs with `worker_task_done_without_cleanup`
-            # to localize the path that leaves entries in `_running`. If
-            # this line is missing from the log right before that error,
-            # the outer finally never ran (Python contract violation =
-            # interpreter shutdown / OS-level kill). If it IS present,
-            # the bypass is inside `_on_worker_exit` itself.
-            log.info(
-                "worker_finally_entered",
-                issue_id=running_issue_id,
-                outcome=outcome,
-                error=error,
-            )
-            # AF-01 — a force-ejected zombie's `finally` can run after a
-            # retry already installed a fresh entry under this issue id
-            # (the zombie task is never cancelled by force-eject, only its
-            # bookkeeping is dropped). Only the task that actually owns the
-            # current entry may stamp `exit_started_at` or enter
-            # `_on_worker_exit`; a foreign owner must not touch either.
-            # The handler keeps its own identity check as the single guard
-            # around the eventual pop.
-            # `entry.worker_task is None` counts as owned — many existing
-            # tests drive this coroutine directly against a hand-installed
-            # entry that never went through `_dispatch`.
-            owning_task = asyncio.current_task()
-            entry = self._running.get(running_issue_id)
-            stale_entry = (
-                entry is not None
-                and owning_task is not None
-                and self._dispatch_state.entry_foreign_to(running_issue_id, owning_task)
-            )
-            if stale_entry:
-                log.warning(
-                    "worker_finally_stale_entry",
-                    issue_id=running_issue_id,
-                    reason=outcome,
-                )
-            elif entry is not None:
-                entry.exit_started_at = datetime.now(timezone.utc)
-                await asyncio.shield(
-                    self._on_worker_exit(
-                        running_issue_id, outcome, error, owning_task=owning_task
-                    )
-                )
+        return await agent_attempt.run_agent_attempt(self, issue, attempt, cfg)
 
     async def _transition_agent_phase(
         self,
@@ -7902,6 +7013,10 @@ class Orchestrator:
         tools: list[Any] = []
         if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
             tools.append(linear_graphql_tool())
+        # Per-dispatch env rides in BackendInit so the new backend's
+        # subprocess sees it. Forward phase transitions omit
+        # SYMPHONY_REWIND_SCOPE; rewinds carry the JSON of the latest
+        # finding rows.
         new_client = self._build_agent_backend(
             BackendInit(
                 cfg=cfg,
@@ -7914,12 +7029,9 @@ class Orchestrator:
                     self._sync_backend_agent_pid(issue_id, pid)
                 ),
                 client_tools=tools,
+                env=self._dispatch_env_for(issue=issue, cfg=cfg, is_rewind=is_rewind),
             )
         )
-        # Reset per-dispatch env BEFORE the new backend's subprocess spawns.
-        # Forward phase transitions unset SYMPHONY_REWIND_SCOPE; rewinds
-        # set it to the JSON of the latest finding rows.
-        self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=is_rewind)
         try:
             self._sync_backend_agent_pid(
                 running_issue_id, _backend_agent_pid(new_client)
@@ -8703,49 +7815,6 @@ class Orchestrator:
             entry.worker_task.cancel()
         entry.cancelled_at = datetime.now(timezone.utc)
 
-    async def _persist_no_stage_change_handoff(
-        self,
-        *,
-        cfg: ServiceConfig,
-        entry: RunningEntry,
-        issue_id: str,
-        target_state: str,
-        turn_count: int,
-        state_name: str,
-    ) -> bool:
-        note_body = (
-            f"Symphony stopped this worker: no stage change after {turn_count} "
-            f"turns in {state_name}. "
-            f"The workflow is configured to hand off to {target_state}, so "
-            "Symphony moved the ticket there for the next stage."
-        )
-        try:
-            await asyncio.to_thread(
-                self._tracker_call_update_state,
-                cfg,
-                entry.issue,
-                target_state,
-            )
-            await asyncio.to_thread(
-                self._tracker_call_append_note,
-                cfg,
-                entry.issue,
-                "Stage Watchdog Handoff",
-                note_body,
-            )
-            self._clear_tracker_error(issue_id)
-            return True
-        except Exception as exc:
-            log.warning(
-                "no_stage_change_handoff_failed",
-                issue_id=issue_id,
-                identifier=entry.issue.identifier,
-                target_state=target_state,
-                error=str(exc),
-            )
-            self._record_tracker_error(issue_id, exc)
-            return False
-
     # ------------------------------------------------------------------
     # codex events
     # ------------------------------------------------------------------
@@ -9290,624 +8359,14 @@ class Orchestrator:
         owning_task: asyncio.Task[None] | None = None,
         defer_lease_finish: bool = False,
     ) -> None:
-        # AF-01 — identity gate before the pop. `owning_task` is only passed
-        # by the two real callers (the worker's own `finally` and
-        # `_on_worker_task_done`); direct-call test sites and other internal
-        # callers omit it, which is treated as "no check" (pre-AF-01
-        # behavior) rather than "owned by nobody" — many existing tests
-        # exercise this method against entries with `worker_task=None`.
-        if owning_task is not None and (
-            self._running.get(issue_id) is None
-            or self._dispatch_state.entry_foreign_to(issue_id, owning_task)
-        ):
-            log.warning(
-                "worker_exit_stale_task",
-                issue_id=issue_id,
-                reason=reason,
-            )
-            return
-        # INFO-level entry marker — pairs with `worker_finally_entered`.
-        # If `worker_finally_entered` is in the log but this is missing,
-        # the outer finally's `await self._on_worker_exit(...)` was
-        # cancelled before the coroutine body started executing.
-        log.info(
-            "worker_exit_entered",
-            issue_id=issue_id,
-            reason=reason,
-            running_keys_before_pop=list(self._running.keys()),
+        return await worker_exit.handle_worker_exit(
+            self,
+            issue_id,
+            reason,
+            error,
+            owning_task=owning_task,
+            defer_lease_finish=defer_lease_finish,
         )
-        entry = self._running.pop(issue_id, None)
-        owned_transition = self._app_release_transition_locks.get(issue_id)
-        if (
-            entry is not None
-            and owned_transition is not None
-            and owned_transition[0] is entry
-        ):
-            self._app_release_transition_locks.pop(issue_id, None)
-        # G3 — clear any stale wait-age bonus once the worker exits. The
-        # next entry into `_claimed` (conflict, budget, etc.) will record
-        # a fresh release timestamp, so leaving the old one behind would
-        # falsely promote the ticket on its next candidate-list appearance.
-        self._claim_released_at.pop(issue_id, None)
-        # The wakeup event is per-worker — pop it so a fresh worker (if
-        # any) starts with a clean gate. `_paused_issue_ids` is per-issue
-        # and is intentionally preserved: it's what lets `_eligible`
-        # refuse to re-dispatch a ticket the operator chose to hold.
-        pause_event = self._pause_events.pop(issue_id, None)
-        if pause_event is not None and not pause_event.is_set():
-            # Unblock anything still awaiting the event so the worker's
-            # cancellation path can run to completion.
-            pause_event.set()
-        log.info(
-            "worker_exit_pop",
-            issue_id=issue_id,
-            reason=reason,
-            popped=entry is not None,
-            running_keys_after_pop=list(self._running.keys()),
-        )
-        if entry is None:
-            return
-        if not defer_lease_finish:
-            self._finish_run_lease(issue_id, entry, reason, error)
-        elapsed = (datetime.now(timezone.utc) - entry.started_at).total_seconds()
-        self._totals.seconds_running += elapsed
-        debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
-        debug.last_workspace = entry.workspace_path
-        debug.last_error = error
-        debug.completed_turn_count += entry.turn_count
-        if self._stats is not None:
-            self._stats.record_run_end(
-                issue=entry.issue.identifier,
-                state=normalize_state(entry.issue.state),
-                agent=self._entry_agent_kind(entry),
-                outcome=reason,
-                turns=entry.turn_count,
-                seconds=elapsed,
-            )
-
-        if reason == "normal":
-            cfg = self._workflow_state.current()
-            if entry.known_app_release_finalizer and cfg is not None:
-                refreshed_finalizer = await self._refresh_issue_full(cfg, issue_id)
-                if refreshed_finalizer is not None:
-                    entry.issue = refreshed_finalizer
-                try:
-                    finalizer_gate = cast(
-                        ReleaseGate | None,
-                        self._release_registry_call(
-                            cfg,
-                            "read_finalizer_gate_at_exit",
-                            lambda registry: registry.get_release_gate(
-                                entry.release_gate_finalizer or entry.issue.identifier
-                            ),
-                        ),
-                    )
-                    if finalizer_gate is None:
-                        raise SymphonyError(
-                            "application release finalizer authority disappeared",
-                            finalizer=entry.issue.identifier,
-                        )
-                    entry.issue, completion_token = (
-                        self._guard_release_finalizer_with_version(
-                            cfg=cfg,
-                            issue=entry.issue,
-                            gate=finalizer_gate,
-                            rewind_state=entry.release_finalizer_rewind_state or None,
-                            expected_run_id=entry.run_id,
-                            require_run_authority=True,
-                        )
-                    )
-                    if _is_release_success_state(cfg, entry.issue.state):
-                        finalizer_gate = self._mark_release_finalizer_completed(
-                            cfg=cfg,
-                            issue=entry.issue,
-                            gate=finalizer_gate,
-                            completion_token=completion_token,
-                            rewind_state=(entry.release_finalizer_rewind_state or None),
-                        )
-                except Exception as exc:
-                    try:
-                        entry.issue = await self._rewind_app_release_transition(
-                            cfg=cfg,
-                            issue=entry.issue,
-                            producing_state=(
-                                entry.release_finalizer_rewind_state
-                                or next(
-                                    (
-                                        state
-                                        for state in reversed(cfg.tracker.active_states)
-                                        if normalize_state(state) != "verify"
-                                    ),
-                                    _release_verifier_state(cfg),
-                                )
-                            ),
-                            note_body=(
-                                "Final delivery was stopped at worker exit because "
-                                f"the release approval is invalid: {exc}"
-                            ),
-                        )
-                    except Exception as rewind_exc:
-                        log.error(
-                            "release_finalizer_exit_rewind_failed",
-                            issue_id=issue_id,
-                            identifier=entry.issue.identifier,
-                            gate_error=str(exc),
-                            rewind_error=str(rewind_exc),
-                        )
-                    debug.last_error = str(exc)
-                    log.warning(
-                        "release_finalizer_exit_refused",
-                        issue_id=issue_id,
-                        identifier=entry.issue.identifier,
-                        error=str(exc),
-                    )
-                    return
-            if entry.release_verifier_handoff_complete:
-                self._dispatch_state.cancel_pending_retry(issue_id)
-                self._claimed.discard(issue_id)
-                self._persisted_retry_attempts.pop(issue_id, None)
-                self._clear_issue_flags(issue_id, retry_attempt=True)
-                cleanup_started = entry.workspace_cleanup_started
-                if (
-                    cfg is not None
-                    and cfg.agent.auto_commit_on_done
-                    and not cleanup_started
-                ):
-                    await commit_workspace_on_done(
-                        entry.workspace_path,
-                        identifier=entry.issue.identifier,
-                        title=entry.issue.title,
-                        exit_reason=reason,
-                        state=entry.issue.state,
-                        extra_excludes=self._artifact_commit_excludes(cfg),
-                    )
-                if (
-                    cfg is not None
-                    and not cleanup_started
-                    and self._workspace_manager is not None
-                ):
-                    await self._workspace_manager.remove(entry.workspace_path)
-                log.info(
-                    "release_verifier_handoff_completed",
-                    issue_id=issue_id,
-                    identifier=entry.issue.identifier,
-                    finalizer=entry.release_gate_finalizer,
-                    generation=entry.release_gate_generation,
-                )
-                log.info(
-                    "worker_exit",
-                    issue_id=issue_id,
-                    issue_identifier=entry.issue.identifier,
-                    reason=reason,
-                    error=error,
-                )
-                await self._notify_observers()
-                return
-            self._persisted_retry_attempts.pop(issue_id, None)
-            self._clear_issue_flags(issue_id, retry_attempt=True)
-            if entry.release_gate_exhausted:
-                pause_reason = (
-                    "application release verification exhausted its rewind budget; "
-                    "the verifier remains in Verify and requires operator action"
-                )
-                self._claimed.add(issue_id)
-                self._paused_issue_ids.add(issue_id)
-                self._pause_reasons[issue_id] = pause_reason
-                self._set_issue_flags(
-                    issue_id,
-                    paused=True,
-                    pause_reason=pause_reason,
-                )
-                debug.last_error = pause_reason
-                log.warning(
-                    "release_gate_rewind_budget_exhausted",
-                    issue_id=issue_id,
-                    issue_identifier=entry.issue.identifier,
-                    state=entry.issue.state,
-                )
-                return
-            if entry.hit_token_budget:
-                if cfg is not None:
-                    before_state = normalize_state(entry.issue.state)
-                    refreshed = await self._refresh_issue_state(cfg, issue_id)
-                    if refreshed is not None:
-                        entry.issue = refreshed
-                    after_state = normalize_state(entry.issue.state)
-                    if refreshed is not None and after_state != before_state:
-                        log.info(
-                            "token_budget_stage_advanced",
-                            issue_id=issue_id,
-                            issue_identifier=entry.issue.identifier,
-                            from_state=before_state,
-                            to_state=after_state,
-                        )
-                    else:
-                        self._mark_budget_exhausted(issue_id)
-                        self._claimed.add(issue_id)
-                        cap = entry.token_budget_cap or self._token_cap_for_entry(
-                            cfg, entry
-                        )
-                        debug.last_error = (
-                            f"max_total_tokens reached "
-                            f"({entry.codex_state_total_tokens}/{cap} "
-                            f"in {entry.issue.state}); "
-                            f"state still {entry.issue.state}"
-                        )
-                        log.warning(
-                            "worker_token_budget_exhausted",
-                            issue_id=issue_id,
-                            issue_identifier=entry.issue.identifier,
-                            state_total_tokens=entry.codex_state_total_tokens,
-                            total_tokens=entry.codex_total_tokens,
-                            max_total_tokens=cap,
-                            state=entry.issue.state,
-                        )
-                        await self._persist_budget_exhausted_state(
-                            cfg=cfg,
-                            entry=entry,
-                            issue_id=issue_id,
-                            target_state=cfg.agent.budget_exhausted_state,
-                            budget_kind="tokens",
-                        )
-                        return
-                else:
-                    self._mark_budget_exhausted(issue_id)
-                    self._claimed.add(issue_id)
-                    debug.last_error = (
-                        "max_total_tokens reached; workflow config unavailable"
-                    )
-                    return
-
-            if entry.hit_no_stage_change:
-                count = debug.state_turn_count
-                state_name = entry.issue.state or debug.state_turn_state
-                action = (
-                    cfg.agent.no_stage_change_action if cfg is not None else "block"
-                )
-                if cfg is not None and action != "block":
-                    persisted = await self._persist_no_stage_change_handoff(
-                        cfg=cfg,
-                        entry=entry,
-                        issue_id=issue_id,
-                        target_state=action,
-                        turn_count=count,
-                        state_name=state_name,
-                    )
-                    if persisted:
-                        entry.issue = replace(entry.issue, state=action)
-                    debug.last_error = (
-                        f"no stage change after {count} turns in {state_name}; "
-                        f"moved to {action}"
-                    )
-                    return
-                self._claimed.add(issue_id)
-                target_state = (
-                    cfg.agent.budget_exhausted_state if cfg is not None else ""
-                )
-                if cfg is not None and target_state:
-                    state_turn_limit = self._max_state_turns_for_state(cfg, state_name)
-                    persisted = await self._persist_budget_exhausted_state(
-                        cfg=cfg,
-                        entry=entry,
-                        issue_id=issue_id,
-                        target_state=target_state,
-                        budget_kind="no_stage_change",
-                        state_turn_limit=state_turn_limit,
-                    )
-                    if persisted:
-                        entry.issue = replace(entry.issue, state=target_state)
-                pause_reason = (
-                    f"no stage change after {count} turns in {state_name} - "
-                    "operator action required"
-                )
-                debug.last_error = pause_reason
-                self._paused_issue_ids.add(issue_id)
-                self._pause_reasons[issue_id] = pause_reason
-                self._set_issue_flags(
-                    issue_id,
-                    paused=True,
-                    pause_reason=pause_reason,
-                )
-                return
-
-            max_total_turns = cfg.agent.max_total_turns if cfg is not None else 60
-            if debug.completed_turn_count >= max_total_turns:
-                self._mark_budget_exhausted(issue_id)
-                self._claimed.add(issue_id)
-                debug.last_error = (
-                    f"max_total_turns reached "
-                    f"({debug.completed_turn_count}/{max_total_turns})"
-                )
-                log.warning(
-                    "worker_total_turn_budget_exhausted",
-                    issue_id=issue_id,
-                    issue_identifier=entry.issue.identifier,
-                    total_turns=debug.completed_turn_count,
-                    max_total_turns=max_total_turns,
-                )
-                # Persistence: in-memory `_turn_budget_exhausted` clears on
-                # service restart, so without an explicit transition the
-                # same ticket runs again next boot. When the operator opted
-                # in via `agent.budget_exhausted_state`, write the new
-                # state through the tracker so the decision survives
-                # restart and reaches anyone reviewing the board.
-                target_state = (
-                    cfg.agent.budget_exhausted_state if cfg is not None else ""
-                )
-                if target_state and cfg is not None:
-                    await self._persist_budget_exhausted_state(
-                        cfg=cfg,
-                        entry=entry,
-                        issue_id=issue_id,
-                        target_state=target_state,
-                        budget_kind="turns",
-                    )
-                return
-            cleanup_started = entry.workspace_cleanup_started
-            release_evidence_only = (
-                entry.known_app_release
-                or entry.known_release_cycle_verifier
-                or entry.known_app_release_finalizer
-            )
-            # Final History Gate, host-side. The agent cannot be the one to
-            # prove delivery: it runs sandboxed and may not reach the object
-            # database at all (see `utils.git_sandbox`). The orchestrator is
-            # unsandboxed, so it always records the branch locally. It pushes
-            # and re-reads the remote tip only when
-            # `agent.auto_merge_push_target` is true; local-only workflows
-            # never publish the feature branch before the target merge.
-            history_unpublished = False
-            if (
-                release_evidence_only
-                and cfg is not None
-                and cfg.agent.auto_commit_on_done
-                and not cleanup_started
-            ):
-                await commit_workspace_on_done(
-                    # Release evidence is an audit snapshot of an already
-                    # host-authorized target; keep this path local-only even
-                    # when normal tickets publish their history.
-                    entry.workspace_path,
-                    identifier=entry.issue.identifier,
-                    title=entry.issue.title,
-                    exit_reason=reason,
-                    state=entry.issue.state,
-                    extra_excludes=self._artifact_commit_excludes(cfg),
-                )
-            elif (
-                cfg is not None
-                and cfg.agent.auto_commit_on_done
-                and not cleanup_started
-                and normalize_state(entry.issue.state) in ("done", "human review")
-            ):
-                history = await finalize_delivery_history(
-                    entry.workspace_path,
-                    identifier=entry.issue.identifier,
-                    title=entry.issue.title,
-                    state=entry.issue.state,
-                    push=cfg.agent.auto_merge_push_target,
-                )
-                if history.status == HISTORY_PUSH_FAILED:
-                    history_unpublished = True
-                    await self._flag_unpublished_history(cfg, entry.issue, history)
-            elif (
-                cfg is not None
-                and cfg.agent.auto_commit_on_done
-                and not cleanup_started
-            ):
-                # Snapshot whatever the agent left in the worktree, even if
-                # the ticket isn't strictly at Done. The worker stopped
-                # cleanly (`reason == "normal"`); any subsequent reconcile or
-                # operator cleanup would `git worktree remove --force` and
-                # discard uncommitted work otherwise. Lenient — failures only
-                # warn; a missed snapshot must not block the queue.
-                await commit_workspace_on_done(
-                    entry.workspace_path,
-                    identifier=entry.issue.identifier,
-                    title=entry.issue.title,
-                    exit_reason=reason,
-                    state=entry.issue.state,
-                    extra_excludes=self._artifact_commit_excludes(cfg),
-                )
-            # When the worker ran the ticket all the way to Done, the
-            # reconcile path that normally fires after_done/auto_merge/remove
-            # will *not* fire here: this entry was just popped from
-            # `_running` and `_reconcile_running` only iterates entries it
-            # finds there. Run the same terminal-state post-processing
-            # inline so a clean win produces the same artefacts as a
-            # reconcile-driven termination.
-            is_done = (entry.issue.state or "").strip().lower() == "done"
-            terminal_states = (
-                {normalize_state(s) for s in cfg.tracker.terminal_states}
-                if cfg is not None
-                else set()
-            )
-            is_terminal = normalize_state(entry.issue.state) in terminal_states
-            if cleanup_started:
-                pass
-            elif (
-                release_evidence_only
-                and is_terminal
-                and cfg is not None
-                and self._workspace_manager is not None
-            ):
-                # Release verifiers/finalizers prove an already-integrated
-                # target. Their branch is snapshotted for audit, never merged
-                # or delivered through `after_done`.
-                if entry.known_app_release_finalizer:
-                    try:
-                        finalizer_gate = cast(
-                            ReleaseGate | None,
-                            self._release_registry_call(
-                                cfg,
-                                "finalizer_pre_cleanup_gate",
-                                lambda registry: registry.get_release_gate(
-                                    entry.release_gate_finalizer
-                                    or entry.issue.identifier
-                                ),
-                            ),
-                        )
-                        if finalizer_gate is None:
-                            raise SymphonyError(
-                                "application release finalizer authority disappeared",
-                                finalizer=entry.issue.identifier,
-                            )
-                        entry.issue = self._guard_release_finalizer(
-                            cfg=cfg,
-                            issue=entry.issue,
-                            gate=finalizer_gate,
-                            rewind_state=(entry.release_finalizer_rewind_state or None),
-                            expected_run_id=entry.run_id,
-                            require_run_authority=True,
-                        )
-                    except Exception as exc:
-                        entry.issue = await self._rewind_app_release_transition(
-                            cfg=cfg,
-                            issue=entry.issue,
-                            producing_state=(
-                                entry.release_finalizer_rewind_state
-                                or next(
-                                    (
-                                        state
-                                        for state in reversed(cfg.tracker.active_states)
-                                        if normalize_state(state) != "verify"
-                                    ),
-                                    _release_verifier_state(cfg),
-                                )
-                            ),
-                            note_body=(
-                                "Final delivery was stopped immediately before "
-                                f"cleanup because the approval is invalid: {exc}"
-                            ),
-                        )
-                        return
-                await self._workspace_manager.remove(entry.workspace_path)
-            elif history_unpublished:
-                # Commit exists, remote does not have it. The card is now in
-                # `Human Review`; keep the workspace so an operator can finish
-                # the push by hand, and skip the Done post-processing that
-                # would merge and reap it.
-                pass
-            elif is_done and cfg is not None and self._workspace_manager is not None:
-                merge_ok = await self._auto_merge_done_gate_or_block(
-                    cfg,
-                    entry.issue,
-                    entry.workspace_path,
-                    debug_target=debug,
-                )
-                if merge_ok:
-                    await self._after_done_then_remove_per_policy(
-                        cfg,
-                        entry.workspace_path,
-                        identifier=entry.issue.identifier,
-                        title=entry.issue.title,
-                        debug_target=debug,
-                    )
-                    # C5 — count this Done and run wiki-sweep if the cadence
-                    # configured by `wiki.sweep_every_n` is up. Failures are
-                    # absorbed inside the helper so we never block the
-                    # Done transition on a wiki housekeeping nudge.
-                    await self._maybe_run_wiki_sweep(
-                        cfg, identifier=entry.issue.identifier
-                    )
-                # Don't schedule a continuation — a Done ticket has nothing
-                # to continue. Skip straight to the worker_exit emit below.
-            elif not is_terminal and not entry.hit_max_turns:
-                self._schedule_retry(
-                    issue_id,
-                    identifier=entry.issue.identifier,
-                    attempt=1,
-                    delay_ms=CONTINUATION_RETRY_DELAY_MS,
-                    error=None,
-                    kind="continuation",
-                )
-            elif entry.hit_max_turns:
-                # `max_turns` exhausted without a terminal transition: stop
-                # auto-continuation and, when the workflow exposes a Blocked
-                # terminal state, persist that state so the web/TUI boards do
-                # not look idle while the ticket is actually operator-blocked.
-                self._claimed.add(issue_id)
-                attempt_cap = cfg.agent.max_turns if cfg is not None else 0
-                target_state = (
-                    _max_turns_exhausted_target_state(cfg) if cfg is not None else ""
-                )
-                persisted = False
-                if cfg is not None and target_state:
-                    persisted = await self._persist_budget_exhausted_state(
-                        cfg=cfg,
-                        entry=entry,
-                        issue_id=issue_id,
-                        target_state=target_state,
-                        budget_kind="max_turns",
-                    )
-                    if persisted:
-                        entry.issue = replace(entry.issue, state=target_state)
-                suffix = (
-                    f"; moved to {target_state}"
-                    if persisted
-                    else " — operator action required"
-                )
-                debug.last_error = f"max_turns reached ({attempt_cap}/attempt){suffix}"
-        elif reason == "shutdown_interrupted":
-            # A managed stop is a recovery boundary, not a worker failure.
-            # Do not persist pause/retry flags; the next service instance will
-            # atomically claim the latest completed-turn checkpoint.
-            debug.last_error = None
-            log.info(
-                "worker_shutdown_interrupted",
-                issue_id=issue_id,
-                issue_identifier=entry.issue.identifier,
-            )
-        else:
-            failure_reason = f"{reason}: {error}" if error else reason
-            cleaned_failure = _clean_board_error_message(failure_reason)
-            if _is_retryable_worker_error(self._entry_agent_kind(entry), reason, error):
-                debug.last_error = cleaned_failure
-                log.warning(
-                    "worker_error_retry_scheduled",
-                    issue_id=issue_id,
-                    issue_identifier=entry.issue.identifier,
-                    reason=reason,
-                    error=error,
-                )
-            else:
-                pause_reason = _worker_error_pause_reason(reason, error)
-                debug.last_error = pause_reason
-                self._paused_issue_ids.add(issue_id)
-                self._pause_reasons[issue_id] = pause_reason
-                self._set_issue_flags(
-                    issue_id,
-                    paused=True,
-                    pause_reason=pause_reason,
-                )
-                log.warning(
-                    "worker_error_auto_paused",
-                    issue_id=issue_id,
-                    issue_identifier=entry.issue.identifier,
-                    reason=reason,
-                    error=error,
-                    pause_reason=pause_reason,
-                )
-            next_attempt = (entry.retry_attempt or 0) + 1
-            cfg = self._workflow_state.current()
-            cap = cfg.agent.max_retry_backoff_ms if cfg is not None else 300_000
-            delay_ms = min(RETRY_BASE_MS * (2 ** (next_attempt - 1)), cap)
-            self._schedule_retry(
-                issue_id,
-                identifier=entry.issue.identifier,
-                attempt=next_attempt,
-                delay_ms=delay_ms,
-                error=cleaned_failure,
-                kind="retry",
-            )
-        log.info(
-            "worker_exit",
-            issue_id=issue_id,
-            issue_identifier=entry.issue.identifier,
-            reason=reason,
-            error=error,
-        )
-        await self._notify_observers()
 
     def _force_eject_zombie(
         self,
@@ -9974,6 +8433,7 @@ class Orchestrator:
                 attempt=next_attempt,
                 delay_ms=delay_ms,
                 error="force_ejected_zombie",
+                touched_files=frozenset(self._touched_files_for(entry.issue)),
             )
             debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
             debug.last_workspace = entry.workspace_path
@@ -9993,6 +8453,7 @@ class Orchestrator:
         error: str | None,
         kind: str | None = None,
         holds_slot: bool = True,
+        touched_files: frozenset[str] = frozenset(),
     ) -> None:
         if self._loop is None:
             return
@@ -10007,6 +8468,7 @@ class Orchestrator:
             error=error,
             kind=retry_kind,
             holds_slot=holds_slot,
+            touched_files=touched_files,
         )
 
     def _retry_cap_exceeded(
@@ -10057,6 +8519,7 @@ class Orchestrator:
         error: str | None,
         kind: str,
         holds_slot: bool,
+        touched_files: frozenset[str] = frozenset(),
     ) -> None:
         assert self._loop is not None
         due = self._loop.time() + delay_ms / 1000.0
@@ -10078,6 +8541,7 @@ class Orchestrator:
                 error=error,
                 kind=kind,
                 holds_slot=holds_slot,
+                touched_files=touched_files,
             ),
         )
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
@@ -10241,6 +8705,7 @@ class Orchestrator:
             error=error,
             kind=retry.kind,
             holds_slot=True,
+            touched_files=retry.touched_files,
         )
 
     async def _process_retry(self, retry: RetryEntry, cfg: ServiceConfig) -> None:
@@ -10311,6 +8776,7 @@ class Orchestrator:
             error=_clean_board_error_message(reason)[:300],
             kind=retry.kind,
             holds_slot=holds_slot,
+            touched_files=retry.touched_files,
         )
 
     def _release_retry_ownership(
