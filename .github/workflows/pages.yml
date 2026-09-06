@@ -15,10 +15,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  # Runs on any ref (workflow_dispatch from dev included) so the PDF
+  # toolchain can be proven without publishing.
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -52,6 +51,14 @@ jobs:
         with:
           path: docs
 
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

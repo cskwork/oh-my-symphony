@@ -352,6 +352,18 @@ def _request_has_valid_service_instance(
     )
 
 
+_BROWSER_PROVENANCE_HEADERS = ("Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode")
+
+
+def _request_from_browser(request: web.Request) -> bool:
+    """True when the request carries any header only a browser attaches.
+
+    Browsers always send `Origin` on cross-origin POSTs and `Sec-Fetch-*`
+    on every fetch; command-line clients send none of them.
+    """
+    return any(h in request.headers for h in _BROWSER_PROVENANCE_HEADERS)
+
+
 @web.middleware
 async def _api_guard(request: web.Request, handler):
     if request.path.startswith("/api/"):
@@ -389,12 +401,15 @@ async def _api_guard(request: web.Request, handler):
             return _json_error(
                 403, "forbidden_host", f"host {request.host!r} not allowed"
             )
-        # Also enforced on body-less mutations: an HTML form can submit an
-        # empty cross-origin POST without a CORS preflight, and a JSON
-        # content type is what forces the preflight.
+        # A JSON content type is what forces the CORS preflight, so it is
+        # required on every mutation a browser sends, including a body-less
+        # POST from an HTML form. A request with no browser provenance
+        # (plain `curl -X POST`, scripts) cannot be a CSRF vector and keeps
+        # working without a body.
         if (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
             and request.content_type != "application/json"
+            and (request.body_exists or _request_from_browser(request))
         ):
             return _json_error(
                 415, "unsupported_media_type", "mutations require application/json"

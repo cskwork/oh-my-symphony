@@ -791,8 +791,9 @@ curl -H "Authorization: Bearer $SYMPHONY_API_TOKEN" \
 `/_debug/tasks`)는 프록시의 루프백 TCP 연결을 믿지 않고 `X-Forwarded-For`(첫
 항목) 또는 `Forwarded: for=`에서 실제 클라이언트 주소를 읽는다. 프록시가 이
 헤더를 넣어야 하며, 루프백 주소만 통과한다. 선언이 없으면 이 헤더는 무시된다.
-모든 변경 요청(POST/PUT/PATCH/DELETE)은 본문이 비어 있어도
-`Content-Type: application/json`을 보내야 한다(curl은 `-d '{}'`).
+브라우저가 보내는 변경 요청(POST/PUT/PATCH/DELETE)은 본문이 비어 있어도
+`Content-Type: application/json`을 보내야 한다. 셸에서 치는 `curl -X POST`는
+그 헤더 없이도 그대로 동작한다.
 
 토큰이 설정되면 내장 웹 앱은 첫 `401` 응답 뒤 토큰을 요청하고, 현재 탭의
 `sessionStorage`에만 저장한 뒤 API 요청과 Chat WebSocket에 자동으로 붙인다.

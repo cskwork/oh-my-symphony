@@ -1125,9 +1125,10 @@ loopback-only routes (project management, `/_debug/tasks`) no longer trust
 the proxy's loopback TCP connection; they read the real client address from
 `X-Forwarded-For` (first entry) or `Forwarded: for=`, so the proxy must set
 one of those headers, and only a loopback client passes. Without trusted
-origins those headers are ignored. Every mutating request (POST/PUT/PATCH/
-DELETE) must carry `Content-Type: application/json`, even with an empty
-body — send `-d '{}'` from curl. Everything the tunnel exposes is
+origins those headers are ignored. A mutating request (POST/PUT/PATCH/
+DELETE) sent by a browser must carry `Content-Type: application/json`, even
+with an empty body; a plain `curl -X POST` from a shell still works without
+one. Everything the tunnel exposes is
 reachable by whoever can reach the tunnel, so put authentication (for
 example Cloudflare Access) in front of it. Symphony can also require a bearer
 token on every operator `/api/` request:

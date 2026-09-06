@@ -10,6 +10,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-06 - Printable manual, hardened web auth, honest service lifecycle
+
 ### Added
 - **Printable manual on GitHub Pages.** `docs/manual/{en,ko}/{cheatsheet,tutorial}.html`
   plus a download section on the landing page. `pages.yml` renders the four
@@ -64,8 +66,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `_api_guard` skipped the `application/json` check when a POST/PUT/PATCH/
   DELETE had no body, so a cross-origin HTML form could hit `pause`,
   `resume`, `refresh`, `skip-document`, and friends without a CORS preflight.
-  Every mutation now returns 415 without the JSON type; the web app,
-  `scripts/smoke_web_api.py`, and the docs' curl examples send `{}`.
+  A body-less mutation now returns 415 when the request carries any
+  browser provenance header (`Origin`, `Referer`, `Sec-Fetch-Site`,
+  `Sec-Fetch-Mode`) and no JSON type. Plain `curl -X POST` from a shell has
+  none of those headers, is not a CSRF vector, and keeps working unchanged;
+  the web app and `scripts/smoke_web_api.py` send `{}` regardless.
 - **Loopback-only gates work behind a declared reverse proxy.** With
   `SYMPHONY_TRUSTED_ORIGINS` set, project management and `/_debug/tasks`
   read the client from `X-Forwarded-For` (first entry) or `Forwarded: for=`

@@ -318,19 +318,42 @@ def test_request_has_valid_ws_query_token_requires_exact_match() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_bodyless_mutations_require_json_content_type(
+async def test_bodyless_browser_mutations_require_json_content_type(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv(API_TOKEN_ENV, raising=False)
-    # An HTML form can submit an empty POST without a CORS preflight; the
-    # 415 must not depend on whether a body happened to be attached.
-    resp = await client.post("/api/v1/refresh")
+    # An HTML form can submit an empty POST without a CORS preflight; any
+    # browser provenance header must trigger the 415 even with no body.
+    for headers in (
+        {"Origin": "http://evil.example"},
+        {"Referer": "http://evil.example/page"},
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Sec-Fetch-Mode": "no-cors"},
+    ):
+        resp = await client.post("/api/v1/refresh", headers=headers)
+        assert resp.status == 415, headers
+        assert (await resp.json())["error"]["code"] == "unsupported_media_type"
+    resp = await client.delete("/api/v1/issues/X-1", headers={"Origin": "http://evil.example"})
     assert resp.status == 415
-    assert (await resp.json())["error"]["code"] == "unsupported_media_type"
-    resp = await client.delete("/api/v1/issues/X-1")
-    assert resp.status == 415
-    resp = await client.post("/api/v1/refresh", json={})
+    resp = await client.post(
+        "/api/v1/refresh", json={}, headers={"Origin": "http://127.0.0.1"}
+    )
     assert resp.status == 202
+
+
+async def test_bodyless_cli_mutations_still_work_without_json(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`curl -X POST .../refresh` from a shell has no Origin / Sec-Fetch
+    headers, cannot be a CSRF vector, and must keep working (0.22 contract)."""
+    monkeypatch.delenv(API_TOKEN_ENV, raising=False)
+    resp = await client.post("/api/v1/refresh", skip_auto_headers=("Content-Type",))
+    assert resp.status == 202
+    # A body that is not JSON is still rejected regardless of provenance.
+    resp = await client.post(
+        "/api/v1/refresh", data="x=1", headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    assert resp.status == 415
 
 
 # ---------------------------------------------------------------------------
