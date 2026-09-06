@@ -1,0 +1,68 @@
+/* Shared stylesheet for the printable manual (HTML on Pages, PDF via Chromium). */
+:root {
+  --bg: #ffffff; --ink: #1b1f27; --muted: #5c6470; --line: #d9dde3;
+  --accent: #c8741a; --accent-soft: #fff4e6; --teal: #1f8a70; --code-bg: #f4f6f8;
+}
+@page { size: A4; margin: 16mm 14mm 18mm 14mm; }
+* { box-sizing: border-box; }
+html { font-size: 15px; }
+body {
+  margin: 0; color: var(--ink); background: var(--bg);
+  font-family: "Inter", -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  line-height: 1.55;
+}
+main { max-width: 860px; margin: 0 auto; padding: 32px 24px 64px; }
+header.doc { border-bottom: 3px solid var(--accent); padding-bottom: 12px; margin-bottom: 28px; }
+header.doc .kicker { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: 12px; color: var(--accent); letter-spacing: .08em; text-transform: uppercase; }
+header.doc h1 { margin: 4px 0 6px; font-size: 30px; line-height: 1.15; }
+header.doc .sub { color: var(--muted); margin: 0; }
+header.doc .links { margin-top: 10px; font-size: 13px; }
+header.doc .links a { margin-right: 14px; }
+h2 { font-size: 20px; margin: 34px 0 10px; padding-top: 6px; border-top: 1px solid var(--line); break-after: avoid; }
+h3 { font-size: 16px; margin: 22px 0 6px; break-after: avoid; }
+p, li { max-width: 72ch; }
+a { color: var(--teal); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, kbd, pre { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 0.9em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+kbd { display: inline-block; min-width: 1.6em; text-align: center; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: #fafbfc; font-weight: 600; }
+pre { background: var(--code-bg); border: 1px solid var(--line); border-left: 4px solid var(--accent); padding: 12px 14px; overflow-x: auto; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre code { background: none; padding: 0; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 0.92em; }
+th, td { text-align: left; vertical-align: top; padding: 4px 7px; border-bottom: 1px solid var(--line); }
+tr { break-inside: avoid; }
+th { background: var(--accent-soft); font-weight: 600; }
+td:first-child { white-space: nowrap; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+.card { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 8px 0; }
+.card h3 { margin-top: 0; }
+.note { background: var(--accent-soft); border-left: 4px solid var(--accent); padding: 10px 14px; margin: 14px 0; border-radius: 4px; break-inside: avoid; }
+.note strong { color: var(--accent); }
+.steps { counter-reset: step; padding-left: 0; list-style: none; }
+.steps > li { counter-increment: step; position: relative; padding-left: 44px; margin: 18px 0; }
+.steps > li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-family: ui-monospace, Menlo, monospace; font-size: 13px; margin: 10px 0 16px; }
+.flow span { border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; background: #fafbfc; }
+.flow i { color: var(--muted); font-style: normal; }
+.legend span { display: inline-block; margin-right: 14px; }
+.dot-run { color: #1f8a70; } .dot-retry { color: #c8741a; } .dot-done { color: #1f8a70; }
+footer.doc { margin-top: 24px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; break-before: avoid; }
+.no-print { }
+@media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+/* Print last so the two-column grid wins over the narrow-viewport rule above
+   (the A4 content box is ~688px wide). */
+@media print {
+  html { font-size: 11px; }
+  header.doc { margin-bottom: 16px; }
+  header.doc h1 { font-size: 24px; }
+  main { max-width: none; padding: 0; }
+  .no-print { display: none !important; }
+  a { color: var(--teal); }
+  a[href^="http"]::after { content: ""; }
+  .grid { grid-template-columns: 1fr 1fr !important; gap: 0 18px; }
+  h2 { margin-top: 18px; }
+  pre { padding: 8px 10px; }
+  .note { padding: 8px 12px; margin: 10px 0; }
+  footer.doc { margin-top: 10px; padding-top: 6px; font-size: 10px; }
+  main > footer.doc { break-inside: avoid; }
+}

@@ -103,6 +103,9 @@ class _StubOrchestrator:
     def iter_running_issues(self) -> tuple[Issue, ...]:
         return self._running_issues
 
+    def find_running_issue_id(self, identifier: str) -> str | None:
+        return None
+
     def add_observer(self, observer: Any) -> None:
         # KanbanApp registers a tick observer; the Pilot test exercises the
         # widgets directly so we do not need to fire it.
@@ -1486,3 +1489,237 @@ async def test_s_opens_stats_screen(monkeypatch: Any, tmp_path: Path) -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, StatsScreen)
+
+
+@pytest.mark.asyncio
+async def test_question_mark_toggles_help_screen(monkeypatch: Any) -> None:
+    """`?` opens the grouped key-binding modal; a second `?` (or esc) closes it.
+
+    The modal replaces the old 8-second toast, whose one-line dump of ~25
+    bindings was unreadable on narrow terminals.
+    """
+    from symphony.tui import HelpScreen
+
+    cfg = _make_config()
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+
+
+def test_help_sections_cover_every_app_binding() -> None:
+    """Every key in `KanbanApp.BINDINGS` must appear in the help modal, so
+    a new binding cannot ship undocumented."""
+    from symphony.tui.screens import HELP_SECTIONS
+
+    help_text = " ".join(
+        f"{key} {action}" for _, rows in HELP_SECTIONS for key, action in rows
+    )
+    aliases = {
+        "question_mark": "?", "slash": "/", "plus": "+", "equals_sign": "+",
+        "minus": "-", "right_square_bracket": "]", "left_square_bracket": "[",
+        "shift+tab": "shift+tab", "pagedown": "pgdn", "pageup": "pgup",
+        "escape": "esc", "down": "↓", "up": "↑",
+    }
+    for binding in KanbanApp.BINDINGS:
+        for raw in binding.key.split(","):
+            key = aliases.get(raw, raw)
+            if key.isdigit():
+                continue  # 1-9 / 0 documented as a range
+            assert key in help_text, f"binding {raw!r} missing from HELP_SECTIONS"
+
+
+# ---------------------------------------------------------------------------
+# edit ('e') state prefill + card rebinding + orchestrator error guards
+# ---------------------------------------------------------------------------
+
+
+from textual.widgets import Input as TextualInput  # noqa: E402
+from textual.widgets import Select  # noqa: E402
+
+
+async def _settle(pilot: Any, seconds: float = 0.1) -> None:
+    await pilot.pause()
+    await asyncio.sleep(seconds)
+    await pilot.pause()
+
+
+async def _boot_file_board_with_card(app: KanbanApp, pilot: Any) -> IssueCard:
+    await _settle(pilot)
+    cards = list(app.query(IssueCard))
+    assert cards, "expected one ticket card"
+    cards[0].focus()
+    await pilot.pause()
+    return cards[0]
+
+
+@pytest.mark.asyncio
+async def test_e_keeps_terminal_state_when_ticket_casing_differs(
+    tmp_path: Path,
+) -> None:
+    """A ticket with `state: done` must not be re-queued to `Todo` by a
+    title-only edit — the state Select has to match case-insensitively."""
+    from symphony.tui import EditIssueScreen
+
+    cfg = _file_board_config(tmp_path)
+    _write_ticket(tmp_path / "kanban", "T-1.md", "done")
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(140, 40)) as pilot:
+        await _boot_file_board_with_card(app, pilot)
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, EditIssueScreen)
+        assert app.screen.query_one("#ei-state", Select).value == "Done"
+        app.screen.query_one("#ei-title", TextualInput).value = "renamed"
+        await pilot.pause()
+        await pilot.click("#ei-save")
+        await _settle(pilot)
+    text = (tmp_path / "kanban" / "T-1.md").read_text(encoding="utf-8")
+    assert "title: renamed" in text
+    assert "state: Done" in text
+
+
+def test_edit_screen_offers_unknown_state_as_extra_option() -> None:
+    """A state that matches no configured column still round-trips instead
+    of silently collapsing to the first active state."""
+    from symphony.tui import EditIssueScreen
+
+    screen = EditIssueScreen(
+        _issue("T-9", state="Parked"), states=["Todo", "Done"], agent_kinds=[]
+    )
+    assert screen._states == ["Todo", "Done", "Parked"]
+    assert screen._initial_state == "Parked"
+
+
+@pytest.mark.asyncio
+async def test_reused_card_rebinds_issue_after_edit(tmp_path: Path) -> None:
+    """Lane.render_cards reuses card widgets across refreshes; the reused
+    card must carry the refreshed Issue or the next edit reverts the last."""
+    from symphony.tui import EditIssueScreen
+
+    cfg = _file_board_config(tmp_path)
+    _write_ticket(tmp_path / "kanban", "T-1.md", "Todo")
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(140, 40)) as pilot:
+        card = await _boot_file_board_with_card(app, pilot)
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, EditIssueScreen)
+        app.screen.query_one("#ei-title", TextualInput).value = "second title"
+        await pilot.pause()
+        await pilot.click("#ei-save")
+        await _settle(pilot, 0.3)
+        assert card.is_attached, "card should be reused, not remounted"
+        assert card.issue.title == "second title"
+
+        card.focus()
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+        assert isinstance(app.screen, EditIssueScreen)
+        assert app.screen.query_one("#ei-title", TextualInput).value == "second title"
+        app.screen.query_one("#ei-priority", Select).value = 2
+        await pilot.pause()
+        await pilot.click("#ei-save")
+        await _settle(pilot, 0.3)
+    text = (tmp_path / "kanban" / "T-1.md").read_text(encoding="utf-8")
+    assert "title: second title" in text
+    assert "priority: 2" in text
+
+
+@pytest.mark.asyncio
+async def test_issue_card_update_issue_skips_repaint_when_unchanged(
+    monkeypatch: Any,
+) -> None:
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    issue = _issue("SMA-1")
+    _stub_tracker(monkeypatch, [issue], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _settle(pilot)
+        card = list(app.query(IssueCard))[0]
+        repaints: list[int] = []
+        card._refresh_body = lambda: repaints.append(1)  # type: ignore[method-assign]
+        assert card.update_issue(issue) is False
+        assert repaints == []
+        assert card.update_issue(replace(issue, title="new")) is True
+        assert card.issue.title == "new"
+        assert repaints == [1]
+
+
+class _ExplodingStats:
+    def aggregate(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("stats boom")
+
+
+class _ExplodingOrchestrator(_StubOrchestrator):
+    """Every orchestrator query raises — the TUI must survive all of them."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stats = _ExplodingStats()
+
+    def snapshot(self) -> dict[str, Any]:
+        raise RuntimeError("snapshot boom")
+
+    def iter_running_issues(self) -> tuple[Issue, ...]:
+        raise RuntimeError("running boom")
+
+    def find_running_issue_id(self, identifier: str) -> str | None:
+        raise RuntimeError("find boom")
+
+    def is_paused(self, issue_id: str) -> bool:
+        raise RuntimeError("paused boom")
+
+
+def _notification_messages(app: KanbanApp) -> list[str]:
+    return [n.message for n in app._notifications]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_errors_notify_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    from symphony.tui import EditIssueScreen, StatsScreen
+
+    cfg = _file_board_config(tmp_path)
+    _write_ticket(tmp_path / "kanban", "T-1.md", "Todo")
+    app = KanbanApp(_ExplodingOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(140, 40)) as pilot:
+        card = await _boot_file_board_with_card(app, pilot)
+        assert app.is_running
+        messages = _notification_messages(app)
+        assert any("snapshot boom" in m for m in messages)
+        # Heartbeat fires every 0.5 s; the same failure must not re-toast.
+        await _settle(pilot, 1.2)
+        assert sum("snapshot boom" in m for m in _notification_messages(app)) == 1
+
+        await pilot.press("P")
+        await pilot.pause()
+        assert app.is_running
+        assert any("paused boom" in m for m in _notification_messages(app))
+
+        card.focus()
+        await pilot.pause()
+        await pilot.press("e")
+        await _settle(pilot)
+        assert app.is_running
+        assert not isinstance(app.screen, EditIssueScreen)
+        assert any("find boom" in m for m in _notification_messages(app))
+
+        await pilot.press("s")
+        await _settle(pilot, 0.2)
+        assert app.is_running
+        assert not isinstance(app.screen, StatsScreen)
+        assert any("stats boom" in m for m in _notification_messages(app))

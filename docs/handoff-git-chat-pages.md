@@ -242,10 +242,10 @@ SID=$(curl -s -X POST $B/chat/sessions -H 'Content-Type: application/json' \
   -d '{"mode":"qa","max_turns":5,"max_tokens":200000}' | jq -r .session_id)
 curl -s -X POST $B/chat/sessions/$SID/message -H 'Content-Type: application/json' \
   -d '{"text":"hi"}' -o /dev/null -w '%{http_code}\n'                       # 202
-curl -s -X DELETE $B/chat/sessions/$SID | jq .
+curl -s -X DELETE -H 'Content-Type: application/json' -d '{}' $B/chat/sessions/$SID | jq .
 curl -s -X POST $B/chat/sessions/$SID/reattach -H 'Content-Type: application/json' -d '{}' \
   | jq '{active, turn_count, tail: (.transcript_tail|length)}'
-curl -s -X DELETE "$B/chat/sessions/$SID?forget=true" | jq .                 # 인덱스에서 제거(JSONL은 보존)
+curl -s -X DELETE -H 'Content-Type: application/json' -d '{}' "$B/chat/sessions/$SID?forget=true" | jq .                 # 인덱스에서 제거(JSONL은 보존)
 # git 변경계
 curl -s -X POST $B/git/push -H 'Content-Type: application/json' -d '{"branch":"symphony/SEED-1"}' | jq .
 curl -s -X POST $B/git/branch/delete -H 'Content-Type: application/json' \

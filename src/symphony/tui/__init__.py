@@ -49,6 +49,7 @@ from .helpers import (
 )
 from .screens import (
     EditIssueScreen,
+    HelpScreen,
     NewIssueScreen,
     StatsScreen,
     TicketDetailScreen,
@@ -68,6 +69,7 @@ __all__ = [
     "Lane",
     "StatsBar",
     "EditIssueScreen",
+    "HelpScreen",
     "NewIssueScreen",
     "StatsScreen",
     "TicketDetailScreen",

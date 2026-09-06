@@ -138,8 +138,16 @@
     }
   }
 
+  const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
   async function apiRequest(path, { method = 'GET', body, headers = {} } = {}) {
     const init = { method, headers: withAuthHeaders(headers) };
+    // The API answers 415 to any mutation without a JSON content type, body
+    // or not (CSRF: the JSON type is what forces a CORS preflight), so
+    // body-less mutations send an empty object.
+    if (body === undefined && MUTATING_METHODS.has(method.toUpperCase())) {
+      body = '{}';
+    }
     if (body !== undefined) {
       init.body = body;
       init.headers['Content-Type'] = 'application/json';

@@ -52,6 +52,14 @@ def _is_rewind_transition(
         return False
 
 
+def _canonical_state_label(cfg: ServiceConfig, normalized: str) -> str:
+    """Return the workflow's own spelling of a normalized state ("" if unknown)."""
+    for label in (*cfg.tracker.active_states, *cfg.tracker.terminal_states):
+        if normalize_state(label) == normalized:
+            return label
+    return ""
+
+
 def _branch_hook_env(cfg: ServiceConfig) -> dict[str, str]:
     """Env consumed by the default worktree hook when creating a feature branch.
 

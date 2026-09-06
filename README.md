@@ -30,6 +30,8 @@ usage, and whatever rate-limit headroom the selected CLI reports.
 
 ## Contents
 
+> **Printable manual:** [cheatsheet (PDF)](https://cskwork.github.io/oh-my-symphony/manual/pdf/oh-my-symphony-cheatsheet-en.pdf) · [tutorial (PDF)](https://cskwork.github.io/oh-my-symphony/manual/pdf/oh-my-symphony-tutorial-en.pdf) · [HTML + Korean](https://cskwork.github.io/oh-my-symphony/#manual). Rendered from `docs/manual/` on every deploy; key tables come from the code.
+
 - [Why Symphony?](#why-symphony)
 - [How it works](#how-it-works)
 - [Pick an agent](#pick-an-agent)
@@ -1118,7 +1120,15 @@ SYMPHONY_TRUSTED_ORIGINS=https://symphony.example.com symphony ./WORKFLOW.md --p
 ```
 
 Comma-separate several entries; a bare hostname matches any scheme and
-port, and `*` trusts every origin. Everything the tunnel exposes is
+port, and `*` trusts every origin. Once trusted origins are declared, the
+loopback-only routes (project management, `/_debug/tasks`) no longer trust
+the proxy's loopback TCP connection; they read the real client address from
+`X-Forwarded-For` (first entry) or `Forwarded: for=`, so the proxy must set
+one of those headers, and only a loopback client passes. Without trusted
+origins those headers are ignored. A mutating request (POST/PUT/PATCH/
+DELETE) sent by a browser must carry `Content-Type: application/json`, even
+with an empty body; a plain `curl -X POST` from a shell still works without
+one. Everything the tunnel exposes is
 reachable by whoever can reach the tunnel, so put authentication (for
 example Cloudflare Access) in front of it. Symphony can also require a bearer
 token on every operator `/api/` request:
@@ -1184,22 +1194,31 @@ runtime indicator:
 - **↻ yellow.** In retry queue, shows `retry #N` and the last error
 - **✓ green.** Completed in this session
 
-Key bindings (`?` shows the full list; also auto-listed in the footer):
+Key bindings (`?` opens a grouped help modal; the most-used keys are also in the footer):
 
-| Key                | Action                                       |
-|--------------------|----------------------------------------------|
-| `q`                | Quit (drains active workers cleanly)         |
-| `r`                | Force a refresh + re-poll the tracker        |
-| `tab` / `shift+tab`| Move focus to next / previous card or lane   |
-| `j`/`k`, page keys | Scroll the focused lane                      |
-| `1`–`9` / `0`      | Zoom that lane (others shrink) / reset zoom  |
-| `n` / `e`          | Register a new ticket / edit the focused one |
-| `a` / `c`          | Archive / confirm a Done-gated card          |
-| `S`                | Skip Document for the focused ticket         |
-| `P`                | Pause / resume the focused running worker    |
-| `L`                | Cycle TUI + doc language                     |
-| `/`                | Open the filter prompt                       |
-| `enter` / `esc`    | Open / close the full-detail modal           |
+| Key                        | Action                                              |
+|----------------------------|-----------------------------------------------------|
+| `q`                        | Quit (asks twice while workers run; drains cleanly) |
+| `r`                        | Force a refresh + re-poll the tracker               |
+| `?`                        | Open / close the key-binding help modal             |
+| `tab` / `shift+tab`        | Move focus to next / previous card                  |
+| `j`/`k`, `↓`/`↑`           | Scroll the focused lane                             |
+| `g`/`G`, `home`/`end`      | Jump to top / bottom                                |
+| `space`/`pgdn`, `b`/`pgup` | Page down / up                                      |
+| `enter` / `esc`            | Open / close the full-detail modal                  |
+| `p`                        | Show / hide the detail pane                         |
+| `]` / `[`                  | Focus the detail pane / return to the board         |
+| `1`–`9` / `0`              | Zoom that lane (others shrink) / reset zoom         |
+| `t` / `T`                  | Next / previous page of lanes                       |
+| `+` / `-`                  | More / fewer lanes per page                         |
+| `d`                        | Toggle compact / rich cards                         |
+| `n` / `e`                  | Register a new ticket / edit the focused one        |
+| `a` / `c`                  | Archive a Done card / confirm a Human Review card   |
+| `S`                        | Skip Document for the focused ticket                |
+| `P`                        | Pause / resume the focused running worker           |
+| `s`                        | Open the run statistics screen                      |
+| `L`                        | Cycle TUI + doc language                            |
+| `/`                        | Open the filter prompt (`esc` clears)               |
 
 Mouse: clicking a card focuses it, the wheel scrolls its lane.
 

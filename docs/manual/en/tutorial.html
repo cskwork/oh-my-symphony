@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oh-my-symphony tutorial — your first ticket, end to end</title>
+<link rel="stylesheet" href="../manual.css">
+</head>
+<body>
+<main>
+<header class="doc">
+  <div class="kicker">TUTORIAL</div>
+  <h1>Your first ticket, end to end</h1>
+  <p class="sub">About 20 minutes. No prior Symphony knowledge assumed; you need a terminal, Python and git.</p>
+  <div class="links">
+    <a href="../ko/tutorial.html">한국어</a>
+    <a href="cheatsheet.html">Cheatsheet</a>
+    <a href="../pdf/oh-my-symphony-tutorial-en.pdf">PDF</a>
+    <a href="https://github.com/cskwork/oh-my-symphony">github.com/cskwork/oh-my-symphony</a>
+  </div>
+  <div class="links no-print">Print / Save as PDF: <kbd>Ctrl+P</kbd> / <kbd>⌘P</kbd></div>
+</header>
+
+<ol class="steps">
+
+<li>
+<h2>What Symphony is</h2>
+<p>Symphony is a local orchestrator: it polls a Kanban board, hands each ticket to the AI coding agent you chose, and runs those agents concurrently, each inside its own isolated <code>git worktree</code>. You watch progress in a terminal Kanban (the TUI) or in the built-in web board on <code>http://127.0.0.1:9999/</code>. Tickets are Markdown files next to your code: no SaaS, no API key, no signup.</p>
+<div class="flow">
+  <span>install</span><i>→</i><span>project create / add</span><i>→</i><span>doctor</span><i>→</i><span>tui / service</span><i>→</i><span>ticket</span><i>→</i><span>agent runs</span><i>→</i><span>Human Review</span><i>→</i><span>Done</span>
+</div>
+<p>It is for solo devs running unattended overnight refactors, teams parallelizing bug fixes across several agents, researchers comparing the eight agents on one task, and anyone who hit the "one chat window per agent" ceiling.</p>
+</li>
+
+<li>
+<h2>Prerequisites</h2>
+<p>Python 3.12 or newer, git, and one agent CLI on <code>$PATH</code>, already logged in:</p>
+<table>
+  <tr><th><code>agent.kind</code></th><th>CLI and the sign-in the README gives</th></tr>
+  <tr><td><code>codex</code></td><td><code>codex</code> (with the <code>app-server</code> subcommand)</td></tr>
+  <tr><td><code>claude</code></td><td><code>claude</code> (Claude Code)</td></tr>
+  <tr><td><code>gemini</code></td><td><code>gemini</code> (Gemini CLI)</td></tr>
+  <tr><td><code>agy</code></td><td><code>agy</code> (Antigravity CLI, from Google Antigravity)</td></tr>
+  <tr><td><code>kiro</code></td><td><code>kiro-cli</code> (<code>https://cli.kiro.dev/install</code>); <code>kiro-cli login</code> or <code>KIRO_API_KEY</code></td></tr>
+  <tr><td><code>opencode</code></td><td><code>npm install -g opencode-ai</code>; then <code>opencode auth login</code></td></tr>
+  <tr><td><code>pi</code></td><td><code>npm i -g @earendil-works/pi-coding-agent</code>; sign in once via <code>pi</code> → <code>/login</code></td></tr>
+  <tr><td><code>prime-agent</code></td><td><code>curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh</code>; sign in once via <code>prime-agent</code> → <code>/login</code></td></tr>
+</table>
+<p>What you should see: <code>which claude</code> (or your CLI) prints a path.</p>
+</li>
+
+<li>
+<h2>Install</h2>
+<p>Goal: a virtualenv with the <code>symphony</code> command.</p>
+<pre><code>git clone https://github.com/cskwork/oh-my-symphony.git
+cd oh-my-symphony
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+symphony --version</code></pre>
+<p>What you should see: <code>symphony 0.23.0</code>.</p>
+</li>
+
+<li>
+<h2>Create or register a project</h2>
+<p>Goal: a project directory of your own. The <code>oh-my-symphony</code> checkout stays the control plane; doctor and startup refuse a <code>WORKFLOW.md</code> inside Symphony's own repository, so agents can never edit the orchestrator that launched them.</p>
+<pre><code>symphony project create "My App" --path ../my-app
+# or adopt an existing directory; Git and missing Symphony files are added safely
+symphony project add /path/to/existing-project --name "My App"
+cd ../my-app</code></pre>
+<p>What you should see: a new Git repository for a missing path; an existing non-Git directory is initialized in place; an existing Git repository keeps its metadata and files. Symphony adds only missing operator files and never stages unrelated changes.</p>
+<div class="note"><strong>Existing non-Git directories:</strong> Symphony commits only the files it adds. Your product files remain untracked, so review and commit them before dispatching tickets or the worker worktrees will not include them.</div>
+</li>
+
+<li>
+<h2>Read the generated WORKFLOW.md</h2>
+<p>Goal: understand the four blocks that matter for first-run sanity. Open <code>WORKFLOW.md</code> in your project (the shipped file-tracker template is <code>WORKFLOW.file.example.md</code>).</p>
+<pre><code>tracker:
+  kind: file
+  board_root: ./kanban
+  active_states: [Todo, "In Progress", Verify, Document]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
+
+workspace:
+  root: ~/symphony_workspaces
+
+hooks:
+  # Each ticket gets its own workspace at workspace.root/&lt;ID&gt;, attached as a
+  # git worktree of the host repo on a symphony/&lt;ID&gt; branch.
+  after_create: |
+    bash "$SYMPHONY_WORKFLOW_DIR/scripts/symphony-setup-worktree.sh"
+
+agent:
+  kind: codex          # codex | claude | gemini | agy | kiro | opencode | pi | prime-agent
+  max_concurrent_agents: 1
+
+server:
+  port: 9999
+
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
+    Document: ./docs/symphony-prompts/file/stages/document.md
+    Done: ./docs/symphony-prompts/file/stages/done.md</code></pre>
+<p><code>tracker</code> says where tickets live and which columns exist. <code>hooks</code> run around each agent turn; the default attaches the workspace as a worktree so the host working tree is never disturbed. <code>agent.kind</code> picks the backend: change it to <code>claude</code>, <code>pi</code>, or any other value from the comment, and only the matching block (<code>claude:</code>, <code>pi:</code>, …) is used at runtime. <code>prompts</code> sends <code>base</code> plus only the file for the ticket's current state.</p>
+<p>What you should see: a <code>kanban/</code> directory next to <code>WORKFLOW.md</code>, and an <code>agent.kind</code> that matches the CLI you installed.</p>
+</li>
+
+<li>
+<h2>Preflight with <code>symphony doctor</code></h2>
+<p>Goal: catch the common first-run failures before anything launches.</p>
+<pre><code>symphony doctor ./WORKFLOW.md</code></pre>
+<p>What you should see, one line per check:</p>
+<pre><code>PASS  server.port=9999              127.0.0.1:9999 is free
+PASS  agent.kind=claude             claude → /usr/local/bin/claude
+FAIL  hooks.after_create            contains placeholder 'my-org/my-repo' — every dispatch will fail with rc=128. Switch to the worktree default or replace with a real clone / `: noop`.
+PASS  workspace.root=~/symphony_workspaces  exists and is writable
+PASS  tracker.board_root            ./kanban (3 tickets)</code></pre>
+<p>Exit code <code>0</code> means every check passed, <code>1</code> means at least one FAIL, <code>2</code> means <code>WORKFLOW.md</code> itself could not be loaded. Doctor catches port collisions, a missing CLI on <code>$PATH</code>, the placeholder clone URL, an unwritable workspace and a missing board directory. Fix what a FAIL line names and run it again until it is clean.</p>
+</li>
+
+<li>
+<h2>Optional: try it without an agent</h2>
+<p>Goal: watch a card come alive with the bundled mock backend. This step is optional; skip it if your real CLI is ready. The mock speaks Codex's protocol but only simulates turns and token ticks.</p>
+<pre><code>symphony project create "Symphony Demo" --path ../symphony-demo
+cd ../symphony-demo
+
+cat &gt; WORKFLOW.md &lt;&lt;'YAML'
+---
+tracker: { kind: file, board_root: ./kanban,
+           active_states: [Todo, "In Progress", Verify, Document],
+           terminal_states: ["Human Review", Done, Blocked, Archive] }
+polling: { interval_ms: 5000 }
+workspace: { root: ~/symphony_workspaces }
+hooks:
+  after_create: ": noop"
+  before_run:   ": noop"
+  after_run:    "echo done"
+agent:  { kind: codex, max_concurrent_agents: 1, max_turns: 4, max_total_turns: 60 }
+codex:  { command: python -m symphony.mock_codex }
+server: { port: 9999 }
+---
+You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
+YAML
+
+symphony board init ./kanban
+symphony board new TASK-1 "smoke test"
+symphony tui ./WORKFLOW.md</code></pre>
+<p>What you should see: within about 5 seconds TASK-1 grows a green ● in the Todo column with a climbing turn counter and token total. Quit with <kbd>Ctrl-C</kbd>.</p>
+<div class="note"><strong>Cards stay in Todo under the mock.</strong> Only a real agent rewrites <code>kanban/TASK-1.md</code> to move the card. The mock proves the orchestrator → backend → workspace → hooks pipeline without an LLM call.</div>
+</li>
+
+<li>
+<h2>Add a ticket, three ways</h2>
+<p>Goal: one Markdown file at <code>kanban/TASK-1.md</code>. Back in your real project:</p>
+<pre><code>symphony board new TASK-1 "Fix flaky pagination test" \
+  --priority 2 \
+  --labels backend,test \
+  --description "tests/test_pagination.py::test_cursor_advance is flaky on CI."
+# → created kanban/TASK-1.md
+
+symphony board ls                    # all tickets
+symphony board show TASK-1           # full body</code></pre>
+<p>The second way is the TUI: press <kbd>n</kbd> on the board to register a new ticket with a multiline body (file board only), <kbd>e</kbd> edits the focused one. The third is the web board: the Board page creates, edits and deletes issues through the same validation as the CLI.</p>
+<p>What you should see: <code>board new</code> validates before writing. The id must match <code>^[A-Za-z][A-Za-z0-9_-]{0,63}$</code>, the state must be in <code>tracker.active_states</code> / <code>terminal_states</code>, and every <code>--blocked-by</code> target must exist. Add <code>--agent-kind codex</code> to pin a different backend for just this ticket.</p>
+</li>
+
+<li>
+<h2>Launch the TUI and read the board</h2>
+<p>Goal: see your ticket dispatched.</p>
+<pre><code>symphony tui ./WORKFLOW.md</code></pre>
+<p>What you should see: columns are your tracker states (<code>active_states</code> first, then <code>terminal_states</code>). Within one poll tick (<code>polling.interval_ms</code>, default 30 s) a worker is dispatched and the card grows a green ● with turn counter and token totals; ↻ yellow = retry queue, ✓ = completed this session.</p>
+<table>
+  <tr><th>Key</th><th>Try it now</th></tr>
+  <tr><td><kbd>?</kbd></td><td>Grouped help modal with every binding (<kbd>esc</kbd> closes)</td></tr>
+  <tr><td><kbd>tab</kbd> / <kbd>enter</kbd></td><td>Focus the next card / open its full-detail modal</td></tr>
+  <tr><td><kbd>p</kbd></td><td>Show or hide the detail pane; <kbd>]</kbd> focuses it, <kbd>[</kbd> returns</td></tr>
+  <tr><td><kbd>P</kbd></td><td>Pause / resume the focused running worker</td></tr>
+  <tr><td><kbd>/</kbd></td><td>Filter cards by id, title or label; <kbd>esc</kbd> clears</td></tr>
+</table>
+<div class="note"><strong>The ● does not move the card.</strong> Columns follow the ticket file's <code>state</code> field, which only the agent writes; a running ticket stays in Todo until then. The TUI needs a real TTY.</div>
+</li>
+
+<li>
+<h2>Or run it as a service and open the web board</h2>
+<p>Goal: the same orchestrator in the background with a browser UI. <code>service start</code> runs <code>symphony doctor</code> first and records the workflow under <code>.symphony/run/&lt;workflow-hash&gt;.json</code>, so the same <code>WORKFLOW.md</code> cannot be started twice on different ports by accident.</p>
+<pre><code>symphony service start ./WORKFLOW.md --port 9999
+symphony service status ./WORKFLOW.md
+symphony service logs ./WORKFLOW.md
+# later: symphony service restart ./WORKFLOW.md  |  symphony service stop ./WORKFLOW.md</code></pre>
+<p>What you should see: open <code>http://127.0.0.1:9999/</code>. Running cards carry <strong>Pause / Resume</strong> buttons, the header refresh button triggers a <code>poll + reconcile</code>, and the header shows real local git branch dropdowns for <code>agent.feature_base_branch</code> (where new feature branches start) and <code>agent.auto_merge_target_branch</code> (where the Done merge lands). The board is loopback-only.</p>
+<div class="note"><strong>Optional bearer token.</strong> Set <code>export SYMPHONY_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"</code> before launching; every operator <code>/api/</code> request then needs <code>Authorization: Bearer</code>, and the web app prompts after its first <code>401</code>. Keep the value out of <code>WORKFLOW.md</code>, shell history and logs.</div>
+</li>
+
+<li>
+<h2>Follow the ticket through the states</h2>
+<p>Goal: understand what each column means while you wait.</p>
+<table>
+  <tr><th>State</th><th>What the agent does</th></tr>
+  <tr><td>Todo</td><td>Triage; route to In Progress. A ticket with a body and an Acceptance Criteria section moves on without spending a model turn.</td></tr>
+  <tr><td>In Progress</td><td>Plan + TDD implementation + self-critique, on the <code>symphony/&lt;ID&gt;</code> branch inside its worktree.</td></tr>
+  <tr><td>Verify</td><td>Review + QA + Merge Gate. The feature branch must merge into the target branch before the ticket can move to Document.</td></tr>
+  <tr><td>Document</td><td>Docs + wiki write-back; Done unless intervention is needed.</td></tr>
+  <tr><td>Human Review</td><td>Manual intervention or explicit review before Done. The agent stops here; you decide.</td></tr>
+  <tr><td>Done</td><td>Verified complete.</td></tr>
+</table>
+<p>What you should see at Human Review: the card parked in a terminal column, no ● indicator. Focus it and press <kbd>c</kbd> in the TUI to confirm it as Done, or move it to Done from the web board. Symphony never confirms Done for you.</p>
+</li>
+
+<li>
+<h2>Inspect the result</h2>
+<p>Goal: find the code, the notes and the run history.</p>
+<pre><code>symphony board show TASK-1               # the agent's ## Resolution lives in the body
+ls ~/symphony_workspaces/TASK-1          # workspace it operated in
+symphony runs ./WORKFLOW.md --limit 5    # recent run-registry attempts
+git branch --list 'symphony/*'           # the ticket's feature branch</code></pre>
+<p>What you should see: a <code>## Resolution</code> section appended to the ticket, committed artefacts under <code>docs/&lt;TICKET-ID&gt;/&lt;stage&gt;/</code> on the ticket branch, and reviewer files (screenshots, reports) copied to <code>.symphony/artifacts/&lt;TICKET-ID&gt;/</code> on the host, listed under <code>## Artifacts</code> on the ticket and shown in the web ticket drawer. In headless mode (<code>symphony ./WORKFLOW.md</code> without <code>tui</code>) a live <code>WORKFLOW-PROGRESS.md</code> is rewritten next to the workflow on every tick; it is read-only output, do not edit it by hand.</p>
+</li>
+
+<li>
+<h2>Everyday operations</h2>
+<table>
+  <tr><th>Task</th><th>How</th></tr>
+  <tr><td>Pause / resume a worker</td><td><kbd>P</kbd> on the focused running card, or the web buttons</td></tr>
+  <tr><td>Retry</td><td>Automatic: a failed worker enters the ↻ retry queue with exponential backoff up to <code>agent.max_retries</code>; <kbd>r</kbd> forces a refresh + re-poll</td></tr>
+  <tr><td>Archive</td><td><kbd>a</kbd> on a Done card; <code>tracker.archive_after_days</code> also sweeps idle terminal tickets</td></tr>
+  <tr><td>Skip Document</td><td><kbd>S</kbd> on the focused card for tickets that need no wiki write-back</td></tr>
+  <tr><td>Move a ticket by hand</td><td><code>symphony board mv TASK-1 Blocked</code> or <code>symphony board update TASK-1 --state Blocked --add-blocked-by BUG-7</code>; the orchestrator re-evaluates on the next poll tick</td></tr>
+</table>
+<p>What you should see: manual moves are for unsticking. Normally the agent transitions tickets itself, following the stage prompt files in <code>WORKFLOW.md</code>.</p>
+</li>
+
+<li>
+<h2>Multiple projects</h2>
+<p>Goal: run several boards from one control plane.</p>
+<pre><code>symphony project list
+symphony project start my-app
+symphony project status
+symphony project stop my-app
+symphony hub                             # central UI for every registered project</code></pre>
+<p>What you should see: the Hub and every project board show the canonical repository, workflow and "Issues are stored here" paths. Selecting another project starts its service when needed; services and workers for the previous project keep running against their original repository, so switching cannot retarget active jobs.</p>
+</li>
+
+<li>
+<h2>Troubleshooting and where to go next</h2>
+<table>
+  <tr><th>Symptom</th><th>Fix</th></tr>
+  <tr><td>doctor prints FAIL</td><td>Fix what the line names and re-run. Most common: the placeholder clone URL; switch to the worktree default or <code>: noop</code>. Exit <code>2</code> = the YAML did not load.</td></tr>
+  <tr><td>Worker exited, card shows ↻</td><td>Retries back off up to <code>agent.max_retries</code>, then the ticket is escalated and parked. Last error: <code>symphony runs ./WORKFLOW.md --limit 5</code>, <code>symphony service logs ./WORKFLOW.md</code>.</td></tr>
+  <tr><td>Agent silent for minutes</td><td>No progress event inside <code>stall_timeout_ms</code> cancels the worker. Widen only the heavy lane: <code>agent.stall_timeout_ms_by_state: {Verify: 900000}</code>. Logs go to stderr: <code>symphony tui ./WORKFLOW.md 2&gt;&gt; log/symphony.log</code>.</td></tr>
+  <tr><td>Port in use</td><td>doctor reports it. Override with <code>--port N</code>, or check <code>symphony service status ./WORKFLOW.md</code>.</td></tr>
+  <tr><td>TUI exits silently</td><td>Needs a real TTY: use a foreground terminal, or go headless (<code>symphony ./WORKFLOW.md</code>) and follow <code>WORKFLOW-PROGRESS.md</code>.</td></tr>
+</table>
+<p>Next: the <a href="https://github.com/cskwork/oh-my-symphony#readme">README</a> (lane presets, chat intake, JSON API), the <a href="https://github.com/cskwork/oh-my-symphony/blob/main/CHANGELOG.md">CHANGELOG</a>, <a href="https://github.com/cskwork/oh-my-symphony/issues">Issues</a>, and the <a href="cheatsheet.html">cheatsheet</a>.</p>
+</li>
+
+</ol>
+
+<footer class="doc">oh-my-symphony 0.23.0 · Apache-2.0 · generated from README on the same commit</footer>
+</main>
+</body>
+</html>

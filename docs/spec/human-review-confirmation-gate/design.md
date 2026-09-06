@@ -84,7 +84,7 @@ this spec does not invent a replacement terminal state.
 Add an API client method:
 
 ```js
-confirmDone: (id) => apiRequest(`/issues/${encodeURIComponent(id)}/confirm-done`, { method: 'POST' })
+confirmDone: (id) => apiRequest(`/issues/${encodeURIComponent(id)}/confirm-done`, { method: 'POST', body: '{}' })
 ```
 
 Add a card action branch in `buildCardEl`:

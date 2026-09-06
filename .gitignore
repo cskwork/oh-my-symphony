@@ -37,3 +37,6 @@ tmp_workspaces/
 WORKFLOW.demo.*.md
 /.symphony*-demo/
 .sdlc/work/*/scratch/
+
+# Rendered at Pages deploy time by scripts/build_manual_pdf.py
+/docs/manual/pdf/

@@ -163,12 +163,13 @@
     <a href="#top" class="flex items-center gap-3 font-mono text-on-surface">
       <span class="text-primary text-[18px] leading-none">▲</span>
       <span class="text-[15px] font-semibold tracking-tight">oh-my-symphony</span>
-      <span class="hidden md:inline text-[11px] font-mono text-on-surface-variant border border-outline px-2 py-[2px] rounded">v0.22.0</span>
+      <span class="hidden md:inline text-[11px] font-mono text-on-surface-variant border border-outline px-2 py-[2px] rounded">v0.23.0</span>
     </a>
     <div class="flex items-center gap-2 md:gap-6">
       <a href="#features" data-i18n="nav.features" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">features</a>
       <a href="#quickstart" data-i18n="nav.quickstart" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">quickstart</a>
       <a href="#agents" data-i18n="nav.agents" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">agents</a>
+      <a href="#manual" data-i18n="nav.manual" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">manual</a>
       <a href="https://github.com/cskwork/oh-my-symphony" class="hidden sm:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">github</a>
       <button id="lang-toggle" type="button" aria-label="한국어로 전환" class="font-mono text-[13px] text-on-surface-variant hover:text-primary border border-outline rounded px-2 py-[5px]">한국어</button>
       <a href="#quickstart" data-i18n="nav.cta" class="font-mono text-[13px] bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">Get Started →</a>
@@ -566,6 +567,48 @@
   </div>
 </section>
 
+<!-- =========================================================
+  Manual downloads (HTML on Pages, PDFs rendered at deploy time)
+========================================================== -->
+<section id="manual" class="border-b border-outline bg-surface-container-low">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20">
+    <div class="border-l-2 border-primary pl-6 mb-8">
+      <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
+        <span class="text-primary">&gt;</span> <span data-i18n="man.title">Manual</span>
+      </h2>
+      <p data-i18n="man.sub" class="font-sans text-body-md text-on-surface-variant mt-2 max-w-2xl">
+        A two-page cheatsheet and a step-by-step tutorial, in English and Korean. Read them in the browser or download the PDF; both are generated from the same commit as this page, and the key tables come straight from the code.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="terminal-card rounded p-6">
+        <div class="font-mono text-[12px] text-primary uppercase tracking-wider mb-2" data-i18n="man.cheat.kicker">Cheatsheet · 2 pages</div>
+        <h3 class="font-mono text-[17px] text-on-surface mb-2" data-i18n="man.cheat.h3">Every command and key on one sheet</h3>
+        <p class="font-sans text-[14px] text-on-surface-variant mb-5" data-i18n="man.cheat.p">CLI subcommands, TUI key bindings, the minimum WORKFLOW.md, ticket states, and what to run when something breaks.</p>
+        <div class="flex flex-wrap gap-2 font-mono text-[13px]">
+          <a href="manual/pdf/oh-my-symphony-cheatsheet-en.pdf" class="bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">PDF · EN</a>
+          <a href="manual/pdf/oh-my-symphony-cheatsheet-ko.pdf" class="bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">PDF · 한국어</a>
+          <a href="manual/en/cheatsheet.html" class="border border-outline text-on-surface px-3 py-[7px] rounded hover:text-primary">HTML · EN</a>
+          <a href="manual/ko/cheatsheet.html" class="border border-outline text-on-surface px-3 py-[7px] rounded hover:text-primary">HTML · 한국어</a>
+        </div>
+      </div>
+
+      <div class="terminal-card rounded p-6">
+        <div class="font-mono text-[12px] text-primary uppercase tracking-wider mb-2" data-i18n="man.tut.kicker">Tutorial · ~20 minutes</div>
+        <h3 class="font-mono text-[17px] text-on-surface mb-2" data-i18n="man.tut.h3">Your first ticket, end to end</h3>
+        <p class="font-sans text-[14px] text-on-surface-variant mb-5" data-i18n="man.tut.p">Install, create a project, read WORKFLOW.md, run doctor, add a ticket, watch it in the TUI or web board, confirm at Human Review, inspect the result.</p>
+        <div class="flex flex-wrap gap-2 font-mono text-[13px]">
+          <a href="manual/pdf/oh-my-symphony-tutorial-en.pdf" class="bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">PDF · EN</a>
+          <a href="manual/pdf/oh-my-symphony-tutorial-ko.pdf" class="bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">PDF · 한국어</a>
+          <a href="manual/en/tutorial.html" class="border border-outline text-on-surface px-3 py-[7px] rounded hover:text-primary">HTML · EN</a>
+          <a href="manual/ko/tutorial.html" class="border border-outline text-on-surface px-3 py-[7px] rounded hover:text-primary">HTML · 한국어</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <!-- =========================================================
@@ -687,6 +730,15 @@
       "cta.meta1": `Forked from <a class="text-secondary hover:underline" href="https://github.com/openai/symphony">openai/symphony</a>`,
       "cta.meta2": `Built on <a class="text-secondary hover:underline" href="https://textual.textualize.io">Textual</a>`,
       "foot.desc": `A multi-agent fork of OpenAI's Symphony reference implementation. Stop juggling AI coding CLIs — run them in parallel under one Kanban board.`,
+      "man.title": `Manual`,
+      "man.sub": `A two-page cheatsheet and a step-by-step tutorial, in English and Korean. Read them in the browser or download the PDF; both are generated from the same commit as this page, and the key tables come straight from the code.`,
+      "man.cheat.kicker": `Cheatsheet · 2 pages`,
+      "man.cheat.h3": `Every command and key on one sheet`,
+      "man.cheat.p": `CLI subcommands, TUI key bindings, the minimum WORKFLOW.md, ticket states, and what to run when something breaks.`,
+      "man.tut.kicker": `Tutorial · ~20 minutes`,
+      "man.tut.h3": `Your first ticket, end to end`,
+      "man.tut.p": `Install, create a project, read WORKFLOW.md, run doctor, add a ticket, watch it in the TUI or web board, confirm at Human Review, inspect the result.`,
+      "nav.manual": `manual`,
       "foot.project": `Project`,
       "foot.community": `Community`,
       "foot.madewith": `Designed with <a class="text-secondary hover:underline" href="https://stitch.withgoogle.com">Stitch</a> · hosted on GitHub Pages`
@@ -760,6 +812,15 @@
       "cta.meta1": `<a class="text-secondary hover:underline" href="https://github.com/openai/symphony">openai/symphony</a>에서 포크`,
       "cta.meta2": `<a class="text-secondary hover:underline" href="https://textual.textualize.io">Textual</a> 기반`,
       "foot.desc": `OpenAI Symphony 레퍼런스 구현의 멀티에이전트 포크. AI 코딩 CLI 저글링은 그만 — 칸반 보드 하나 아래에서 병렬로 실행한다.`,
+      "man.title": `매뉴얼`,
+      "man.sub": `두 쪽짜리 치트시트와 단계별 튜토리얼을 한국어와 영어로 제공합니다. 브라우저에서 읽거나 PDF로 내려받으세요. 둘 다 이 페이지와 같은 커밋에서 생성되며, 키 표는 코드에서 직접 뽑습니다.`,
+      "man.cheat.kicker": `치트시트 · 2쪽`,
+      "man.cheat.h3": `모든 명령과 키를 한 장에`,
+      "man.cheat.p": `CLI 하위 명령, TUI 키 바인딩, 최소 WORKFLOW.md, 티켓 상태, 문제가 생겼을 때 실행할 명령.`,
+      "man.tut.kicker": `튜토리얼 · 약 20분`,
+      "man.tut.h3": `첫 티켓을 처음부터 끝까지`,
+      "man.tut.p": `설치, 프로젝트 생성, WORKFLOW.md 읽기, doctor 실행, 티켓 추가, TUI 또는 웹 보드에서 관찰, Human Review 승인, 결과 확인.`,
+      "nav.manual": `매뉴얼`,
       "foot.project": `프로젝트`,
       "foot.community": `커뮤니티`,
       "foot.madewith": `<a class="text-secondary hover:underline" href="https://stitch.withgoogle.com">Stitch</a>로 디자인 · GitHub Pages 호스팅`

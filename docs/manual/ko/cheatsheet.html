@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oh-my-symphony 치트시트</title>
+<link rel="stylesheet" href="../manual.css">
+</head>
+<body>
+<main>
+<header class="doc">
+  <div class="kicker">CHEATSHEET</div>
+  <h1>oh-my-symphony</h1>
+  <p class="sub">칸반 보드 하나, AI 코딩 에이전트 여덟 개, 티켓마다 독립된 <code>git worktree</code>(작업 트리). 자주 치는 명령을 두 장에 모았다.</p>
+  <div class="links">
+    <a href="../en/cheatsheet.html">English</a>
+    <a href="tutorial.html">튜토리얼</a>
+    <a href="../pdf/oh-my-symphony-cheatsheet-ko.pdf">PDF</a>
+    <a href="https://github.com/cskwork/oh-my-symphony">github.com/cskwork/oh-my-symphony</a>
+  </div>
+  <div class="links no-print">인쇄 / PDF로 저장: <kbd>Ctrl+P</kbd> / <kbd>⌘P</kbd></div>
+</header>
+
+<h2>한 줄로 보는 생애주기</h2>
+<div class="flow">
+  <span>install</span><i>→</i>
+  <span>project create / add</span><i>→</i>
+  <span>doctor</span><i>→</i>
+  <span>tui / service</span><i>→</i>
+  <span>ticket</span><i>→</i>
+  <span>agent runs</span><i>→</i>
+  <span>Human Review</span><i>→</i>
+  <span>Done</span>
+</div>
+
+<h2>설치와 첫 실행</h2>
+<pre><code>git clone https://github.com/cskwork/oh-my-symphony.git &amp;&amp; cd oh-my-symphony
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+python -m pip install -e ".[dev]"
+symphony project create "My App" --path ../my-app &amp;&amp; cd ../my-app
+symphony doctor ./WORKFLOW.md
+symphony tui ./WORKFLOW.md</code></pre>
+
+<h2>CLI</h2>
+<!-- generated:cli-subcommands -->
+<table><tr><th>명령</th><th>하는 일</th></tr><tr><td><code>symphony tui</code></td><td>칸반 TUI 열기 (--tui와 동일)</td></tr><tr><td><code>symphony doctor</code></td><td>실행 전 WORKFLOW.md 사전 점검</td></tr><tr><td><code>symphony board</code></td><td>파일 칸반 보드 관리 (init/ls/new/mv/update/show/graph)</td></tr><tr><td><code>symphony service</code></td><td>오케스트레이터를 백그라운드 서비스로 실행</td></tr><tr><td><code>symphony project</code></td><td>독립 프로젝트 서비스 등록·실행</td></tr><tr><td><code>symphony hub</code></td><td>여러 프로젝트를 모아 보는 허브 서버</td></tr><tr><td><code>symphony runs</code></td><td>최근 실행 기록 출력</td></tr><tr><td><code>symphony release</code></td><td>애플리케이션 릴리스 증빙 검증</td></tr><tr><td><code>symphony wiki-sweep</code></td><td>docs/llm-wiki 중복 슬러그·고아 문서 점검</td></tr></table>
+<!-- /generated -->
+<table>
+  <tr><th>자주 쓰는 전체 명령</th><th>효과</th></tr>
+  <tr><td><code>symphony board init ./kanban</code></td><td>파일 보드를 만들고 예시 티켓 <code>DEMO-001.md</code>를 넣는다</td></tr>
+  <tr><td><code>symphony board new TASK-1 "title"</code></td><td><code>kanban/TASK-1.md</code> 생성. 옵션: <code>--priority 2 --labels backend,test --description "…" --blocked-by ID --agent-kind codex</code></td></tr>
+  <tr><td><code>symphony board ls --state Todo</code></td><td>티켓 목록, 상태로 필터 가능</td></tr>
+  <tr><td><code>symphony board mv TASK-1 Blocked</code></td><td>상태 강제 변경. 다음 폴 틱(poll tick, 주기적 조회 시점)에 다시 평가된다</td></tr>
+  <tr><td><code>symphony service start ./WORKFLOW.md --port 9999</code></td><td>백그라운드 서비스 + 웹 보드. 이후 <code>status</code> / <code>logs</code> / <code>restart</code> / <code>stop</code></td></tr>
+  <tr><td><code>symphony runs ./WORKFLOW.md --limit 5</code></td><td>최근 실행 기록 (<code>--issue ID</code>로 필터)</td></tr>
+</table>
+
+<h2>TUI 키</h2>
+<p class="legend">
+  <span><b class="dot-run">●</b> 실행 중 (turn N, 토큰)</span>
+  <span><b class="dot-retry">↻</b> 재시도 대기 (retry #N, 마지막 오류)</span>
+  <span><b class="dot-done">✓</b> 이번 세션에서 완료</span>
+  <span><kbd>?</kbd> TUI 안에서 이 목록을 연다</span>
+</p>
+<div class="grid">
+<!-- generated:tui-keys -->
+<div class="card"><h3>보드</h3><table>
+<tr><td><kbd>q</kbd></td><td>종료 (워커 실행 중이면 두 번 확인)</td></tr>
+<tr><td><kbd>r</kbd></td><td>새로고침 + 트래커 재폴링</td></tr>
+<tr><td><kbd>?</kbd></td><td>이 도움말</td></tr>
+<tr><td><kbd>L</kbd></td><td>TUI·문서 언어 순환</td></tr>
+<tr><td><kbd>s</kbd></td><td>실행 통계</td></tr>
+<tr><td><kbd>/</kbd></td><td>id · 제목 · 라벨로 카드 필터</td></tr>
+<tr><td><kbd>esc</kbd></td><td>필터 닫기, 확대 해제</td></tr>
+</table></div>
+<div class="card"><h3>이동</h3><table>
+<tr><td><kbd>tab</kbd> / <kbd>shift+tab</kbd></td><td>다음 / 이전 카드로 포커스</td></tr>
+<tr><td><kbd>j</kbd> / <kbd>k</kbd>, <kbd>↓</kbd> / <kbd>↑</kbd></td><td>포커스된 레인 스크롤</td></tr>
+<tr><td><kbd>g</kbd> / <kbd>G</kbd>, <kbd>home</kbd> / <kbd>end</kbd></td><td>맨 위 / 맨 아래로</td></tr>
+<tr><td><kbd>space</kbd> / <kbd>pgdn</kbd>, <kbd>b</kbd> / <kbd>pgup</kbd></td><td>페이지 아래 / 위</td></tr>
+<tr><td><kbd>enter</kbd></td><td>상세 모달 열기</td></tr>
+<tr><td><kbd>p</kbd></td><td>상세 패널 표시 / 숨기기</td></tr>
+<tr><td><kbd>]</kbd> / <kbd>[</kbd></td><td>상세 패널로 포커스 / 보드로 복귀</td></tr>
+</table></div>
+<div class="card"><h3>레이아웃</h3><table>
+<tr><td><kbd>1-9</kbd> / <kbd>0</kbd></td><td>해당 레인 확대 / 확대 해제</td></tr>
+<tr><td><kbd>t</kbd> / <kbd>T</kbd></td><td>다음 / 이전 레인 페이지</td></tr>
+<tr><td><kbd>+</kbd> / <kbd>-</kbd></td><td>페이지당 레인 늘리기 / 줄이기</td></tr>
+<tr><td><kbd>d</kbd></td><td>컴팩트 / 리치 카드 전환</td></tr>
+</table></div>
+<div class="card"><h3>티켓</h3><table>
+<tr><td><kbd>n</kbd></td><td>새 티켓 (파일 보드 전용)</td></tr>
+<tr><td><kbd>e</kbd></td><td>포커스된 티켓 편집 (파일 보드 전용)</td></tr>
+<tr><td><kbd>a</kbd></td><td>포커스된 Done 카드 아카이브</td></tr>
+<tr><td><kbd>c</kbd></td><td>포커스된 Human Review 카드를 Done으로 승인</td></tr>
+<tr><td><kbd>S</kbd></td><td>포커스된 카드의 Document 단계 건너뛰기</td></tr>
+<tr><td><kbd>P</kbd></td><td>실행 중인 워커 일시정지 / 재개</td></tr>
+</table></div>
+<!-- /generated -->
+</div>
+
+<h2>웹 보드</h2>
+<table>
+  <tr><th>항목</th><th>내용</th></tr>
+  <tr><td>URL</td><td><code>http://127.0.0.1:&lt;port&gt;/</code> (<code>server.port</code> 또는 <code>--port</code>). 루프백(내 컴퓨터 안) 전용</td></tr>
+  <tr><td>Pause / Resume</td><td>실행 중 카드의 버튼. 해당 워커를 잠시 멈추거나 다시 돌린다</td></tr>
+  <tr><td>헤더 refresh</td><td>오케스트레이터의 <code>poll + reconcile</code>을 즉시 실행한다</td></tr>
+  <tr><td>브랜치 드롭다운</td><td>실제 로컬 git 브랜치. <code>agent.feature_base_branch</code>(새 브랜치 시작점), <code>agent.auto_merge_target_branch</code>(Done 머지 대상)</td></tr>
+  <tr><td>Bearer 토큰</td><td>실행 전 <code>export SYMPHONY_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"</code>. 웹 앱은 첫 <code>401</code> 뒤에 토큰을 묻는다. 선택 사항</td></tr>
+</table>
+
+<h2>WORKFLOW.md 최소 구성</h2>
+<pre><code>---
+tracker:
+  kind: file
+  board_root: ./kanban
+  active_states: [Todo, "In Progress", Verify, Document]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
+agent:
+  kind: claude          # codex | claude | gemini | agy | kiro | opencode | pi | prime-agent
+  max_concurrent_agents: 1
+server:
+  port: 9999
+---</code></pre>
+<table>
+  <tr><th>키</th><th>무엇을 바꾸는가</th></tr>
+  <tr><td><code>agent.kind</code></td><td>기본 에이전트 CLI. 티켓 frontmatter의 <code>agent_kind:</code>로 개별 덮어쓰기 가능</td></tr>
+  <tr><td><code>agent.max_concurrent_agents</code></td><td>동시에 도는 워커 수 (각자 자기 worktree 안에서)</td></tr>
+  <tr><td><code>tracker.active_states</code></td><td>오케스트레이터가 에이전트를 투입하는 컬럼들</td></tr>
+  <tr><td><code>server.port</code></td><td>웹 보드 + JSON API 포트. 블록을 지우면 HTTP를 끈다</td></tr>
+  <tr><td><code>agent.feature_base_branch</code></td><td><code>symphony/&lt;ID&gt;</code> 브랜치의 시작점. 빈 값 = 호스트의 현재 브랜치</td></tr>
+  <tr><td><code>agent.auto_merge_target_branch</code></td><td>Verify 게이트가 머지해 넣는 브랜치. 빈 값 = 기능 브랜치를 딴 원래 브랜치</td></tr>
+</table>
+
+<h2>티켓 상태</h2>
+<table>
+  <tr><th>상태</th><th>여기서 일어나는 일</th></tr>
+  <tr><td>Todo</td><td>분류(triage) 후 In Progress로 보낸다. Acceptance Criteria가 있는 명확한 티켓은 모델 턴 없이 통과</td></tr>
+  <tr><td>In Progress</td><td>계획 + TDD 구현 + 자기 검토. <code>symphony/&lt;ID&gt;</code> 브랜치 위에서</td></tr>
+  <tr><td>Verify</td><td>리뷰 + QA + 머지 게이트. 기능 브랜치를 대상 브랜치에 머지해야 Document로 넘어간다</td></tr>
+  <tr><td>Document</td><td>문서 + 위키 반영. 개입이 없으면 Done (<kbd>S</kbd>로 건너뛰기)</td></tr>
+  <tr><td>Human Review</td><td>Done 전에 사람이 개입하거나 명시적으로 검토한다. TUI에서 <kbd>c</kbd>, 또는 웹 보드에서 승인</td></tr>
+  <tr><td>Done</td><td>검증 완료. <code>&lt;ID&gt;: &lt;title&gt;</code> 커밋 하나로 남는다. <kbd>a</kbd>로 아카이브</td></tr>
+</table>
+
+<h2>문제가 생기면</h2>
+<div class="note">
+  <strong>doctor가 FAIL을 출력</strong> — 그 줄이 가리키는 것만 고친다 (자리표시자 클론 URL → worktree 기본값 또는 <code>: noop</code>, CLI 누락 → <code>$PATH</code>에 설치). <code>symphony doctor ./WORKFLOW.md</code> 재실행. 종료 코드 <code>1</code> = FAIL 있음, <code>2</code> = WORKFLOW.md를 읽지 못함.<br>
+  <strong>워커가 종료되고 카드에 ↻</strong> — <code>agent.max_retries</code>까지 간격을 늘려가며 자동 재시도. 마지막 오류는 <code>symphony runs ./WORKFLOW.md --limit 5</code>와 <code>symphony service logs ./WORKFLOW.md</code>에서.<br>
+  <strong>에이전트가 몇 분째 조용함</strong> — <code>stall_timeout_ms</code> 안에 진행이 없으면 워커가 취소된다. 무거운 레인만 <code>agent.stall_timeout_ms_by_state: {Verify: 900000}</code>으로 넓히고 <code>log/symphony.log</code>를 tail한다.<br>
+  <strong>포트가 이미 사용 중</strong> — doctor가 보고한다. <code>--port N</code>이 <code>server.port</code>를 덮어쓴다. <code>symphony service status ./WORKFLOW.md</code>로 점유한 서비스를 찾는다.<br>
+  <strong>TUI가 조용히 꺼짐</strong> — 실제 TTY(터미널)가 필요하다. 포그라운드 터미널에서 실행하거나, headless(화면 없이)로 <code>symphony ./WORKFLOW.md</code>를 돌리고 <code>WORKFLOW-PROGRESS.md</code>를 읽는다.
+</div>
+
+<footer class="doc">oh-my-symphony 0.23.0 · Apache-2.0 · 같은 커밋의 README에서 생성</footer>
+</main>
+</body>
+</html>

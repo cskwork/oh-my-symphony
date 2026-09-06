@@ -229,9 +229,9 @@ async def test_chat_session_crud(client: TestClient) -> None:
     assert patched["mode"] == "edit"
     assert patched["context_preserved"] is True  # claude resumes
 
-    resp = await client.delete("/api/v1/chat/session")
+    resp = await client.delete("/api/v1/chat/session", json={})
     assert resp.status == 200
-    resp = await client.delete("/api/v1/chat/session")
+    resp = await client.delete("/api/v1/chat/session", json={})
     assert resp.status == 404
     resp = await client.patch("/api/v1/chat/session", json={"mode": "qa"})
     assert resp.status == 404
@@ -606,7 +606,7 @@ async def test_chat_sessions_plural_crud_and_singular_alias(
     assert resp.status == 200
     assert (await resp.json())["turn_count"] == 1
 
-    resp = await client.delete(f"/api/v1/chat/sessions/{first}")
+    resp = await client.delete(f"/api/v1/chat/sessions/{first}", json={})
     assert resp.status == 200
     resp = await client.get(f"/api/v1/chat/sessions/{first}")
     assert resp.status == 404
@@ -631,7 +631,7 @@ async def test_chat_stop_waits_for_gated_mode_rebuild(
         )
     )
     await entered.wait()
-    stopping = asyncio.create_task(client.delete(f"/api/v1/chat/sessions/{session_id}"))
+    stopping = asyncio.create_task(client.delete(f"/api/v1/chat/sessions/{session_id}", json={}))
     await asyncio.sleep(0)
     try:
         assert stopping.done() is False
@@ -669,7 +669,7 @@ async def test_chat_reattach_restores_a_stopped_session(
         f"/api/v1/chat/sessions/{session_id}/message", json={"text": "remember"}
     )
     assert resp.status == 202
-    await client.delete(f"/api/v1/chat/sessions/{session_id}")
+    await client.delete(f"/api/v1/chat/sessions/{session_id}", json={})
 
     resp = await client.post(f"/api/v1/chat/sessions/{session_id}/reattach", json={})
     assert resp.status == 200
@@ -678,7 +678,7 @@ async def test_chat_reattach_restores_a_stopped_session(
     assert "remember" in [m["text"] for m in payload["transcript_tail"]]
 
     # Forgetting drops it from the resumable list.
-    await client.delete(f"/api/v1/chat/sessions/{session_id}?forget=true")
+    await client.delete(f"/api/v1/chat/sessions/{session_id}?forget=true", json={})
     listing = await (await client.get("/api/v1/chat/sessions")).json()
     assert listing["resumable"] == []
 
@@ -707,6 +707,29 @@ async def test_chat_ws_rejects_cross_origin(client: TestClient) -> None:
         await client.ws_connect(
             "/api/v1/chat/ws", headers={"Origin": "http://evil.example"}
         )
+
+
+async def test_chat_ws_rejects_cross_origin_on_non_loopback_bind(
+    board_dir: Path, fake_backends: list[_FakeBackend]
+) -> None:
+    # Browsers skip CORS on WebSocket upgrades regardless of where the
+    # server is bound, so the Origin check must not be loopback-only.
+    from symphony.webapi import BIND_HOST_KEY
+
+    state = WorkflowState(board_dir / "WORKFLOW.md")
+    cfg, err = state.reload()
+    assert err is None and cfg is not None
+    app = build_app(cast(Orchestrator, _StubOrchestrator(state)))
+    app[BIND_HOST_KEY] = "0.0.0.0"
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        with pytest.raises(aiohttp.WSServerHandshakeError):
+            await client.ws_connect(
+                "/api/v1/chat/ws", headers={"Origin": "http://evil.example"}
+            )
+    finally:
+        await client.close()
 
 
 async def test_shutdown_stops_chat_backend(

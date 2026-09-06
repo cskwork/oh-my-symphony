@@ -22,7 +22,14 @@ from aiohttp import web
 
 from .logging import get_logger
 from .orchestrator import Orchestrator
-from .webapi import BIND_HOST_KEY, _request_is_loopback, register_web_routes
+from .webapi import (
+    _LOOPBACK_BINDS,
+    API_TOKEN_ENV,
+    BIND_HOST_KEY,
+    _configured_api_token,
+    _request_is_loopback,
+    register_web_routes,
+)
 
 
 log = get_logger()
@@ -221,6 +228,12 @@ async def run_server(
     # The API guard middleware only enforces the loopback Host allowlist
     # when the server itself is loopback-bound; record the bind address.
     app[BIND_HOST_KEY] = host
+    if host.lower() not in _LOOPBACK_BINDS and _configured_api_token() is None:
+        log.warning(
+            "http_server_unauthenticated_on_network_bind",
+            host=host,
+            hint=f"set {API_TOKEN_ENV} or bind to 127.0.0.1",
+        )
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)

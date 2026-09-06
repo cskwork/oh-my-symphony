@@ -110,6 +110,16 @@ class IssueCard(Static):
         self._status = status
         self._refresh_body()
 
+    def update_issue(self, issue: Issue) -> bool:
+        """Rebind the tracker Issue after a refresh. Returns True when the
+        card repainted. Reused cards otherwise keep serving the pre-refresh
+        Issue to the detail pane, the Enter modal and the `e` prefill."""
+        if issue == self._issue:
+            return False
+        self._issue = issue
+        self._refresh_body()
+        return True
+
     def set_density(self, density: str) -> None:
         if density == self._density:
             return
@@ -395,6 +405,7 @@ class Lane(Vertical):
             wanted_ids.add(card_id)
             existing_card = existing.pop(card_id, None)
             if existing_card is not None:
+                existing_card.update_issue(issue)
                 existing_card.update_status(status)
                 existing_card.set_density(density)
                 existing_card.set_stage_pos(self._stage_pos)

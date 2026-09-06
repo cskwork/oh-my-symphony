@@ -220,7 +220,7 @@ CLI flag for one-off path overrides: `--progress-md-path docs/STATUS.md`.
 symphony ./WORKFLOW.md --port 9999
 curl -s http://127.0.0.1:9999/api/v1/state | jq
 curl -s http://127.0.0.1:9999/api/v1/TASK-1 | jq
-curl -s -X POST http://127.0.0.1:9999/api/v1/refresh   # force a poll tick
+curl -s -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:9999/api/v1/refresh   # force a poll tick (mutations need JSON, even empty)
 ```
 
 Endpoints:

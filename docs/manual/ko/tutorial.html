@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oh-my-symphony 튜토리얼 — 첫 티켓을 끝까지</title>
+<link rel="stylesheet" href="../manual.css">
+</head>
+<body>
+<main>
+<header class="doc">
+  <div class="kicker">TUTORIAL</div>
+  <h1>첫 티켓을 끝까지 따라가기</h1>
+  <p class="sub">약 20분. Symphony를 몰라도 된다. 터미널, Python, git만 있으면 된다.</p>
+  <div class="links">
+    <a href="../en/tutorial.html">English</a>
+    <a href="cheatsheet.html">치트시트</a>
+    <a href="../pdf/oh-my-symphony-tutorial-ko.pdf">PDF</a>
+    <a href="https://github.com/cskwork/oh-my-symphony">github.com/cskwork/oh-my-symphony</a>
+  </div>
+  <div class="links no-print">인쇄 / PDF로 저장: <kbd>Ctrl+P</kbd> / <kbd>⌘P</kbd></div>
+</header>
+
+<ol class="steps">
+
+<li>
+<h2>Symphony가 무엇인가</h2>
+<p>Symphony는 내 컴퓨터에서 도는 오케스트레이터(orchestrator, 여러 에이전트를 지휘하는 프로그램)다. 칸반 보드를 poll(주기적 조회)하고, 티켓마다 내가 고른 AI 코딩 에이전트를 붙이고, 그 에이전트들을 각자 격리된 <code>git worktree</code>(작업 트리, 같은 저장소의 별도 체크아웃) 안에서 동시에 돌린다. 진행 상황(턴 수, 토큰, 마지막 이벤트)은 터미널 칸반인 TUI(터미널 화면)나 <code>http://127.0.0.1:9999/</code>의 내장 웹 보드에서 본다. 티켓은 코드 옆에 놓인 Markdown 파일이라 SaaS도, API 키도, 가입도 없이 써볼 수 있다.</p>
+<div class="flow">
+  <span>install</span><i>→</i><span>project create / add</span><i>→</i><span>doctor</span><i>→</i><span>tui / service</span><i>→</i><span>ticket</span><i>→</i><span>agent runs</span><i>→</i><span>Human Review</span><i>→</i><span>Done</span>
+</div>
+<p>자는 동안 무인 리팩터링을 돌리는 1인 개발자, 버그 수정을 여러 에이전트에 병렬로 나누는 팀, 여덟 에이전트를 같은 작업으로 비교하는 연구자, 그리고 "에이전트당 채팅 창 하나"의 한계에 부딪힌 누구에게나 맞는다.</p>
+</li>
+
+<li>
+<h2>준비물</h2>
+<p>Python 3.12 이상, git, 그리고 <code>$PATH</code>에 설치되어 이미 로그인된 에이전트 CLI 하나:</p>
+<table>
+  <tr><th><code>agent.kind</code></th><th>CLI와 README가 안내하는 로그인</th></tr>
+  <tr><td><code>codex</code></td><td><code>codex</code> (<code>app-server</code> 하위 명령 포함)</td></tr>
+  <tr><td><code>claude</code></td><td><code>claude</code> (Claude Code)</td></tr>
+  <tr><td><code>gemini</code></td><td><code>gemini</code> (Gemini CLI)</td></tr>
+  <tr><td><code>agy</code></td><td><code>agy</code> (Antigravity CLI, Google Antigravity에서 설치)</td></tr>
+  <tr><td><code>kiro</code></td><td><code>kiro-cli</code>, <code>https://cli.kiro.dev/install</code>에서 설치. <code>kiro-cli login</code> 또는 <code>KIRO_API_KEY</code> 설정</td></tr>
+  <tr><td><code>opencode</code></td><td><code>npm install -g opencode-ai</code> 후 <code>opencode auth login</code></td></tr>
+  <tr><td><code>pi</code></td><td><code>npm i -g @earendil-works/pi-coding-agent</code>. <code>pi</code> 실행 후 <code>/login</code> 한 번</td></tr>
+  <tr><td><code>prime-agent</code></td><td><code>curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh</code>. <code>prime-agent</code> 실행 후 <code>/login</code> 한 번</td></tr>
+</table>
+<p>확인: <code>which claude</code>(또는 고른 CLI)가 경로를 출력하면 된다.</p>
+</li>
+
+<li>
+<h2>설치</h2>
+<p>목표: <code>symphony</code> 명령이 들어 있는 가상환경.</p>
+<pre><code>git clone https://github.com/cskwork/oh-my-symphony.git
+cd oh-my-symphony
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+symphony --version</code></pre>
+<p>확인: <code>symphony 0.23.0</code>이 출력된다.</p>
+</li>
+
+<li>
+<h2>프로젝트 만들기 또는 등록하기</h2>
+<p>목표: 내 프로젝트 디렉터리. <code>oh-my-symphony</code> 체크아웃은 컨트롤 플레인(control plane, 지휘소)으로 남긴다. doctor와 일반 실행은 Symphony 자체 저장소 안의 <code>WORKFLOW.md</code>를 거부하므로, 에이전트가 자신을 띄운 오케스트레이터를 고칠 수 없다.</p>
+<pre><code>symphony project create "My App" --path ../my-app
+# or adopt an existing directory; Git and missing Symphony files are added safely
+symphony project add /path/to/existing-project --name "My App"
+cd ../my-app</code></pre>
+<p>확인: 없는 경로는 새 Git 저장소가 된다. Git이 아닌 기존 디렉터리는 그 자리에서 초기화된다. 기존 Git 저장소는 메타데이터와 파일을 그대로 유지한다. Symphony는 빠진 운영 파일만 추가하고 관련 없는 변경은 절대 스테이징하지 않는다.</p>
+<div class="note"><strong>Git이 아니던 디렉터리라면:</strong> Symphony는 자신이 추가한 파일만 커밋한다. 기존 제품 파일은 추적되지 않은 채 남으므로, 티켓을 보내기 전에 직접 검토하고 커밋해야 워커의 worktree에 포함된다.</div>
+</li>
+
+<li>
+<h2>생성된 WORKFLOW.md 읽기</h2>
+<p>목표: 첫 실행에 중요한 네 블록을 이해한다. 프로젝트의 <code>WORKFLOW.md</code>를 연다(기본 제공 파일 트래커 템플릿은 <code>WORKFLOW.file.example.md</code>).</p>
+<pre><code>tracker:
+  kind: file
+  board_root: ./kanban
+  active_states: [Todo, "In Progress", Verify, Document]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
+
+workspace:
+  root: ~/symphony_workspaces
+
+hooks:
+  # Each ticket gets its own workspace at workspace.root/&lt;ID&gt;, attached as a
+  # git worktree of the host repo on a symphony/&lt;ID&gt; branch.
+  after_create: |
+    bash "$SYMPHONY_WORKFLOW_DIR/scripts/symphony-setup-worktree.sh"
+
+agent:
+  kind: codex          # codex | claude | gemini | agy | kiro | opencode | pi | prime-agent
+  max_concurrent_agents: 1
+
+server:
+  port: 9999
+
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
+    Document: ./docs/symphony-prompts/file/stages/document.md
+    Done: ./docs/symphony-prompts/file/stages/done.md</code></pre>
+<p><code>tracker</code>(트래커, 티켓 저장소)는 티켓이 어디 있고 어떤 컬럼이 있는지 정한다. <code>hooks</code>는 에이전트 턴 앞뒤로 실행되는 스크립트다. 기본값은 워크스페이스를 worktree로 붙여서 호스트 작업 트리를 건드리지 않는다. <code>agent.kind</code>가 에이전트를 고른다. 주석에 있는 값 중 <code>claude</code>, <code>pi</code> 등으로 바꾸면 이름이 같은 블록(<code>claude:</code>, <code>pi:</code>, …)만 실행에 쓰인다. <code>prompts</code>는 <code>base</code>와 티켓의 현재 상태에 해당하는 파일 하나만 보낸다.</p>
+<p>확인: <code>WORKFLOW.md</code> 옆에 <code>kanban/</code> 디렉터리가 있고, <code>agent.kind</code>가 설치한 CLI와 일치한다.</p>
+</li>
+
+<li>
+<h2><code>symphony doctor</code>로 preflight(사전 점검)</h2>
+<p>목표: 무엇이든 띄우기 전에 흔한 첫 실행 실패를 잡는다.</p>
+<pre><code>symphony doctor ./WORKFLOW.md</code></pre>
+<p>확인: 점검 항목당 한 줄.</p>
+<pre><code>PASS  server.port=9999              127.0.0.1:9999 is free
+PASS  agent.kind=claude             claude → /usr/local/bin/claude
+FAIL  hooks.after_create            contains placeholder 'my-org/my-repo' — every dispatch will fail with rc=128. Switch to the worktree default or replace with a real clone / `: noop`.
+PASS  workspace.root=~/symphony_workspaces  exists and is writable
+PASS  tracker.board_root            ./kanban (3 tickets)</code></pre>
+<p>종료 코드 <code>0</code>은 전부 통과, <code>1</code>은 FAIL이 하나 이상, <code>2</code>는 <code>WORKFLOW.md</code> 자체를 읽지 못했다는 뜻이다. doctor는 포트 충돌, <code>$PATH</code>의 CLI 누락, 자리표시자 클론 URL, 쓰기 불가 워크스페이스, 보드 디렉터리 누락을 잡는다. FAIL 줄이 가리키는 것을 고치고 깨끗해질 때까지 다시 돌린다.</p>
+</li>
+
+<li>
+<h2>선택: 에이전트 없이 먼저 돌려보기</h2>
+<p>목표: 내장 mock(가짜) 백엔드로 카드가 살아 움직이는 것을 본다. 이 단계는 선택이다. 실제 CLI가 준비됐다면 건너뛴다. mock은 Codex와 같은 프로토콜을 쓰지만 턴과 토큰 증가를 흉내 낼 뿐 실제 작업은 하지 않는다.</p>
+<pre><code>symphony project create "Symphony Demo" --path ../symphony-demo
+cd ../symphony-demo
+
+cat &gt; WORKFLOW.md &lt;&lt;'YAML'
+---
+tracker: { kind: file, board_root: ./kanban,
+           active_states: [Todo, "In Progress", Verify, Document],
+           terminal_states: ["Human Review", Done, Blocked, Archive] }
+polling: { interval_ms: 5000 }
+workspace: { root: ~/symphony_workspaces }
+hooks:
+  after_create: ": noop"
+  before_run:   ": noop"
+  after_run:    "echo done"
+agent:  { kind: codex, max_concurrent_agents: 1, max_turns: 4, max_total_turns: 60 }
+codex:  { command: python -m symphony.mock_codex }
+server: { port: 9999 }
+---
+You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
+YAML
+
+symphony board init ./kanban
+symphony board new TASK-1 "smoke test"
+symphony tui ./WORKFLOW.md</code></pre>
+<p>확인: 약 5초 안에 Todo 컬럼의 TASK-1에 초록색 ●가 생기고 턴 카운터와 토큰 합계가 올라간다. <kbd>Ctrl-C</kbd>로 종료한다.</p>
+<div class="note"><strong>mock에서는 카드가 Todo에 머문다.</strong> 실제 에이전트만 <code>kanban/TASK-1.md</code>를 다시 써서 카드를 옮긴다. mock은 오케스트레이터 → 백엔드 → 워크스페이스 → hooks 파이프라인이 LLM 호출 없이 끝까지 도는지 증명하는 용도다.</div>
+</li>
+
+<li>
+<h2>티켓 추가하기, 세 가지 방법</h2>
+<p>목표: <code>kanban/TASK-1.md</code> 파일 하나. 실제 프로젝트로 돌아와서:</p>
+<pre><code>symphony board new TASK-1 "Fix flaky pagination test" \
+  --priority 2 \
+  --labels backend,test \
+  --description "tests/test_pagination.py::test_cursor_advance is flaky on CI."
+# → created kanban/TASK-1.md
+
+symphony board ls                    # all tickets
+symphony board show TASK-1           # full body</code></pre>
+<p>두 번째 방법은 TUI다. 보드에서 <kbd>n</kbd>을 누르면 여러 줄 본문을 가진 새 티켓을 등록한다(파일 보드 전용). <kbd>e</kbd>는 포커스된 티켓을 편집한다. 세 번째는 웹 보드다. Board 페이지에서 CLI와 같은 검증을 거쳐 이슈를 만들고 고치고 지운다.</p>
+<p>확인: <code>board new</code>는 쓰기 전에 검증한다. id는 <code>^[A-Za-z][A-Za-z0-9_-]{0,63}$</code>에 맞아야 하고, 상태는 <code>tracker.active_states</code> / <code>terminal_states</code> 안에 있어야 하며, 모든 <code>--blocked-by</code> 대상이 보드에 존재해야 한다. <code>--agent-kind codex</code>를 붙이면 이 티켓만 다른 에이전트로 고정한다.</p>
+</li>
+
+<li>
+<h2>TUI를 띄우고 보드 읽기</h2>
+<p>목표: 내 티켓이 디스패치(dispatch, 워커 투입)되는 것을 본다.</p>
+<pre><code>symphony tui ./WORKFLOW.md</code></pre>
+<p>확인: 컬럼은 트래커 상태다(<code>active_states</code>가 먼저, 그다음 <code>terminal_states</code>). 한 번의 폴 틱(<code>polling.interval_ms</code>, 기본 30초) 안에 오케스트레이터가 워커를 보내고, 카드에 초록색 ●와 턴 카운터, 토큰 합계가 나타난다. 노란 ↻는 재시도 큐에 있다는 뜻이고, ✓는 이번 세션에서 완료됐다는 뜻이다.</p>
+<table>
+  <tr><th>키</th><th>지금 눌러보기</th></tr>
+  <tr><td><kbd>?</kbd></td><td>모든 키를 묶어 보여주는 도움말 모달 (<kbd>esc</kbd>로 닫기)</td></tr>
+  <tr><td><kbd>tab</kbd> / <kbd>enter</kbd></td><td>다음 카드로 포커스 / 그 카드의 상세 모달 열기</td></tr>
+  <tr><td><kbd>p</kbd></td><td>상세 패널 표시·숨기기. <kbd>]</kbd>로 패널에 포커스, <kbd>[</kbd>로 복귀</td></tr>
+  <tr><td><kbd>P</kbd></td><td>포커스된 실행 중 워커 일시정지 / 재개</td></tr>
+  <tr><td><kbd>/</kbd></td><td>id · 제목 · 라벨로 카드 필터. <kbd>esc</kbd>로 해제</td></tr>
+</table>
+<div class="note"><strong>●는 카드를 옮기지 않는다.</strong> 컬럼은 티켓 파일의 <code>state</code> 필드를 따르고 그 파일은 에이전트만 쓰므로, 실행 중인 티켓은 에이전트가 파일을 고칠 때까지 Todo에 머문다. TUI는 실제 TTY가 필요하다. 스크립트에서 띄우면 조용히 종료된다.</div>
+</li>
+
+<li>
+<h2>또는 서비스로 돌리고 웹 보드 열기</h2>
+<p>목표: 같은 오케스트레이터를 백그라운드에서 브라우저 UI와 함께. <code>service start</code>는 먼저 <code>symphony doctor</code>를 돌리고, 시작한 워크플로를 <code>.symphony/run/&lt;workflow-hash&gt;.json</code>에 기록한다. 그래서 같은 <code>WORKFLOW.md</code>를 실수로 다른 포트에서 두 번 띄울 수 없다.</p>
+<pre><code>symphony service start ./WORKFLOW.md --port 9999
+symphony service status ./WORKFLOW.md
+symphony service logs ./WORKFLOW.md
+# later: symphony service restart ./WORKFLOW.md  |  symphony service stop ./WORKFLOW.md</code></pre>
+<p>확인: <code>http://127.0.0.1:9999/</code>를 연다. 실행 중 카드에는 <strong>Pause / Resume</strong> 버튼이 있고, 헤더의 refresh 버튼은 <code>poll + reconcile</code>을 실행하며, 헤더에는 <code>agent.feature_base_branch</code>(새 기능 브랜치의 시작점)와 <code>agent.auto_merge_target_branch</code>(Done 머지가 들어갈 곳)를 고르는 실제 로컬 git 브랜치 드롭다운이 있다. 보드는 루프백 전용이다.</p>
+<div class="note"><strong>선택: Bearer 토큰.</strong> 실행 전에 <code>export SYMPHONY_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"</code>를 설정하면 모든 운영 <code>/api/</code> 요청에 <code>Authorization: Bearer</code>가 필요해지고, 웹 앱은 첫 <code>401</code> 뒤에 토큰을 물어본다. 값은 <code>WORKFLOW.md</code>, 셸 히스토리, 로그에 남기지 않는다.</div>
+</li>
+
+<li>
+<h2>티켓이 상태를 지나가는 것을 따라가기</h2>
+<p>목표: 기다리는 동안 각 컬럼의 뜻을 이해한다.</p>
+<table>
+  <tr><th>상태</th><th>에이전트가 하는 일</th></tr>
+  <tr><td>Todo</td><td>분류하고 In Progress로 보낸다. 본문과 Acceptance Criteria 섹션이 있는 티켓은 모델 턴 없이 넘어간다.</td></tr>
+  <tr><td>In Progress</td><td>계획 + TDD 구현 + 자기 검토. worktree 안의 <code>symphony/&lt;ID&gt;</code> 브랜치에서.</td></tr>
+  <tr><td>Verify</td><td>리뷰 + QA + 머지 게이트. 기능 브랜치를 대상 브랜치에 머지해야 Document로 갈 수 있다.</td></tr>
+  <tr><td>Document</td><td>문서 + 위키 반영. 개입이 필요 없으면 Done.</td></tr>
+  <tr><td>Human Review</td><td>Done 전에 사람이 개입하거나 명시적으로 검토한다. 에이전트는 여기서 멈추고 결정은 내가 한다.</td></tr>
+  <tr><td>Done</td><td>검증 완료.</td></tr>
+</table>
+<p>Human Review에서 보이는 것: 카드가 종료 상태 컬럼에 멈춰 있고 ● 표시가 없다. TUI에서 카드에 포커스하고 <kbd>c</kbd>를 누르면 Done으로 승인되고, 웹 보드에서도 Done으로 옮길 수 있다. Symphony가 대신 Done을 확정하는 일은 없다.</p>
+</li>
+
+<li>
+<h2>결과 확인하기</h2>
+<p>목표: 코드, 메모, 실행 기록이 어디 있는지 찾는다.</p>
+<pre><code>symphony board show TASK-1               # the agent's ## Resolution lives in the body
+ls ~/symphony_workspaces/TASK-1          # workspace it operated in
+symphony runs ./WORKFLOW.md --limit 5    # recent run-registry attempts
+git branch --list 'symphony/*'           # the ticket's feature branch</code></pre>
+<p>확인: 티켓 끝에 <code>## Resolution</code> 섹션이 붙는다. 커밋되는 산출물은 티켓 브랜치의 <code>docs/&lt;TICKET-ID&gt;/&lt;stage&gt;/</code> 아래에 있다. 리뷰어가 열어볼 파일(스크린샷, 리포트)은 호스트의 <code>.symphony/artifacts/&lt;TICKET-ID&gt;/</code>로 복사되어 티켓의 <code>## Artifacts</code> 목록과 웹 티켓 서랍에 나타난다. headless 모드(<code>tui</code> 없이 <code>symphony ./WORKFLOW.md</code>)에서는 워크플로 옆에 <code>WORKFLOW-PROGRESS.md</code>가 매 틱 다시 쓰인다. 읽기 전용 출력이니 손으로 고치지 않는다.</p>
+</li>
+
+<li>
+<h2>일상 운영</h2>
+<table>
+  <tr><th>할 일</th><th>방법</th></tr>
+  <tr><td>워커 일시정지 / 재개</td><td>포커스된 실행 중 카드에서 <kbd>P</kbd>, 또는 웹 버튼</td></tr>
+  <tr><td>재시도</td><td>자동. 실패한 워커는 ↻ 재시도 큐에 들어가 <code>agent.max_retries</code>까지 간격을 늘려가며 다시 시도한다. <kbd>r</kbd>은 새로고침 + 재폴링을 강제한다</td></tr>
+  <tr><td>아카이브</td><td>Done 카드에서 <kbd>a</kbd>. <code>tracker.archive_after_days</code>가 오래 방치된 종료 티켓도 정리한다</td></tr>
+  <tr><td>Document 건너뛰기</td><td>위키 반영이 필요 없는 티켓은 포커스 후 <kbd>S</kbd></td></tr>
+  <tr><td>티켓 수동 이동</td><td><code>symphony board mv TASK-1 Blocked</code> 또는 <code>symphony board update TASK-1 --state Blocked --add-blocked-by BUG-7</code>. 오케스트레이터는 다음 폴 틱에 다시 평가한다</td></tr>
+</table>
+<p>확인: 수동 이동은 막힌 것을 풀 때만 쓴다. 보통은 <code>WORKFLOW.md</code>의 단계별 프롬프트 파일에 따라 에이전트가 직접 티켓을 옮긴다.</p>
+</li>
+
+<li>
+<h2>여러 프로젝트</h2>
+<p>목표: 컨트롤 플레인 하나로 보드 여러 개를 돌린다.</p>
+<pre><code>symphony project list
+symphony project start my-app
+symphony project status
+symphony project stop my-app
+symphony hub                             # central UI for every registered project</code></pre>
+<p>확인: Hub와 각 프로젝트 보드는 정식 저장소, 워크플로, "Issues are stored here" 경로를 보여준다. 다른 프로젝트를 고르면 필요할 때 그 서비스가 시작된다. 이전 프로젝트의 서비스와 워커는 원래 저장소에서 계속 돌기 때문에, 프로젝트를 바꿔도 진행 중인 작업이 다른 곳으로 옮겨가지 않는다.</p>
+</li>
+
+<li>
+<h2>문제 해결과 다음 읽을 것</h2>
+<table>
+  <tr><th>증상</th><th>해결</th></tr>
+  <tr><td>doctor가 FAIL 출력</td><td>그 줄이 가리키는 것만 고치고 다시 돌린다. 가장 흔한 것은 자리표시자 클론 URL이다. worktree 기본값이나 <code>: noop</code>으로 바꾼다. 종료 코드 <code>2</code>는 YAML 자체를 읽지 못한 것이다.</td></tr>
+  <tr><td>워커 종료, 카드에 ↻</td><td>Symphony는 <code>agent.max_retries</code>까지 간격을 늘려 재시도한 뒤 에스컬레이션하고 티켓을 세워 둔다. 마지막 오류는 <code>symphony runs ./WORKFLOW.md --limit 5</code>와 <code>symphony service logs ./WORKFLOW.md</code>에서 읽는다.</td></tr>
+  <tr><td>에이전트가 몇 분째 조용함</td><td><code>stall_timeout_ms</code> 안에 진행 이벤트가 없는 워커는 취소된다. 무거운 레인(lane, 컬럼)만 <code>agent.stall_timeout_ms_by_state: {Verify: 900000}</code>으로 넓힌다. 로그는 stderr로 나가므로 <code>symphony tui ./WORKFLOW.md 2&gt;&gt; log/symphony.log</code>로 남긴다.</td></tr>
+  <tr><td>포트가 이미 사용 중</td><td>doctor가 충돌을 보고한다. <code>--port N</code>으로 덮어쓰거나 <code>symphony service status ./WORKFLOW.md</code>를 본다. 같은 워크플로는 두 번 뜨지 않는다.</td></tr>
+  <tr><td>TUI가 조용히 꺼짐</td><td>실제 터미널(TTY)이 필요하다. 포그라운드 터미널에서 실행하거나, <code>symphony ./WORKFLOW.md</code>로 headless로 돌리고 <code>WORKFLOW-PROGRESS.md</code>를 따라간다.</td></tr>
+</table>
+<p>다음: <a href="https://github.com/cskwork/oh-my-symphony/blob/main/README.ko.md">README.ko</a>(레인 프리셋, 채팅 인테이크, JSON API), <a href="https://github.com/cskwork/oh-my-symphony/blob/main/CHANGELOG.md">CHANGELOG</a>, <a href="https://github.com/cskwork/oh-my-symphony/issues">Issues</a>, 그리고 <a href="cheatsheet.html">치트시트</a>.</p>
+</li>
+
+</ol>
+
+<footer class="doc">oh-my-symphony 0.23.0 · Apache-2.0 · 같은 커밋의 README에서 생성</footer>
+</main>
+</body>
+</html>

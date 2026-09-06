@@ -27,7 +27,13 @@ exception is scoped to that one route — query strings leak into access logs,
 so no other endpoint accepts it).
 Fronting the board with a reverse proxy or tunnel is the other opt-in: the
 public name goes in `SYMPHONY_TRUSTED_ORIGINS` so project mutations and the
-chat WebSocket accept it.
+chat WebSocket accept it. Once trusted origins are declared, the loopback-only
+gates (project management, run diagnostics, `/_debug/tasks`) stop trusting
+the TCP peer — which is now the proxy — and read the real client from
+`X-Forwarded-For` (first entry) or `Forwarded: for=`; the proxy must set one
+of them, and anything but a loopback address there is refused. Without
+trusted origins those headers are ignored so a direct caller cannot forge
+them.
 """
 
 from __future__ import annotations
@@ -172,16 +178,58 @@ def _json_error(status: int, code: str, message: str) -> web.Response:
 # ---------------------------------------------------------------------------
 
 
+_FORWARDED_FOR_RE = re.compile(r"(?:^|[;,\s])for=([^;,\s]+)", re.IGNORECASE)
+
+
+def _forwarded_client(request: web.Request) -> str | None:
+    """Client address a reverse proxy reported, or None when neither
+    `X-Forwarded-For` nor `Forwarded: for=` is present."""
+    xff = request.headers.get("X-Forwarded-For")
+    if xff is not None:
+        return xff.split(",", 1)[0].strip()
+    forwarded = request.headers.get("Forwarded")
+    if forwarded is not None:
+        match = _FORWARDED_FOR_RE.search(forwarded)
+        return match.group(1).strip().strip('"') if match else ""
+    return None
+
+
+def _address_is_loopback(address: str) -> bool:
+    """Accepts bare IPs plus the `[v6]:port` / `v4:port` forms proxies emit."""
+    candidate = address.strip()
+    if candidate.startswith("["):
+        candidate = candidate.split("]", 1)[0].removeprefix("[")
+    elif candidate.count(":") == 1:
+        candidate = candidate.rsplit(":", 1)[0]
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
+
+
 def _request_is_loopback(request: web.Request) -> bool:
-    """Keep sensitive run diagnostics on the operator's local machine."""
+    """Keep sensitive run diagnostics on the operator's local machine.
+
+    Behind a declared reverse proxy (`SYMPHONY_TRUSTED_ORIGINS` set) the TCP
+    peer is the proxy itself, so the decision moves to the client address it
+    forwarded; a missing, malformed, or non-loopback forwarded address is
+    not loopback. Without trusted origins the headers are ignored — a
+    direct loopback caller could forge them.
+    """
     remote = request.remote
     if remote is None:
         bind = str(request.app.get(BIND_HOST_KEY) or "127.0.0.1").lower()
         return bind in _LOOPBACK_BINDS
     try:
-        return ipaddress.ip_address(remote).is_loopback
+        peer_is_loopback = ipaddress.ip_address(remote).is_loopback
     except ValueError:
         return False
+    if not peer_is_loopback or not _trusted_origins():
+        return peer_is_loopback
+    forwarded = _forwarded_client(request)
+    if forwarded is None:
+        return True
+    return _address_is_loopback(forwarded)
 
 
 def _request_host(request: web.Request) -> str:
@@ -304,6 +352,18 @@ def _request_has_valid_service_instance(
     )
 
 
+_BROWSER_PROVENANCE_HEADERS = ("Origin", "Referer", "Sec-Fetch-Site", "Sec-Fetch-Mode")
+
+
+def _request_from_browser(request: web.Request) -> bool:
+    """True when the request carries any header only a browser attaches.
+
+    Browsers always send `Origin` on cross-origin POSTs and `Sec-Fetch-*`
+    on every fetch; command-line clients send none of them.
+    """
+    return any(h in request.headers for h in _BROWSER_PROVENANCE_HEADERS)
+
+
 @web.middleware
 async def _api_guard(request: web.Request, handler):
     if request.path.startswith("/api/"):
@@ -341,10 +401,15 @@ async def _api_guard(request: web.Request, handler):
             return _json_error(
                 403, "forbidden_host", f"host {request.host!r} not allowed"
             )
+        # A JSON content type is what forces the CORS preflight, so it is
+        # required on every mutation a browser sends, including a body-less
+        # POST from an HTML form. A request with no browser provenance
+        # (plain `curl -X POST`, scripts) cannot be a CSRF vector and keeps
+        # working without a body.
         if (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
-            and request.body_exists
             and request.content_type != "application/json"
+            and (request.body_exists or _request_from_browser(request))
         ):
             return _json_error(
                 415, "unsupported_media_type", "mutations require application/json"
@@ -2799,8 +2864,7 @@ def _register_chat_routes(
                 return
 
     async def handle_chat_ws(request: web.Request) -> web.StreamResponse:
-        bind = str(request.app.get(BIND_HOST_KEY) or "127.0.0.1").lower()
-        if bind in _LOOPBACK_BINDS and not _origin_allowed(request):
+        if not _origin_allowed(request):
             return _json_error(
                 403, "forbidden_origin", "cross-origin websocket rejected"
             )
@@ -3094,13 +3158,7 @@ def _project_mutation_error(request: web.Request) -> web.Response | None:
         return _json_error(
             403, "project_mutation_forbidden", "project management is loopback-only"
         )
-    remote = request.remote
-    try:
-        if remote is None or not ipaddress.ip_address(remote).is_loopback:
-            return _json_error(
-                403, "project_mutation_forbidden", "project management is loopback-only"
-            )
-    except ValueError:
+    if request.remote is None or not _request_is_loopback(request):
         return _json_error(
             403, "project_mutation_forbidden", "project management is loopback-only"
         )

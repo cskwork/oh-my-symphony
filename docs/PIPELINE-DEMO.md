@@ -86,7 +86,7 @@ Not covered:
 
 How to re-run:
 - `pytest -q tests/test_server.py`
-- `curl -i -X POST http://127.0.0.1:9999/api/v1/refresh`
+- `curl -i -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:9999/api/v1/refresh`
 
 ```text
 $ pytest -q tests/test_server.py
@@ -94,7 +94,7 @@ $ pytest -q tests/test_server.py
 4 passed in 0.42s
 exit code: 0
 
-$ curl -i -X POST http://127.0.0.1:9999/api/v1/refresh
+$ curl -i -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:9999/api/v1/refresh
 HTTP/1.1 200 OK
 Content-Type: application/json
 Cache-Control: no-store
@@ -145,7 +145,7 @@ artefacts:
   review.
 
 ### Evidence
-- Commands: `pytest -q tests/test_server.py` rc=0; `curl -i -X POST
+- Commands: `pytest -q tests/test_server.py` rc=0; `curl -i -X POST -H 'Content-Type: application/json' -d '{}'
   http://127.0.0.1:9999/api/v1/refresh` rc=0.
 - Test: `tests/test_server.py::test_refresh_sets_no_store_cache_header`.
 - Artefacts: `docs/PIPELINE-DEMO/qa/refresh-response-asis.json`,
@@ -156,4 +156,4 @@ artefacts:
 
 ### How To Re-run
 - Run `pytest -q tests/test_server.py`, then call
-  `curl -i -X POST http://127.0.0.1:9999/api/v1/refresh`.
+  `curl -i -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:9999/api/v1/refresh`.

@@ -590,9 +590,13 @@ async def _run_turn_loop(orch: Orchestrator, st: _AttemptState) -> _AttemptExit 
         # next iteration can detect a phase transition against
         # the freshly refreshed state below.
         st.prev_phase_state = st.current_state
-        st.prev_phase_state_raw = (
-            st.running.issue.state if st.running is not None else st.issue.state
-        ) or ""
+        # Take the casing from the turn-start snapshot (`st.issue`), never
+        # from the running entry: a poll tick that landed mid-turn may
+        # already have refreshed `running.issue` to the *advanced* state,
+        # and a contract-failure rewind written with that casing is a
+        # silent no-op (the live e2e on 2026-09-06 recorded
+        # `verify -> verify` instead of `verify -> in progress`).
+        st.prev_phase_state_raw = st.issue.state or ""
 
         step = await _evaluate_turn_result(orch, st)
         if isinstance(step, _AttemptExit):

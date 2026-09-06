@@ -10,6 +10,93 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-06 - Printable manual, hardened web auth, honest service lifecycle
+
+### Added
+- **Printable manual on GitHub Pages.** `docs/manual/{en,ko}/{cheatsheet,tutorial}.html`
+  plus a download section on the landing page. `pages.yml` renders the four
+  PDFs with Chromium at deploy time (`scripts/build_manual_pdf.py`); the TUI
+  key and CLI subcommand tables are generated from `HELP_SECTIONS` and
+  `SUBCOMMANDS` by `scripts/sync_manual_tables.py`, and a test fails when
+  they drift.
+
+### Changed
+- **TUI `?` help is a modal.** The one-line 8-second toast listing ~25
+  bindings is now a scrollable `HelpScreen` grouped into Board / Navigate /
+  Layout / Ticket; `?`, `esc`, or `q` closes it. A test asserts every
+  `KanbanApp` binding appears in it.
+- **`symphony --help` lists the subcommands.** `tui`, `doctor`, `board`,
+  `service`, `project`, `hub`, `runs`, `release`, `wiki-sweep` were routed
+  before argparse and so never appeared in the top-level help.
+- **Mistyped subcommands fail fast.** `symphony servce start` now prints
+  `unknown command 'servce'` plus the command list (exit 2) instead of
+  resolving `./servce` as a workflow and reporting a missing WORKFLOW.md.
+  Tokens with a dot, a path separator, or that exist on disk are still
+  treated as the workflow path.
+- README (en/ko) key tables now list every binding; the KO table had
+  lagged behind by nine keys (`n`/`e`/`a`/`c`/`S`/`P`/`L`/`/`/`s`).
+
+### Fixed
+- **Stage-contract rewinds actually rewind.** When a poll tick refreshed the
+  running entry to the *advanced* state while the turn was still in flight,
+  the rewind was written with that state's casing and became a silent no-op
+  (stats recorded `verify -> verify`; the ticket note still claimed a rewind).
+  The producing state's casing is now taken from the turn-start snapshot,
+  and `_transition_agent_phase` falls back to the workflow's spelling of the
+  producing state whenever the raw label does not denote it. Found by the
+  0.23.0 live end-to-end run with `pi` / `glm-5.3-flash`.
+- **Verify contract accepts the heading the Verify prompt asks for.** The
+  shipped prompt says to append `## Merge Status: preflight clean, …`, but
+  the section matcher only recognised a bare `## Merge Status` line, so every
+  prompt-compliant ticket failed the Verify contract. Headings may now carry
+  an inline summary after the colon and that text counts as section content.
+  Surfaced by the same live run once rewinds became real.
+- **`service start` no longer reports success for an orchestrator that dies
+  at once** (for example, port already bound). The 2s gate polled "is the pid
+  alive?", which is true on the first poll, so the check never ran; a dead
+  child is also a zombie that still answers `kill(pid, 0)`. Startup now reaps
+  with `waitpid(WNOHANG)` for the whole window and fails if the child exits.
+  `port_owner_hint` also stops naming the current process as the port owner.
+- **`service stop` can signal an orchestrator that does not lead a process
+  group.** `killpg` raises `ProcessLookupError` for such pids and the stop path
+  returned `False`; it now falls back to `os.kill` while the process is alive.
+- **A leftover `.symphony/run/*.lock` after a crash, SIGKILL, or reboot no
+  longer blocks `service start` forever.** The lock owner pid is read back;
+  a dead or unparsable owner is reclaimed once (logged as `reclaimed stale
+  lock`), and a live owner's error now says which file to delete.
+- **TUI `e` no longer re-queues a finished ticket.** A file-board ticket
+  whose `state:` differed from WORKFLOW.md only by case (`done` vs `Done`)
+  was prefilled with the first active state, so a title-only edit moved it
+  back to `Todo`. The state Select now matches case-insensitively and offers
+  an unknown state as an extra option.
+- **TUI cards refresh their Issue in place.** Reused `IssueCard` widgets kept
+  the pre-refresh ticket, so the detail pane, Enter modal and `e` prefill
+  showed stale fields and a second edit reverted the first.
+- **Orchestrator errors no longer crash the TUI.** `snapshot()`,
+  `iter_running_issues()`, `find_running_issue_id()`, `is_paused()` and
+  `stats.aggregate()` are guarded; the board keeps the last good snapshot and
+  toasts each distinct failure at most once per 10s.
+- **Body-less mutations can no longer bypass the JSON content-type gate.**
+  `_api_guard` skipped the `application/json` check when a POST/PUT/PATCH/
+  DELETE had no body, so a cross-origin HTML form could hit `pause`,
+  `resume`, `refresh`, `skip-document`, and friends without a CORS preflight.
+  A body-less mutation now returns 415 when the request carries any
+  browser provenance header (`Origin`, `Referer`, `Sec-Fetch-Site`,
+  `Sec-Fetch-Mode`) and no JSON type. Plain `curl -X POST` from a shell has
+  none of those headers, is not a CSRF vector, and keeps working unchanged;
+  the web app and `scripts/smoke_web_api.py` send `{}` regardless.
+- **Loopback-only gates work behind a declared reverse proxy.** With
+  `SYMPHONY_TRUSTED_ORIGINS` set, project management and `/_debug/tasks`
+  read the client from `X-Forwarded-For` (first entry) or `Forwarded: for=`
+  instead of trusting the proxy's loopback TCP peer; a missing, malformed,
+  or non-loopback forwarded address is refused. Without trusted origins the
+  headers are ignored, so a direct loopback caller cannot forge them.
+- **Chat WebSocket rejects foreign origins on every bind.** The Origin check
+  only ran when the server was loopback-bound, which is exactly the case that
+  needed it least. `run_server` also logs a WARN when the bind is
+  non-loopback and `SYMPHONY_API_TOKEN` is unset.
+
+
 ## [0.22.0] - 2026-09-05 - Chat intent gate and orchestrator extractions
 
 ### Added
