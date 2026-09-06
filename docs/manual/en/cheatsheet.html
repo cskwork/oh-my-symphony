@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oh-my-symphony cheatsheet</title>
+<link rel="stylesheet" href="../manual.css">
+</head>
+<body>
+<main>
+<header class="doc">
+  <div class="kicker">CHEATSHEET</div>
+  <h1>oh-my-symphony</h1>
+  <p class="sub">One Kanban board, eight AI coding agents, one ticket per <code>git worktree</code>. Everything you type, on two pages.</p>
+  <div class="links">
+    <a href="../ko/cheatsheet.html">한국어</a>
+    <a href="tutorial.html">Tutorial</a>
+    <a href="../pdf/oh-my-symphony-cheatsheet-en.pdf">PDF</a>
+    <a href="https://github.com/cskwork/oh-my-symphony">github.com/cskwork/oh-my-symphony</a>
+  </div>
+  <div class="links no-print">Print / Save as PDF: <kbd>Ctrl+P</kbd> / <kbd>⌘P</kbd></div>
+</header>
+
+<h2>Lifecycle in one line</h2>
+<div class="flow">
+  <span>install</span><i>→</i>
+  <span>project create / add</span><i>→</i>
+  <span>doctor</span><i>→</i>
+  <span>tui / service</span><i>→</i>
+  <span>ticket</span><i>→</i>
+  <span>agent runs</span><i>→</i>
+  <span>Human Review</span><i>→</i>
+  <span>Done</span>
+</div>
+
+<h2>Install &amp; first run</h2>
+<pre><code>git clone https://github.com/cskwork/oh-my-symphony.git &amp;&amp; cd oh-my-symphony
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
+python -m pip install -e ".[dev]"
+symphony project create "My App" --path ../my-app &amp;&amp; cd ../my-app
+symphony doctor ./WORKFLOW.md
+symphony tui ./WORKFLOW.md</code></pre>
+
+<h2>CLI</h2>
+<!-- generated:cli-subcommands -->
+<table><tr><th>Command</th><th>What it does</th></tr><tr><td><code>symphony tui</code></td><td>open the Kanban TUI (same as --tui)</td></tr><tr><td><code>symphony doctor</code></td><td>preflight a WORKFLOW.md before launching</td></tr><tr><td><code>symphony board</code></td><td>manage the file-based Kanban board (init/ls/new/mv/update/show/graph)</td></tr><tr><td><code>symphony service</code></td><td>run the orchestrator as a managed background service</td></tr><tr><td><code>symphony project</code></td><td>register and run independent project services</td></tr><tr><td><code>symphony hub</code></td><td>serve the multi-project hub</td></tr><tr><td><code>symphony runs</code></td><td>print recent run-registry attempts</td></tr><tr><td><code>symphony release</code></td><td>validate application release evidence</td></tr><tr><td><code>symphony wiki-sweep</code></td><td>lint docs/llm-wiki for duplicate slugs and orphans</td></tr></table>
+<!-- /generated -->
+<table>
+  <tr><th>Most-used invocation</th><th>Effect</th></tr>
+  <tr><td><code>symphony board init ./kanban</code></td><td>Create the file board with a sample <code>DEMO-001.md</code></td></tr>
+  <tr><td><code>symphony board new TASK-1 "title"</code></td><td>Create <code>kanban/TASK-1.md</code>; flags: <code>--priority 2 --labels backend,test --description "…" --blocked-by ID --agent-kind codex</code></td></tr>
+  <tr><td><code>symphony board ls --state Todo</code></td><td>List tickets, optionally by state</td></tr>
+  <tr><td><code>symphony board mv TASK-1 Blocked</code></td><td>Force a state change; re-evaluated on the next poll tick</td></tr>
+  <tr><td><code>symphony service start ./WORKFLOW.md --port 9999</code></td><td>Background service + web board; also <code>status</code> / <code>logs</code> / <code>restart</code> / <code>stop</code></td></tr>
+  <tr><td><code>symphony runs ./WORKFLOW.md --limit 5</code></td><td>Recent run-registry attempts (<code>--issue ID</code> to filter)</td></tr>
+</table>
+
+<h2>TUI keys</h2>
+<p class="legend">
+  <span><b class="dot-run">●</b> running (turn N, tokens)</span>
+  <span><b class="dot-retry">↻</b> retry queued (retry #N, last error)</span>
+  <span><b class="dot-done">✓</b> done this session</span>
+  <span><kbd>?</kbd> opens this list inside the TUI</span>
+</p>
+<div class="grid">
+<!-- generated:tui-keys -->
+<div class="card"><h3>Board</h3><table>
+<tr><td><kbd>q</kbd></td><td>quit (asks twice while workers run)</td></tr>
+<tr><td><kbd>r</kbd></td><td>refresh + re-poll the tracker</td></tr>
+<tr><td><kbd>?</kbd></td><td>this help</td></tr>
+<tr><td><kbd>L</kbd></td><td>cycle TUI + doc language</td></tr>
+<tr><td><kbd>s</kbd></td><td>run statistics</td></tr>
+<tr><td><kbd>/</kbd></td><td>filter cards by id / title / label</td></tr>
+<tr><td><kbd>esc</kbd></td><td>close filter, reset zoom</td></tr>
+</table></div>
+<div class="card"><h3>Navigate</h3><table>
+<tr><td><kbd>tab</kbd> / <kbd>shift+tab</kbd></td><td>focus next / previous card</td></tr>
+<tr><td><kbd>j</kbd> / <kbd>k</kbd>, <kbd>↓</kbd> / <kbd>↑</kbd></td><td>scroll the focused lane</td></tr>
+<tr><td><kbd>g</kbd> / <kbd>G</kbd>, <kbd>home</kbd> / <kbd>end</kbd></td><td>jump to top / bottom</td></tr>
+<tr><td><kbd>space</kbd> / <kbd>pgdn</kbd>, <kbd>b</kbd> / <kbd>pgup</kbd></td><td>page down / up</td></tr>
+<tr><td><kbd>enter</kbd></td><td>open the full-detail modal</td></tr>
+<tr><td><kbd>p</kbd></td><td>show / hide the detail pane</td></tr>
+<tr><td><kbd>]</kbd> / <kbd>[</kbd></td><td>focus the detail pane / back to the board</td></tr>
+</table></div>
+<div class="card"><h3>Layout</h3><table>
+<tr><td><kbd>1-9</kbd> / <kbd>0</kbd></td><td>zoom that lane / reset zoom</td></tr>
+<tr><td><kbd>t</kbd> / <kbd>T</kbd></td><td>next / previous page of lanes</td></tr>
+<tr><td><kbd>+</kbd> / <kbd>-</kbd></td><td>more / fewer lanes per page</td></tr>
+<tr><td><kbd>d</kbd></td><td>toggle compact / rich cards</td></tr>
+</table></div>
+<div class="card"><h3>Ticket</h3><table>
+<tr><td><kbd>n</kbd></td><td>new ticket (file board only)</td></tr>
+<tr><td><kbd>e</kbd></td><td>edit the focused ticket (file board only)</td></tr>
+<tr><td><kbd>a</kbd></td><td>archive the focused Done card</td></tr>
+<tr><td><kbd>c</kbd></td><td>confirm the focused Human Review card as Done</td></tr>
+<tr><td><kbd>S</kbd></td><td>skip Document for the focused card</td></tr>
+<tr><td><kbd>P</kbd></td><td>pause / resume the focused running worker</td></tr>
+</table></div>
+<!-- /generated -->
+</div>
+
+<h2>Web board</h2>
+<table>
+  <tr><th>Item</th><th>Detail</th></tr>
+  <tr><td>URL</td><td><code>http://127.0.0.1:&lt;port&gt;/</code> (<code>server.port</code> or <code>--port</code>); loopback only</td></tr>
+  <tr><td>Pause / Resume</td><td>Buttons on running cards hold / release that worker</td></tr>
+  <tr><td>Header refresh</td><td>Triggers an orchestrator <code>poll + reconcile</code></td></tr>
+  <tr><td>Branch dropdowns</td><td>Real local git branches for <code>agent.feature_base_branch</code> (start of new branches) and <code>agent.auto_merge_target_branch</code> (Done merge target)</td></tr>
+  <tr><td>Bearer token</td><td><code>export SYMPHONY_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"</code> before launch; the web app prompts after its first <code>401</code>. Optional</td></tr>
+</table>
+
+<h2>WORKFLOW.md minimum</h2>
+<pre><code>---
+tracker:
+  kind: file
+  board_root: ./kanban
+  active_states: [Todo, "In Progress", Verify, Document]
+  terminal_states: ["Human Review", Done, Blocked, Archive]
+agent:
+  kind: claude          # codex | claude | gemini | agy | kiro | opencode | pi | prime-agent
+  max_concurrent_agents: 1
+server:
+  port: 9999
+---</code></pre>
+<table>
+  <tr><th>Key</th><th>What it changes</th></tr>
+  <tr><td><code>agent.kind</code></td><td>Default backend CLI; a ticket can override with <code>agent_kind:</code> frontmatter</td></tr>
+  <tr><td><code>agent.max_concurrent_agents</code></td><td>How many workers run at once (each in its own worktree)</td></tr>
+  <tr><td><code>tracker.active_states</code></td><td>Columns the orchestrator dispatches agents into</td></tr>
+  <tr><td><code>server.port</code></td><td>Web board + JSON API port; drop the block to disable HTTP</td></tr>
+  <tr><td><code>agent.feature_base_branch</code></td><td>Start point of <code>symphony/&lt;ID&gt;</code> branches; empty = current host branch</td></tr>
+  <tr><td><code>agent.auto_merge_target_branch</code></td><td>Branch the Verify gate merges into; empty = the branch the feature was cut from</td></tr>
+</table>
+
+<h2>Ticket states</h2>
+<table>
+  <tr><th>State</th><th>What happens there</th></tr>
+  <tr><td>Todo</td><td>Triage; route to In Progress (a ticket with Acceptance Criteria skips the model turn)</td></tr>
+  <tr><td>In Progress</td><td>Plan + TDD implementation + self-critique on the <code>symphony/&lt;ID&gt;</code> branch</td></tr>
+  <tr><td>Verify</td><td>Review + QA + Merge Gate; feature branch merged into the target before Document</td></tr>
+  <tr><td>Document</td><td>Docs + wiki write-back; Done unless intervention (<kbd>S</kbd> skips it)</td></tr>
+  <tr><td>Human Review</td><td>Manual intervention or explicit review before Done; confirm with <kbd>c</kbd> in the TUI or from the web board</td></tr>
+  <tr><td>Done</td><td>Verified complete; one <code>&lt;ID&gt;: &lt;title&gt;</code> commit; <kbd>a</kbd> archives</td></tr>
+</table>
+
+<h2>When something breaks</h2>
+<div class="note">
+  <strong>doctor FAIL line</strong> — fix what the line names (placeholder clone URL → worktree default or <code>: noop</code>; missing CLI → put it on <code>$PATH</code>), re-run <code>symphony doctor ./WORKFLOW.md</code>. Exit <code>1</code> = a FAIL, <code>2</code> = WORKFLOW.md would not load.<br>
+  <strong>Worker exited, card shows ↻</strong> — retries back off up to <code>agent.max_retries</code>; last error in <code>symphony runs ./WORKFLOW.md --limit 5</code> and <code>symphony service logs ./WORKFLOW.md</code>.<br>
+  <strong>Agent silent for minutes</strong> — no progress inside <code>stall_timeout_ms</code> cancels the worker; widen one lane: <code>agent.stall_timeout_ms_by_state: {Verify: 900000}</code>; tail <code>log/symphony.log</code>.<br>
+  <strong>Port in use</strong> — doctor reports it; <code>--port N</code> overrides <code>server.port</code>; <code>symphony service status ./WORKFLOW.md</code> shows who holds it.<br>
+  <strong>TUI exits silently</strong> — it needs a real TTY: run it in a foreground terminal, or go headless (<code>symphony ./WORKFLOW.md</code>) and read <code>WORKFLOW-PROGRESS.md</code>.
+</div>
+
+<footer class="doc">oh-my-symphony 0.22.0 · Apache-2.0 · generated from README on the same commit</footer>
+</main>
+</body>
+</html>

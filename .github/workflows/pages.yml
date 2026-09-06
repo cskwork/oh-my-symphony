@@ -24,6 +24,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The manual PDFs are rendered from docs/manual/<lang>/*.html at deploy
+      # time so the download always matches the HTML on the same commit.
+      - name: Install PDF toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q fonts-noto-cjk fonts-inter
+          python -m pip install -q -e . playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Check manual tables match the code
+        run: python scripts/sync_manual_tables.py --check
+
+      - name: Render manual PDFs
+        run: python scripts/build_manual_pdf.py
+
       - name: Configure Pages
         uses: actions/configure-pages@v6
 

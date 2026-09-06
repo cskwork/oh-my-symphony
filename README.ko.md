@@ -30,6 +30,8 @@
 
 ## 목차
 
+> **인쇄용 매뉴얼:** [치트시트 (PDF)](https://cskwork.github.io/oh-my-symphony/manual/pdf/oh-my-symphony-cheatsheet-ko.pdf) · [튜토리얼 (PDF)](https://cskwork.github.io/oh-my-symphony/manual/pdf/oh-my-symphony-tutorial-ko.pdf) · [HTML + 영어](https://cskwork.github.io/oh-my-symphony/#manual). 배포할 때마다 `docs/manual/`에서 생성되며 키 표는 코드에서 뽑습니다.
+
 - [Symphony를 쓰는 이유](#why-symphony)
 - [작동 방식](#how-it-works)
 - [에이전트 선택](#pick-an-agent)
@@ -784,6 +786,13 @@ symphony ./WORKFLOW.md --host 0.0.0.0 --port 9999
 curl -H "Authorization: Bearer $SYMPHONY_API_TOKEN" \
   http://127.0.0.1:9999/api/v1/state
 ```
+
+`SYMPHONY_TRUSTED_ORIGINS`를 선언하면 루프백 전용 경로(프로젝트 관리,
+`/_debug/tasks`)는 프록시의 루프백 TCP 연결을 믿지 않고 `X-Forwarded-For`(첫
+항목) 또는 `Forwarded: for=`에서 실제 클라이언트 주소를 읽는다. 프록시가 이
+헤더를 넣어야 하며, 루프백 주소만 통과한다. 선언이 없으면 이 헤더는 무시된다.
+모든 변경 요청(POST/PUT/PATCH/DELETE)은 본문이 비어 있어도
+`Content-Type: application/json`을 보내야 한다(curl은 `-d '{}'`).
 
 토큰이 설정되면 내장 웹 앱은 첫 `401` 응답 뒤 토큰을 요청하고, 현재 탭의
 `sessionStorage`에만 저장한 뒤 API 요청과 Chat WebSocket에 자동으로 붙인다.

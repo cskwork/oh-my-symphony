@@ -30,6 +30,8 @@ usage, and whatever rate-limit headroom the selected CLI reports.
 
 ## Contents
 
+> **Printable manual:** [cheatsheet (PDF)](https://cskwork.github.io/oh-my-symphony/manual/pdf/oh-my-symphony-cheatsheet-en.pdf) · [tutorial (PDF)](https://cskwork.github.io/oh-my-symphony/manual/pdf/oh-my-symphony-tutorial-en.pdf) · [HTML + Korean](https://cskwork.github.io/oh-my-symphony/#manual). Rendered from `docs/manual/` on every deploy; key tables come from the code.
+
 - [Why Symphony?](#why-symphony)
 - [How it works](#how-it-works)
 - [Pick an agent](#pick-an-agent)
@@ -1118,7 +1120,14 @@ SYMPHONY_TRUSTED_ORIGINS=https://symphony.example.com symphony ./WORKFLOW.md --p
 ```
 
 Comma-separate several entries; a bare hostname matches any scheme and
-port, and `*` trusts every origin. Everything the tunnel exposes is
+port, and `*` trusts every origin. Once trusted origins are declared, the
+loopback-only routes (project management, `/_debug/tasks`) no longer trust
+the proxy's loopback TCP connection; they read the real client address from
+`X-Forwarded-For` (first entry) or `Forwarded: for=`, so the proxy must set
+one of those headers, and only a loopback client passes. Without trusted
+origins those headers are ignored. Every mutating request (POST/PUT/PATCH/
+DELETE) must carry `Content-Type: application/json`, even with an empty
+body — send `-d '{}'` from curl. Everything the tunnel exposes is
 reachable by whoever can reach the tunnel, so put authentication (for
 example Cloudflare Access) in front of it. Symphony can also require a bearer
 token on every operator `/api/` request:
