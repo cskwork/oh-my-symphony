@@ -315,7 +315,16 @@ class EditIssueScreen(ModalScreen[dict[str, Any] | None]):
     ) -> None:
         super().__init__()
         self._issue = issue
-        self._states = states or [issue.state or "Todo"]
+        self._states = list(states) or [issue.state or "Todo"]
+        # Ticket files may spell a state differently from WORKFLOW.md
+        # (`state: done` vs `Done`). Match case-insensitively so a title-only
+        # edit never re-queues the ticket to `states[0]`; an unknown state is
+        # offered as an extra option so it round-trips untouched.
+        self._initial_state = _match_state(issue.state, self._states)
+        if self._initial_state is None:
+            self._initial_state = issue.state or self._states[0]
+            if self._initial_state not in self._states:
+                self._states.append(self._initial_state)
         self._agent_kinds = agent_kinds
 
     def compose(self) -> ComposeResult:
@@ -333,7 +342,7 @@ class EditIssueScreen(ModalScreen[dict[str, Any] | None]):
             )
             yield Select(
                 [(s, s) for s in self._states],
-                value=self._issue.state if self._issue.state in self._states else self._states[0],
+                value=self._initial_state,
                 id="ei-state",
             )
             yield Select(
@@ -388,6 +397,14 @@ class EditIssueScreen(ModalScreen[dict[str, Any] | None]):
                 "labels": _split_csv(self.query_one("#ei-labels", Input).value),
             }
         )
+
+
+def _match_state(state: str | None, states: list[str]) -> str | None:
+    key = normalize_state(state).strip()
+    for candidate in states:
+        if normalize_state(candidate).strip() == key:
+            return candidate
+    return None
 
 
 def _split_csv(raw: str) -> list[str]:

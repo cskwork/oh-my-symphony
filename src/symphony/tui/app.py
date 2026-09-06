@@ -14,6 +14,7 @@ module's globals at call time, so tests patch the consumer's reference.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import replace
 from typing import Any, Iterable
 
@@ -62,6 +63,16 @@ log = get_logger()
 # Seconds the quit confirmation stays armed after a first `q` on a busy
 # board. A second `q` inside this window quits; outside it, `q` re-arms.
 QUIT_CONFIRM_WINDOW_S = 5.0
+
+
+_ORCH_ERROR_REPEAT_S = 10.0
+_EMPTY_SNAPSHOT: dict[str, Any] = {
+    "counts": {"running": 0, "retrying": 0},
+    "codex_totals": {},
+    "running": [],
+    "retrying": [],
+    "generated_at": "",
+}
 
 
 class KanbanApp(App):
@@ -168,6 +179,11 @@ class KanbanApp(App):
         # While workers are live the first press only arms a short
         # confirmation window; see `action_quit`.
         self._quit_armed: bool = False
+        # Orchestrator queries run on the 0.5 s heartbeat. A raise there
+        # must not tear the app down: keep the last good snapshot and toast
+        # each distinct failure once instead of every tick.
+        self._last_snapshot: dict[str, Any] = _EMPTY_SNAPSHOT
+        self._orch_error_seen: dict[str, float] = {}
 
     # ----- composition -------------------------------------------------
 
@@ -262,7 +278,7 @@ class KanbanApp(App):
         cfg = self._ws.current()
         if cfg is None:
             return
-        snapshot = self._orch.snapshot()
+        snapshot = self._safe_snapshot()
         try:
             stats = self.query_one(StatsBar)
         except (NoMatches, ScreenStackError):
@@ -301,12 +317,38 @@ class KanbanApp(App):
         self._apply_lane_widths()
         self._refresh_detail_pane()
 
+    def _safe_snapshot(self) -> dict[str, Any]:
+        try:
+            self._last_snapshot = self._orch.snapshot()
+        except Exception as exc:
+            self._notify_orch_error("orchestrator snapshot failed", exc)
+        return self._last_snapshot
+
+    def _safe_running_issues(self) -> list[Issue]:
+        try:
+            return list(self._orch.iter_running_issues())
+        except Exception as exc:
+            self._notify_orch_error("orchestrator running-issues failed", exc)
+            return []
+
+    def _notify_orch_error(self, what: str, exc: Exception) -> None:
+        # Heartbeat calls this every 0.5 s while the fault persists; surface
+        # each distinct message at most once per window.
+        message = f"{what}: {exc}"
+        now = time.monotonic()
+        last = self._orch_error_seen.get(message)
+        if last is not None and now - last < _ORCH_ERROR_REPEAT_S:
+            return
+        self._orch_error_seen[message] = now
+        log.warning("tui_orchestrator_query_failed", what=what, error=str(exc))
+        self.notify(message, severity="error", timeout=4)
+
     def _all_known_issues(self) -> Iterable[Issue]:
         seen: set[str] = set()
         for source in (
             self._candidates,
             self._terminal_issues,
-            list(self._orch.iter_running_issues()),
+            self._safe_running_issues(),
         ):
             for issue in source:
                 if issue.id in seen:
@@ -798,7 +840,15 @@ class KanbanApp(App):
             )
             return
         issue = focused.issue
-        if self._orch.find_running_issue_id(issue.identifier) is not None:
+        try:
+            running_id = self._orch.find_running_issue_id(issue.identifier)
+        except Exception as exc:
+            log.warning(
+                "tui_find_running_failed", identifier=issue.identifier, error=str(exc)
+            )
+            self.notify(f"edit check failed: {exc}", severity="error", timeout=4)
+            return
+        if running_id is not None:
             self.notify(
                 f"{issue.identifier} is running; wait before editing",
                 timeout=3,
@@ -880,7 +930,12 @@ class KanbanApp(App):
         )
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         done_states = {"done"} if "done" in terminal else terminal
-        aggregate = await asyncio.to_thread(store.aggregate, 30, done_states)
+        try:
+            aggregate = await asyncio.to_thread(store.aggregate, 30, done_states)
+        except Exception as exc:
+            log.warning("tui_stats_failed", error=str(exc))
+            self.notify(f"stats failed: {exc}", timeout=4, severity="error")
+            return
         casing = {
             s.lower(): s
             for s in (*cfg.tracker.active_states, *cfg.tracker.terminal_states)
@@ -904,7 +959,13 @@ class KanbanApp(App):
             self.notify("focus a card first", timeout=2)
             return
         issue_id = focused.issue.id
-        if self._orch.is_paused(issue_id):
+        try:
+            paused = self._orch.is_paused(issue_id)
+        except Exception as exc:
+            log.warning("tui_is_paused_failed", issue_id=issue_id, error=str(exc))
+            self.notify(f"pause check failed: {exc}", severity="error", timeout=4)
+            return
+        if paused:
             if self._orch.resume_worker(issue_id):
                 self.notify(f"resumed {focused.issue.identifier}", timeout=2)
             else:

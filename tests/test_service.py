@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import signal
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1508,7 +1511,7 @@ def test_start_generates_and_persists_one_service_instance_id(
 
     monkeypatch.setattr(secrets, "token_urlsafe", _token_urlsafe)
     monkeypatch.setattr(service_module, "_popen_detached", _spawn)
-    monkeypatch.setattr(service_module, "_wait_until", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(service_module, "_exited_during_startup", lambda pid: False)
 
     rc = service_main(["start", "--skip-doctor", str(workflow)])
 
@@ -1558,7 +1561,7 @@ def test_start_cleans_spawned_process_if_record_save_fails(
         service_module, "_run_doctor_or_print", lambda *args, **kwargs: True
     )
     monkeypatch.setattr(service_module, "_popen_detached", lambda *args, **kwargs: 1234)
-    monkeypatch.setattr(service_module, "_wait_until", lambda *args, **kwargs: True)
+    monkeypatch.setattr(service_module, "_exited_during_startup", lambda pid: False)
     monkeypatch.setattr(
         service_module,
         "save_record",
@@ -1592,3 +1595,118 @@ def test_restart_aborts_when_stop_fails(tmp_path: Path, monkeypatch) -> None:
 
     assert rc == 1
     assert starts == []
+
+
+@pytest.fixture
+def sleeping_child():
+    """Real child in pytest's own process group (so killpg(pid) has no group)."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        yield proc
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=5)
+
+
+def _reaped_dead_pid() -> int:
+    proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(0)"])
+    proc.wait(timeout=5)
+    return proc.pid
+
+
+def test_start_fails_when_orchestrator_exits_immediately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    workflow = _workflow(tmp_path)
+    monkeypatch.setattr(service_module, "_START_STABILITY_WINDOW_S", 0.5)
+
+    def _spawn(*_args: object, **_kwargs: object) -> int:
+        # Mirrors _popen_detached: the Popen handle is dropped, child is never reaped.
+        return subprocess.Popen(
+            [sys.executable, "-c", "raise SystemExit(3)"], start_new_session=True
+        ).pid
+
+    monkeypatch.setattr(service_module, "_popen_detached", _spawn)
+
+    rc = service_main(["start", "--skip-doctor", str(workflow)])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "orchestrator exited early" in captured.err
+    assert load_record(workflow) is None
+
+
+def test_start_succeeds_when_orchestrator_survives_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sleeping_child: subprocess.Popen
+) -> None:
+    workflow = _workflow(tmp_path)
+    monkeypatch.setattr(service_module, "_START_STABILITY_WINDOW_S", 0.3)
+    monkeypatch.setattr(
+        service_module, "_popen_detached", lambda *_a, **_k: sleeping_child.pid
+    )
+
+    rc = service_main(["start", "--skip-doctor", str(workflow)])
+
+    assert rc == 0
+    record = load_record(workflow)
+    assert record is not None
+    assert record.orchestrator_pid == sleeping_child.pid
+
+
+def test_port_owner_hint_ignores_record_owned_by_current_process(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path)
+    save_record(_record(workflow, pid=os.getpid(), port=9999))
+
+    assert service_module.port_owner_hint(workflow, 9999) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+def test_terminate_process_falls_back_to_kill_for_non_group_leader(
+    sleeping_child: subprocess.Popen,
+) -> None:
+    assert service_module.terminate_process(sleeping_child.pid) is True
+    assert sleeping_child.wait(timeout=5) == -signal.SIGTERM
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+def test_terminate_process_returns_false_for_reaped_pid() -> None:
+    assert service_module.terminate_process(_reaped_dead_pid()) is False
+
+
+def test_service_lock_reclaims_stale_owner(tmp_path: Path, capsys) -> None:
+    workflow = _workflow(tmp_path)
+    lock = service_module.lock_path_for(workflow)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(f"{_reaped_dead_pid()}\n", encoding="utf-8")
+
+    with acquire_service_lock(workflow) as held:
+        assert held == lock
+        assert lock.read_text(encoding="utf-8").strip() == str(os.getpid())
+    assert not lock.exists()
+    assert "reclaimed stale lock" in capsys.readouterr().err
+
+
+def test_service_lock_reclaims_unparsable_owner(tmp_path: Path, capsys) -> None:
+    workflow = _workflow(tmp_path)
+    lock = service_module.lock_path_for(workflow)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("not-a-pid", encoding="utf-8")
+
+    with acquire_service_lock(workflow):
+        pass
+    assert "reclaimed stale lock" in capsys.readouterr().err
+
+
+def test_service_lock_keeps_live_owner_and_explains_recovery(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path)
+    lock = service_module.lock_path_for(workflow)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    with pytest.raises(ServiceLockError) as excinfo:
+        with acquire_service_lock(workflow):
+            pass
+    message = str(excinfo.value)
+    assert f"delete {lock} if no service operation is running" in message
+    assert lock.exists()

@@ -20,6 +20,7 @@ import pytest
 import pytest_asyncio
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from multidict import CIMultiDict
 
 import symphony.server as server_mod
 from symphony.orchestrator import Orchestrator
@@ -27,6 +28,7 @@ from symphony.server import build_app
 from symphony.workflow import WorkflowState
 from symphony.webapi import (
     API_TOKEN_ENV,
+    TRUSTED_ORIGINS_ENV,
     _request_has_valid_bearer,
     _request_has_valid_ws_query_token,
     _request_is_loopback,
@@ -312,6 +314,26 @@ def test_request_has_valid_ws_query_token_requires_exact_match() -> None:
 
 
 # ---------------------------------------------------------------------------
+# JSON content type on every mutation (CSRF: no simple-form submissions)
+# ---------------------------------------------------------------------------
+
+
+async def test_bodyless_mutations_require_json_content_type(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(API_TOKEN_ENV, raising=False)
+    # An HTML form can submit an empty POST without a CORS preflight; the
+    # 415 must not depend on whether a body happened to be attached.
+    resp = await client.post("/api/v1/refresh")
+    assert resp.status == 415
+    assert (await resp.json())["error"]["code"] == "unsupported_media_type"
+    resp = await client.delete("/api/v1/issues/X-1")
+    assert resp.status == 415
+    resp = await client.post("/api/v1/refresh", json={})
+    assert resp.status == 202
+
+
+# ---------------------------------------------------------------------------
 # /api/v1/_debug/tasks loopback gate
 # ---------------------------------------------------------------------------
 
@@ -340,10 +362,59 @@ async def test_debug_tasks_rejects_non_loopback_peer(
 
 def test_shared_loopback_predicate_rejects_non_loopback_remote() -> None:
     def req(remote: str) -> Any:
-        return SimpleNamespace(remote=remote, app={})
+        return SimpleNamespace(remote=remote, app={}, headers={})
 
     assert _request_is_loopback(req("127.0.0.1"))
     assert not _request_is_loopback(req("203.0.113.9"))
+
+
+def test_shared_loopback_predicate_reads_forwarded_client_behind_trusted_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def req(remote: str, **headers: str) -> Any:
+        # Real requests carry a case-insensitive multidict; hyphenate here.
+        return SimpleNamespace(
+            remote=remote,
+            app={},
+            headers=CIMultiDict(
+                {key.replace("_", "-"): value for key, value in headers.items()}
+            ),
+        )
+
+    # No trusted origins: a direct loopback caller could forge the header,
+    # so it is ignored and the TCP peer alone decides.
+    monkeypatch.delenv(TRUSTED_ORIGINS_ENV, raising=False)
+    assert _request_is_loopback(req("127.0.0.1", X_Forwarded_For="203.0.113.9"))
+
+    # Reverse-proxy deployment declared: the proxy is the loopback peer and
+    # the real client is whatever it forwarded.
+    monkeypatch.setenv(TRUSTED_ORIGINS_ENV, "https://symphony.example.com")
+    assert _request_is_loopback(req("127.0.0.1"))
+    assert _request_is_loopback(req("127.0.0.1", X_Forwarded_For="127.0.0.1"))
+    assert _request_is_loopback(req("127.0.0.1", X_Forwarded_For="::1, 10.0.0.2"))
+    assert _request_is_loopback(req("127.0.0.1", Forwarded="for=127.0.0.1;proto=https"))
+    assert _request_is_loopback(req("127.0.0.1", Forwarded='for="[::1]:4711"'))
+    assert not _request_is_loopback(req("127.0.0.1", X_Forwarded_For="203.0.113.9"))
+    assert not _request_is_loopback(req("127.0.0.1", X_Forwarded_For="203.0.113.9, 127.0.0.1"))
+    assert not _request_is_loopback(req("127.0.0.1", Forwarded="for=203.0.113.9"))
+    assert not _request_is_loopback(req("127.0.0.1", X_Forwarded_For="not-an-ip"))
+    assert not _request_is_loopback(req("127.0.0.1", Forwarded="proto=https"))
+    # A non-loopback peer never gets to vouch for itself via headers.
+    assert not _request_is_loopback(req("203.0.113.9", X_Forwarded_For="127.0.0.1"))
+
+
+async def test_debug_tasks_rejects_forwarded_non_loopback_client(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = {"X-Forwarded-For": "203.0.113.9"}
+    monkeypatch.delenv(TRUSTED_ORIGINS_ENV, raising=False)
+    assert (await client.get("/api/v1/_debug/tasks", headers=headers)).status == 200
+
+    monkeypatch.setenv(TRUSTED_ORIGINS_ENV, "https://symphony.example.com")
+    resp = await client.get("/api/v1/_debug/tasks", headers=headers)
+    assert resp.status == 403
+    assert (await resp.json())["error"]["code"] == "debug_tasks_local_only"
+    assert (await client.get("/api/v1/_debug/tasks")).status == 200
 
 
 # ---------------------------------------------------------------------------

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import importlib
-import os
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -157,13 +157,16 @@ def test_port_conflict_names_this_workflow_service(
     blocker.bind(("127.0.0.1", 0))
     blocker.listen(1)
     port = blocker.getsockname()[1]
+    # A live pid that is not this process: the hint must never blame the
+    # current process (the orchestrator child sees its own record on startup).
+    owner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     save_record(
         ServiceRecord(
             workflow_path=workflow,
             workflow_dir=workflow.parent,
             host="127.0.0.1",
             port=port,
-            orchestrator_pid=os.getpid(),
+            orchestrator_pid=owner.pid,
             log_path=tmp_path / "log" / "symphony.log",
             started_at="2026-07-03T01:00:00Z",
             orchestrator_command=["symphony", str(workflow)],
@@ -173,9 +176,11 @@ def test_port_conflict_names_this_workflow_service(
         rc = cli_main_mod.main([str(workflow), "--port", str(port)])
     finally:
         blocker.close()
+        owner.kill()
+        owner.wait(timeout=5)
 
     assert rc == 1
     err = capsys.readouterr().err
     assert "owned by this workflow's service" in err
-    assert f"pid {os.getpid()}" in err
+    assert f"pid {owner.pid}" in err
     assert "symphony service status" in err

@@ -29,6 +29,8 @@ def request(
 ) -> tuple[int, Any]:
     data = None
     headers: dict[str, str] = {}
+    if body is None and method in {"POST", "PUT", "PATCH", "DELETE"}:
+        body = {}  # every mutation must carry application/json, body or not
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"

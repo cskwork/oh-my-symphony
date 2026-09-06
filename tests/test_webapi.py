@@ -863,7 +863,7 @@ async def test_skip_document_route_and_legacy_skip_learn_alias(
     """`/skip-document` is the route; `/skip-learn` stays a deprecated alias."""
     stub = client.stub  # type: ignore[attr-defined]
 
-    resp = await client.post("/api/v1/issues/SEED-1/skip-document")
+    resp = await client.post("/api/v1/issues/SEED-1/skip-document", json={})
     assert resp.status == 200
     payload = await resp.json()
     assert payload == {
@@ -872,7 +872,7 @@ async def test_skip_document_route_and_legacy_skip_learn_alias(
         "message": "moved SEED-1 to Human Review",
     }
 
-    legacy = await client.post("/api/v1/issues/SEED-1/skip-learn")
+    legacy = await client.post("/api/v1/issues/SEED-1/skip-learn", json={})
     assert legacy.status == 200
     legacy_payload = await legacy.json()
     assert legacy_payload["skipped"] is True
@@ -883,9 +883,9 @@ async def test_skip_document_route_and_legacy_skip_learn_alias(
 async def test_delete_issue_and_running_guard(client: TestClient) -> None:
     stub = client.stub  # type: ignore[attr-defined]
     stub.running_identifiers["SEED-1"] = "iss-1"
-    assert (await client.delete("/api/v1/issues/SEED-1")).status == 409
+    assert (await client.delete("/api/v1/issues/SEED-1", json={})).status == 409
     stub.running_identifiers.clear()
-    assert (await client.delete("/api/v1/issues/SEED-1")).status == 200
+    assert (await client.delete("/api/v1/issues/SEED-1", json={})).status == 200
     assert (await client.get("/api/v1/issues/SEED-1")).status == 404
 
 
@@ -1170,7 +1170,7 @@ async def test_continuous_improvement_status_and_reset(
     assert status["last_verified_branch"] == "dev"
 
     reset_resp = await client.post(
-        "/api/v1/workflow/continuous-improvement/reset-turns"
+        "/api/v1/workflow/continuous-improvement/reset-turns", json={}
     )
 
     assert reset_resp.status == 200
@@ -1212,7 +1212,7 @@ async def test_traversal_identifiers_rejected_on_get_and_delete(
     for payload in ("..%5C..%5Csecret", "..%2e", "a.b", "space name"):
         resp = await client.get(f"/api/v1/issues/{payload}")
         assert resp.status == 400, payload
-        resp = await client.delete(f"/api/v1/issues/{payload}")
+        resp = await client.delete(f"/api/v1/issues/{payload}", json={})
         assert resp.status == 400, payload
 
 
@@ -2045,6 +2045,38 @@ async def test_project_mutations_reject_cross_origin(
         )
         assert opaque.status == 403
         assert (await opaque.json())["error"]["code"] == "forbidden_origin"
+    finally:
+        await client.close()
+
+
+async def test_project_mutations_honour_forwarded_client_behind_trusted_proxy(
+    board_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Behind a declared proxy the TCP peer is the proxy, not the operator."""
+    from symphony.webapi import TRUSTED_ORIGINS_ENV
+
+    client = await _project_client(board_dir, monkeypatch, _FakeProjectRegistry([]))
+    try:
+        forwarded = {"X-Forwarded-For": "203.0.113.9"}
+        monkeypatch.delenv(TRUSTED_ORIGINS_ENV, raising=False)
+        # Direct loopback: the header is untrusted and ignored.
+        ignored = await client.post(
+            "/api/v1/projects", json={"name": "", "path": ""}, headers=forwarded
+        )
+        assert ignored.status == 400
+
+        monkeypatch.setenv(TRUSTED_ORIGINS_ENV, "https://symphony.example.com")
+        rejected = await client.post(
+            "/api/v1/projects", json={"name": "", "path": ""}, headers=forwarded
+        )
+        assert rejected.status == 403
+        assert (await rejected.json())["error"]["code"] == "project_mutation_forbidden"
+        local = await client.post(
+            "/api/v1/projects",
+            json={"name": "", "path": ""},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        )
+        assert local.status == 400
     finally:
         await client.close()
 
