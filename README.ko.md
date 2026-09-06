@@ -837,22 +837,31 @@ CLI에서 `--port N`으로 워크플로 값을 재정의하거나, `server` 블�
 - **↻ yellow.** 재시도 큐에 있음, `retry #N`과 마지막 오류를 표시
 - **✓ green.** 이번 세션에서 완료됨
 
-키 바인딩(푸터에도 자동으로 나열됨):
+키 바인딩 (`?`를 누르면 그룹별 도움말 모달이 열린다. 자주 쓰는 키는 푸터에도 표시된다):
 
-| Key                | Action                                       |
-|--------------------|----------------------------------------------|
-| `q`                | Quit (drains active workers cleanly)         |
-| `r`                | Force a refresh + re-poll the tracker        |
-| `?`                | Show all key bindings as a notification      |
-| `tab` / `shift+tab`| Move focus to next / previous card or lane   |
-| `j` / `↓`          | Scroll focused lane down one row             |
-| `k` / `↑`          | Scroll focused lane up one row               |
-| `space` / `pgdn`   | Page down                                    |
-| `b` / `pgup`       | Page up                                      |
-| `g` / `home`       | Jump to top                                  |
-| `G` / `end`        | Jump to bottom                               |
-| `enter`            | Open the focused card's full-detail modal    |
-| `esc` / `q`        | Close the modal (when one is open)           |
+| Key                        | Action                                              |
+|----------------------------|-----------------------------------------------------|
+| `q`                        | 종료 (워커 실행 중이면 두 번 눌러 확인; 안전하게 드레인) |
+| `r`                        | 강제 새로고침 + 트래커 재폴링                        |
+| `?`                        | 키 바인딩 도움말 모달 열기 / 닫기                    |
+| `tab` / `shift+tab`        | 다음 / 이전 카드로 포커스 이동                       |
+| `j`/`k`, `↓`/`↑`           | 포커스된 레인 스크롤                                |
+| `g`/`G`, `home`/`end`      | 맨 위 / 맨 아래로 이동                              |
+| `space`/`pgdn`, `b`/`pgup` | 페이지 아래 / 위                                    |
+| `enter` / `esc`            | 상세 모달 열기 / 닫기                               |
+| `p`                        | 상세 패널 표시 / 숨기기                             |
+| `]` / `[`                  | 상세 패널로 포커스 / 보드로 복귀                     |
+| `1`–`9` / `0`              | 해당 레인 확대 (나머지 축소) / 확대 해제             |
+| `t` / `T`                  | 다음 / 이전 레인 페이지                             |
+| `+` / `-`                  | 페이지당 레인 수 늘리기 / 줄이기                     |
+| `d`                        | 컴팩트 / 리치 카드 전환                             |
+| `n` / `e`                  | 새 티켓 등록 / 포커스된 티켓 편집                    |
+| `a` / `c`                  | Done 카드 아카이브 / Human Review 카드 승인          |
+| `S`                        | 포커스된 티켓의 Document 단계 건너뛰기               |
+| `P`                        | 포커스된 실행 중 워커 일시정지 / 재개                |
+| `s`                        | 실행 통계 화면 열기                                 |
+| `L`                        | TUI + 문서 언어 순환                                |
+| `/`                        | 필터 프롬프트 열기 (`esc`로 해제)                    |
 
 마우스: 카드를 클릭하면 포커스되고, 휠로 해당 레인을 스크롤한다.
 

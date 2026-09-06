@@ -47,7 +47,13 @@ from .helpers import (
     _ordered_column_states,
     _stage_position,
 )
-from .screens import EditIssueScreen, NewIssueScreen, StatsScreen, _RefreshNow
+from .screens import (
+    EditIssueScreen,
+    HelpScreen,
+    NewIssueScreen,
+    StatsScreen,
+    _RefreshNow,
+)
 from .widgets import DetailPane, FilterBar, IssueCard, Lane, StatsBar
 
 
@@ -379,20 +385,17 @@ class KanbanApp(App):
         self.notify("refreshed")
 
     def action_help(self) -> None:
-        lang = self._effective_language()
-        page = self._current_page_index() + 1
-        total_pages = self._page_count()
-        msg = (
-            "q quit · r refresh · enter details · "
-            "1-9 zoom lane · 0/esc reset · "
-            f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
-            "d density · p detail-pane · ]/[ focus detail/board · "
-            "L language · a archive · c confirm done · S skip Document · "
-            "P pause/resume · n new · e edit · / filter · "
-            "tab focus · j/k scroll · g/G top/bottom · "
-            f"lang={lang}"
+        """Open the grouped key-binding modal (`?` again, esc, or q closes)."""
+        if isinstance(self.screen, HelpScreen):
+            self.pop_screen()
+            return
+        self.push_screen(
+            HelpScreen(
+                language=self._effective_language(),
+                page=self._current_page_index() + 1,
+                total_pages=self._page_count(),
+            )
         )
-        self.notify(msg, timeout=8)
 
     def action_open_details(self) -> None:
         focused = self.focused

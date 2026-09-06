@@ -1184,22 +1184,31 @@ runtime indicator:
 - **↻ yellow.** In retry queue, shows `retry #N` and the last error
 - **✓ green.** Completed in this session
 
-Key bindings (`?` shows the full list; also auto-listed in the footer):
+Key bindings (`?` opens a grouped help modal; the most-used keys are also in the footer):
 
-| Key                | Action                                       |
-|--------------------|----------------------------------------------|
-| `q`                | Quit (drains active workers cleanly)         |
-| `r`                | Force a refresh + re-poll the tracker        |
-| `tab` / `shift+tab`| Move focus to next / previous card or lane   |
-| `j`/`k`, page keys | Scroll the focused lane                      |
-| `1`–`9` / `0`      | Zoom that lane (others shrink) / reset zoom  |
-| `n` / `e`          | Register a new ticket / edit the focused one |
-| `a` / `c`          | Archive / confirm a Done-gated card          |
-| `S`                | Skip Document for the focused ticket         |
-| `P`                | Pause / resume the focused running worker    |
-| `L`                | Cycle TUI + doc language                     |
-| `/`                | Open the filter prompt                       |
-| `enter` / `esc`    | Open / close the full-detail modal           |
+| Key                        | Action                                              |
+|----------------------------|-----------------------------------------------------|
+| `q`                        | Quit (asks twice while workers run; drains cleanly) |
+| `r`                        | Force a refresh + re-poll the tracker               |
+| `?`                        | Open / close the key-binding help modal             |
+| `tab` / `shift+tab`        | Move focus to next / previous card                  |
+| `j`/`k`, `↓`/`↑`           | Scroll the focused lane                             |
+| `g`/`G`, `home`/`end`      | Jump to top / bottom                                |
+| `space`/`pgdn`, `b`/`pgup` | Page down / up                                      |
+| `enter` / `esc`            | Open / close the full-detail modal                  |
+| `p`                        | Show / hide the detail pane                         |
+| `]` / `[`                  | Focus the detail pane / return to the board         |
+| `1`–`9` / `0`              | Zoom that lane (others shrink) / reset zoom         |
+| `t` / `T`                  | Next / previous page of lanes                       |
+| `+` / `-`                  | More / fewer lanes per page                         |
+| `d`                        | Toggle compact / rich cards                         |
+| `n` / `e`                  | Register a new ticket / edit the focused one        |
+| `a` / `c`                  | Archive a Done card / confirm a Human Review card   |
+| `S`                        | Skip Document for the focused ticket                |
+| `P`                        | Pause / resume the focused running worker           |
+| `s`                        | Open the run statistics screen                      |
+| `L`                        | Cycle TUI + doc language                            |
+| `/`                        | Open the filter prompt (`esc` clears)               |
 
 Mouse: clicking a card focuses it, the wheel scrolls its lane.
 

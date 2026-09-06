@@ -3,7 +3,8 @@
 `_RefreshNow` is the message the orchestrator observer thread posts to
 ask the Textual loop for a redraw. `TicketDetailScreen` is the full-screen
 modal opened by Enter on a focused card. `NewIssueScreen` ('n') registers
-a ticket on the file board; `StatsScreen` ('s') shows run statistics.
+a ticket on the file board; `StatsScreen` ('s') shows run statistics;
+`HelpScreen` ('?') lists every key binding grouped by purpose.
 """
 
 from __future__ import annotations
@@ -86,6 +87,103 @@ class TicketDetailScreen(ModalScreen[None]):
             meta.append("\n")
             meta.append(self._status.last_message, style="italic")
         return meta
+
+
+# (keys, description) rows for the `?` help modal, grouped by purpose. Keep in
+# sync with `KanbanApp.BINDINGS` and the README key table.
+HELP_SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "Board",
+        (
+            ("q", "quit (asks twice while workers run)"),
+            ("r", "refresh + re-poll the tracker"),
+            ("?", "this help"),
+            ("L", "cycle TUI + doc language"),
+            ("s", "run statistics"),
+            ("/", "filter cards by id / title / label"),
+            ("esc", "close filter, reset zoom"),
+        ),
+    ),
+    (
+        "Navigate",
+        (
+            ("tab / shift+tab", "focus next / previous card"),
+            ("j / k, ↓ / ↑", "scroll the focused lane"),
+            ("g / G, home / end", "jump to top / bottom"),
+            ("space / pgdn, b / pgup", "page down / up"),
+            ("enter", "open the full-detail modal"),
+            ("p", "show / hide the detail pane"),
+            ("] / [", "focus the detail pane / back to the board"),
+        ),
+    ),
+    (
+        "Layout",
+        (
+            ("1-9 / 0", "zoom that lane / reset zoom"),
+            ("t / T", "next / previous page of lanes"),
+            ("+ / -", "more / fewer lanes per page"),
+            ("d", "toggle compact / rich cards"),
+        ),
+    ),
+    (
+        "Ticket",
+        (
+            ("n", "new ticket (file board only)"),
+            ("e", "edit the focused ticket (file board only)"),
+            ("a", "archive the focused Done card"),
+            ("c", "confirm the focused Human Review card as Done"),
+            ("S", "skip Document for the focused card"),
+            ("P", "pause / resume the focused running worker"),
+        ),
+    ),
+)
+
+
+class HelpScreen(ModalScreen[None]):
+    """Every key binding, grouped. Dismiss with Esc, q, or ?."""
+
+    DEFAULT_CSS = """
+    HelpScreen { align: center middle; }
+    #help-dialog {
+        width: 70%;
+        max-width: 90;
+        height: 85%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #help-dialog #help-title { text-style: bold; color: $accent; }
+    #help-dialog #help-meta { color: $text-muted; margin-bottom: 1; }
+    #help-dialog VerticalScroll { height: 1fr; }
+    """
+    BINDINGS = [Binding("escape,q,question_mark", "dismiss", "Close")]
+
+    def __init__(self, *, language: str, page: int, total_pages: int) -> None:
+        super().__init__()
+        self._language = language
+        self._page = page
+        self._total_pages = total_pages
+
+    def compose(self) -> ComposeResult:
+        with Container(id="help-dialog"):
+            yield Static("Key bindings", id="help-title")
+            yield Static(
+                f"language={self._language}  lanes page {self._page}/{self._total_pages}",
+                id="help-meta",
+            )
+            with VerticalScroll():
+                for title, rows in HELP_SECTIONS:
+                    yield Static(self._section_table(title, rows))
+            yield Static("[dim]esc / q / ? to close[/dim]")
+
+    @staticmethod
+    def _section_table(title: str, rows: tuple[tuple[str, str], ...]) -> Table:
+        table = Table(title=title, title_justify="left", expand=True, show_header=False)
+        table.add_column("key", style="bold", no_wrap=True, ratio=1)
+        table.add_column("action", ratio=3)
+        for key, action in rows:
+            table.add_row(key, action)
+        return table
 
 
 class NewIssueScreen(ModalScreen[dict[str, Any] | None]):

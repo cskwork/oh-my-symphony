@@ -281,3 +281,52 @@ def test_project_token_dispatches_to_project_main(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("symphony.cli.project.main", fake_project_main)
     assert cli_main_mod.main(["project", "list"]) == 6
     assert captured["argv"] == ["list"]
+
+
+def test_help_lists_every_routed_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+    """`symphony --help` must name each first-token subcommand; before this
+    the top-level help showed only the orchestrator flags."""
+    with pytest.raises(SystemExit) as exc:
+        cli_main_mod.main(["--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    for name, _ in cli_main_mod.SUBCOMMANDS:
+        assert f"\n  {name} " in out, f"{name} missing from --help"
+
+
+def test_mistyped_subcommand_is_rejected_with_command_list(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bare word that is not a command and not a path fails fast, instead
+    of being resolved as `./servce` and reported as a missing WORKFLOW.md."""
+    called = False
+
+    async def fake_run(args) -> int:  # noqa: ANN001
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.setattr(cli_main_mod, "_run", fake_run)
+    rc = cli_main_mod.main(["servce", "start"])
+    assert rc == 2
+    assert called is False
+    err = capsys.readouterr().err
+    assert "unknown command 'servce'" in err
+    assert "service" in err
+
+
+def test_existing_directory_token_is_still_a_workflow_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The mistyped-command guard must not swallow real paths without a dot."""
+    captured: dict = {}
+
+    async def fake_run(args) -> int:  # noqa: ANN001
+        captured["workflow"] = getattr(args, "workflow", None)
+        return 0
+
+    monkeypatch.setattr(cli_main_mod, "_run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "myproj").mkdir()
+    assert cli_main_mod.main(["myproj"]) == 0
+    assert str(captured["workflow"]).endswith("myproj")

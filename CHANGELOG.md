@@ -10,6 +10,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **TUI `?` help is a modal.** The one-line 8-second toast listing ~25
+  bindings is now a scrollable `HelpScreen` grouped into Board / Navigate /
+  Layout / Ticket; `?`, `esc`, or `q` closes it. A test asserts every
+  `KanbanApp` binding appears in it.
+- **`symphony --help` lists the subcommands.** `tui`, `doctor`, `board`,
+  `service`, `project`, `hub`, `runs`, `release`, `wiki-sweep` were routed
+  before argparse and so never appeared in the top-level help.
+- **Mistyped subcommands fail fast.** `symphony servce start` now prints
+  `unknown command 'servce'` plus the command list (exit 2) instead of
+  resolving `./servce` as a workflow and reporting a missing WORKFLOW.md.
+  Tokens with a dot, a path separator, or that exist on disk are still
+  treated as the workflow path.
+- README (en/ko) key tables now list every binding; the KO table had
+  lagged behind by nine keys (`n`/`e`/`a`/`c`/`S`/`P`/`L`/`/`/`s`).
+
 ## [0.22.0] - 2026-09-05 - Chat intent gate and orchestrator extractions
 
 ### Added

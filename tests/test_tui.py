@@ -1486,3 +1486,52 @@ async def test_s_opens_stats_screen(monkeypatch: Any, tmp_path: Path) -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, StatsScreen)
+
+
+@pytest.mark.asyncio
+async def test_question_mark_toggles_help_screen(monkeypatch: Any) -> None:
+    """`?` opens the grouped key-binding modal; a second `?` (or esc) closes it.
+
+    The modal replaces the old 8-second toast, whose one-line dump of ~25
+    bindings was unreadable on narrow terminals.
+    """
+    from symphony.tui import HelpScreen
+
+    cfg = _make_config()
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+        await pilot.press("question_mark")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+
+
+def test_help_sections_cover_every_app_binding() -> None:
+    """Every key in `KanbanApp.BINDINGS` must appear in the help modal, so
+    a new binding cannot ship undocumented."""
+    from symphony.tui.screens import HELP_SECTIONS
+
+    help_text = " ".join(
+        f"{key} {action}" for _, rows in HELP_SECTIONS for key, action in rows
+    )
+    aliases = {
+        "question_mark": "?", "slash": "/", "plus": "+", "equals_sign": "+",
+        "minus": "-", "right_square_bracket": "]", "left_square_bracket": "[",
+        "shift+tab": "shift+tab", "pagedown": "pgdn", "pageup": "pgup",
+        "escape": "esc", "down": "↓", "up": "↑",
+    }
+    for binding in KanbanApp.BINDINGS:
+        for raw in binding.key.split(","):
+            key = aliases.get(raw, raw)
+            if key.isdigit():
+                continue  # 1-9 / 0 documented as a range
+            assert key in help_text, f"binding {raw!r} missing from HELP_SECTIONS"
