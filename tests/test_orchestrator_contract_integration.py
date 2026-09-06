@@ -552,6 +552,60 @@ def test_contract_fails_when_disk_missing_sections(
     )
 
 
+def test_contract_rewind_survives_mid_turn_running_entry_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A poll tick that refreshes ``running.issue`` to the *advanced* state
+    while the turn is still in flight must not defeat the rewind.
+
+    Live e2e (2026-09-06, pi/glm): the agent wrote ``state: Verify`` mid-turn,
+    the reconcile tick copied it into the running entry, and the rewind was
+    written with ``producing_state_raw == "Verify"`` — recorded in stats as
+    ``verify -> verify`` while the ticket note claimed a rewind.
+    """
+    import symphony.orchestrator.attempt as attempt_mod
+
+    board_root = tmp_path / "board"
+    ticket_path = _write_initial_ticket(
+        board_root, state="In Progress", body=_IN_PROGRESS_BODY_MISSING_DONE_SIGNALS
+    )
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("In Progress", "Verify", "Document"),
+        max_turns=2,
+    )
+    _install_file_tracker_backend(
+        monkeypatch,
+        ticket_path=ticket_path,
+        transitions=[("Verify", _IN_PROGRESS_BODY_MISSING_DONE_SIGNALS)],
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    (workspace_path / "docs" / "MT-1" / "work").mkdir(parents=True)
+    (workspace_path / "docs" / "MT-1" / "work" / "notes.md").write_text("ok")
+    o = _orch(workspace_path)
+    issue = _make_issue_from_disk("In Progress", _IN_PROGRESS_BODY_MISSING_DONE_SIGNALS)
+    _seed_running_entry(o, issue, workspace_path)
+
+    original_hooks = attempt_mod._after_turn_hooks
+
+    async def hooks_then_simulate_poll_tick(orch: Any, st: Any) -> None:
+        await original_hooks(orch, st)
+        # Simulate the reconcile tick landing before the turn boundary.
+        running = orch._running[st.running_issue_id]
+        running.issue = replace(running.issue, state="Verify")
+
+    monkeypatch.setattr(attempt_mod, "_after_turn_hooks", hooks_then_simulate_poll_tick)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert _has_contract_failure_heading(final_body)
+    assert final_front["state"] == "In Progress", (
+        f"rewind was a no-op; final state {final_front['state']!r}"
+    )
+
+
 def test_full_refresh_payload_failure_records_error_and_rewinds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

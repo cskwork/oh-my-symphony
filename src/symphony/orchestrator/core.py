@@ -135,6 +135,7 @@ from .executors import LegacyStageExecutor, TicketExecutor, TicketRunContext
 from .helpers import (
     _branch_hook_env,
     _branch_already_merged_into_target,
+    _canonical_state_label,
     _config_for_issue_agent,
     resolve_symphony_cli,
     _from_monotonic_to_iso,
@@ -6737,6 +6738,12 @@ class Orchestrator:
         current_state = phase_state.current_state
         known_app_release = phase_state.known_app_release
         debug = self._issue_debug.setdefault(running_issue_id, _IssueDebug())
+        # Defensive: the raw label must denote `producing_state`. If a caller
+        # hands us the advanced state's casing, a contract rewind would write
+        # the state the ticket is already in (a silent no-op). Fall back to
+        # the workflow's own spelling of the producing state.
+        if normalize_state(producing_state_raw) != producing_state:
+            producing_state_raw = _canonical_state_label(cfg, producing_state)
 
         is_rewind = _is_rewind_transition(
             producing_state,

@@ -37,6 +37,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lagged behind by nine keys (`n`/`e`/`a`/`c`/`S`/`P`/`L`/`/`/`s`).
 
 ### Fixed
+- **Stage-contract rewinds actually rewind.** When a poll tick refreshed the
+  running entry to the *advanced* state while the turn was still in flight,
+  the rewind was written with that state's casing and became a silent no-op
+  (stats recorded `verify -> verify`; the ticket note still claimed a rewind).
+  The producing state's casing is now taken from the turn-start snapshot,
+  and `_transition_agent_phase` falls back to the workflow's spelling of the
+  producing state whenever the raw label does not denote it. Found by the
+  0.23.0 live end-to-end run with `pi` / `glm-5.3-flash`.
+- **Verify contract accepts the heading the Verify prompt asks for.** The
+  shipped prompt says to append `## Merge Status: preflight clean, …`, but
+  the section matcher only recognised a bare `## Merge Status` line, so every
+  prompt-compliant ticket failed the Verify contract. Headings may now carry
+  an inline summary after the colon and that text counts as section content.
+  Surfaced by the same live run once rewinds became real.
 - **`service start` no longer reports success for an orchestrator that dies
   at once** (for example, port already bound). The 2s gate polled "is the pid
   alive?", which is true on the first poll, so the check never ran; a dead

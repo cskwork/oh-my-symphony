@@ -303,17 +303,22 @@ def _section_present_nonempty(body: str, heading: str) -> bool:
     """
     if not body:
         return False
+    # The heading may carry an inline summary after a colon — the shipped
+    # Verify prompt itself asks for `## Merge Status: preflight clean, …`
+    # — so accept `## <heading>`, `## <heading>:` and `## <heading>: <text>`,
+    # and count that inline text as section content.
     pattern = re.compile(
-        r"^##\s+" + re.escape(heading[3:].strip()) + r"\s*:?\s*$",
+        r"^##\s+" + re.escape(heading[3:].strip()) + r"\s*(?::\s*(?P<inline>.*))?$",
         re.IGNORECASE | re.MULTILINE,
     )
     match = pattern.search(body)
     if not match:
         return False
+    inline = match.group("inline") or ""
     after = body[match.end() :]
     next_heading = re.search(r"^##\s+\S", after, re.MULTILINE)
     section_body = after if next_heading is None else after[: next_heading.start()]
-    return bool(section_body.strip())
+    return bool(inline.strip() or section_body.strip())
 
 
 def _has_collected_artifact(path: Path) -> bool:

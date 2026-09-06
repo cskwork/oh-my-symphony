@@ -144,6 +144,52 @@ def test_verify_contract_passes_with_review_qa_scorecard_and_merge(
     assert result.missing == []
 
 
+def test_verify_contract_accepts_inline_merge_status_heading(
+    tmp_path: Path,
+) -> None:
+    """The shipped Verify prompt asks for
+    `## Merge Status: preflight clean, orchestrator will merge at Done`.
+    The matcher used to require a bare `## Merge Status` line, so every
+    prompt-compliant ticket failed the Verify contract (masked until the
+    2026-09-06 rewind fix made rewinds real)."""
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body().replace(
+        "## Merge Status",
+        "## Merge Status: preflight clean, orchestrator will merge at Done",
+    )
+    assert "## Merge Status:" in body
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=body,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert result.passed is True, result.missing
+
+
+def test_section_heading_with_inline_text_but_no_body_counts_as_present(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    _write_verify_artifacts(docs_root)
+    body = _complete_verify_body()
+    start = body.index("## Merge Status")
+    end = body.find("\n## ", start + 1)
+    trimmed = body[:start] + "## Merge Status: preflight clean\n" + (body[end + 1:] if end != -1 else "")
+
+    result = evaluate_contract(
+        producing_state="Verify",
+        ticket_body=trimmed,
+        identifier="SMA-1",
+        docs_root=docs_root,
+    )
+
+    assert "## Merge Status" not in result.missing
+
+
 def test_verify_contract_reads_scorecard_result_by_header(tmp_path: Path) -> None:
     docs_root = tmp_path / "docs"
     _write_verify_artifacts(docs_root)
