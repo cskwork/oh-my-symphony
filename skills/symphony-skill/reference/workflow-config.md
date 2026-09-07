@@ -526,20 +526,9 @@ Failure modes:
 This boundary is deliberate: Slack is a side channel; correctness of the
 tracker write must not depend on it.
 
-### Asking the operator to wire it up
+### Requested notification setup
 
-When bootstrapping a new board, offer the Slack block alongside the rest
-of `WORKFLOW.md` — but make it a question, not a default. A reasonable
-script:
-
-> "Optional: do you want Symphony to post each ticket transition to
-> Slack? If yes, give me an incoming-webhook URL (or an env var name to
-> resolve from) and the channels/states you care about — Done only, or
-> every stage."
-
-If the operator declines, omit the block. If they want only "Done"
-events, set `notify_on_states: [Done]` and skip templates.
-
+When the operator requests Slack notifications, obtain the webhook environment reference and the states to publish. Keep posting within that authorization. For Done-only events set `notify_on_states: [Done]`; omit the block when notifications are not requested.
 
 ## Product Preview
 
