@@ -27,6 +27,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   three-section projection: intent for non-developers, an optional policy
   classification, then developer notes with a verdict.
 
+### Fixed
+- **Symlink loops in project-setup paths.** Python 3.13+ `Path.resolve()`
+  no longer raises on a self-referential symlink, so a chat project-setup
+  marker pointing at one became a selectable action. `canonical_project_repo`
+  now rejects any unresolvable symlink component with `ELOOP`.
+- **Flaky release-reconcile test on slow hosts.** The lease-hold test waited
+  1 s for cleanup to start, but the preceding release enforcement shells out
+  to git a dozen-plus times and took ~1.05 s on macOS. The waits are now 10 s.
+
 ## [0.23.0] - 2026-09-06 - Printable manual, hardened web auth, honest service lifecycle
 
 ### Added
