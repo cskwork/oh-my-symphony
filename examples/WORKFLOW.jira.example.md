@@ -53,3 +53,32 @@ When the work for the current state is complete, transition the issue
 to the next status in the workflow using the Jira UI or the API. The
 orchestrator polls the board on the next tick and routes the issue to
 the appropriate Symphony stage.
+
+## Optional: read-only intent analysis before Intake
+
+A cheap, read-only model pass can run before any Spec/Plan stage and post
+one tracker note per ticket revision. Keep the note short and fixed-shape
+so a non-developer can act on it, and keep the detailed analysis as a
+local artifact (`.sdlc/work/<ticket>/intent.md`) that the human reviews.
+
+Recommended projection (the first two sections carry no code identifiers):
+
+```
+### Intent
+- **Situation** who reports what, where. [stated]
+- **Wanted** the outcome and why. [stated] / [inferred from ...] / [unknown]
+- **One line** the intent in one sentence, plus the decision a human must make.
+### Policy (only when a canonical business rule governs the ticket)
+- **Source** the planning doc / ADR / rule ticket, in words.
+- **Class** one of: compliant-implementation defect / policy change request /
+  policy undecided / policy conflict (doc vs code).
+### Developer notes
+- decisive code references, duplicate-work status, verification limits.
+- verdict: proceed / hold / human decision.
+```
+
+Post it with `JiraClient.append_note_once(issue, "", note, marker)` where
+`marker` is `<tool> <KEY> <sha256(intent.md)[:16]>`. The marker makes
+delivery idempotent across restarts and lost acknowledgements; a changed
+existing comment raises instead of being overwritten.
+

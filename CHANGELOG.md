@@ -10,6 +10,23 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Structured Jira notes.** `JiraClient.append_note` renders a Markdown
+  subset (headings, `- ` bullets, inline code/strong) into ADF instead of
+  flattening every line to a paragraph, so multi-section notes stay
+  readable in Jira.
+- **Idempotent Jira comment delivery.** `JiraClient.append_note_once(issue,
+  heading, body, marker)` reuses an existing comment carrying the marker,
+  raises `JiraCommentConflict` when that comment was edited, reads the post
+  back, and raises `JiraCommentDeliveryUncertain` when the read-back is
+  missing or differs, so a lost acknowledgement never turns into a
+  duplicate. `fetch_comments` pages `GET /issue/{key}/comment` to `total`
+  and refuses a truncated listing.
+- **Read-only intent analysis lane (pattern).** `examples/WORKFLOW.jira.example.md`
+  documents a pre-Intake analysis stage whose tracker note is a fixed
+  three-section projection: intent for non-developers, an optional policy
+  classification, then developer notes with a verdict.
+
 ## [0.23.0] - 2026-09-06 - Printable manual, hardened web auth, honest service lifecycle
 
 ### Added

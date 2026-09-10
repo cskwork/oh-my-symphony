@@ -367,3 +367,103 @@ def test_search_raises_on_malformed_payload() -> None:
     client = _client(handler)
     with pytest.raises(JiraUnknownPayload):
         client.fetch_candidate_issues()
+
+
+# ---------------------------------------------------------------------------
+# Structured notes + idempotent delivery
+# ---------------------------------------------------------------------------
+
+
+def _comment(cid: str, text: str) -> dict:
+    return {"id": cid, "author": {"accountId": "me"}, "body": jira_module._adf_from_markdown(text)}
+
+
+def test_append_note_renders_markdown_subset_as_adf() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": "1"})
+
+    client = _client(handler)
+    client.append_note(_issue(), "", "### 의도\n- **상황** 신고\n\n- `Foo.java` 확인\n일반 문단")
+    content = captured["body"]["body"]["content"]
+    assert [n["type"] for n in content] == ["heading", "bulletList", "paragraph"]
+    assert content[0]["attrs"]["level"] == 3
+    items = content[1]["content"]
+    assert len(items) == 2
+    assert items[0]["content"][0]["content"][0] == {
+        "type": "text", "text": "상황", "marks": [{"type": "strong"}]
+    }
+    assert items[1]["content"][0]["content"][0]["marks"] == [{"type": "code"}]
+
+
+def test_fetch_comments_paginates_and_refuses_truncation() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("startAt", "0"))
+        if start == 0:
+            return httpx.Response(200, json={"comments": [_comment("1", "a")], "total": 2, "startAt": 0})
+        return httpx.Response(200, json={"comments": [_comment("2", "b")], "total": 2, "startAt": 1})
+
+    assert [c["id"] for c in _client(handler).fetch_comments(_issue())] == ["1", "2"]
+
+    def truncated(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"comments": [_comment("1", "a")], "total": 3})
+
+    with pytest.raises(JiraUnknownPayload):
+        _client(truncated).fetch_comments(_issue())
+
+
+def test_append_note_once_reuses_matching_marked_comment_without_posting() -> None:
+    marker = "symphony PROJ-1 abc123"
+    posts: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(1)
+            return httpx.Response(201, json={"id": "9"})
+        body = jira_module._note_doc("H", f"line\n\n{marker}")
+        return httpx.Response(200, json={"comments": [{"id": "7", "body": body}], "total": 1})
+
+    assert _client(handler).append_note_once(_issue(), "H", "line", marker) == "7"
+    assert posts == []
+
+
+def test_append_note_once_raises_conflict_when_marked_comment_differs() -> None:
+    from symphony.errors import JiraCommentConflict
+
+    marker = "symphony PROJ-1 abc123"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = jira_module._note_doc("H", f"edited by human\n\n{marker}")
+        return httpx.Response(200, json={"comments": [{"id": "7", "body": body}], "total": 1})
+
+    with pytest.raises(JiraCommentConflict):
+        _client(handler).append_note_once(_issue(), "H", "line", marker)
+
+
+def test_append_note_once_posts_then_verifies_read_back() -> None:
+    marker = "symphony PROJ-1 abc123"
+    state: dict = {"posted": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            state["posted"] = json.loads(request.content)["body"]
+            return httpx.Response(201, json={"id": "9"})
+        comments = [{"id": "9", "body": state["posted"]}] if state["posted"] else []
+        return httpx.Response(200, json={"comments": comments, "total": len(comments)})
+
+    assert _client(handler).append_note_once(_issue(), "H", "line", marker) == "9"
+    assert marker in jira_module._flatten_adf(state["posted"])
+
+
+def test_append_note_once_is_uncertain_when_read_back_misses() -> None:
+    from symphony.errors import JiraCommentDeliveryUncertain
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(201, json={"id": "9"})
+        return httpx.Response(200, json={"comments": [], "total": 0})
+
+    with pytest.raises(JiraCommentDeliveryUncertain):
+        _client(handler).append_note_once(_issue(), "H", "line", "symphony PROJ-1 abc123")
