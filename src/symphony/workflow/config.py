@@ -47,7 +47,7 @@ from .constants import (
     DEFAULT_WORKSPACE_REUSE_POLICY,
     SUPPORTED_CI_MODES,
 )
-from .presets import board_uses_default_contracts
+from .presets import board_uses_shipped_contracts
 
 
 @dataclass(frozen=True)
@@ -247,7 +247,7 @@ class AgentConfig:
             return True
         if mode == "off":
             return False
-        return board_uses_default_contracts(active_states)
+        return board_uses_shipped_contracts(active_states)
 
     def stall_timeout_ms_for_state(self, state: str | None, fallback: int) -> int:
         """Per-state stall budget with fallback to the backend's value."""

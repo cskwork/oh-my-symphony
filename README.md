@@ -877,7 +877,10 @@ Boards start from a preset and stay fully customizable:
 - **deep.** An optional 8-lane pipeline `Intake → Research → Plan → Review
   → Build → QA → Verify → Document` for complex deliveries. Each lane
   carries its own lean gate (Verify/Document run a literal
-  `grep 'verdict: GREEN'` check); the Plan lane spawns the
+  `grep 'verdict: GREEN'` check), and the orchestrator re-checks the same
+  facts at every lane transition — the vault file exists, its verdict line
+  is present, the ticket section was appended — rewinding the ticket with
+  `## Contract Failure` otherwise; the Plan lane spawns the
   Build/QA/Verify/Document ticket DAG via `symphony board new
   --blocked-by --request`.
 
@@ -925,8 +928,8 @@ The mechanical evidence floor (`orchestrator/contracts.py`) is gated by
 
 | value            | behaviour                                                        |
 |------------------|------------------------------------------------------------------|
-| `auto` (default) | enforce when every active lane is a default-preset lane          |
-| `on`             | always enforce, whatever the lanes are called                    |
+| `auto` (default) | enforce on a shipped preset: default lanes, or exactly the deep lanes |
+| `on`             | always enforce the default contract set, whatever the lanes are called |
 | `off`            | never enforce; the stage prompts are the only gate               |
 
 Under `auto`, renaming a lane (`Document` → `Docs`) turns the validator off, and

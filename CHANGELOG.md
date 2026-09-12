@@ -11,6 +11,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Deep preset stage contracts.** `agent.stage_contracts: auto` now enforces
+  a contract set on the 8-lane deep preset too (`board_uses_shipped_contracts`).
+  At every lane transition the orchestrator re-checks what the lane prompt's
+  shell gate self-attests: the vault file exists (`brief.md`, `research.md`,
+  `plan.md` + `contracts.md`, `review.md`, `claims.md`, `qa-report.md`,
+  `verification.md`, `delivery.md`), its verdict line is present
+  (`verdict: PASS` before a request ticket may reach Done, `Verdict:
+  APPROVED|BLOCKED` for QA, `verdict: GREEN|RED` for Verify), the Build claim
+  names the ticket, and the short ticket section was appended. A miss appends
+  `## Contract Failure` and rewinds to the lane. `app-release` verifiers are
+  exempt because the host release cycle already owns that gate.
 - **Structured Jira notes.** `JiraClient.append_note` renders a Markdown
   subset (headings, `- ` bullets, inline code/strong) into ADF instead of
   flattening every line to a paragraph, so multi-section notes stay
@@ -26,6 +37,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   documents a pre-Intake analysis stage whose tracker note is a fixed
   three-section projection: intent for non-developers, an optional policy
   classification, then developer notes with a verdict.
+
+### Changed
+- **The move into Done is contract-gated.** Terminal transitions never
+  reached the phase handler, so the last gate of every board — `Document ->
+  Done` on the default preset, every lane `-> Done` on the deep preset — was
+  prompt-only, and `artifacts.require_for_done` could not fire on a board
+  whose Done lane is terminal. `attempt._post_turn_refresh` now runs the
+  producing lane's contract before accepting Done; a failure rewinds the
+  ticket with `## Contract Failure` and counts against `agent.max_attempts`.
+  Blocked, Cancelled, and Human Review stay ungated.
 
 ### Fixed
 - **Empty `auto_merge_target_branch` no longer strands the release verifier.**

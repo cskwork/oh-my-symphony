@@ -622,9 +622,10 @@ def check_stage_contracts(cfg: ServiceConfig) -> CheckResult:
     return CheckResult(
         name,
         "warn",
-        "auto: contracts disabled because these lanes are not default-preset "
-        f"lanes ({', '.join(offending) or 'n/a'}) — set agent.stage_contracts: "
-        "on to enforce them anyway",
+        "auto: contracts disabled because the board is neither the default "
+        "preset nor the exact deep preset (non-default lanes: "
+        f"{', '.join(offending) or 'n/a'}) — set agent.stage_contracts: on to "
+        "enforce the default contract set anyway",
     )
 
 def check_symphony_cli_reachable(cfg: ServiceConfig) -> CheckResult:

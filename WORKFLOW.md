@@ -248,12 +248,15 @@ agent:
   # instead of starting another In Progress pass. Set to 0 to disable.
   max_attempts: 3
   # Mechanical evidence floor (orchestrator/contracts.py):
-  #   auto (default) — enforce only when every active lane is a default-preset
-  #                    lane (Todo / In Progress / Verify / Document). Renaming
-  #                    a lane therefore turns it OFF — logged as
+  #   auto (default) — enforce when the board is a shipped preset: every
+  #                    active lane is a default-preset lane (Todo / In
+  #                    Progress / Verify / Document), or the lanes are exactly
+  #                    the deep preset (vault-file + verdict-line contracts).
+  #                    Renaming a lane therefore turns it OFF — logged as
   #                    `stage_contracts_disabled` and reported by
   #                    `symphony doctor`, never silent.
-  #   on             — enforce whatever the lanes are called.
+  #   on             — enforce the default contract set whatever the lanes
+  #                    are called.
   #   off            — never enforce; the stage prompts are the only gate.
   stage_contracts: auto
   # File-board optimization: obvious Todo tickets with Acceptance Criteria

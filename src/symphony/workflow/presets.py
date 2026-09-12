@@ -173,13 +173,14 @@ def guess_lane_preset(active_states: Iterable[str]) -> str | None:
     return None
 
 
-# Lanes the shipped stage-contract validator (orchestrator/contracts.py)
-# enforces: the DEFAULT preset's active lanes plus the legacy `Learn`
+# Lanes the DEFAULT stage-contract set (orchestrator/contracts.py)
+# enforces: the default preset's active lanes plus the legacy `Learn`
 # name — the pre-rename spelling of Document that existing boards keep.
-# Boards with any other active lane (deep preset's Intake/Research/Plan/
-# Review/Build/QA, or user-defined lanes) carry their own prompt-encoded
-# gates, so enforcing the default section lists against them would rewind
-# tickets for sections their prompts never asked for.
+# The deep preset has its own contract set (vault files + verdict lines),
+# selected by an exact lane-sequence match in `board_uses_shipped_contracts`.
+# User-defined lanes carry only their prompt-encoded gates, so enforcing a
+# shipped section list against them would rewind tickets for sections their
+# prompts never asked for.
 _CONTRACT_LANES = frozenset(
     {state.lower() for state in DEFAULT_PRESET.active_states} | {"learn"}
 )
@@ -198,3 +199,17 @@ def board_uses_default_contracts(
     return all(
         (state or "").strip().lower() in _CONTRACT_LANES for state in active_states
     )
+
+
+def board_uses_shipped_contracts(
+    active_states: "tuple[str, ...] | list[str]",
+) -> bool:
+    """True when a shipped stage-contract set applies to these lanes.
+
+    Either every lane is a default-preset lane (the default contract set)
+    or the lanes are exactly the deep preset (the deep contract set). This
+    is what `agent.stage_contracts: auto` resolves against.
+    """
+    if board_uses_default_contracts(active_states):
+        return True
+    return guess_lane_preset(active_states) == "deep"

@@ -163,6 +163,13 @@ The orchestrator dispatches a worker for any ticket whose state is active.
 Terminal states stop dispatch. `Human Review` is terminal because a human must
 resolve or confirm an explicit intervention before `Done`.
 
+`agent.stage_contracts` (default `auto`) is the mechanical evidence floor
+behind the prompts. On the default lanes it checks the sections above at
+every forward transition, including the move into `Done`; on the deep preset
+it checks each lane's vault file and verdict line. A miss appends
+`## Contract Failure` and rewinds the ticket to the producing lane. Blocked,
+Cancelled, and Human Review are never contract-gated.
+
 The web board opens on active agent lanes. `Human Review`, `Done`, `Blocked`,
 and `Archive` stay visible in the compact **Review and parked** group until
 you switch to `All`.

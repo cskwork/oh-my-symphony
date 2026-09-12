@@ -994,7 +994,7 @@ def _log_stage_contracts_decision(agent: AgentConfig, tracker: TrackerConfig) ->
     ]
     get_logger().warning(
         "stage_contracts_disabled",
-        reason="board lanes are not the default preset",
+        reason="board lanes are neither the default preset nor the deep preset",
         offending_lanes=offending,
         lanes=list(tracker.active_states),
         hint="set agent.stage_contracts: on to enforce them anyway",

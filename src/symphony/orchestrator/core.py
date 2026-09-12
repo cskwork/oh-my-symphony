@@ -81,6 +81,7 @@ from ..workflow import (
     WorkflowState,
     validate_for_dispatch,
 )
+from ..workflow.presets import guess_lane_preset
 from ..utils.auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
 from ..utils.git_sandbox import SANDBOX_WRITE_DENIED, classify_history_failure
 from ..workspace import (
@@ -110,7 +111,7 @@ from .constants import (
     WAIT_AGE_BUMP_MIN,
     _TOKEN_EMA_ALPHA,
 )
-from .contracts import evaluate_contract
+from .contracts import contract_producing_states, evaluate_contract
 from .release_contracts import (
     ReleaseValidationResult,
     release_workspace_target_errors,
@@ -262,6 +263,16 @@ class _AgentPhaseState:
 class _AgentPhaseTransition:
     state: _AgentPhaseState
     is_rewind: bool
+
+
+@dataclass(frozen=True)
+class _StageContractOutcome:
+    """Result of `Orchestrator._enforce_stage_contract`."""
+
+    issue: Issue
+    current_state: str
+    known_app_release: bool
+    rewound: bool
 
 
 class _ReleaseTransitionAuthorityLost(SymphonyError):
@@ -6750,122 +6761,31 @@ class Orchestrator:
             current_state,
             cfg.tracker.active_states,
         )
-        # v0.6.7 — contract validator. When the agent
-        # moved forward (not a rewind), check that
-        # the producing stage actually wrote the
-        # sections its prompt promised. On failure:
-        # write the tracker state back to the
-        # producing stage, append a ## Contract
-        # Failure note, and treat the situation as
-        # a forced rewind so the rebuild + budget
-        # bookkeeping below still apply.
+        # v0.6.7 — contract validator. When the agent moved forward (not a
+        # rewind), check that the producing stage actually wrote the outputs
+        # its prompt promised; a failure writes the state back to the
+        # producing stage and counts as a forced rewind below. The same
+        # method gates the move into Done from the worker loop
+        # (`attempt._post_turn_refresh`), where terminal transitions never
+        # reach this phase handler.
         if not is_rewind and cfg.agent.stage_contracts_enabled(
             cfg.tracker.active_states
         ):
-            if producing_state in {
-                "in progress",
-                "verify",
-                "document",
-                # legacy lane name (pre-rename boards)
-                "learn",
-                "done",
-            }:
-                # IMPORTANT: contract eval reads
-                # `issue.description`, so we MUST use
-                # the full-body refresh — not the
-                # minimal `_refresh_issue_state`, which
-                # returns description=None for every
-                # tracker adapter and would falsely
-                # fail every forward transition. See
-                # tests/test_orchestrator_contract_
-                # integration.py for the regression
-                # the v0.6.7 release surfaced.
-                refreshed_for_contract = await self._refresh_issue_full(
-                    cfg, running_issue_id
-                )
-                if refreshed_for_contract is not None:
-                    issue = refreshed_for_contract
-                    known_app_release = known_app_release or _has_app_release_label(
-                        issue
-                    )
-                    running_entry = self._running.get(running_issue_id)
-                    if running_entry is not None:
-                        running_entry.issue = issue
-                    current_state = normalize_state(issue.state)
-            contract = evaluate_contract(
+            outcome = await self._enforce_stage_contract(
+                cfg=cfg,
+                running_issue_id=running_issue_id,
+                issue=issue,
                 producing_state=producing_state,
-                ticket_body=issue.description or "",
-                identifier=issue.identifier,
-                docs_root=workspace_path / "docs",
-                artifact_store_root=(
-                    self._artifact_store.root
-                    if (
-                        cfg.artifacts.require_for_done
-                        and self._artifact_store is not None
-                    )
-                    else None
-                ),
+                producing_state_raw=producing_state_raw,
+                current_state=current_state,
+                workspace_path=workspace_path,
+                known_app_release=known_app_release,
             )
-            if not contract.passed:
-                log.warning(
-                    "stage_contract_failed",
-                    issue_id=issue.id,
-                    identifier=issue.identifier,
-                    producing_state=producing_state,
-                    advanced_to=current_state,
-                    missing=contract.missing,
-                )
-                await asyncio.to_thread(
-                    self._tracker_call_append_note,
-                    cfg,
-                    issue,
-                    contract.note_heading,
-                    contract.note_body,
-                )
-                await asyncio.to_thread(
-                    self._tracker_call_update_state,
-                    cfg,
-                    issue,
-                    producing_state_raw or producing_state,
-                )
-                # Pull the freshly-rewound body so the
-                # next backend rebuild's first prompt
-                # sees the ## Contract Failure note we
-                # just appended (full-body fetch — see
-                # the comment above the preflight
-                # refresh for why minimal would erase
-                # description).
-                refreshed = await self._refresh_issue_full(cfg, running_issue_id)
-                if refreshed is not None:
-                    issue = refreshed
-                issue = replace(
-                    issue,
-                    state=(producing_state_raw or producing_state),
-                )
-                running_entry = self._running.get(running_issue_id)
-                if running_entry is not None:
-                    running_entry.issue = issue
-                current_state = normalize_state(issue.state)
+            issue = outcome.issue
+            current_state = outcome.current_state
+            known_app_release = outcome.known_app_release
+            if outcome.rewound:
                 is_rewind = True
-            elif contract.warnings:
-                # Soft S2 advisories (e.g. a non-passing AC
-                # Scorecard row): surface as a ticket note
-                # without rewinding so the pipeline proceeds.
-                log.warning(
-                    "stage_contract_warn",
-                    issue_id=issue.id,
-                    identifier=issue.identifier,
-                    producing_state=producing_state,
-                    advanced_to=current_state,
-                    warnings=contract.warnings,
-                )
-                await asyncio.to_thread(
-                    self._tracker_call_append_note,
-                    cfg,
-                    issue,
-                    "Contract Warning",
-                    contract.warning_note.split("\n", 1)[1],
-                )
         if is_rewind:
             debug.rewind_count += 1
             if (
@@ -6979,6 +6899,133 @@ class Orchestrator:
                 known_app_release=known_app_release,
             ),
             is_rewind=is_rewind,
+        )
+
+    async def _enforce_stage_contract(
+        self,
+        *,
+        cfg: ServiceConfig,
+        running_issue_id: str,
+        issue: Issue,
+        producing_state: str,
+        producing_state_raw: str,
+        current_state: str,
+        workspace_path: Path,
+        known_app_release: bool,
+    ) -> _StageContractOutcome:
+        """Evaluate the producing lane's stage contract after a forward move.
+
+        Refreshes the full ticket body, evaluates the preset's contract set,
+        and on failure appends `## Contract Failure` and writes the tracker
+        state back to the producing lane. Returns the (possibly refreshed
+        and rewound) issue, its normalized state, and whether it rewound.
+        Producing states outside the preset's contract set pass through
+        without the full-body refresh.
+        """
+        # Defensive: the raw label must denote `producing_state`; a caller
+        # that hands us the advanced state's casing would make the rewind
+        # write the state the ticket is already in (a silent no-op).
+        if normalize_state(producing_state_raw) != producing_state:
+            producing_state_raw = _canonical_state_label(cfg, producing_state)
+        # The deep preset carries its own contract set (vault files +
+        # verdict lines); anything else gets the default section set.
+        lane_preset = guess_lane_preset(cfg.tracker.active_states)
+        if producing_state not in contract_producing_states(lane_preset):
+            return _StageContractOutcome(
+                issue=issue,
+                current_state=current_state,
+                known_app_release=known_app_release,
+                rewound=False,
+            )
+        # IMPORTANT: contract eval reads `issue.description`, so we MUST use
+        # the full-body refresh — not the minimal `_refresh_issue_state`,
+        # which returns description=None for every tracker adapter and
+        # would falsely fail every forward transition. See
+        # tests/test_orchestrator_contract_integration.py for the
+        # regression the v0.6.7 release surfaced.
+        refreshed_for_contract = await self._refresh_issue_full(cfg, running_issue_id)
+        if refreshed_for_contract is not None:
+            issue = refreshed_for_contract
+            known_app_release = known_app_release or _has_app_release_label(issue)
+            running_entry = self._running.get(running_issue_id)
+            if running_entry is not None:
+                running_entry.issue = issue
+            current_state = normalize_state(issue.state)
+        contract = evaluate_contract(
+            producing_state=producing_state,
+            ticket_body=issue.description or "",
+            identifier=issue.identifier,
+            docs_root=workspace_path / "docs",
+            artifact_store_root=(
+                self._artifact_store.root
+                if (cfg.artifacts.require_for_done and self._artifact_store is not None)
+                else None
+            ),
+            preset=lane_preset,
+            request=issue.request,
+            advanced_state=current_state,
+            app_release=known_app_release,
+        )
+        if not contract.passed:
+            log.warning(
+                "stage_contract_failed",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                producing_state=producing_state,
+                advanced_to=current_state,
+                missing=contract.missing,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                issue,
+                contract.note_heading,
+                contract.note_body,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                issue,
+                producing_state_raw or producing_state,
+            )
+            # Pull the freshly-rewound body so the next prompt sees the
+            # `## Contract Failure` note we just appended (full-body fetch).
+            refreshed = await self._refresh_issue_full(cfg, running_issue_id)
+            if refreshed is not None:
+                issue = refreshed
+            issue = replace(issue, state=(producing_state_raw or producing_state))
+            running_entry = self._running.get(running_issue_id)
+            if running_entry is not None:
+                running_entry.issue = issue
+            return _StageContractOutcome(
+                issue=issue,
+                current_state=normalize_state(issue.state),
+                known_app_release=known_app_release,
+                rewound=True,
+            )
+        if contract.warnings:
+            # Soft S2 advisories (e.g. a non-passing AC Scorecard row):
+            # surface as a ticket note without rewinding.
+            log.warning(
+                "stage_contract_warn",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                producing_state=producing_state,
+                advanced_to=current_state,
+                warnings=contract.warnings,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                issue,
+                "Contract Warning",
+                contract.warning_note.split("\n", 1)[1],
+            )
+        return _StageContractOutcome(
+            issue=issue,
+            current_state=current_state,
+            known_app_release=known_app_release,
+            rewound=False,
         )
 
     async def _rebuild_backend_for_phase(
