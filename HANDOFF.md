@@ -23,6 +23,33 @@ bottom): `_on_tick` / `_reconcile_one` extractions, Linear/Jira intent gate
 (neither adapter has an issue-create API yet), win32 `process_identity()`,
 the deferred UX items, #31 codex sandbox repro.
 
+## Live end-to-end run (2026-09-12, scratch project, real `claude` worker)
+
+Scratch registry `SYMPHONY_PROJECTS_FILE=/tmp/symphony-smoke.GxHny4/projects.json`,
+project `/tmp/symphony-smoke.GxHny4/smoke` (default 4-lane preset,
+`agent.kind: claude`, `auto_merge_push_target: false`, service on :9999,
+log `log/symphony.log`, stats `.symphony/stats.jsonl`).
+
+| Ticket | Result | Evidence |
+|---|---|---|
+| `SMK-1` | Auto-triaged to In Progress; In Progress contract passed; Verify wrote `## Security Audit` / `## Review` / `## QA Evidence` / `## AC Scorecard` and then `## Environment Block` → `Blocked`, because the headless worker was denied `python3`, `pytest`, and `git merge-tree` (`docs/SMK-1/qa/runtime-block.log`). Not a Symphony defect: the scratch project had no `.claude/settings.json` allow list (bootstrapping.md already says the CLI lanes need a permission mode that allows Bash). | `kanban/SMK-1.md`, log 02:29–02:37 UTC |
+| `SMK-2` | After committing a `.claude/settings.json` allow list: Todo → In Progress → Verify → Document → Done in 13 min / 3 turns; the terminal Done gate passed (`## Wiki Updates` + `## As-Is -> To-Be Report` present), `auto_commit` + `--no-ff` merge landed on `main`, wiki entries written, artifact collected. `python3 hello.py` on `main` prints `hello, symphony`. A soft `## Contract Warning` correctly flagged the one `Not proven` scorecard row. | `kanban/SMK-2.md`, log 04:17–04:30 UTC, `stats.jsonl` (`run_end … state=done`) |
+
+Two pre-existing behaviours surfaced while recovering SMK-1 (neither changed
+by this branch; both worth a ticket):
+
+- **Cancelled worker of a terminal ticket wedges a 1-slot board.** Moving the
+  auto-opened `FIX-SMK-1-1` to `Archive` ejected its worker with
+  `reason=cancelled`; `_handle_worker_error` then auto-paused it and kept a
+  retry entry (`holds_slot=True`) re-scheduling every tick, so `SMK-1` never
+  dispatched until `symphony service restart`. `worker_exit._handle_worker_error`
+  should skip pause/retry when the ticket is already in a terminal state.
+- **`auto_recover_blocked` fights a manual re-run.** The FIX ticket is added
+  as a blocker of the source; hand-moving the source back to an active lane
+  gets it pushed to `Blocked` again (`blocked_recovery_pending`) until the FIX
+  resolves. Document the escape hatch (`auto_recover_blocked: false`, or
+  resolve/remove the FIX blocker first) or let an operator move override it.
+
 Verify-before-trusting notes for the next session:
 
 - Item 2 changes behaviour on existing default boards: `Document -> Done`
