@@ -38,6 +38,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   three-section projection: intent for non-developers, an optional policy
   classification, then developer notes with a verdict.
 
+- **`agent.max_reopens` bounds the Build ↔ Verify reopen loop.** A deep
+  Verify RED / QA BLOCKED reopens a merged Build slice by moving it from Done
+  back to Build; that is a fresh run with a fresh rewind counter, so
+  `agent.max_attempts` never bounded the oscillation. The orchestrator now
+  counts the ticket's prior Done runs in the run registry and, past the cap
+  (default 3), appends `## Reopen Budget` and parks the ticket in Blocked
+  instead of dispatching another cycle. A `## Reopen Approved` section on
+  the ticket extends the budget by one; `0` disables.
+
 ### Changed
 - **The move into Done is contract-gated.** Terminal transitions never
   reached the phase handler, so the last gate of every board — `Document ->

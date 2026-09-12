@@ -10773,3 +10773,121 @@ def test_kill_without_recorded_identity_stays_ungated(tmp_path, monkeypatch):
     orch._force_eject_zombie(issue.id, entry, cfg)
 
     assert captured == [(4242, None)], "identity=None must keep the kill ungated"
+
+
+# ---------------------------------------------------------------------------
+# reopen budget — a ticket that keeps coming back from Done
+# ---------------------------------------------------------------------------
+
+
+def _seed_done_runs(registry: RunRegistry, issue: Issue, count: int, tmp_path: Path) -> None:
+    """Record `count` completed runs that carried `issue` to Done."""
+    for _ in range(count):
+        run_id = registry.acquire_run(
+            issue,
+            workspace_path=tmp_path / "ws" / issue.identifier,
+            attempt=None,
+            attempt_kind="initial",
+            agent_kind="codex",
+        )
+        assert run_id
+        assert registry.complete_run(
+            issue_id=issue.id, run_id=run_id, status="normal", state="Done"
+        )
+
+
+def _reopen_tick(
+    monkeypatch, tmp_path: Path, *, prior_done: int, max_reopens: int, body: str = ""
+) -> tuple[list[str], list[tuple[str, str, str]], list[tuple[str, str]]]:
+    # The tick opens the registry at `<workflow dir>/.symphony/state.db`
+    # (`registry_path_for_workflow`), so seed exactly that file.
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Build", "Verify"),
+        terminal_states=("Done", "Blocked"),
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+    )
+    cfg = replace(cfg, agent=replace(cfg.agent, max_reopens=max_reopens))
+    issue = _issue("BUILD-1", state="Build", description=body)
+    registry = RunRegistry(tmp_path / ".symphony" / "state.db")
+    _seed_done_runs(registry, issue, prior_done, tmp_path)
+    orch = _orch()
+    orch._run_registry = registry
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    dispatched: list[str] = []
+    appended: list[tuple[str, str, str]] = []
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    def _append(_cfg, _issue, heading, note):
+        appended.append((_issue.identifier, heading, note))
+
+    def _move(_cfg, _issue, target):
+        moved.append((_issue.identifier, target))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+    monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_append))
+    monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
+    asyncio.run(orch._on_tick())
+    registry.close()
+    return dispatched, appended, moved
+
+
+def test_reopen_within_budget_dispatches(monkeypatch, tmp_path):
+    dispatched, appended, moved = _reopen_tick(
+        monkeypatch, tmp_path, prior_done=3, max_reopens=3
+    )
+    assert dispatched == ["BUILD-1"]
+    assert appended == [] and moved == []
+
+
+def test_reopen_over_budget_is_parked_in_blocked_with_note(monkeypatch, tmp_path):
+    """Deep Verify RED reopens a merged Build slice as a *new* run each time,
+    so `max_attempts` (per-run rewinds) never bounds the Build <-> Verify
+    loop. The registry remembers every Done run; past the cap the ticket is
+    parked for an operator instead of burning another cycle."""
+    dispatched, appended, moved = _reopen_tick(
+        monkeypatch, tmp_path, prior_done=4, max_reopens=3
+    )
+    assert dispatched == []
+    assert moved == [("BUILD-1", "Blocked")]
+    [(identifier, heading, note)] = appended
+    assert identifier == "BUILD-1" and heading == "Reopen Budget"
+    assert "reached Done 4 time(s)" in note
+    assert "## Reopen Approved" in note
+
+
+def test_reopen_approved_section_extends_the_budget(monkeypatch, tmp_path):
+    body = "## Verify Failure\n\nflaky\n\n## Reopen Approved\n\noperator: one more\n"
+    dispatched, appended, moved = _reopen_tick(
+        monkeypatch, tmp_path, prior_done=4, max_reopens=3, body=body
+    )
+    assert dispatched == ["BUILD-1"]
+    assert moved == []
+
+
+def test_reopen_budget_zero_disables_the_cap(monkeypatch, tmp_path):
+    dispatched, _appended, moved = _reopen_tick(
+        monkeypatch, tmp_path, prior_done=9, max_reopens=0
+    )
+    assert dispatched == ["BUILD-1"]
+    assert moved == []
+
+
+def test_first_dispatch_never_counts_as_a_reopen(monkeypatch, tmp_path):
+    dispatched, appended, moved = _reopen_tick(
+        monkeypatch, tmp_path, prior_done=0, max_reopens=1
+    )
+    assert dispatched == ["BUILD-1"]
+    assert appended == [] and moved == []

@@ -135,6 +135,7 @@ from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
 from .executors import LegacyStageExecutor, TicketExecutor, TicketRunContext
 from .helpers import (
     _branch_hook_env,
+    _is_successful_terminal_state,
     _branch_already_merged_into_target,
     _canonical_state_label,
     _config_for_issue_agent,
@@ -632,6 +633,9 @@ def _blocked_rca_labels(issue: Issue) -> list[str]:
         if label not in labels:
             labels.append(label)
     return labels
+
+
+_REOPEN_APPROVED_RE = re.compile(r"^##\s+Reopen Approved\b", re.MULTILINE)
 
 
 def _has_app_release_label(issue: Issue) -> bool:
@@ -4172,6 +4176,15 @@ class Orchestrator:
                 )
                 continue
 
+            if await self._hold_reopened_ticket_over_budget(issue, cfg):
+                entry.update(
+                    status="needs_action",
+                    code="reopen_budget",
+                    reason="ticket exceeded agent.max_reopens and was parked",
+                    dispatch_outcome="state_changed",
+                )
+                continue
+
             # C1 — this final pre-dispatch check can still invalidate a
             # forecast because touched-file ownership changes with live runs.
             conflict = self._conflict_blocker(issue)
@@ -4275,6 +4288,8 @@ class Orchestrator:
             if self._available_slots(cfg) <= 0:
                 break
             if not self._should_dispatch(issue, cfg):
+                continue
+            if await self._hold_reopened_ticket_over_budget(issue, cfg):
                 continue
             conflict = self._conflict_blocker(issue)
             if conflict is not None:
@@ -5477,6 +5492,87 @@ class Orchestrator:
                     reason_code="source_reopen_failed",
                 )
         return reopened
+
+    def _prior_done_run_count(self, issue: Issue) -> int:
+        """How many completed runs already carried this ticket to Done."""
+        registry = self._run_registry
+        if registry is None:
+            return 0
+        records = self._registry_guard(
+            "reopen_history",
+            lambda: registry.recent_runs(issue.id, limit=200, status="normal"),
+            [],
+        )
+        return sum(
+            1 for record in records if _is_successful_terminal_state(record.state)
+        )
+
+    async def _hold_reopened_ticket_over_budget(
+        self, issue: Issue, cfg: ServiceConfig
+    ) -> bool:
+        """Block a ticket that keeps coming back from Done; True when held.
+
+        A rewind inside one run is capped by `agent.max_attempts`, but a
+        reopen is a *new* run with a fresh counter: the deep preset's Verify
+        RED / QA BLOCKED reopen a merged Build slice by moving it from Done
+        back to Build, and nothing bounded that loop. Count the ticket's
+        prior Done runs in the registry; past `agent.max_reopens` (plus one
+        per `## Reopen Approved` section an operator appended) append
+        `## Reopen Budget` and park the ticket in Blocked.
+        """
+        cap = cfg.agent.max_reopens
+        if cap <= 0:
+            return False
+        prior_done = self._prior_done_run_count(issue)
+        if prior_done == 0:
+            return False
+        approvals = len(_REOPEN_APPROVED_RE.findall(issue.description or ""))
+        allowed = cap + approvals
+        if prior_done <= allowed:
+            return False
+        target = _rewind_budget_target_state(cfg)
+        if not target:
+            log.warning(
+                "reopen_budget_exceeded",
+                identifier=issue.identifier,
+                prior_done_runs=prior_done,
+                max_reopens=cap,
+                approvals=approvals,
+                target_state="(none)",
+            )
+            return False
+        note = (
+            f"This ticket reached Done {prior_done} time(s) and was reopened "
+            f"again (agent.max_reopens: {cap}, approvals: {approvals}). Symphony "
+            f"moved it to {target} instead of dispatching another cycle: an "
+            "operator must decide whether the latest Verify/QA findings are "
+            "real or the verifier is wrong. To allow one more cycle, append a "
+            "`## Reopen Approved` section here and move the ticket back to its "
+            "lane; raise `agent.max_reopens` (0 disables) for more."
+        )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_append_note, cfg, issue, "Reopen Budget", note
+            )
+            await asyncio.to_thread(self._tracker_call_update_state, cfg, issue, target)
+        except Exception as exc:
+            log.warning(
+                "reopen_budget_hold_failed",
+                identifier=issue.identifier,
+                error=str(exc),
+            )
+            self._record_tracker_error(issue.id, exc)
+            return False
+        self._clear_tracker_error(issue.id)
+        log.warning(
+            "reopen_budget_exceeded",
+            identifier=issue.identifier,
+            prior_done_runs=prior_done,
+            max_reopens=cap,
+            approvals=approvals,
+            target_state=target,
+        )
+        return True
 
     async def _auto_triage_todo_if_actionable(
         self, issue: Issue, cfg: ServiceConfig

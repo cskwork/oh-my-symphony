@@ -170,6 +170,14 @@ it checks each lane's vault file and verdict line. A miss appends
 `## Contract Failure` and rewinds the ticket to the producing lane. Blocked,
 Cancelled, and Human Review are never contract-gated.
 
+Two budgets bound the loops. `agent.max_attempts` caps rewinds inside one
+run (Verify or Document back to In Progress). `agent.max_reopens` caps how
+often a ticket that already reached Done is dispatched again — the deep
+preset's Verify RED / QA BLOCKED reopen a merged Build slice as a fresh run,
+which `max_attempts` never sees. Past the cap the ticket gets a
+`## Reopen Budget` note and parks in Blocked; an operator appends
+`## Reopen Approved` to buy one more cycle.
+
 The web board opens on active agent lanes. `Human Review`, `Done`, `Blocked`,
 and `Archive` stay visible in the compact **Review and parked** group until
 you switch to `All`.

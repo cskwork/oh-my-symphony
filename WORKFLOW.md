@@ -247,6 +247,13 @@ agent:
   # on the (max_attempts+1)th rewind, it moves the ticket to Blocked
   # instead of starting another In Progress pass. Set to 0 to disable.
   max_attempts: 3
+  # Cap on re-dispatching a ticket that already reached Done (deep preset:
+  # Verify RED / QA BLOCKED reopen a merged Build slice; each reopen is a
+  # fresh run, so max_attempts never sees it). Past the cap Symphony
+  # appends `## Reopen Budget` and parks the ticket in Blocked; a
+  # `## Reopen Approved` section on the ticket buys one more cycle.
+  # Set 0 to disable.
+  max_reopens: 3
   # Mechanical evidence floor (orchestrator/contracts.py):
   #   auto (default) — enforce when the board is a shipped preset: every
   #                    active lane is a default-preset lane (Todo / In

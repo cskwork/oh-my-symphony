@@ -39,6 +39,7 @@ from .constants import (
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_KIRO_COMMAND,
     DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_REOPENS,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_STATE_TURNS,
     DEFAULT_MAX_TOTAL_TURNS,
@@ -114,6 +115,15 @@ class AgentConfig:
     no_stage_change_action: str = "block"
     # Soft cap for Verify/Document rewinds back into In Progress. 0 disables.
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    # Cap on how many times one ticket may be dispatched again after it
+    # already reached Done (deep preset: Verify RED / QA BLOCKED reopen a
+    # merged Build slice; any board: an operator moves a Done card back).
+    # Each reopen is a fresh run, so `max_attempts` never sees it. On the
+    # (max_reopens+1)th reopen the orchestrator appends `## Reopen Budget`
+    # and moves the ticket to Blocked instead of dispatching another cycle;
+    # a `## Reopen Approved` section on the ticket extends the budget by
+    # one. 0 disables.
+    max_reopens: int = DEFAULT_MAX_REOPENS
     # Cap on auto-retries scheduled after a worker exits with a non-normal
     # outcome (timeout, crash, transient backend error). On exhaustion the
     # orchestrator stops scheduling further retries, appends an

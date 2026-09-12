@@ -766,6 +766,41 @@ def test_repo_workflow_codex_is_browser_capable() -> None:
     assert cfg.codex.turn_sandbox_policy == "danger-full-access"
 
 
+def test_build_service_config_reads_agent_max_reopens(tmp_path):
+    workflow_path = tmp_path / "WORKFLOW.md"
+    workflow_path.write_text(
+        """---
+tracker:
+  kind: file
+  board_root: ./kanban
+agent:
+  kind: codex
+  max_reopens: 5
+---
+""",
+        encoding="utf-8",
+    )
+    cfg = build_service_config(load_workflow(workflow_path))
+    assert cfg.agent.max_reopens == 5
+
+
+def test_build_service_config_defaults_agent_max_reopens(tmp_path):
+    workflow_path = tmp_path / "WORKFLOW.md"
+    workflow_path.write_text(
+        """---
+tracker:
+  kind: file
+  board_root: ./kanban
+agent:
+  kind: codex
+---
+""",
+        encoding="utf-8",
+    )
+    cfg = build_service_config(load_workflow(workflow_path))
+    assert cfg.agent.max_reopens == 3
+
+
 def test_build_service_config_allows_zero_agent_max_attempts(tmp_path):
     path = _write(
         tmp_path,
