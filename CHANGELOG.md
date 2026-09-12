@@ -81,6 +81,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing.
 
 ### Changed
+- **`core.py` extraction: `release_transition.py`.** The Verify-exit release
+  gate (`_enforce_app_release_transition_inner`, ~420 lines) now lives in
+  `orchestrator/release_transition.py` as a module-level function that takes
+  the orchestrator explicitly, following the `worker_exit.py` / `attempt.py`
+  convention; `core.py` keeps a one-call forward and the
+  `validate_release_contract` / `resolve_target_release_identity` test seams.
+  `core.py` is 9,822 → 9,680 lines.
+- **Parallel test suite is load-tolerant.** The two tests that failed only
+  under `pytest -n auto` (HANDOFF 2026-09-05 item 7) now wait long enough on
+  a loaded host: the worktree-script subprocess timeout is 60 s (was 5 s) and
+  the release-reconcile worker-start wait is 10 s (was 1 s).
 - **The move into Done is contract-gated.** Terminal transitions never
   reached the phase handler, so the last gate of every board — `Document ->
   Done` on the default preset, every lane `-> Done` on the deep preset — was

@@ -374,8 +374,9 @@ def _miss_key(item: str) -> str:
     """Collapse a contract `missing` entry to a stable key.
 
     `## Wiki Updates` stays as is; a path-bearing message keeps only the
-    first backtick span (`vault file \`/ws/docs/req/x/brief.md\` missing`
-    -> `brief.md`), so the same miss on different tickets counts together.
+    file name of its first backtick span ("vault file /ws/docs/req/x/brief.md
+    missing" -> "brief.md"), so the same miss on different tickets counts
+    together.
     """
     text = item.strip()
     if text.startswith("## "):

@@ -453,6 +453,9 @@ def test_setup_worktree_script_supports_linked_workflow_dir(tmp_path, lock_backe
         ),
     }
 
+    # 5 s was enough alone but not under `pytest -n auto`: the script runs a
+    # dozen git commands and a lock acquisition, and a loaded host (HANDOFF
+    # 2026-09-05 item 7) blew the budget. Slow is not the failure mode here.
     subprocess.run(
         [_BASH, str(repo_root / "scripts" / "symphony-setup-worktree.sh")],
         cwd=str(workspace),
@@ -460,7 +463,7 @@ def test_setup_worktree_script_supports_linked_workflow_dir(tmp_path, lock_backe
         capture_output=True,
         text=True,
         check=True,
-        timeout=5,
+        timeout=60,
     )
 
     common_git_dir = Path(
