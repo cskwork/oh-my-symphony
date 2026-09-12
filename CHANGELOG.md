@@ -55,6 +55,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deep Review prompt treats each as a mandatory objection candidate
   (AGENTS.md rule 3 for lazymode-waived gates).
 
+- **`agent.fallback_kinds` — backend fallback on quota errors.** A worker
+  that exits on a usage-limit / quota / billing error (not a transient 429)
+  used to auto-pause until an operator re-pinned the ticket by hand (the
+  2026-09-05 E2E lost ~20 minutes this way). With `fallback_kinds` set, the
+  orchestrator force-pins the next untried kind onto the file-board ticket
+  (`FileBoardTracker.record_agent_kind(..., force=True)`), appends
+  `## Backend Fallback`, and schedules the normal retry. When every listed
+  kind has hit its limit the ticket pauses as before. Remote trackers
+  cannot carry the pin and keep the pause.
+- **`symphony doctor` probes the agent binary.** `agent.kind=<kind>` now runs
+  `<binary> --version` after the PATH lookup: a non-zero exit is a `warn`
+  naming the stub's output (the E2E host's `~/.opencode/bin/opencode` was an
+  npm postinstall stub), an exec failure is a `fail`.
+
 ### Changed
 - **The move into Done is contract-gated.** Terminal transitions never
   reached the phase handler, so the last gate of every board — `Document ->

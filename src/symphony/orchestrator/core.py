@@ -347,6 +347,35 @@ def _clean_board_error_message(message: str) -> str:
     return " ".join(without_controls.split())
 
 
+# Errors that mean "this backend's account is out of budget for now": a
+# retry with backoff on the same backend cannot help, but another backend
+# can (2026-09-05 E2E: codex usage limit paused the worker until an operator
+# re-pinned the ticket by hand). Distinct from the transient
+# `_RETRYABLE_WORKER_ERROR_MARKERS` (429 / rate limit), which retry in place.
+_QUOTA_WORKER_ERROR_MARKERS = (
+    "usage limit",
+    "usage_limit",
+    "session limit",
+    "quota",
+    "insufficient_quota",
+    "insufficient credits",
+    "out of credits",
+    "credit balance",
+    "billing",
+    "plan limit",
+    "weekly limit",
+    "monthly limit",
+    "limit reached",
+    "limit exceeded",
+)
+
+
+def _is_quota_worker_error(reason: str, error: str | None) -> bool:
+    detail = f"{reason}: {error}" if error else reason
+    clean = _clean_board_error_message(detail).lower()
+    return any(marker in clean for marker in _QUOTA_WORKER_ERROR_MARKERS)
+
+
 def _worker_error_pause_reason(reason: str, error: str | None) -> str:
     detail = f"{reason}: {error}" if error else reason
     clean = _clean_board_error_message(detail)
@@ -9620,6 +9649,49 @@ class Orchestrator:
             self._invoke_shared_tracker_client(cfg, _record)
         except _TrackerClientUnavailable:
             return
+
+    def _pin_fallback_agent_kind(
+        self, cfg: ServiceConfig, identifier: str, agent_kind: str
+    ) -> bool:
+        """Replace the ticket's backend pin; False when the tracker cannot.
+
+        Only adapters with ``record_agent_kind`` (the file board) can carry
+        the pin, so a remote tracker keeps the pause-for-operator path.
+        """
+        pinned = False
+
+        def _record(client: TrackerClient) -> None:
+            nonlocal pinned
+            record = getattr(client, "record_agent_kind", None)
+            if record is None:
+                return
+            record(identifier, agent_kind, force=True)
+            pinned = True
+
+        try:
+            self._invoke_shared_tracker_client(cfg, _record)
+        except _TrackerClientUnavailable:
+            return False
+        except Exception as exc:
+            log.warning(
+                "backend_fallback_pin_failed",
+                identifier=identifier,
+                agent_kind=agent_kind,
+                error=str(exc),
+            )
+            return False
+        return pinned
+
+    def _next_fallback_agent_kind(
+        self, cfg: ServiceConfig, entry: RunningEntry, debug: _IssueDebug
+    ) -> str | None:
+        """First `agent.fallback_kinds` entry this ticket has not exhausted."""
+        current = self._entry_agent_kind(entry)
+        exhausted = set(debug.quota_exhausted_kinds) | {current}
+        for kind in cfg.agent.fallback_kinds:
+            if kind not in exhausted:
+                return kind
+        return None
 
     def _tracker_call_record_last_agent_kind(
         self, cfg: ServiceConfig, identifier: str, agent_kind: str

@@ -421,6 +421,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         budget_exhausted_state=_as_str(
             agent_raw.get("budget_exhausted_state"), ""
         ) or "",
+        fallback_kinds=_validated_fallback_kinds(agent_raw.get("fallback_kinds")),
         stage_kinds=_validated_stage_kinds(
             agent_raw.get("stage_kinds"),
             active_states=tracker.active_states,
@@ -928,6 +929,30 @@ def _validated_nonnegative_or_default(value: Any, default: int, *, name: str) ->
     if ivalue < 0:
         raise ConfigValidationError(f"{name} must be a non-negative integer", value=value)
     return ivalue
+
+
+def _validated_fallback_kinds(value: Any) -> tuple[str, ...]:
+    """agent.fallback_kinds — ordered, distinct, supported agent kinds."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        raise ConfigValidationError(
+            "agent.fallback_kinds must be a list of agent kinds", value=value
+        )
+    out: list[str] = []
+    for raw in value:
+        kind = _canonical_agent_kind(_as_str(raw).strip().lower())
+        if kind not in SUPPORTED_AGENT_KINDS:
+            raise ConfigValidationError(
+                f"agent.fallback_kinds entries must be one of "
+                f"{sorted(SUPPORTED_AGENT_KINDS)}",
+                value=raw,
+            )
+        if kind not in out:
+            out.append(kind)
+    return tuple(out)
 
 
 def _validated_stage_kinds(

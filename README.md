@@ -50,7 +50,9 @@ usage, and whatever rate-limit headroom the selected CLI reports.
 ## Why Symphony?
 
 - **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ AGY ↔ Kiro ↔ OpenCode ↔ Pi ↔ Prime Agent with one
-  YAML line, or mix backends per ticket. New agents (Ollama, local models,
+  YAML line, mix backends per ticket, or list `agent.fallback_kinds` so a
+  quota-exhausted backend hands the ticket to the next one instead of
+  pausing for an operator. New agents (Ollama, local models,
   anything with a CLI) drop in behind a thin `AgentBackend` Protocol without
   changing the orchestrator.
 - **See what your agents are actually doing.** Live Kanban shows turn count,

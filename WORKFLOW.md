@@ -239,6 +239,13 @@ hooks:
 
 agent:
   kind: claude
+  # Backends to switch to, in order, when a worker exits on a quota /
+  # usage-limit error ("usage limit", "insufficient_quota", "billing"…).
+  # Transient rate limits (429) still retry on the same backend. Symphony
+  # pins the next untried kind onto the ticket (`agent.kind` frontmatter),
+  # appends `## Backend Fallback`, and retries instead of pausing for an
+  # operator. Empty list keeps the pause. File boards only.
+  fallback_kinds: []
   max_concurrent_agents: 1
   max_turns: 100
   max_retry_backoff_ms: 300000

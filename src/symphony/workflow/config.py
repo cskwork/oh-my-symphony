@@ -231,6 +231,13 @@ class AgentConfig:
     # Review). Resolution order at dispatch: explicit dispatch arg >
     # per-ticket `agent_kind` frontmatter pin > this map > `kind`.
     stage_kinds: dict[str, str] = field(default_factory=dict)
+    # Backends to fall back to, in order, when a worker exits on a quota /
+    # usage-limit error (not a transient rate limit, which retries on the
+    # same backend). The orchestrator pins the next untried kind onto the
+    # ticket (file boards: `agent.kind` frontmatter), appends
+    # `## Backend Fallback`, and retries instead of auto-pausing. Empty
+    # keeps the pause-for-operator behaviour.
+    fallback_kinds: tuple[str, ...] = ()
     # Whether the shipped stage-contract validator (the mechanical evidence
     # floor in `orchestrator/contracts.py`) runs on this board.
     #   "auto" (default) — on when every active lane is a default-preset lane

@@ -192,6 +192,13 @@ hooks:
 
 agent:
   kind: codex          # codex | claude | gemini | agy | kiro | opencode | pi | prime-agent
+  # Backends to switch to, in order, when a worker exits on a quota /
+  # usage-limit error ("usage limit", "insufficient_quota", "billing"…).
+  # Transient rate limits (429) still retry on the same backend. Symphony
+  # pins the next untried kind onto the ticket (`agent.kind` frontmatter),
+  # appends `## Backend Fallback`, and retries instead of pausing for an
+  # operator. Empty list keeps the pause. File boards only.
+  fallback_kinds: []
   # Optional per-state backend routing: cheap/fast agents on light lanes,
   # the default `kind` everywhere else. Precedence per dispatch:
   # per-ticket `agent_kind` frontmatter pin > stage_kinds > kind.
