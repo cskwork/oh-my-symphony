@@ -47,6 +47,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of dispatching another cycle. A `## Reopen Approved` section on
   the ticket extends the budget by one; `0` disables.
 
+- **Trip-wire scan on the intent card.** The chat intent gate now runs the
+  sdlc-kit `tools/tripwire.sh` heuristics (migration/schema, data deletion,
+  public API, security paths, infra/config) over every proposal. Hits are
+  listed on the card, recorded as `## Trip-wires` on the request ticket and
+  in `.sdlc/work/<slug>/intent.md`, force a `micro` track to `full`, and the
+  deep Review prompt treats each as a mandatory objection candidate
+  (AGENTS.md rule 3 for lazymode-waived gates).
+
 ### Changed
 - **The move into Done is contract-gated.** Terminal transitions never
   reached the phase handler, so the last gate of every board — `Document ->

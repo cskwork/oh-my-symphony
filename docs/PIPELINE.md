@@ -37,6 +37,13 @@ The ticket description carries the whole intent, so every lane treats it as
 the scope of record and never reopens the ask with the operator; `Human
 Review` stays reserved for a real blocker.
 
+Every proposal is scanned with the sdlc-kit trip-wire heuristics
+(`tools/tripwire.sh`: migrations, data deletion, public API, security paths,
+infra/config). Hits are shown on the card and recorded as `## Trip-wires` on
+the ticket and in `intent.md`; they never block the operator, but a hit
+downgrades a `micro` track to `full`, and the deep Review lane treats each
+hit as a mandatory objection candidate.
+
 ## Why four stages
 
 The old eight-stage flow spread one delivery story across too many agent

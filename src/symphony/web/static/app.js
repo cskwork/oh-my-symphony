@@ -4515,6 +4515,15 @@
         el('span', { class: `chat-intent-track ${action.track}` },
           action.track === 'micro' ? t('chat.intentTrackMicro') : t('chat.intentTrackFull')),
       ]),
+      Array.isArray(action.tripwires) && action.tripwires.length
+        ? el('div', { class: 'chat-intent-tripwires', role: 'note' }, [
+          el('strong', null, t('chat.intentTripwires')),
+          el('ul', null, action.tripwires.map((hit) => el('li', null, [
+            el('span', { class: 'chat-intent-tripwire-label' }, `${hit.label}: `),
+            el('code', null, (hit.lines && hit.lines[0]) || ''),
+          ]))),
+        ])
+        : null,
       el('details', { class: 'chat-intent-body' }, [
         el('summary', null, t('chat.intentShowBody')),
         body,

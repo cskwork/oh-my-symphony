@@ -983,7 +983,10 @@ cycle with exactly one human gate.
    claim labelled verified or assumed), Success criteria as checkboxes,
    Out of scope, Constraints, Open questions, and a track (`full`, or
    `micro` when the exact files are known and an existing command proves
-   success).
+   success). The server scans the card with the sdlc-kit trip-wire
+   heuristics (migrations, deletion, public API, security, infra); hits are
+   shown on the card, recorded as `## Trip-wires` on the ticket, and force
+   the `full` track.
 2. **Approve.** Press **Approve intent** on the card or reply `approve`.
    Any other reply supersedes the card so the agent can propose a revision.
    This approval is the only human decision in the cycle.
