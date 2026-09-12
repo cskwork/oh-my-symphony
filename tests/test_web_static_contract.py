@@ -519,7 +519,7 @@ def test_board_request_view_ships_accessible_explainable_schedule_contract() -> 
     assert "getRequestSchedule: (kind, id)" in js
     assert "new URLSearchParams({ kind, id })" in js
     assert "function renderRequestView(scrollEl)" in js
-    assert "function buildScheduleNode(node, index)" in js
+    assert "function buildScheduleNode(" in js
     assert "t('schedule.invalidExecutionOrder')" in js
     assert "'aria-busy': state.requestLoading ? 'true' : 'false'" in js
     assert "Request schedule" in js

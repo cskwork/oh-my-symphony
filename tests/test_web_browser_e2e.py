@@ -1463,3 +1463,110 @@ async def test_terminal_tickets_do_not_show_first_ticket_hint(
             assert await page.locator(".terminal-section").count() == 0
         finally:
             await browser.close()
+
+
+def prepare_diagnostics_board(root: Path) -> None:
+    for identifier, state in (("FIX-1", "In Progress"), ("FIX-RESOLVED", "Done")):
+        (root / "kanban" / f"{identifier}.md").write_text(_ticket(identifier, identifier, state))
+    path = root / "kanban" / "E2E-BUILD.md"
+    path.write_text(path.read_text().replace("blocked_by: [E2E-PLAN]", "blocked_by: [FIX-1, FIX-RESOLVED, FIX-MISSING]"))
+
+
+def diagnostics_schedule(_self) -> dict[str, Any]:
+    rows = []
+    for identifier, state, code in (
+        ("E2E-BUILD", "In Progress", "waiting_dependency"),
+        ("FIX-1", "In Progress", "paused"),
+        ("E2E-PLAN", "Todo", "waiting_global_capacity"),
+    ):
+        rows.append({"identifier": identifier, "status": "waiting", "code": code,
+                     "evaluated_state": state, "evaluated_updated_at": "2026-07-02T00:00:00+00:00"})
+    return {"available": True, "stale": False, "generated_at": "2026-07-02T00:00:00Z", "entries": rows}
+
+
+async def diagnostics_budgets(_self, issue) -> dict[str, Any]:
+    return {"available": True, "state": issue.state, "items": [
+        {"name": "attempt_turns", "status": "exhausted", "limit": 5, "used": 5, "remaining": 0},
+        {"name": "total_turns", "status": "remaining", "limit": 20, "used": 6, "remaining": 14},
+        {"name": "state_tokens", "status": "remaining", "limit": 1000, "used": 600, "remaining": 400},
+        {"name": "retries", "status": "disabled", "limit": 0, "used": None, "remaining": None},
+        {"name": "rewinds", "status": "remaining", "limit": 3, "used": 1, "remaining": 2},
+        {"name": "reopens", "status": "unknown", "limit": 3, "used": None, "remaining": None},
+    ]}
+
+
+async def test_drawer_execution_diagnostics_desktop_mobile(
+    web_base_url: str, board_dir: Path, monkeypatch
+) -> None:
+    prepare_diagnostics_board(board_dir)
+    monkeypatch.setattr(_StubOrchestrator, "schedule_snapshot", diagnostics_schedule)
+    monkeypatch.setattr(_StubOrchestrator, "issue_budget_snapshot", diagnostics_budgets, raising=False)
+    assert async_playwright is not None
+    evidence = Path(os.environ.get("SYMPHONY_UI_EVIDENCE_DIR", str(board_dir)))
+    evidence.mkdir(parents=True, exist_ok=True)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        try:
+            for width, language in ((1440, "en"), (390, "ko")):
+                plan_path = board_dir / "kanban" / "E2E-PLAN.md"
+                plan_original = plan_path.read_text()
+                page = await browser.new_page(viewport={"width": width, "height": 1000})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                mutations = []
+                page.on("request", lambda request: mutations.append(request.url) if request.method == "POST" and request.url.endswith('/refresh') else None)
+                await page.add_init_script(f"localStorage.setItem('symphony.lang', '{language}')")
+                await page.goto(f"{web_base_url}/#/board", wait_until="networkidle")
+                if width < 600:
+                    # The mobile board initially shows one lane; select In Progress.
+                    await page.get_by_role('tab', name='In Progress').click()
+                await page.locator('.card', has_text='Build request').click()
+                drawer = page.locator('#drawer-panel')
+                section = drawer.locator('.drawer-execution')
+                await section.wait_for()
+                text = await section.inner_text()
+                assert ('Waiting for one or more dependencies.' if language == 'en' else '하나 이상의 의존성 완료를 기다립니다.') in text
+                assert await section.get_by_role('button', name='Open ticket FIX-RESOLVED' if language == 'en' else 'FIX-RESOLVED 티켓 열기').count() == 0
+                assert 'FIX-MISSING' in text
+                await section.locator('summary').click()
+                text = await section.inner_text()
+                assert ('14 remaining' if language == 'en' else '14 남음') in text
+                assert ('0 remaining' if language == 'en' else '0 남음') in text
+                assert ('No limit' if language == 'en' else '제한 없음') in text
+                assert ('usage unavailable' if language == 'en' else '사용량 미확인') in text
+                await _assert_no_document_overflow(page, f'diagnostics {width}')
+                await _assert_no_element_overflow(page, '#drawer-panel', f'drawer {width}')
+                await page.screenshot(path=str(evidence / f'diagnostics-{width}-{language}.png'))
+                # A blocker button navigates to the existing detail and exposes its pause.
+                await section.locator('button', has_text='FIX-1').click()
+                await page.wait_for_function("document.querySelector('.drawer-id')?.textContent === 'FIX-1'")
+                assert ('This ticket is paused.' if language == 'en' else '이 티켓은 일시정지되었습니다.') in await drawer.inner_text()
+                # Reloading saved status must not invoke the dispatch-triggering refresh API.
+                await drawer.locator('.drawer-execution > button').click()
+                assert mutations == []
+                await drawer.locator('.drawer-header button').click()
+                if width < 600:
+                    await page.get_by_role('tab', name='Todo').click()
+                await page.locator('.card', has_text='Plan request').click()
+                await drawer.locator('.drawer-execution').wait_for()
+                assert ('Waiting for global agent capacity.' if language == 'en' else '전체 에이전트 용량을 기다립니다.') in await drawer.inner_text()
+                plan_path.write_text(plan_original.replace('state: Todo', 'state: In Progress'))
+                await drawer.locator('.drawer-execution > button').click()
+                await page.wait_for_function("document.querySelector('.execution-reason')?.textContent.includes('changed') || document.querySelector('.execution-reason')?.textContent.includes('변경')")
+                assert 'ready' not in (await drawer.locator('.execution-reason').inner_text()).lower()
+                async def old_server(route):
+                    response = await route.fetch()
+                    payload = await response.json()
+                    payload.pop('scheduling', None)
+                    payload.pop('budgets', None)
+                    await route.fulfill(response=response, json=payload)
+                await page.route('**/api/v1/issues/E2E-PLAN', old_server)
+                await drawer.locator('.drawer-execution > button').click()
+                await page.wait_for_function("document.querySelector('.execution-reason')?.textContent.includes('evaluation') || document.querySelector('.execution-reason')?.textContent.includes('평가')")
+                await drawer.locator('.execution-limits summary').click()
+                assert ('Execution limits are unavailable' if language == 'en' else '실행 한도를 확인할 수 없습니다') in await drawer.inner_text()
+                assert mutations == [] and errors == []
+                plan_path.write_text(plan_original)
+                await page.close()
+        finally:
+            await browser.close()

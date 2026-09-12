@@ -920,8 +920,9 @@ class CodexAppServerBackend(BaseAgentBackend):
 
         cachedInputTokens is a subset of inputTokens; reasoningOutputTokens
         is a subset of outputTokens. Adding either subset again inflates
-        the dashboard and token budgets. Keep the existing three-bucket
-        interface and overwrite, rather than accumulate, each notification.
+        the dashboard and token budgets. Preserve those inclusive totals and
+        expose cache only as the existing optional subset telemetry field.
+        Overwrite, rather than accumulate, each notification.
         """
         if not isinstance(usage, dict):
             return
@@ -930,6 +931,10 @@ class CodexAppServerBackend(BaseAgentBackend):
         self._latest_usage["input_tokens"] = in_t
         self._latest_usage["output_tokens"] = out_t
         self._latest_usage["total_tokens"] = in_t + out_t
+        if "cachedInputTokens" in usage:
+            self._latest_usage["cache_input_tokens"] = int(usage["cachedInputTokens"] or 0)
+        else:
+            self._latest_usage.pop("cache_input_tokens", None)
 
     async def _handle_approval(self, params: dict[str, Any]) -> None:
         # Best-effort auto-approve. The legacy `respondToApproval` method is

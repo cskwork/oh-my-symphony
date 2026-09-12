@@ -2335,3 +2335,17 @@ a { color: inherit; }
 .request-node-main.missing-node { cursor: default; }
 .request-node-main.missing-node:hover { background: transparent; }
 .cycle-chip { border-radius: 999px; padding: .05rem .4rem; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); font-size: .68rem; font-weight: 700; }
+
+/* Ticket execution context uses the existing drawer typography and controls. */
+.drawer-execution { margin: 1.25rem 0; padding-top: 1rem; border-top: 1px solid var(--border); }
+.drawer-execution h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+.drawer-execution p { margin: 0.5rem 0; overflow-wrap: anywhere; }
+.execution-blocker-label { margin-top: 0.75rem; font-weight: 600; }
+.execution-blockers { list-style: none; padding: 0; margin: 0.25rem 0; }
+.execution-blockers li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.execution-blockers button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.execution-limits { margin-top: 0.75rem; }
+.execution-limits summary { cursor: pointer; font-weight: 600; }
+.execution-limit-list { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 0.5rem 0.75rem; font-size: 0.8125rem; }
+.execution-limit-list dt, .execution-limit-list dd { margin: 0; overflow-wrap: anywhere; }
+.execution-limit-list dd { font-variant-numeric: tabular-nums; }

@@ -19,17 +19,8 @@ This ticket depends on:
 
 ## Deep pipeline (8 lanes)
 
-```
-request ticket:   Intake -> Research -> Plan <-> Review -> Done
-                                                    |
-                                    verdict: PASS releases the spawned DAG
-                                                    v
-spawned tickets:                    Build -> QA -> Verify -> Document -> Done
-```
-
-Every lane above is a separate ticket that ends at `Done`. The request ticket
-reaching `Done` (Review's PASS) is what unblocks the spawned Build tickets;
-each spawned ticket then walks its own lane to `Done`. `Done` is intentionally
+Each spawned ticket completes its own lane at `Done`; the request reaches
+`Done` after Review PASS. `Done` is intentionally
 unprompted in this preset — the lane gates live in the lane prompts.
 
 - A request ticket walks `Intake -> Research -> Plan -> Review`. Plan spawns the downstream `Build`/`QA`/`Verify`/`Document` tickets as a DAG (`--blocked-by`); Review red-teams the plan before any Build dispatches. Review's `verdict: PASS` moves the request ticket to `Done`, which is what releases the spawned Build tickets.

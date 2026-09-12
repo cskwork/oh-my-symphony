@@ -3289,6 +3289,78 @@ class Orchestrator:
                 }
         return None
 
+    async def issue_budget_snapshot(self, issue: Issue) -> dict[str, Any]:
+        """Read current guard counters; missing or truncated history is unknown."""
+        cfg = self._workflow_state.current()
+        if cfg is None:
+            return {"available": False, "items": []}
+        entry = self._running.get(issue.id)
+        debug = self._issue_debug.get(issue.id)
+        generated_at = _utc_iso_z()
+        current_state = (entry.state_at_turn_start or issue.state) if entry else issue.state
+        attempt_turns = entry.turn_count if entry else None
+        total_turns = (
+            (debug.completed_turn_count if debug else 0) + entry.turn_count
+            if entry else debug.completed_turn_count if debug else None
+        )
+        state_tokens = (
+            entry.codex_state_total_tokens
+            if entry and entry.last_reported_total_tokens > 0 else None
+        )
+        rewinds = debug.rewind_count if debug else None
+        retry_used = self._persisted_retry_attempts.get(issue.id)
+        if entry is not None and entry.attempt_kind == "retry":
+            retry_used = entry.retry_attempt
+        elif entry is not None and entry.retry_attempt is None:
+            retry_used = 0
+
+        def item(name: str, limit: int, used: int | None) -> dict[str, Any]:
+            status = "disabled" if limit <= 0 else (
+                "unknown" if used is None else "exhausted" if used >= limit else "remaining"
+            )
+            return {
+                "name": name, "limit": limit, "used": used,
+                "remaining": max(limit - used, 0) if limit > 0 and used is not None else None,
+                "status": status,
+            }
+
+        reopen_used = None
+        registry = self._run_registry
+        if registry is not None:
+            records = await asyncio.to_thread(
+                self._registry_guard,
+                "budget_reopen_history",
+                lambda: registry.recent_runs(issue.id, limit=200, status="normal"),
+                None,
+            )
+            # A full page may omit older runs. Never infer an exact count from it.
+            if (
+                records is not None and len(records) < 200
+                and self._running.get(issue.id) is entry
+            ):
+                prior_done = sum(
+                    1 for record in records if _is_successful_terminal_state(record.state)
+                )
+                reopen_used = max(prior_done - 1, 0)
+                if entry is not None and prior_done:
+                    reopen_used += 1
+        reopen_limit = cfg.agent.max_reopens
+        if reopen_limit > 0:
+            reopen_limit += len(_REOPEN_APPROVED_RE.findall(issue.description or ""))
+        return {
+            "available": True,
+            "generated_at": generated_at,
+            "state": current_state,
+            "items": [
+                item("attempt_turns", cfg.agent.max_turns, attempt_turns),
+                item("total_turns", cfg.agent.max_total_turns, total_turns),
+                item("state_tokens", self._token_budget_for_state(cfg, current_state), state_tokens),
+                item("retries", cfg.agent.max_retries, retry_used),
+                item("rewinds", cfg.agent.max_attempts, rewinds),
+                item("reopens", reopen_limit, reopen_used),
+            ],
+        }
+
     def issue_attention(self, issue: Issue) -> dict[str, str | None] | None:
         if self._issue_is_terminal(issue):
             if normalize_state(issue.state) == "blocked":
@@ -8415,8 +8487,8 @@ class Orchestrator:
         """Move a ticket whose retry budget is exhausted to a terminal state.
 
         Surfaces a board-level ``## Escalation`` note and updates the
-        tracker state to ``Blocked`` (or whichever configured terminal
-        state mentions ``block``/``human``). The ticket no longer cycles
+        tracker state to ``Blocked``, then another block-named terminal,
+        then a human-named terminal if no failure lane exists. The ticket no longer cycles
         through ``_schedule_retry``; an operator inspecting the board
         sees both the state change and the explanatory comment.
 
@@ -8433,11 +8505,23 @@ class Orchestrator:
             self._retry.pop(issue_id, None)
             self._pending_escalations.pop(issue_id, None)
             return
-        target_state = ""
-        for terminal in cfg.tracker.terminal_states:
-            if "block" in terminal.lower() or "human" in terminal.lower():
-                target_state = terminal
+        target_state = next(
+            (
+                state for state in cfg.tracker.terminal_states
+                if normalize_state(state) == "blocked"
+            ),
+            "",
+        )
+        for keyword in ("block", "human"):
+            if target_state:
                 break
+            target_state = next(
+                (
+                    state for state in cfg.tracker.terminal_states
+                    if keyword in state.lower()
+                ),
+                "",
+            )
         if not target_state and cfg.tracker.terminal_states:
             target_state = cfg.tracker.terminal_states[0]
         if not target_state:
@@ -9631,9 +9715,9 @@ class Orchestrator:
                             )
                     continue
                 state = (issue.state or "").strip().lower()
-                if state == "blocked":
+                if state in {"blocked", "human review"}:
                     log.warning(
-                        "startup_terminal_cleanup_preserved_blocked_workspace",
+                        f"startup_terminal_cleanup_preserved_{state.replace(' ', '_')}_workspace",
                         identifier=issue.identifier,
                         path=str(path),
                     )

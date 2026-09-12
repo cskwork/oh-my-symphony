@@ -11,6 +11,8 @@ default, or the first configured terminal state mentioning ``block`` or
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 from dataclasses import replace
 from pathlib import Path
 
@@ -224,14 +226,25 @@ def test_continuation_kind_is_exempt_from_cap() -> None:
     o._loop.close()
 
 
-def test_escalation_picks_human_terminal_when_named(monkeypatch) -> None:
-    """If `terminal_states` contains "Needs Human", prefer it over "Blocked"."""
+@pytest.mark.parametrize(
+    ("terminals", "expected"),
+    [
+        (("Done", "Cancelled", "Needs Human", "Blocked"), "Blocked"),
+        (("Human Review", "Done", "Cancelled", "Blocked"), "Blocked"),
+        (("Done", "Needs Human", "Work Blocked"), "Work Blocked"),
+        (("Done", "Cancelled", "Needs Human"), "Needs Human"),
+    ],
+)
+def test_escalation_prefers_blocked_over_human_terminal(
+    monkeypatch, terminals, expected
+) -> None:
+    """Retry exhaustion uses the configured failure lane before human review."""
     cfg = _make_config(max_retries=3)
     cfg = replace(
         cfg,
         tracker=replace(
             cfg.tracker,
-            terminal_states=("Done", "Cancelled", "Needs Human", "Blocked"),
+            terminal_states=terminals,
         ),
     )
     o = _orch(cfg)
@@ -266,9 +279,7 @@ def test_escalation_picks_human_terminal_when_named(monkeypatch) -> None:
     )
     o._loop.close()
 
-    # "Needs Human" comes BEFORE "Blocked" in terminal_states and
-    # matches the "human" preference rule, so it should win.
-    assert captured == ["Needs Human"], captured
+    assert captured == [expected], captured
 
 
 # ---------------------------------------------------------------------------

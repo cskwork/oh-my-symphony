@@ -8,6 +8,18 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-09-12 - Execution diagnostics and Deep workflow reliability
+
+### Fixed
+- Per-attempt turn exhaustion retains its budget guard when no terminal destination exists or tracker persistence fails.
+- Startup preserves Human Review workspaces, and retry exhaustion prefers a configured Blocked lane over human review.
+- Reopened Deep Build prompts retain the latest failure evidence. Shared Deep instructions remove a repeated diagram while preserving ordering and completion gates.
+- Codex reports cached-input telemetry through the existing cache field without adding that subset to inclusive token totals.
+
+### Added
+- Ticket details explain the saved scheduler decision, link unresolved dependencies, and show known remaining execution limits. Missing usage stays unknown and disabled caps stay distinct from exhausted limits. Reloading this information is read-only.
+- Recorded an isolated real GPT-6 Astra Deep run through two Build contracts, intentional QA failure, repair, independent re-QA, Verify, and Document. This is local library-workflow evidence, not app-release or all-backend certification.
+
 ## [0.24.0] - 2026-09-12 - Mechanical gates on every preset, reopen and quota budgets, learning loop
 
 ### Fixed
