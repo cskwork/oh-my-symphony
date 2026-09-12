@@ -206,7 +206,46 @@ def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
         located = sys.executable
     if located is None:
         return CheckResult(name, "fail", f"{binary!r} not on $PATH (configured: {command!r})")
+    probe = _probe_agent_binary(located)
+    if probe is not None:
+        return CheckResult(name, probe[0], f"{binary} → {located}; {probe[1]}")
     return CheckResult(name, "pass", f"{binary} → {located}")
+
+
+_AGENT_PROBE_TIMEOUT_S = 15
+
+
+def _probe_agent_binary(located: str) -> tuple[Status, str] | None:
+    """Run `<binary> --version`; None when it exits 0.
+
+    A binary that resolves on PATH can still be a broken launcher — the
+    2026-09-05 E2E found `~/.opencode/bin/opencode` pointing at an npm
+    postinstall stub that exits non-zero while the real CLI sat next to it.
+    `shutil.which` alone reported PASS. Failure to execute at all is a
+    `fail`; a non-zero exit is a `warn` because a few CLIs answer
+    `--version` on a non-zero code, and the operator can still launch.
+    """
+    try:
+        completed = subprocess.run(
+            [located, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=_AGENT_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return ("fail", f"`{Path(located).name} --version` could not run: {exc}")
+    if completed.returncode == 0:
+        return None
+    tail = " ".join(
+        part.strip() for part in (completed.stderr, completed.stdout) if part.strip()
+    )[-200:]
+    detail = f" — {tail}" if tail else ""
+    return (
+        "warn",
+        f"`{Path(located).name} --version` exited {completed.returncode}{detail}; "
+        "the launcher may be a broken stub (check the symlink target)",
+    )
 
 
 _PLACEHOLDER_TOKENS = ("my-org/my-repo", "my-org:my-repo")
