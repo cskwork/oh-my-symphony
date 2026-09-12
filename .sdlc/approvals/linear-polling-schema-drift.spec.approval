@@ -1,9 +1,0 @@
-stage: spec
-artifact: .sdlc/work/linear-polling-schema-drift/spec.md
-sha256: b1e4a9b54a0febacf8ac59d657d53fa98c87a6fd6ecd8ec2a065d6dfbf4f1afa
-approved_by: danny
-approved_at: 2026-08-29T07:50:18Z
-upstream: .sdlc/work/linear-polling-schema-drift/intent.md
-upstream_sha256: e6407205127d390f3fe533e7bba85262d96918b72319072fbb8dfdde096f64ea
-mode: delegated-chat (agent-run on explicit human instruction)
-runner: agent

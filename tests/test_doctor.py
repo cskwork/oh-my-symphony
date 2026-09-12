@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import textwrap
 import types
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -242,6 +244,51 @@ def test_agent_cli_fail_for_missing_binary(tmp_path: Path) -> None:
     assert "not on $PATH" in result.message
 
 
+def test_agent_cli_warns_when_binary_fails_its_version_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PATH hit is not enough: a broken launcher stub exits non-zero."""
+    stub = tmp_path / "bin" / "opencode"
+    stub.parent.mkdir()
+    stub.write_text("#!/bin/sh\necho 'postinstall stub: run npm install' >&2\nexit 1\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: opencode }
+        opencode: { command: opencode run --format json }
+        """,
+    )
+    result = check_agent_cli(cfg)
+    assert result.status == "warn"
+    assert "--version` exited 1" in result.message
+    assert "postinstall stub" in result.message
+
+
+def test_agent_cli_fails_when_binary_cannot_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from symphony.cli import doctor as doctor_module
+
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("Exec format error")
+
+    monkeypatch.setattr(doctor_module.subprocess, "run", _boom)
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: python -m symphony.mock_codex }
+        """,
+    )
+    result = check_agent_cli(cfg)
+    assert result.status == "fail"
+    assert "could not run" in result.message
+
+
 def _force_agent_cli_platform(
     monkeypatch: pytest.MonkeyPatch, *, win32: bool, resolved: str = "/resolved/agent"
 ) -> list[str]:
@@ -260,6 +307,9 @@ def _force_agent_cli_platform(
 
     monkeypatch.setattr(doctor_module, "_IS_WIN32", win32)
     monkeypatch.setattr(doctor_module, "shutil", types.SimpleNamespace(which=_which))
+    # The stubbed lookup names a path that does not exist; these tests are
+    # about argv parsing, not about whether `--version` runs.
+    monkeypatch.setattr(doctor_module, "_probe_agent_binary", lambda _located: None)
     return seen
 
 

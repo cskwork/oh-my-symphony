@@ -931,7 +931,9 @@ class KanbanApp(App):
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         done_states = {"done"} if "done" in terminal else terminal
         try:
-            aggregate = await asyncio.to_thread(store.aggregate, 30, done_states)
+            aggregate = await asyncio.to_thread(
+                store.aggregate, 30, done_states, cfg.tracker.active_states
+            )
         except Exception as exc:
             log.warning("tui_stats_failed", error=str(exc))
             self.notify(f"stats failed: {exc}", timeout=4, severity="error")

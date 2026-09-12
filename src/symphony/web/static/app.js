@@ -2810,10 +2810,33 @@
     ]);
   }
 
+  function buildGatesCard(gates) {
+    const g = gates || {};
+    const tiles = el('div', { class: 'stat-grid' }, [
+      statTile(t('stats.rewinds'), String(g.rewinds || 0)),
+      statTile(t('stats.contractFailures'), String(g.contract_failure || 0)),
+      statTile(t('stats.reopenHolds'), String(g.reopen_budget || 0)),
+      statTile(t('stats.backendFallbacks'), String(g.backend_fallback || 0)),
+    ]);
+    const misses = Array.isArray(g.top_contract_misses) ? g.top_contract_misses : [];
+    const table = misses.length
+      ? el('table', { class: 'data-table' }, [
+        el('thead', null, el('tr', null, [t('common.state'), t('stats.contractMiss'), t('stats.count')].map((h) => el('th', null, h)))),
+        el('tbody', null, misses.map((row) => el('tr', null, [
+          el('td', null, canonicalStateName(row.state)),
+          el('td', null, row.item),
+          el('td', null, String(row.count)),
+        ]))),
+      ])
+      : el('div', { class: 'chart-empty' }, t('stats.noContractMisses'));
+    return el('div', null, [tiles, table]);
+  }
+
   function renderStatsContent(data) {
     const content = document.getElementById('stats-content');
     clearNode(content);
-    const hasEvents = data.totals.turns > 0 || data.totals.runs > 0 || data.by_day.length > 0;
+    const hasGateEvents = Object.values(data.gates || {}).some((value) => typeof value === 'number' && value > 0);
+    const hasEvents = data.totals.turns > 0 || data.totals.runs > 0 || data.by_day.length > 0 || hasGateEvents;
     if (!hasEvents) {
       content.appendChild(el('div', { class: 'empty-state' }, t('stats.noActivity')));
       return;
@@ -2833,6 +2856,7 @@
     chartsGrid.appendChild(chartCard(t('stats.tokensByColumn'), hBarChart(mapStateLabels(data.by_state, (s) => s.total_tokens))));
     chartsGrid.appendChild(chartCard(t('stats.avgTimeInColumn'), hBarChart(mapStateLabels(data.by_state, (s) => s.avg_dwell_seconds), { formatValue: humanizeSeconds })));
     content.appendChild(chartsGrid);
+    content.appendChild(chartCard(t('stats.gates'), buildGatesCard(data.gates)));
     content.appendChild(chartCard(t('stats.byAgent'), buildAgentTable(data.by_agent)));
   }
 
@@ -4515,6 +4539,15 @@
         el('span', { class: `chat-intent-track ${action.track}` },
           action.track === 'micro' ? t('chat.intentTrackMicro') : t('chat.intentTrackFull')),
       ]),
+      Array.isArray(action.tripwires) && action.tripwires.length
+        ? el('div', { class: 'chat-intent-tripwires', role: 'note' }, [
+          el('strong', null, t('chat.intentTripwires')),
+          el('ul', null, action.tripwires.map((hit) => el('li', null, [
+            el('span', { class: 'chat-intent-tripwire-label' }, `${hit.label}: `),
+            el('code', null, (hit.lines && hit.lines[0]) || ''),
+          ]))),
+        ])
+        : null,
       el('details', { class: 'chat-intent-body' }, [
         el('summary', null, t('chat.intentShowBody')),
         body,

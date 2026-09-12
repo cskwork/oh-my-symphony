@@ -471,3 +471,39 @@ async def test_claude_bounded_post_stream_reap_terminates_lingering_process(
     assert result.status == EVENT_TURN_COMPLETED
     assert waits == [POST_STREAM_REAP_TIMEOUT_S]
     assert terminated == [proc.pid]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["stdin", "stream"])
+async def test_per_turn_failure_reaps_live_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _PipeProcess(returncode=None)
+    reaped = []
+
+    async def spawn(*args, **kwargs):
+        return proc
+
+    async def fail(*args, **kwargs):
+        raise PortExit("stdin closed") if failure_stage == "stdin" else TurnFailed("bad event")
+
+    async def reap(process):
+        reaped.append(process.pid)
+        process.returncode = -15
+        return -15
+
+    monkeypatch.setattr(backend, "_spawn", spawn)
+    monkeypatch.setattr(backend, "_write_prompt" if failure_stage == "stdin" else "_drive_turn", fail)
+    monkeypatch.setattr(per_turn_module, "terminate_process_tree", reap)
+
+    with pytest.raises((PortExit, TurnFailed)):
+        await backend.run_turn(prompt="hello", is_continuation=False)
+
+    assert reaped == [proc.pid]
+    assert backend.pid is None

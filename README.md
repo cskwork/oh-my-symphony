@@ -50,7 +50,9 @@ usage, and whatever rate-limit headroom the selected CLI reports.
 ## Why Symphony?
 
 - **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ AGY ↔ Kiro ↔ OpenCode ↔ Pi ↔ Prime Agent with one
-  YAML line, or mix backends per ticket. New agents (Ollama, local models,
+  YAML line, mix backends per ticket, or list `agent.fallback_kinds` so a
+  quota-exhausted backend hands the ticket to the next one instead of
+  pausing for an operator. New agents (Ollama, local models,
   anything with a CLI) drop in behind a thin `AgentBackend` Protocol without
   changing the orchestrator.
 - **See what your agents are actually doing.** Live Kanban shows turn count,
@@ -877,7 +879,10 @@ Boards start from a preset and stay fully customizable:
 - **deep.** An optional 8-lane pipeline `Intake → Research → Plan → Review
   → Build → QA → Verify → Document` for complex deliveries. Each lane
   carries its own lean gate (Verify/Document run a literal
-  `grep 'verdict: GREEN'` check); the Plan lane spawns the
+  `grep 'verdict: GREEN'` check), and the orchestrator re-checks the same
+  facts at every lane transition — the vault file exists, its verdict line
+  is present, the ticket section was appended — rewinding the ticket with
+  `## Contract Failure` otherwise; the Plan lane spawns the
   Build/QA/Verify/Document ticket DAG via `symphony board new
   --blocked-by --request`.
 
@@ -925,8 +930,8 @@ The mechanical evidence floor (`orchestrator/contracts.py`) is gated by
 
 | value            | behaviour                                                        |
 |------------------|------------------------------------------------------------------|
-| `auto` (default) | enforce when every active lane is a default-preset lane          |
-| `on`             | always enforce, whatever the lanes are called                    |
+| `auto` (default) | enforce on a shipped preset: default lanes, or exactly the deep lanes |
+| `on`             | always enforce the default contract set, whatever the lanes are called |
 | `off`            | never enforce; the stage prompts are the only gate               |
 
 Under `auto`, renaming a lane (`Document` → `Docs`) turns the validator off, and
@@ -980,7 +985,10 @@ cycle with exactly one human gate.
    claim labelled verified or assumed), Success criteria as checkboxes,
    Out of scope, Constraints, Open questions, and a track (`full`, or
    `micro` when the exact files are known and an existing command proves
-   success).
+   success). The server scans the card with the sdlc-kit trip-wire
+   heuristics (migrations, deletion, public API, security, infra); hits are
+   shown on the card, recorded as `## Trip-wires` on the ticket, and force
+   the `full` track.
 2. **Approve.** Press **Approve intent** on the card or reply `approve`.
    Any other reply supersedes the card so the agent can propose a revision.
    This approval is the only human decision in the cycle.

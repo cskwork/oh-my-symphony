@@ -70,28 +70,27 @@ def find_cycle(edges: Mapping[str, Sequence[str]]) -> list[str] | None:
     done: set[str] = set()
     path: list[str] = []
 
-    def dfs(node: str) -> list[str] | None:
+    for node in sorted(edges):
+        if node in done:
+            continue
         visiting.add(node)
         path.append(node)
-        for dep in edges.get(node, ()):
+        stack = [iter(edges[node])]
+        while stack:
+            dep = next(stack[-1], None)
+            if dep is None:
+                stack.pop()
+                done.add(path[-1])
+                visiting.remove(path.pop())
+                continue
             if dep not in edges:
                 continue
             if dep in visiting:
                 return path[path.index(dep) :] + [dep]
             if dep not in done:
-                found = dfs(dep)
-                if found is not None:
-                    return found
-        visiting.discard(node)
-        done.add(node)
-        path.pop()
-        return None
-
-    for node in sorted(edges):
-        if node not in done:
-            found = dfs(node)
-            if found is not None:
-                return found
+                visiting.add(dep)
+                path.append(dep)
+                stack.append(iter(edges[dep]))
     return None
 
 
@@ -107,21 +106,21 @@ def _find_cycle_through(
     path = [node]
     visited: set[str] = set()
 
-    def dfs(current: str) -> list[str] | None:
-        for dep in edges.get(current, ()):
-            if dep == node:
-                return [*path, node]
-            if dep in visited or dep not in edges:
-                continue
-            visited.add(dep)
-            path.append(dep)
-            found = dfs(dep)
-            if found is not None:
-                return found
+    stack = [iter(edges.get(node, ()))]
+    while stack:
+        dep = next(stack[-1], None)
+        if dep is None:
+            stack.pop()
             path.pop()
-        return None
-
-    return dfs(node)
+            continue
+        if dep == node:
+            return [*path, node]
+        if dep in visited or dep not in edges:
+            continue
+        visited.add(dep)
+        path.append(dep)
+        stack.append(iter(edges[dep]))
+    return None
 
 
 def topological_order(edges: Mapping[str, Sequence[str]]) -> list[str]:
@@ -129,17 +128,26 @@ def topological_order(edges: Mapping[str, Sequence[str]]) -> list[str]:
     rejected cycles via :func:`find_cycle` first; cyclic leftovers are
     appended in identifier order so output never silently drops tickets."""
     remaining = {node: {d for d in deps if d in edges} for node, deps in edges.items()}
+    dependents: dict[str, list[str]] = {node: [] for node in edges}
+    for node, deps in remaining.items():
+        for dep in deps:
+            dependents[dep].append(node)
+    ready = sorted(node for node, deps in remaining.items() if not deps)
     order: list[str] = []
-    while remaining:
-        ready = sorted(n for n, deps in remaining.items() if not deps)
-        if not ready:
-            order.extend(sorted(remaining))
-            break
+    while ready:
+        next_ready: list[str] = []
         for node in ready:
             order.append(node)
             del remaining[node]
-        for deps in remaining.values():
-            deps.difference_update(ready)
+            for dependent in dependents[node]:
+                deps = remaining[dependent]
+                deps.remove(node)
+                if not deps:
+                    next_ready.append(dependent)
+        # Preserve sorted waves, rather than letting a newly-ready ticket
+        # jump ahead of the rest of the current wave.
+        ready = sorted(next_ready)
+    order.extend(sorted(remaining))
     return order
 
 

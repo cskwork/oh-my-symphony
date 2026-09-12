@@ -1585,7 +1585,9 @@ def test_concurrent_release_cycle_reservations_create_one_ticket_per_item(
         registry: RunRegistry, **kwargs: object
     ):
         if kwargs.get("item_role") == "repair":
-            reservation_barrier.wait(timeout=5)
+            # Generous: under `pytest -n auto` the two threads reach the
+            # barrier seconds apart while the rest of the suite hammers git.
+            reservation_barrier.wait(timeout=30)
         return original_reserve(registry, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
@@ -1610,7 +1612,7 @@ def test_concurrent_release_cycle_reservations_create_one_ticket_per_item(
     for worker in workers:
         worker.start()
     for worker in workers:
-        worker.join(timeout=10)
+        worker.join(timeout=60)
 
     assert all(not worker.is_alive() for worker in workers)
     assert errors == []
@@ -3294,7 +3296,9 @@ def test_reconcile_terminal_release_holds_lease_until_cleanup_finishes(
 
         worker_task = asyncio.create_task(worker())
         entry.worker_task = worker_task
-        await asyncio.wait_for(worker_started.wait(), timeout=1)
+        # 10 s like the other waits below: a loaded `pytest -n auto` host
+        # can take longer than 1 s to start the worker task (HANDOFF item 7).
+        await asyncio.wait_for(worker_started.wait(), timeout=10)
         reconcile_task = asyncio.create_task(
             orchestrator._reconcile_one(
                 terminal_verifier,

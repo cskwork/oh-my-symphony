@@ -552,6 +552,123 @@ def test_contract_fails_when_disk_missing_sections(
     )
 
 
+_DOCUMENT_BODY_COMPLETE = """## Wiki Updates
+
+- docs/llm-wiki/feature.md (created)
+
+## As-Is -> To-Be Report
+
+### Goal
+ship it
+"""
+
+_DOCUMENT_BODY_MISSING_WIKI = """## Learnings
+
+- nothing durable
+"""
+
+
+def test_document_to_done_is_contract_gated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The move INTO Done is a contract transition too.
+
+    Terminal transitions never reach `_transition_agent_phase` (the worker
+    loop stops first), so until the terminal gate in
+    `attempt._post_turn_refresh` the last gate of the default board —
+    Document -> Done — was prompt-only. A Document turn that skips
+    `## Wiki Updates` must be rewound to Document with a `## Contract
+    Failure` note instead of landing in Done.
+    """
+    board_root = tmp_path / "board"
+    ticket_path = _write_initial_ticket(
+        board_root, state="Document", body=_DOCUMENT_BODY_MISSING_WIKI
+    )
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("In Progress", "Verify", "Document"),
+        max_turns=2,
+    )
+    _install_file_tracker_backend(
+        monkeypatch,
+        ticket_path=ticket_path,
+        transitions=[("Done", _DOCUMENT_BODY_MISSING_WIKI)],
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    o = _orch(workspace_path)
+    issue = _make_issue_from_disk("Document", _DOCUMENT_BODY_MISSING_WIKI)
+    _seed_running_entry(o, issue, workspace_path)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert _has_contract_failure_heading(final_body), final_body
+    assert "## Wiki Updates" in final_body
+    assert final_front["state"] == "Document", final_front["state"]
+
+
+def test_document_to_done_passes_with_wiki_and_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_root = tmp_path / "board"
+    ticket_path = _write_initial_ticket(
+        board_root, state="Document", body=_DOCUMENT_BODY_COMPLETE
+    )
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("In Progress", "Verify", "Document"),
+        max_turns=2,
+    )
+    _install_file_tracker_backend(
+        monkeypatch,
+        ticket_path=ticket_path,
+        transitions=[("Done", _DOCUMENT_BODY_COMPLETE)],
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    o = _orch(workspace_path)
+    issue = _make_issue_from_disk("Document", _DOCUMENT_BODY_COMPLETE)
+    _seed_running_entry(o, issue, workspace_path)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert not _has_contract_failure_heading(final_body), final_body
+    assert final_front["state"] == "Done"
+
+
+def test_blocked_is_never_contract_gated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane may give up without its outputs; only Done is gated."""
+    board_root = tmp_path / "board"
+    ticket_path = _write_initial_ticket(
+        board_root, state="Document", body=_DOCUMENT_BODY_MISSING_WIKI
+    )
+    cfg = _make_file_tracker_config(
+        board_root=board_root,
+        active_states=("In Progress", "Verify", "Document"),
+        max_turns=2,
+    )
+    _install_file_tracker_backend(
+        monkeypatch,
+        ticket_path=ticket_path,
+        transitions=[("Blocked", _DOCUMENT_BODY_MISSING_WIKI + "\n## Blocker\n\nno wiki root")],
+    )
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    o = _orch(workspace_path)
+    issue = _make_issue_from_disk("Document", _DOCUMENT_BODY_MISSING_WIKI)
+    _seed_running_entry(o, issue, workspace_path)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    final_front, final_body = parse_ticket_file(ticket_path)
+    assert not _has_contract_failure_heading(final_body)
+    assert final_front["state"] == "Blocked"
+
+
 def test_contract_rewind_survives_mid_turn_running_entry_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -70,7 +70,7 @@ from ..prompt import build_first_turn_prompt
 from ..runtime_safety import ensure_workflow_repo_is_safe
 from ..service_identity import SERVICE_INSTANCE_ENV, normalize_service_instance_id
 from ..skills import render_skill_block
-from ..stats import StatsStore, stats_store_for
+from ..stats import StatsStore, board_health_summary, stats_store_for
 from ..trackers import TrackerClient, build_tracker_client
 from ..utils.wiki_sweep import sweep as _wiki_sweep_run
 from ..workflow import (
@@ -81,6 +81,7 @@ from ..workflow import (
     WorkflowState,
     validate_for_dispatch,
 )
+from ..workflow.presets import guess_lane_preset
 from ..utils.auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
 from ..utils.git_sandbox import SANDBOX_WRITE_DENIED, classify_history_failure
 from ..workspace import (
@@ -110,12 +111,15 @@ from .constants import (
     WAIT_AGE_BUMP_MIN,
     _TOKEN_EMA_ALPHA,
 )
-from .contracts import evaluate_contract
+from .contracts import contract_producing_states, evaluate_contract
 from .release_contracts import (
     ReleaseValidationResult,
     release_workspace_target_errors,
     resolve_target_release_identity,
-    validate_release_contract,
+    # Only `release_transition` calls this now, through this module's
+    # globals, so `symphony.orchestrator.core.validate_release_contract`
+    # stays the documented monkeypatch seam (see that module's docstring).
+    validate_release_contract,  # noqa: F401
 )
 from .release_cycle import (
     ReleaseCycleService,
@@ -134,6 +138,7 @@ from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
 from .executors import LegacyStageExecutor, TicketExecutor, TicketRunContext
 from .helpers import (
     _branch_hook_env,
+    _is_successful_terminal_state,
     _branch_already_merged_into_target,
     _canonical_state_label,
     _config_for_issue_agent,
@@ -167,6 +172,7 @@ from .run_registry import (
     registry_path_for_workflow,
 )
 from . import attempt as agent_attempt
+from . import release_transition
 from . import worker_exit
 
 
@@ -264,6 +270,16 @@ class _AgentPhaseTransition:
     is_rewind: bool
 
 
+@dataclass(frozen=True)
+class _StageContractOutcome:
+    """Result of `Orchestrator._enforce_stage_contract`."""
+
+    issue: Issue
+    current_state: str
+    known_app_release: bool
+    rewound: bool
+
+
 class _ReleaseTransitionAuthorityLost(SymphonyError):
     """A stale release worker must exit without mutating its replacement."""
 
@@ -333,6 +349,39 @@ def _clean_board_error_message(message: str) -> str:
     without_ansi = _ANSI_ESCAPE_RE.sub("", message)
     without_controls = _CONTROL_CHAR_RE.sub("", without_ansi)
     return " ".join(without_controls.split())
+
+
+# Errors that mean "this backend's account is out of budget for now": a
+# retry with backoff on the same backend cannot help, but another backend
+# can (2026-09-05 E2E: codex usage limit paused the worker until an operator
+# re-pinned the ticket by hand). Distinct from the transient
+# `_RETRYABLE_WORKER_ERROR_MARKERS` (429 / rate limit), which retry in place.
+_QUOTA_WORKER_ERROR_MARKERS = (
+    "usage limit",
+    "usage_limit",
+    "session limit",
+    "quota",
+    "insufficient_quota",
+    "insufficient credits",
+    "out of credits",
+    "credit balance",
+    "billing",
+    "plan limit",
+    "weekly limit",
+    "monthly limit",
+)
+
+
+def _is_quota_worker_error(reason: str, error: str | None) -> bool:
+    detail = f"{reason}: {error}" if error else reason
+    clean = _clean_board_error_message(detail).lower()
+    if any(marker in clean for marker in _QUOTA_WORKER_ERROR_MARKERS):
+        return True
+    # Generic limit wording also appears in transient rate-limit errors.
+    # Explicit account/quota markers above still win when both are present.
+    return not _has_retryable_worker_marker(clean) and any(
+        marker in clean for marker in ("limit reached", "limit exceeded")
+    )
 
 
 def _worker_error_pause_reason(reason: str, error: str | None) -> str:
@@ -621,6 +670,10 @@ def _blocked_rca_labels(issue: Issue) -> list[str]:
         if label not in labels:
             labels.append(label)
     return labels
+
+
+_BOARD_HEALTH_LANES = frozenset({"document", "learn"})
+_REOPEN_APPROVED_RE = re.compile(r"^##\s+Reopen Approved\b", re.MULTILINE)
 
 
 def _has_app_release_label(issue: Issue) -> bool:
@@ -4161,6 +4214,15 @@ class Orchestrator:
                 )
                 continue
 
+            if await self._hold_reopened_ticket_over_budget(issue, cfg):
+                entry.update(
+                    status="needs_action",
+                    code="reopen_budget",
+                    reason="ticket exceeded agent.max_reopens and was parked",
+                    dispatch_outcome="state_changed",
+                )
+                continue
+
             # C1 — this final pre-dispatch check can still invalidate a
             # forecast because touched-file ownership changes with live runs.
             conflict = self._conflict_blocker(issue)
@@ -4264,6 +4326,8 @@ class Orchestrator:
             if self._available_slots(cfg) <= 0:
                 break
             if not self._should_dispatch(issue, cfg):
+                continue
+            if await self._hold_reopened_ticket_over_budget(issue, cfg):
                 continue
             conflict = self._conflict_blocker(issue)
             if conflict is not None:
@@ -5466,6 +5530,88 @@ class Orchestrator:
                     reason_code="source_reopen_failed",
                 )
         return reopened
+
+    def _prior_done_run_count(self, issue: Issue) -> int:
+        """How many completed runs already carried this ticket to Done."""
+        registry = self._run_registry
+        if registry is None:
+            return 0
+        records = self._registry_guard(
+            "reopen_history",
+            lambda: registry.recent_runs(issue.id, limit=200, status="normal"),
+            [],
+        )
+        return sum(
+            1 for record in records if _is_successful_terminal_state(record.state)
+        )
+
+    async def _hold_reopened_ticket_over_budget(
+        self, issue: Issue, cfg: ServiceConfig
+    ) -> bool:
+        """Block a ticket that keeps coming back from Done; True when held.
+
+        A rewind inside one run is capped by `agent.max_attempts`, but a
+        reopen is a *new* run with a fresh counter: the deep preset's Verify
+        RED / QA BLOCKED reopen a merged Build slice by moving it from Done
+        back to Build, and nothing bounded that loop. Count the ticket's
+        prior Done runs in the registry; past `agent.max_reopens` (plus one
+        per `## Reopen Approved` section an operator appended) append
+        `## Reopen Budget` and park the ticket in Blocked.
+        """
+        cap = cfg.agent.max_reopens
+        if cap <= 0:
+            return False
+        prior_done = self._prior_done_run_count(issue)
+        if prior_done == 0:
+            return False
+        approvals = len(_REOPEN_APPROVED_RE.findall(issue.description or ""))
+        allowed = cap + approvals
+        if prior_done <= allowed:
+            return False
+        target = _rewind_budget_target_state(cfg)
+        if not target:
+            log.warning(
+                "reopen_budget_exceeded",
+                identifier=issue.identifier,
+                prior_done_runs=prior_done,
+                max_reopens=cap,
+                approvals=approvals,
+                target_state="(none)",
+            )
+            return False
+        note = (
+            f"This ticket reached Done {prior_done} time(s) and was reopened "
+            f"again (agent.max_reopens: {cap}, approvals: {approvals}). Symphony "
+            f"moved it to {target} instead of dispatching another cycle: an "
+            "operator must decide whether the latest Verify/QA findings are "
+            "real or the verifier is wrong. To allow one more cycle, append a "
+            "`## Reopen Approved` section here and move the ticket back to its "
+            "lane; raise `agent.max_reopens` (0 disables) for more."
+        )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_append_note, cfg, issue, "Reopen Budget", note
+            )
+            await asyncio.to_thread(self._tracker_call_update_state, cfg, issue, target)
+        except Exception as exc:
+            log.warning(
+                "reopen_budget_hold_failed",
+                identifier=issue.identifier,
+                error=str(exc),
+            )
+            self._record_tracker_error(issue.id, exc)
+            return False
+        self._clear_tracker_error(issue.id)
+        self._record_stats_gate(issue.identifier, issue.state, "reopen_budget")
+        log.warning(
+            "reopen_budget_exceeded",
+            identifier=issue.identifier,
+            prior_done_runs=prior_done,
+            max_reopens=cap,
+            approvals=approvals,
+            target_state=target,
+        )
+        return True
 
     async def _auto_triage_todo_if_actionable(
         self, issue: Issue, cfg: ServiceConfig
@@ -6750,122 +6896,31 @@ class Orchestrator:
             current_state,
             cfg.tracker.active_states,
         )
-        # v0.6.7 — contract validator. When the agent
-        # moved forward (not a rewind), check that
-        # the producing stage actually wrote the
-        # sections its prompt promised. On failure:
-        # write the tracker state back to the
-        # producing stage, append a ## Contract
-        # Failure note, and treat the situation as
-        # a forced rewind so the rebuild + budget
-        # bookkeeping below still apply.
+        # v0.6.7 — contract validator. When the agent moved forward (not a
+        # rewind), check that the producing stage actually wrote the outputs
+        # its prompt promised; a failure writes the state back to the
+        # producing stage and counts as a forced rewind below. The same
+        # method gates the move into Done from the worker loop
+        # (`attempt._post_turn_refresh`), where terminal transitions never
+        # reach this phase handler.
         if not is_rewind and cfg.agent.stage_contracts_enabled(
             cfg.tracker.active_states
         ):
-            if producing_state in {
-                "in progress",
-                "verify",
-                "document",
-                # legacy lane name (pre-rename boards)
-                "learn",
-                "done",
-            }:
-                # IMPORTANT: contract eval reads
-                # `issue.description`, so we MUST use
-                # the full-body refresh — not the
-                # minimal `_refresh_issue_state`, which
-                # returns description=None for every
-                # tracker adapter and would falsely
-                # fail every forward transition. See
-                # tests/test_orchestrator_contract_
-                # integration.py for the regression
-                # the v0.6.7 release surfaced.
-                refreshed_for_contract = await self._refresh_issue_full(
-                    cfg, running_issue_id
-                )
-                if refreshed_for_contract is not None:
-                    issue = refreshed_for_contract
-                    known_app_release = known_app_release or _has_app_release_label(
-                        issue
-                    )
-                    running_entry = self._running.get(running_issue_id)
-                    if running_entry is not None:
-                        running_entry.issue = issue
-                    current_state = normalize_state(issue.state)
-            contract = evaluate_contract(
+            outcome = await self._enforce_stage_contract(
+                cfg=cfg,
+                running_issue_id=running_issue_id,
+                issue=issue,
                 producing_state=producing_state,
-                ticket_body=issue.description or "",
-                identifier=issue.identifier,
-                docs_root=workspace_path / "docs",
-                artifact_store_root=(
-                    self._artifact_store.root
-                    if (
-                        cfg.artifacts.require_for_done
-                        and self._artifact_store is not None
-                    )
-                    else None
-                ),
+                producing_state_raw=producing_state_raw,
+                current_state=current_state,
+                workspace_path=workspace_path,
+                known_app_release=known_app_release,
             )
-            if not contract.passed:
-                log.warning(
-                    "stage_contract_failed",
-                    issue_id=issue.id,
-                    identifier=issue.identifier,
-                    producing_state=producing_state,
-                    advanced_to=current_state,
-                    missing=contract.missing,
-                )
-                await asyncio.to_thread(
-                    self._tracker_call_append_note,
-                    cfg,
-                    issue,
-                    contract.note_heading,
-                    contract.note_body,
-                )
-                await asyncio.to_thread(
-                    self._tracker_call_update_state,
-                    cfg,
-                    issue,
-                    producing_state_raw or producing_state,
-                )
-                # Pull the freshly-rewound body so the
-                # next backend rebuild's first prompt
-                # sees the ## Contract Failure note we
-                # just appended (full-body fetch — see
-                # the comment above the preflight
-                # refresh for why minimal would erase
-                # description).
-                refreshed = await self._refresh_issue_full(cfg, running_issue_id)
-                if refreshed is not None:
-                    issue = refreshed
-                issue = replace(
-                    issue,
-                    state=(producing_state_raw or producing_state),
-                )
-                running_entry = self._running.get(running_issue_id)
-                if running_entry is not None:
-                    running_entry.issue = issue
-                current_state = normalize_state(issue.state)
+            issue = outcome.issue
+            current_state = outcome.current_state
+            known_app_release = outcome.known_app_release
+            if outcome.rewound:
                 is_rewind = True
-            elif contract.warnings:
-                # Soft S2 advisories (e.g. a non-passing AC
-                # Scorecard row): surface as a ticket note
-                # without rewinding so the pipeline proceeds.
-                log.warning(
-                    "stage_contract_warn",
-                    issue_id=issue.id,
-                    identifier=issue.identifier,
-                    producing_state=producing_state,
-                    advanced_to=current_state,
-                    warnings=contract.warnings,
-                )
-                await asyncio.to_thread(
-                    self._tracker_call_append_note,
-                    cfg,
-                    issue,
-                    "Contract Warning",
-                    contract.warning_note.split("\n", 1)[1],
-                )
         if is_rewind:
             debug.rewind_count += 1
             if (
@@ -6981,6 +7036,136 @@ class Orchestrator:
             is_rewind=is_rewind,
         )
 
+    async def _enforce_stage_contract(
+        self,
+        *,
+        cfg: ServiceConfig,
+        running_issue_id: str,
+        issue: Issue,
+        producing_state: str,
+        producing_state_raw: str,
+        current_state: str,
+        workspace_path: Path,
+        known_app_release: bool,
+    ) -> _StageContractOutcome:
+        """Evaluate the producing lane's stage contract after a forward move.
+
+        Refreshes the full ticket body, evaluates the preset's contract set,
+        and on failure appends `## Contract Failure` and writes the tracker
+        state back to the producing lane. Returns the (possibly refreshed
+        and rewound) issue, its normalized state, and whether it rewound.
+        Producing states outside the preset's contract set pass through
+        without the full-body refresh.
+        """
+        # Defensive: the raw label must denote `producing_state`; a caller
+        # that hands us the advanced state's casing would make the rewind
+        # write the state the ticket is already in (a silent no-op).
+        if normalize_state(producing_state_raw) != producing_state:
+            producing_state_raw = _canonical_state_label(cfg, producing_state)
+        # The deep preset carries its own contract set (vault files +
+        # verdict lines); anything else gets the default section set.
+        lane_preset = guess_lane_preset(cfg.tracker.active_states)
+        if producing_state not in contract_producing_states(lane_preset):
+            return _StageContractOutcome(
+                issue=issue,
+                current_state=current_state,
+                known_app_release=known_app_release,
+                rewound=False,
+            )
+        # IMPORTANT: contract eval reads `issue.description`, so we MUST use
+        # the full-body refresh — not the minimal `_refresh_issue_state`,
+        # which returns description=None for every tracker adapter and
+        # would falsely fail every forward transition. See
+        # tests/test_orchestrator_contract_integration.py for the
+        # regression the v0.6.7 release surfaced.
+        refreshed_for_contract = await self._refresh_issue_full(cfg, running_issue_id)
+        if refreshed_for_contract is not None:
+            issue = refreshed_for_contract
+            known_app_release = known_app_release or _has_app_release_label(issue)
+            running_entry = self._running.get(running_issue_id)
+            if running_entry is not None:
+                running_entry.issue = issue
+            current_state = normalize_state(issue.state)
+        contract = evaluate_contract(
+            producing_state=producing_state,
+            ticket_body=issue.description or "",
+            identifier=issue.identifier,
+            docs_root=workspace_path / "docs",
+            artifact_store_root=(
+                self._artifact_store.root
+                if (cfg.artifacts.require_for_done and self._artifact_store is not None)
+                else None
+            ),
+            preset=lane_preset,
+            request=issue.request,
+            advanced_state=current_state,
+            app_release=known_app_release,
+        )
+        if not contract.passed:
+            log.warning(
+                "stage_contract_failed",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                producing_state=producing_state,
+                advanced_to=current_state,
+                missing=contract.missing,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                issue,
+                contract.note_heading,
+                contract.note_body,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                issue,
+                producing_state_raw or producing_state,
+            )
+            self._record_stats_gate(
+                issue.identifier, producing_state, "contract_failure", contract.missing
+            )
+            # Pull the freshly-rewound body so the next prompt sees the
+            # `## Contract Failure` note we just appended (full-body fetch).
+            refreshed = await self._refresh_issue_full(cfg, running_issue_id)
+            if refreshed is not None:
+                issue = refreshed
+            issue = replace(issue, state=(producing_state_raw or producing_state))
+            running_entry = self._running.get(running_issue_id)
+            if running_entry is not None:
+                running_entry.issue = issue
+            return _StageContractOutcome(
+                issue=issue,
+                current_state=normalize_state(issue.state),
+                known_app_release=known_app_release,
+                rewound=True,
+            )
+        if contract.warnings:
+            # Soft S2 advisories (e.g. a non-passing AC Scorecard row):
+            # surface as a ticket note without rewinding.
+            log.warning(
+                "stage_contract_warn",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                producing_state=producing_state,
+                advanced_to=current_state,
+                warnings=contract.warnings,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                issue,
+                "Contract Warning",
+                contract.warning_note.split("\n", 1)[1],
+            )
+        return _StageContractOutcome(
+            issue=issue,
+            current_state=current_state,
+            known_app_release=known_app_release,
+            rewound=False,
+        )
+
     async def _rebuild_backend_for_phase(
         self,
         *,
@@ -7053,6 +7238,11 @@ class Orchestrator:
             skill_context = await asyncio.to_thread(
                 render_skill_block, cfg.workflow_path.parent, issue.skills
             )
+            board_health = ""
+            if self._board_health_wanted(issue.state):
+                board_health = await asyncio.to_thread(
+                    self._board_health_for_prompt, cfg, issue.state
+                )
             first_prompt, _ = build_first_turn_prompt(
                 prompt_template=cfg.prompt_template_for_state(issue.state),
                 issue=issue,
@@ -7072,6 +7262,7 @@ class Orchestrator:
                 full_ticket_path=self._ticket_prompt_path(cfg, issue),
                 artifacts_dir=self._prompt_artifacts_dir(cfg),
                 extra_context=skill_context,
+                board_health=board_health,
             )
             await new_client.start_session(
                 initial_prompt=first_prompt,
@@ -7269,416 +7460,19 @@ class Orchestrator:
     ) -> tuple[Issue, bool]:
         """Gate a local-file-board transition out of Verify.
 
-        Returns ``(issue, rewound)``. The full refresh and machine gate are
-        independent of the prose stage-contract mode. Remote adapters do not
-        expose the atomic create/update lifecycle API and are rejected before
-        any release-gate write.
+        Body lives in ``release_transition.enforce_app_release_transition_inner``
+        (see that module's docstring); this forward keeps the call site and
+        the test seam on the orchestrator.
         """
-        refreshed = await self._refresh_issue_full(cfg, issue.id)
-        if refreshed is not None:
-            issue = refreshed
-        # Capture the entry before waiting for the per-run lock. Worker exit
-        # may remove it from `_running` immediately after a peer persists the
-        # decision, but the waiting caller still belongs to that exact run.
-        running = running_entry or self._running.get(issue.id)
-        enforce_bound_verifier_authority = bool(
-            running is not None
-            and running.release_authority_resolved
-            and running.known_release_cycle_verifier
+        return await release_transition.enforce_app_release_transition_inner(
+            self,
+            cfg=cfg,
+            issue=issue,
+            workspace_path=workspace_path,
+            producing_state=producing_state,
+            known_app_release=known_app_release,
+            running_entry=running_entry,
         )
-        known_app_release = (
-            known_app_release
-            or (running.known_app_release if running is not None else False)
-            or _has_app_release_label(issue)
-        )
-        if not known_app_release:
-            return issue, False
-        if cfg.tracker.kind != "file":
-            raise SymphonyError(
-                "app-release contracts require tracker.kind=file until an adapter "
-                "provides atomic repair-cycle create/update support",
-                tracker_kind=cfg.tracker.kind,
-            )
-
-        gate = cast(
-            ReleaseGate | None,
-            self._release_registry_call(
-                cfg,
-                "read_verifier_gate_for_transition",
-                lambda registry: registry.get_release_gate_for_verifier(
-                    issue.identifier
-                ),
-            ),
-        )
-        if gate is None:
-            evidence_identity = cast(
-                ReleaseEvidenceIdentity | None,
-                self._release_registry_call(
-                    cfg,
-                    "read_retired_verifier_after_transition",
-                    lambda registry: registry.get_release_evidence_identity(
-                        issue.identifier
-                    ),
-                ),
-            )
-            if (
-                running is not None
-                and running.known_release_cycle_verifier
-                and evidence_identity is not None
-                and evidence_identity.retired
-                and evidence_identity.issue_id == issue.id
-                and evidence_identity.finalizer_identifier
-                == running.release_gate_finalizer
-                and evidence_identity.cycle_generation
-                == running.release_gate_generation
-            ):
-                # A serialized peer already replaced this verifier with the
-                # next PENDING cycle. The old issue is now immutable evidence;
-                # recovering a gate for it would duplicate repairs/verifiers.
-                log.info(
-                    "app_release_red_transition_already_reconciled",
-                    identifier=issue.identifier,
-                    finalizer=evidence_identity.finalizer_identifier,
-                    generation=evidence_identity.cycle_generation,
-                )
-                return issue, False
-            if enforce_bound_verifier_authority:
-                assert running is not None
-                self._require_release_transition_verifier_authority(
-                    cfg=cfg,
-                    issue=issue,
-                    entry=running,
-                )
-            # Defensive compatibility for a run that was already in flight
-            # when the host upgraded. New dispatches always persist this row
-            # before their lease is acquired.
-            identity = resolve_target_release_identity(
-                repository_root=cfg.workflow_path.parent,
-                configured_target_branch=cfg.agent.auto_merge_target_branch,
-            )
-            if identity.errors:
-                rewound = await self._rewind_app_release_transition(
-                    cfg=cfg,
-                    issue=issue,
-                    producing_state=producing_state,
-                    note_body=(
-                        "Release validation could not establish host-owned "
-                        "authority before the transition.\n\nEvidence errors:\n- "
-                        + "\n- ".join(identity.errors)
-                    ),
-                )
-                return rewound, True
-            gate = self._persist_pending_release_gate(
-                cfg=cfg,
-                gate=self._pending_release_gate(
-                    issue=issue,
-                    finalizer=identity.finalizer_ticket,
-                    contract_sha256=identity.contract_sha256,
-                ),
-                operation="recover_inflight_pending_gate",
-            )
-        elif enforce_bound_verifier_authority:
-            assert running is not None
-            self._require_release_transition_verifier_authority(
-                cfg=cfg,
-                issue=issue,
-                entry=running,
-            )
-        if running is not None and not enforce_bound_verifier_authority:
-            running.known_app_release = True
-            running.known_release_cycle_verifier = True
-            running.release_gate_finalizer = gate.finalizer_identifier
-            running.release_gate_expected_contract_sha256 = (
-                gate.expected_contract_sha256
-            )
-            running.release_gate_cycle_fingerprint = gate.cycle_fingerprint
-            running.release_gate_generation = gate.generation
-
-        validation = await asyncio.to_thread(
-            validate_release_contract,
-            workspace_root=workspace_path,
-            repository_root=cfg.workflow_path.parent,
-            verifier_ticket=issue.identifier,
-            configured_target_branch=cfg.agent.auto_merge_target_branch,
-            board_root=cfg.tracker.board_root,
-        )
-        if enforce_bound_verifier_authority:
-            assert running is not None
-            self._require_release_transition_verifier_authority(
-                cfg=cfg,
-                issue=issue,
-                entry=running,
-            )
-        binding_errors: list[str] = []
-        approved_for_current_run = (
-            gate.status == "approved"
-            and running is not None
-            and bool(running.run_id)
-            and gate.verifier_run_id == running.run_id
-            and gate.approved_fingerprint == validation.fingerprint
-            and gate.target_branch == validation.target_branch
-            and gate.approved_target_sha == validation.target_sha
-        )
-        if gate.status != "pending" and not approved_for_current_run:
-            binding_errors.append("release verifier authority is not pending")
-        if gate.verifier_issue_id != issue.id:
-            binding_errors.append("release verifier issue id does not match authority")
-        if gate.verifier_identifier != issue.identifier:
-            binding_errors.append(
-                "release verifier identifier does not match authority"
-            )
-        if gate.expected_contract_sha256 != validation.contract_sha256:
-            binding_errors.append(
-                "host-owned expected contract hash does not match the current release contract"
-            )
-        if gate.finalizer_identifier != validation.finalizer_ticket:
-            binding_errors.append(
-                "host-owned finalizer binding does not match the release contract"
-            )
-        if binding_errors:
-            if (
-                gate.status == "pending"
-                and validation.contract_sha256
-                and gate.finalizer_identifier == validation.finalizer_ticket
-                and gate.expected_contract_sha256 != validation.contract_sha256
-            ):
-                refreshed_pending = self._persist_pending_release_gate(
-                    cfg=cfg,
-                    gate=self._pending_release_gate(
-                        issue=issue,
-                        finalizer=gate.finalizer_identifier,
-                        contract_sha256=validation.contract_sha256,
-                    ),
-                    operation="refresh_drifted_pending_release_contract",
-                )
-                ReleaseCycleService(cfg).restore_verifier_gate_labels(
-                    issue=issue,
-                    gate=refreshed_pending,
-                    verifier_state=_release_verifier_state(cfg),
-                )
-                binding_errors.append(
-                    "host authority was rebound to the new contract; a fresh "
-                    "verifier run is required"
-                )
-            metadata = (
-                f"\n\nContract SHA-256: "
-                f"`{validation.contract_sha256 or '(unavailable)'}`\n"
-                f"Target SHA: `{validation.target_sha or '(unavailable)'}`\n"
-                f"Release fingerprint: `{validation.fingerprint}`"
-            )
-            note_text = validation.note_text
-            if validation.evidence_errors:
-                note_text += "\n- " + "\n- ".join(binding_errors)
-            else:
-                note_text = (
-                    "Release validation did not pass.\n\nEvidence errors:\n- "
-                    + "\n- ".join(binding_errors)
-                )
-            rewound = await self._rewind_app_release_transition(
-                cfg=cfg,
-                issue=issue,
-                producing_state=producing_state,
-                note_body=note_text + metadata,
-            )
-            return rewound, True
-        if validation.passed:
-            if approved_for_current_run:
-                log.info(
-                    "app_release_gate_already_approved",
-                    identifier=issue.identifier,
-                    target_branch=validation.target_branch,
-                    target_sha=validation.target_sha,
-                    contract_sha256=validation.contract_sha256,
-                )
-                return issue, False
-            if running is None or not running.run_id:
-                rewound = await self._rewind_app_release_transition(
-                    cfg=cfg,
-                    issue=issue,
-                    producing_state=producing_state,
-                    note_body=(
-                        "Release validation passed, but no active host run lease "
-                        "was available to bind the approval."
-                    ),
-                )
-                return rewound, True
-            approved = bool(
-                self._release_registry_call(
-                    cfg,
-                    "approve_release_gate",
-                    lambda registry: registry.approve_release_gate(
-                        finalizer_identifier=gate.finalizer_identifier,
-                        verifier_issue_id=gate.verifier_issue_id,
-                        verifier_identifier=gate.verifier_identifier,
-                        expected_contract_sha256=gate.expected_contract_sha256,
-                        expected_cycle_fingerprint=gate.cycle_fingerprint,
-                        expected_generation=gate.generation,
-                        approved_fingerprint=validation.fingerprint,
-                        target_branch=validation.target_branch,
-                        target_sha=validation.target_sha,
-                        verifier_run_id=running.run_id,
-                    ),
-                )
-            )
-            approved_gate = cast(
-                ReleaseGate | None,
-                self._release_registry_call(
-                    cfg,
-                    "read_approved_release_gate",
-                    lambda registry: registry.get_release_gate(
-                        gate.finalizer_identifier
-                    ),
-                ),
-            )
-            if (
-                not approved
-                or approved_gate is None
-                or approved_gate.status != "approved"
-                or approved_gate.approved_fingerprint != validation.fingerprint
-                or approved_gate.approved_target_sha != validation.target_sha
-                or approved_gate.target_branch != validation.target_branch
-                or approved_gate.verifier_run_id != running.run_id
-            ):
-                rewound = await self._rewind_app_release_transition(
-                    cfg=cfg,
-                    issue=issue,
-                    producing_state=producing_state,
-                    note_body=(
-                        "Release validation passed, but the host-owned GREEN "
-                        "approval could not be durably persisted."
-                    ),
-                )
-                return rewound, True
-            log.info(
-                "app_release_gate_passed",
-                identifier=issue.identifier,
-                target_branch=validation.target_branch,
-                target_sha=validation.target_sha,
-                contract_sha256=validation.contract_sha256,
-            )
-            return issue, False
-
-        metadata = (
-            f"\n\nContract SHA-256: `{validation.contract_sha256 or '(unavailable)'}`\n"
-            f"Target SHA: `{validation.target_sha or '(unavailable)'}`\n"
-            f"Release fingerprint: `{validation.fingerprint}`"
-        )
-        if validation.evidence_errors:
-            rewound = await self._rewind_app_release_transition(
-                cfg=cfg,
-                issue=issue,
-                producing_state=producing_state,
-                note_body=validation.note_text + metadata,
-            )
-            return rewound, True
-
-        registry_path = registry_path_for_workflow(cfg.workflow_path)
-
-        def persist_fresh_pending_gate(verifier: Issue) -> None:
-            pending = replace(
-                self._pending_release_gate(
-                    issue=verifier,
-                    finalizer=validation.finalizer_ticket,
-                    contract_sha256=validation.contract_sha256,
-                ),
-                cycle_fingerprint=validation.fingerprint,
-            )
-            registry = RunRegistry(registry_path)
-            try:
-                registry.replace_pending_release_gate(pending)
-                persisted = registry.get_release_gate(validation.finalizer_ticket)
-                expected = (
-                    pending.finalizer_identifier,
-                    pending.verifier_issue_id,
-                    pending.verifier_identifier,
-                    pending.expected_contract_sha256,
-                    pending.cycle_fingerprint,
-                    "pending",
-                )
-                actual = (
-                    (
-                        persisted.finalizer_identifier,
-                        persisted.verifier_issue_id,
-                        persisted.verifier_identifier,
-                        persisted.expected_contract_sha256,
-                        persisted.cycle_fingerprint,
-                        persisted.status,
-                    )
-                    if persisted is not None
-                    else None
-                )
-                if actual != expected:
-                    raise SymphonyError(
-                        "fresh release verifier authority was not persisted before relink",
-                        verifier=verifier.identifier,
-                        finalizer=validation.finalizer_ticket,
-                    )
-            finally:
-                registry.close()
-
-        lifecycle = await asyncio.to_thread(
-            self._tracker_call_reconcile_release_cycle,
-            cfg,
-            issue,
-            validation,
-            issue.agent_kind or cfg.agent.kind,
-            before_finalizer_relink=persist_fresh_pending_gate,
-        )
-        if not lifecycle.passed:
-            rewound = await self._rewind_app_release_transition(
-                cfg=cfg,
-                issue=issue,
-                producing_state=producing_state,
-                note_body=(
-                    validation.note_text
-                    + metadata
-                    + "\n\nRepair-cycle write failed closed: "
-                    + lifecycle.error
-                ),
-            )
-            return rewound, True
-
-        if running is not None:
-            retired_identity = cast(
-                ReleaseEvidenceIdentity | None,
-                self._release_registry_call(
-                    cfg,
-                    "read_completed_verifier_handoff",
-                    lambda registry: registry.get_release_evidence_identity_by_issue_id(
-                        issue.id
-                    ),
-                ),
-            )
-            if retired_identity is None or (
-                retired_identity.issue_id,
-                retired_identity.identifier,
-                retired_identity.finalizer_identifier,
-                retired_identity.role,
-                retired_identity.cycle_generation,
-                retired_identity.retired,
-            ) != (
-                issue.id,
-                issue.identifier,
-                running.release_gate_finalizer,
-                "verifier",
-                running.release_gate_generation,
-                True,
-            ):
-                raise SymphonyError(
-                    "completed release verifier handoff identity could not be proven",
-                    verifier=issue.identifier,
-                    finalizer=validation.finalizer_ticket,
-                )
-            running.release_verifier_handoff_complete = True
-
-        log.warning(
-            "app_release_repairs_created",
-            identifier=issue.identifier,
-            fingerprint=validation.fingerprint,
-            repair_identifiers=lifecycle.repair_identifiers,
-            verifier_identifier=lifecycle.verifier_identifier,
-        )
-        return issue, False
 
     async def _persist_budget_exhausted_state(
         self,
@@ -8313,6 +8107,47 @@ class Orchestrator:
             from_state=normalize_state(from_state),
             to_state=normalize_state(to_state),
         )
+
+    def _record_stats_gate(
+        self, identifier: str, state: str, kind: str, items: list[str] | tuple[str, ...] = ()
+    ) -> None:
+        """A gate decision (contract failure / reopen hold / backend fallback)."""
+        if self._stats is None:
+            return
+        self._stats.record_gate(
+            issue=identifier, state=normalize_state(state), kind=kind, items=items
+        )
+
+    def _board_health_wanted(self, state: str | None) -> bool:
+        """Cheap synchronous pre-check so non-Document lanes never pay a thread hop.
+
+        `_open_session` runs on the worker's first turn; an unconditional
+        `asyncio.to_thread` there changed the dispatch timing enough to
+        break the eager-task dispatch test, so only the write-back lane
+        crosses into a thread to aggregate `stats.jsonl`.
+        """
+        return self._stats is not None and normalize_state(state) in _BOARD_HEALTH_LANES
+
+    def _board_health_for_prompt(self, cfg: ServiceConfig, state: str | None) -> str:
+        """`{{ board_health }}` for the write-back lane; "" elsewhere.
+
+        Only the Document lane (and its legacy `learn` name) receives the
+        summary: it is the lane that turns repeat failures into wiki
+        lessons, and every other lane would just pay tokens for it.
+        """
+        stats = self._stats
+        if stats is None or not self._board_health_wanted(state):
+            return ""
+        try:
+            terminal = {s.lower() for s in cfg.tracker.terminal_states}
+            done_states = {"done"} if "done" in terminal else terminal
+            aggregate = stats.aggregate(
+                30, done_states, active_states=cfg.tracker.active_states
+            )
+            return board_health_summary(aggregate)
+        except Exception as exc:
+            log.warning("board_health_failed", error=str(exc))
+            return ""
 
     # ------------------------------------------------------------------
     # worker exit handling (§16.6)
@@ -9477,6 +9312,49 @@ class Orchestrator:
             self._invoke_shared_tracker_client(cfg, _record)
         except _TrackerClientUnavailable:
             return
+
+    def _pin_fallback_agent_kind(
+        self, cfg: ServiceConfig, identifier: str, agent_kind: str
+    ) -> bool:
+        """Replace the ticket's backend pin; False when the tracker cannot.
+
+        Only adapters with ``record_agent_kind`` (the file board) can carry
+        the pin, so a remote tracker keeps the pause-for-operator path.
+        """
+        pinned = False
+
+        def _record(client: TrackerClient) -> None:
+            nonlocal pinned
+            record = getattr(client, "record_agent_kind", None)
+            if record is None:
+                return
+            record(identifier, agent_kind, force=True)
+            pinned = True
+
+        try:
+            self._invoke_shared_tracker_client(cfg, _record)
+        except _TrackerClientUnavailable:
+            return False
+        except Exception as exc:
+            log.warning(
+                "backend_fallback_pin_failed",
+                identifier=identifier,
+                agent_kind=agent_kind,
+                error=str(exc),
+            )
+            return False
+        return pinned
+
+    def _next_fallback_agent_kind(
+        self, cfg: ServiceConfig, entry: RunningEntry, debug: _IssueDebug
+    ) -> str | None:
+        """First `agent.fallback_kinds` entry this ticket has not exhausted."""
+        current = self._entry_agent_kind(entry)
+        exhausted = set(debug.quota_exhausted_kinds) | {current}
+        for kind in cfg.agent.fallback_kinds:
+            if kind not in exhausted:
+                return kind
+        return None
 
     def _tracker_call_record_last_agent_kind(
         self, cfg: ServiceConfig, identifier: str, agent_kind: str

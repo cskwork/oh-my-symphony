@@ -3327,7 +3327,9 @@ def _register_meta_routes(
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         skip = {cfg.tracker.archive_state.lower(), "cancelled", "blocked"}
         done_states = {"done"} if "done" in terminal else (terminal - skip or {"done"})
-        aggregated = await asyncio.to_thread(ctx.stats().aggregate, days, done_states)
+        aggregated = await asyncio.to_thread(
+            ctx.stats().aggregate, days, done_states, cfg.tracker.active_states
+        )
         snapshot = orchestrator.snapshot()
         aggregated["live"] = {
             "running": snapshot["counts"]["running"],

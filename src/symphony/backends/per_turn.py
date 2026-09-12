@@ -281,8 +281,11 @@ class PerTurnCliBackend(BaseAgentBackend):
             if stdin_payload is not None:
                 await self._write_prompt(proc, stdin_payload)
             return await self._drive_turn(proc)
-        except asyncio.CancelledError:
-            await self._reap(proc)
+        except BaseException:
+            # Prompt writes and stream adapters can fail before the normal
+            # reap. Release the owned process before another turn replaces it.
+            if proc.returncode is None:
+                await self._reap(proc)
             raise
         finally:
             for watcher in watchers:

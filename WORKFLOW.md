@@ -239,6 +239,13 @@ hooks:
 
 agent:
   kind: claude
+  # Backends to switch to, in order, when a worker exits on a quota /
+  # usage-limit error ("usage limit", "insufficient_quota", "billing"…).
+  # Transient rate limits (429) still retry on the same backend. Symphony
+  # pins the next untried kind onto the ticket (`agent.kind` frontmatter),
+  # appends `## Backend Fallback`, and retries instead of pausing for an
+  # operator. Empty list keeps the pause. File boards only.
+  fallback_kinds: []
   max_concurrent_agents: 1
   max_turns: 100
   max_retry_backoff_ms: 300000
@@ -247,13 +254,23 @@ agent:
   # on the (max_attempts+1)th rewind, it moves the ticket to Blocked
   # instead of starting another In Progress pass. Set to 0 to disable.
   max_attempts: 3
+  # Cap on re-dispatching a ticket that already reached Done (deep preset:
+  # Verify RED / QA BLOCKED reopen a merged Build slice; each reopen is a
+  # fresh run, so max_attempts never sees it). Past the cap Symphony
+  # appends `## Reopen Budget` and parks the ticket in Blocked; a
+  # `## Reopen Approved` section on the ticket buys one more cycle.
+  # Set 0 to disable.
+  max_reopens: 3
   # Mechanical evidence floor (orchestrator/contracts.py):
-  #   auto (default) — enforce only when every active lane is a default-preset
-  #                    lane (Todo / In Progress / Verify / Document). Renaming
-  #                    a lane therefore turns it OFF — logged as
+  #   auto (default) — enforce when the board is a shipped preset: every
+  #                    active lane is a default-preset lane (Todo / In
+  #                    Progress / Verify / Document), or the lanes are exactly
+  #                    the deep preset (vault-file + verdict-line contracts).
+  #                    Renaming a lane therefore turns it OFF — logged as
   #                    `stage_contracts_disabled` and reported by
   #                    `symphony doctor`, never silent.
-  #   on             — enforce whatever the lanes are called.
+  #   on             — enforce the default contract set whatever the lanes
+  #                    are called.
   #   off            — never enforce; the stage prompts are the only gate.
   stage_contracts: auto
   # File-board optimization: obvious Todo tickets with Acceptance Criteria

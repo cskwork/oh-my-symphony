@@ -303,6 +303,25 @@ def test_document_stage_writes_wiki_and_done_or_intervention_handoff(workflow: s
     assert "set state to `In Progress`" in rendered
 
 
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_document_stage_receives_board_health_only_when_present(workflow: str) -> None:
+    cfg = _load(workflow)
+    template = cfg.prompt_template_for_state("Document")
+    quiet = render(template, build_prompt_env(_issue("Document"), attempt=None))
+    assert "Board health" not in quiet
+    noisy = render(
+        template,
+        build_prompt_env(
+            _issue("Document"),
+            attempt=None,
+            board_health="- lane `verify`: rewound 3x, contract failed 2x",
+        ),
+    )
+    assert "Board health (orchestrator stats, last 30 days)" in noisy
+    assert "rewound 3x" in noisy
+    assert "## Learnings" in noisy
+
+
 @pytest.mark.parametrize("flavor", ("file", "linear"))
 def test_base_prompt_declares_four_stage_pipeline_and_skip_document(flavor: str) -> None:
     text = (REPO_ROOT / "docs" / "symphony-prompts" / flavor / "base.md").read_text(

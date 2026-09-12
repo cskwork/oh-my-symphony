@@ -101,3 +101,34 @@ def test_validate_generated_identifier_only_checks_blockers_exist():
         validate_ticket_dependencies(
             [_issue("A")], identifier=None, blocked_by=["NOPE"], new_ticket=True
         )
+
+
+@pytest.mark.parametrize("cyclic", [False, True])
+def test_find_cycle_handles_deep_dependency_chain(cyclic):
+    edges = {f"T-{i:04}": (f"T-{i + 1:04}",) for i in range(2000)}
+    edges["T-2000"] = ("T-0000",) if cyclic else ()
+    cycle = find_cycle(edges)
+    if cyclic:
+        assert cycle == [*edges, "T-0000"]
+    else:
+        assert cycle is None
+
+
+@pytest.mark.parametrize("cyclic", [False, True])
+def test_validate_dependencies_handles_deep_chain(cyclic):
+    issues = [_issue(f"T-{i:04}", f"T-{i + 1:04}")
+              for i in range(2000)]
+    issues.append(_issue("T-2000"))
+    if cyclic:
+        with pytest.raises(BoardDependencyError, match="dependency cycle"):
+            validate_ticket_dependencies(issues, identifier="T-2000",
+                                         blocked_by=["T-0000"], new_ticket=False)
+    else:
+        validate_ticket_dependencies(issues, identifier="NEW",
+                                     blocked_by=["T-0000"], new_ticket=True)
+
+
+def test_topological_order_preserves_waves_duplicates_and_cyclic_leftovers():
+    edges = {"A": ("Z", "Z"), "B": (), "C": ("B",), "Z": (),
+             "X": ("Y",), "Y": ("X",), "D": ("MISSING",)}
+    assert topological_order(edges) == ["B", "D", "Z", "A", "C", "X", "Y"]
