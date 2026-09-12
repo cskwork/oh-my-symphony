@@ -13,6 +13,14 @@ Intake lane can consume it verbatim: ``## Problem``, ``## Evidence``,
 ``## Success criteria`` (checkbox lines), ``## Out of scope``,
 ``## Constraints`` and ``## Open questions``. The ``track`` is ``full``
 (Intake through Document) or ``micro`` (Intake skips Research).
+
+Every proposal is scanned with the sdlc-kit trip-wire heuristics
+(``tools/tripwire.sh``: migrations, data deletion, public API, security
+paths, infra/config). Hits never block the operator — they are shown on the
+card and recorded on the ticket and in ``intent.md`` so the pipeline's Review
+lane treats them as mandatory objection candidates — but a hit downgrades a
+``micro`` track to ``full``, exactly as the kit's stage 1 requires a
+trip-wire-clean intent for the micro track.
 """
 
 from __future__ import annotations
@@ -46,6 +54,60 @@ _MAX_PAYLOAD = INTENT_MAX_BODY + 2 * 1024
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 _CHECKBOX_RE = re.compile(r"^\s*- \[ \] \S", re.M)
 _INTAKE = "intake"
+
+# sdlc-kit `tools/tripwire.sh` patterns, verbatim (extended regex, case-
+# insensitive). A hit is a question for the reviewer, not a conviction.
+TRIPWIRE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("migration/schema", r"migrat|schema change|ALTER TABLE|CREATE TABLE|DROP TABLE|[.]sql"),
+    ("data deletion", r"DELETE FROM|DROP |TRUNCATE|destructive|backfill|rm -rf"),
+    ("public API", r"public API|breaking change|API contract|openapi|swagger|/api/v[0-9]"),
+    ("security paths", r"auth|secret|credential|password|token|permission|session"),
+    (
+        "infra/config",
+        r"Dockerfile|docker-compose|[.]github/workflows|terraform|helm|kubernetes|k8s|nginx|systemd|deploy",
+    ),
+)
+_TRIPWIRE_COMPILED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (label, re.compile(pattern, re.IGNORECASE)) for label, pattern in TRIPWIRE_PATTERNS
+)
+TRIPWIRE_MAX_LINES = 3
+
+
+@dataclass(frozen=True)
+class TripwireHit:
+    """One trip-wire category that matched, with up to three matching lines."""
+
+    label: str
+    lines: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"label": self.label, "lines": list(self.lines)}
+
+
+def scan_tripwires(text: str) -> tuple[TripwireHit, ...]:
+    """Heuristic trip-wire scan of an intent body (kit `tools/tripwire.sh`)."""
+
+    hits: list[TripwireHit] = []
+    lines = [line.strip() for line in (text or "").splitlines()]
+    for label, pattern in _TRIPWIRE_COMPILED:
+        matched = [line for line in lines if line and pattern.search(line)]
+        if matched:
+            hits.append(TripwireHit(label=label, lines=tuple(matched[:TRIPWIRE_MAX_LINES])))
+    return tuple(hits)
+
+
+def render_tripwire_section(hits: tuple[TripwireHit, ...]) -> str:
+    """`## Trip-wires` markdown for the ticket body and `intent.md`."""
+
+    if not hits:
+        return "## Trip-wires\n\n- none (heuristic scan; the Review lane still judges)\n"
+    rows = "\n".join(f"- {hit.label}: `{line}`" for hit in hits for line in hit.lines)
+    return (
+        "## Trip-wires\n\n"
+        "Heuristic hits from the sdlc-kit scan. Each one is a mandatory "
+        "objection candidate for the Review lane, not a conviction.\n\n"
+        f"{rows}\n"
+    )
 
 
 def _utc_iso() -> str:
@@ -90,6 +152,7 @@ class IntentAction:
     ticket: dict[str, Any] | None = None
     error: str | None = None
     expires_at: str = field(default_factory=_expiry)
+    tripwires: tuple[TripwireHit, ...] = ()
     task: Any = field(default=None, repr=False, compare=False)
 
     def is_expired(self) -> bool:
@@ -106,6 +169,7 @@ class IntentAction:
             "ticket": self.ticket,
             "error": self.error,
             "expires_at": self.expires_at,
+            "tripwires": [hit.as_dict() for hit in self.tripwires],
         }
 
 
@@ -156,12 +220,17 @@ def parse_intent_marker(text: str) -> tuple[str, IntentAction | None]:
     if _CHECKBOX_RE.search(body) is None:
         return text, None
     visible = (text[:open_start] + text[end + len(INTENT_CLOSE) :]).strip()
+    tripwires = scan_tripwires(body)
+    if tripwires and track == "micro":
+        # Kit stage 1: the micro track requires a trip-wire-clean intent.
+        track = "full"
     return visible, IntentAction(
         action_id="intent-" + uuid.uuid4().hex,
         slug=slug,
         title=title.strip(),
         track=track,
         intent=body,
+        tripwires=tripwires,
     )
 
 
@@ -190,6 +259,7 @@ def render_ticket_description(
 
     return (
         f"{action.intent}\n\n"
+        f"{render_tripwire_section(action.tripwires)}\n"
         f"## Track\n\n{action.track}\n\n"
         "## Approval\n\n"
         f"- Approved at: {approved_at}\n"
@@ -214,6 +284,7 @@ def render_intent_markdown(
         f"- Track: {action.track}\n"
         f"- Requested by: chat session {session_id}\n\n"
         f"{action.intent}\n\n"
+        f"{render_tripwire_section(action.tripwires)}\n"
         "## Approval\n\n"
         f"- Approved at: {approved_at}\n"
         f"- Ticket: {ticket_identifier}\n"

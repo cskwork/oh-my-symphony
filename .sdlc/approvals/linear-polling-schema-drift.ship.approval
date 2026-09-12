@@ -1,9 +1,0 @@
-stage: ship
-artifact: .sdlc/work/linear-polling-schema-drift/evidence.md
-sha256: d39f21707dd7f242e7f1462f55d105709c1e1bb1ebd34a9434d9565e63b8adbc
-approved_by: danny
-approved_at: 2026-08-29T10:37:04Z
-upstream: .sdlc/work/linear-polling-schema-drift/plan.md
-upstream_sha256: 625c6a098b586d34804f422eefb422795f0254985eb6600a17649d2379279136
-mode: delegated-chat (agent-run on explicit human instruction)
-runner: agent

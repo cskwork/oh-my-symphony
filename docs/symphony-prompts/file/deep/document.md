@@ -17,3 +17,7 @@ For app delivery, historical GREEN is not a start gate: the `app-release-finaliz
 4. Append `## Delivery` to the ticket: one-paragraph summary + `delivery.md` path.
 
 Then set state to `Done`.
+{% if board_health %}
+Board health (orchestrator stats, last 30 days). Recurring rewinds or contract misses are lessons: fold them into `## Learnings` and the wiki instead of rediscovering them.
+{{ board_health }}
+{% endif %}

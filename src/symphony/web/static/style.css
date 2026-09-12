@@ -1877,6 +1877,9 @@ a { color: inherit; }
 .chat-intent-error,
 .chat-intent-hint { margin: 0; }
 .chat-intent-hint { color: var(--text-muted); font-size: 0.88em; }
+.chat-intent-tripwires { font-size: 0.88em; color: var(--warning, #b7791f); }
+.chat-intent-tripwires ul { margin: 0.25rem 0 0; padding-left: 1.2rem; }
+.chat-intent-tripwire-label { font-weight: 600; }
 .chat-intent-approve { justify-self: start; }
 .chat-status { text-align: center; color: var(--text-muted); font-size: 0.78em; }
 .chat-top-actions { display: flex; gap: 0.5926rem; align-items: center; }

@@ -37,6 +37,13 @@ The ticket description carries the whole intent, so every lane treats it as
 the scope of record and never reopens the ask with the operator; `Human
 Review` stays reserved for a real blocker.
 
+Every proposal is scanned with the sdlc-kit trip-wire heuristics
+(`tools/tripwire.sh`: migrations, data deletion, public API, security paths,
+infra/config). Hits are shown on the card and recorded as `## Trip-wires` on
+the ticket and in `intent.md`; they never block the operator, but a hit
+downgrades a `micro` track to `full`, and the deep Review lane treats each
+hit as a mandatory objection candidate.
+
 ## Why four stages
 
 The old eight-stage flow spread one delivery story across too many agent
@@ -162,6 +169,28 @@ tracker:
 The orchestrator dispatches a worker for any ticket whose state is active.
 Terminal states stop dispatch. `Human Review` is terminal because a human must
 resolve or confirm an explicit intervention before `Done`.
+
+`agent.stage_contracts` (default `auto`) is the mechanical evidence floor
+behind the prompts. On the default lanes it checks the sections above at
+every forward transition, including the move into `Done`; on the deep preset
+it checks each lane's vault file and verdict line. A miss appends
+`## Contract Failure` and rewinds the ticket to the producing lane. Blocked,
+Cancelled, and Human Review are never contract-gated.
+
+Two budgets bound the loops. `agent.max_attempts` caps rewinds inside one
+run (Verify or Document back to In Progress). `agent.max_reopens` caps how
+often a ticket that already reached Done is dispatched again — the deep
+preset's Verify RED / QA BLOCKED reopen a merged Build slice as a fresh run,
+which `max_attempts` never sees. Past the cap the ticket gets a
+`## Reopen Budget` note and parks in Blocked; an operator appends
+`## Reopen Approved` to buy one more cycle.
+
+The learning loop runs on the same counters. Every contract failure,
+reopen hold, and backend fallback is a `gate` event in `.symphony/stats.jsonl`;
+rewinds are derived from the lane order. The Stats page and TUI show them per
+lane with the recurring contract misses, and the Document lane's prompt
+receives the same summary as `{{ board_health }}` so repeat failures turn
+into `## Learnings` and wiki entries.
 
 The web board opens on active agent lanes. `Human Review`, `Done`, `Blocked`,
 and `Archive` stay visible in the compact **Review and parked** group until

@@ -451,6 +451,7 @@ class StatsScreen(ModalScreen[None]):
             )
             with VerticalScroll():
                 yield Static(self._state_table())
+                yield Static(self._gates_table())
                 yield Static(self._agent_table())
                 yield Static(self._day_table())
             yield Static("[dim]esc / q / s to close[/dim]")
@@ -460,7 +461,9 @@ class StatsScreen(ModalScreen[None]):
 
     def _state_table(self) -> Table:
         table = Table(title="By column", expand=True)
-        for col in ("column", "tokens", "turns", "runs", "avg run", "avg dwell"):
+        for col in (
+            "column", "tokens", "turns", "runs", "avg run", "avg dwell", "rewound", "gate fails"
+        ):
             table.add_column(col)
         for row in self._agg.get("by_state", []):
             table.add_row(
@@ -470,6 +473,29 @@ class StatsScreen(ModalScreen[None]):
                 str(row.get("runs", 0)),
                 _fmt_seconds(row.get("avg_run_seconds", 0)),
                 _fmt_seconds(row.get("avg_dwell_seconds", 0)),
+                str(row.get("rewinds_out", 0)),
+                str(row.get("contract_failures", 0)),
+            )
+        return table
+
+    def _gates_table(self) -> Table:
+        gates = self._agg.get("gates", {}) or {}
+        table = Table(
+            title=(
+                f"Gates — rewinds={gates.get('rewinds', 0)}  "
+                f"contract failures={gates.get('contract_failure', 0)}  "
+                f"reopen holds={gates.get('reopen_budget', 0)}  "
+                f"backend fallbacks={gates.get('backend_fallback', 0)}"
+            ),
+            expand=True,
+        )
+        for col in ("column", "recurring contract miss", "count"):
+            table.add_column(col)
+        for row in gates.get("top_contract_misses", []) or []:
+            table.add_row(
+                self._display_state(str(row.get("state", "?"))),
+                str(row.get("item", "?")),
+                str(row.get("count", 0)),
             )
         return table
 

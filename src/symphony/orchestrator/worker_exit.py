@@ -843,7 +843,12 @@ def _handle_worker_error(
     core = _core()
     failure_reason = f"{reason}: {error}" if error else reason
     cleaned_failure = core._clean_board_error_message(failure_reason)
-    if core._is_retryable_worker_error(orch._entry_agent_kind(entry), reason, error):
+    cfg = orch._workflow_state.current()
+    if _switch_backend_on_quota_error(
+        orch, cfg, issue_id, entry, debug, reason, error, cleaned_failure
+    ):
+        pass
+    elif core._is_retryable_worker_error(orch._entry_agent_kind(entry), reason, error):
         debug.last_error = cleaned_failure
         log.warning(
             "worker_error_retry_scheduled",
@@ -871,7 +876,6 @@ def _handle_worker_error(
             pause_reason=pause_reason,
         )
     next_attempt = (entry.retry_attempt or 0) + 1
-    cfg = orch._workflow_state.current()
     cap = cfg.agent.max_retry_backoff_ms if cfg is not None else 300_000
     delay_ms = min(RETRY_BASE_MS * (2 ** (next_attempt - 1)), cap)
     orch._schedule_retry(
@@ -883,6 +887,74 @@ def _handle_worker_error(
         kind="retry",
         touched_files=frozenset(orch._touched_files_for(entry.issue)),
     )
+
+
+def _switch_backend_on_quota_error(
+    orch: Orchestrator,
+    cfg: ServiceConfig | None,
+    issue_id: str,
+    entry: RunningEntry,
+    debug: _IssueDebug,
+    reason: str,
+    error: str | None,
+    cleaned_failure: str,
+) -> bool:
+    """Pin the next `agent.fallback_kinds` backend after a quota error.
+
+    Returns True when the ticket was re-pinned (the caller then schedules
+    the normal retry instead of pausing). A quota error with no untried
+    fallback, or a tracker that cannot carry the pin, falls through to the
+    existing retry/auto-pause decision.
+    """
+    core = _core()
+    if cfg is None or not cfg.agent.fallback_kinds:
+        return False
+    if not core._is_quota_worker_error(reason, error):
+        return False
+    current = orch._entry_agent_kind(entry)
+    debug.quota_exhausted_kinds.add(current)
+    next_kind = orch._next_fallback_agent_kind(cfg, entry, debug)
+    if next_kind is None:
+        log.warning(
+            "backend_fallback_exhausted",
+            issue_id=issue_id,
+            issue_identifier=entry.issue.identifier,
+            tried=sorted(debug.quota_exhausted_kinds),
+            error=error,
+        )
+        return False
+    if not orch._pin_fallback_agent_kind(cfg, entry.issue.identifier, next_kind):
+        return False
+    note = (
+        f"`{current}` reported a quota/usage limit: {cleaned_failure}. Symphony "
+        f"pinned this ticket to `{next_kind}` (agent.fallback_kinds) and "
+        "scheduled a retry instead of pausing. Remove the `agent.kind` pin "
+        "from the frontmatter to return to the board default."
+    )
+    try:
+        orch._tracker_call_append_note(cfg, entry.issue, "Backend Fallback", note)
+    except Exception as exc:
+        log.warning(
+            "backend_fallback_note_failed",
+            issue_id=issue_id,
+            issue_identifier=entry.issue.identifier,
+            error=str(exc),
+        )
+    entry.issue = replace(entry.issue, agent_kind=next_kind)
+    entry.agent_kind = next_kind
+    debug.last_error = f"quota on {current}; falling back to {next_kind}"
+    orch._record_stats_gate(
+        entry.issue.identifier, entry.issue.state, "backend_fallback", (current, next_kind)
+    )
+    log.warning(
+        "worker_quota_backend_fallback",
+        issue_id=issue_id,
+        issue_identifier=entry.issue.identifier,
+        from_kind=current,
+        to_kind=next_kind,
+        error=error,
+    )
+    return True
 
 
 # ----------------------------------------------------------------------

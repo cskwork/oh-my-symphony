@@ -43,6 +43,54 @@ def test_record_and_aggregate_roundtrip(tmp_path: Path) -> None:
     assert len(agg["by_day"]) == 1
 
 
+def test_aggregate_counts_rewinds_and_gate_decisions(tmp_path: Path) -> None:
+    from symphony.stats import board_health_summary
+
+    store = StatsStore(tmp_path / "stats.jsonl")
+    lanes = ("Todo", "In Progress", "Verify", "Document")
+    store.record_transition(issue="T-1", from_state="in progress", to_state="verify")
+    store.record_transition(issue="T-1", from_state="verify", to_state="in progress")
+    store.record_gate(
+        issue="T-1",
+        state="verify",
+        kind="contract_failure",
+        items=["## QA Evidence", "vault file `/ws/docs/req/x/brief.md` missing or empty"],
+    )
+    store.record_gate(issue="T-2", state="verify", kind="contract_failure", items=["## QA Evidence"])
+    store.record_gate(issue="T-3", state="build", kind="reopen_budget")
+    store.record_gate(issue="T-4", state="build", kind="backend_fallback", items=["codex", "claude"])
+    store.record_gate(issue="T-5", state="build", kind="not-a-kind")
+    store.record_transition(issue="T-1", from_state="in progress", to_state="verify")
+    store.record_transition(issue="T-1", from_state="verify", to_state="document")
+
+    agg = store.aggregate(days=7, done_states={"done"}, active_states=lanes)
+    assert agg["gates"]["rewinds"] == 1
+    assert agg["gates"]["contract_failure"] == 2
+    assert agg["gates"]["reopen_budget"] == 1
+    assert agg["gates"]["backend_fallback"] == 1
+    assert agg["gates"]["top_contract_misses"][0] == {
+        "state": "verify",
+        "item": "## QA Evidence",
+        "count": 2,
+    }
+    assert {"state": "verify", "item": "brief.md", "count": 1} in agg["gates"]["top_contract_misses"]
+    by_state = {row["state"]: row for row in agg["by_state"]}
+    assert by_state["verify"]["rewinds_out"] == 1
+    assert by_state["verify"]["contract_failures"] == 2
+    assert by_state["in progress"]["rewinds_in"] == 1
+
+    summary = board_health_summary(agg)
+    assert "rewinds=1, contract failures=2, reopen-budget holds=1, backend fallbacks=1" in summary
+    assert "lane `verify`: rewound 1x, contract failed 2x" in summary
+    assert "recurring miss in `verify`: ## QA Evidence (2x)" in summary
+    assert summary.count("\n") <= 7
+
+    # A healthy board renders nothing so prompts stay short.
+    healthy = StatsStore(tmp_path / "healthy.jsonl")
+    healthy.record_transition(issue="T-9", from_state="verify", to_state="document")
+    assert board_health_summary(healthy.aggregate(days=7, active_states=lanes)) == ""
+
+
 def test_aggregate_skips_corrupt_lines_and_old_events(tmp_path: Path) -> None:
     path = tmp_path / "stats.jsonl"
     path.write_text(

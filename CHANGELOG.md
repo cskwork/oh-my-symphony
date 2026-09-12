@@ -8,9 +8,20 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.0] - 2026-09-12 - Mechanical gates on every preset, reopen and quota budgets, learning loop
 
 ### Added
+- **Deep preset stage contracts.** `agent.stage_contracts: auto` now enforces
+  a contract set on the 8-lane deep preset too (`board_uses_shipped_contracts`).
+  At every lane transition the orchestrator re-checks what the lane prompt's
+  shell gate self-attests: the vault file exists (`brief.md`, `research.md`,
+  `plan.md` + `contracts.md`, `review.md`, `claims.md`, `qa-report.md`,
+  `verification.md`, `delivery.md`), its verdict line is present
+  (`verdict: PASS` before a request ticket may reach Done, `Verdict:
+  APPROVED|BLOCKED` for QA, `verdict: GREEN|RED` for Verify), the Build claim
+  names the ticket, and the short ticket section was appended. A miss appends
+  `## Contract Failure` and rewinds to the lane. `app-release` verifiers are
+  exempt because the host release cycle already owns that gate.
 - **Structured Jira notes.** `JiraClient.append_note` renders a Markdown
   subset (headings, `- ` bullets, inline code/strong) into ADF instead of
   flattening every line to a paragraph, so multi-section notes stay
@@ -27,7 +38,78 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   three-section projection: intent for non-developers, an optional policy
   classification, then developer notes with a verdict.
 
+- **`agent.max_reopens` bounds the Build ↔ Verify reopen loop.** A deep
+  Verify RED / QA BLOCKED reopens a merged Build slice by moving it from Done
+  back to Build; that is a fresh run with a fresh rewind counter, so
+  `agent.max_attempts` never bounded the oscillation. The orchestrator now
+  counts the ticket's prior Done runs in the run registry and, past the cap
+  (default 3), appends `## Reopen Budget` and parks the ticket in Blocked
+  instead of dispatching another cycle. A `## Reopen Approved` section on
+  the ticket extends the budget by one; `0` disables.
+
+- **Trip-wire scan on the intent card.** The chat intent gate now runs the
+  sdlc-kit `tools/tripwire.sh` heuristics (migration/schema, data deletion,
+  public API, security paths, infra/config) over every proposal. Hits are
+  listed on the card, recorded as `## Trip-wires` on the request ticket and
+  in `.sdlc/work/<slug>/intent.md`, force a `micro` track to `full`, and the
+  deep Review prompt treats each as a mandatory objection candidate
+  (AGENTS.md rule 3 for lazymode-waived gates).
+
+- **`agent.fallback_kinds` — backend fallback on quota errors.** A worker
+  that exits on a usage-limit / quota / billing error (not a transient 429)
+  used to auto-pause until an operator re-pinned the ticket by hand (the
+  2026-09-05 E2E lost ~20 minutes this way). With `fallback_kinds` set, the
+  orchestrator force-pins the next untried kind onto the file-board ticket
+  (`FileBoardTracker.record_agent_kind(..., force=True)`), appends
+  `## Backend Fallback`, and schedules the normal retry. When every listed
+  kind has hit its limit the ticket pauses as before. Remote trackers
+  cannot carry the pin and keep the pause.
+- **`symphony doctor` probes the agent binary.** `agent.kind=<kind>` now runs
+  `<binary> --version` after the PATH lookup: a non-zero exit is a `warn`
+  naming the stub's output (the E2E host's `~/.opencode/bin/opencode` was an
+  npm postinstall stub), an exec failure is a `fail`.
+
+- **Learning loop closed: gate stats feed the Document lane.** `stats.jsonl`
+  gains `gate` events (contract failure with the missing items, reopen-budget
+  hold, backend fallback) and the aggregate now derives rewinds from the
+  board's lane order, exposing per-lane `rewinds_in/out`,
+  `contract_failures`, and a `gates.top_contract_misses` list on
+  `/api/v1/stats`, the web Stats page, and the TUI stats screen. The
+  Document lane's first prompt receives `{{ board_health }}` — a few lines
+  summarising the last 30 days — so recurring misses become `## Learnings`
+  and wiki entries instead of being rediscovered; healthy boards render
+  nothing.
+
+### Changed
+- **`core.py` extraction: `release_transition.py`.** The Verify-exit release
+  gate (`_enforce_app_release_transition_inner`, ~420 lines) now lives in
+  `orchestrator/release_transition.py` as a module-level function that takes
+  the orchestrator explicitly, following the `worker_exit.py` / `attempt.py`
+  convention; `core.py` keeps a one-call forward and the
+  `validate_release_contract` / `resolve_target_release_identity` test seams.
+  `core.py` is 9,822 → 9,680 lines.
+- **Parallel test suite is load-tolerant.** The two tests that failed only
+  under `pytest -n auto` (HANDOFF 2026-09-05 item 7) now wait long enough on
+  a loaded host: the worktree-script subprocess timeout is 60 s (was 5 s) and
+  the release-reconcile worker-start wait is 10 s (was 1 s).
+- **The move into Done is contract-gated.** Terminal transitions never
+  reached the phase handler, so the last gate of every board — `Document ->
+  Done` on the default preset, every lane `-> Done` on the deep preset — was
+  prompt-only, and `artifacts.require_for_done` could not fire on a board
+  whose Done lane is terminal. `attempt._post_turn_refresh` now runs the
+  producing lane's contract before accepting Done; a failure rewinds the
+  ticket with `## Contract Failure` and counts against `agent.max_attempts`.
+  Blocked, Cancelled, and Human Review stay ungated.
+
 ### Fixed
+- **Empty `auto_merge_target_branch` no longer strands the release verifier.**
+  `WORKFLOW.file.example.md` ships both branch keys empty (meaning "the
+  current branch"), and the deep preset accepts that, but the release binder
+  refused it every tick (`release_dispatch_refused ... resolvable local
+  branch: ''`) while `VERIFY-1` waited in `Verify`. `resolve_configured_target_branch`
+  now resolves the empty value to the checked-out branch for `validate_release_contract`,
+  `inspect_release_contract`, and `resolve_target_release_identity`; a detached
+  HEAD still fails the "resolvable local branch" check.
 - **Symlink loops in project-setup paths.** Python 3.13+ `Path.resolve()`
   no longer raises on a self-referential symlink, so a chat project-setup
   marker pointing at one became a selectable action. `canonical_project_repo`

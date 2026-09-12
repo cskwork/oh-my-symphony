@@ -205,6 +205,8 @@ class _IssueDebug:
     current_attempt_kind: str | None = None
     completed_turn_count: int = 0
     rewind_count: int = 0
+    # Backends that already hit a quota/usage limit on this ticket.
+    quota_exhausted_kinds: set[str] = field(default_factory=set)
     state_turn_state: str = ""
     state_turn_count: int = 0
     last_workspace: Path | None = None

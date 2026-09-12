@@ -108,6 +108,45 @@ def test_parse_intent_marker_rejects_malformed_payloads(text: str) -> None:
     assert visible == text
 
 
+def test_parse_intent_marker_scans_tripwires_and_forces_full_track() -> None:
+    from symphony.intent import render_intent_markdown, render_ticket_description, scan_tripwires
+
+    clean = scan_tripwires(INTENT_BODY)
+    assert clean == ()
+
+    risky = INTENT_BODY.replace(
+        "## Constraints\n\n- no new dependency\n",
+        "## Constraints\n\n- run `ALTER TABLE users` first\n- rotate the auth token\n",
+    )
+    hits = scan_tripwires(risky)
+    assert [hit.label for hit in hits] == ["migration/schema", "security paths"]
+    assert hits[0].lines == ("- run `ALTER TABLE users` first",)
+
+    _visible, action = parse_intent_marker(_marker(track="micro", intent=risky))
+    assert action is not None
+    assert action.track == "full", "a trip-wire hit must force the full track"
+    assert [hit["label"] for hit in action.as_dict()["tripwires"]] == [
+        "migration/schema",
+        "security paths",
+    ]
+
+    ticket = render_ticket_description(action, approved_at="2026-09-12T00:00:00Z", session_id="s")
+    assert "## Trip-wires" in ticket
+    assert "- migration/schema: `- run `ALTER TABLE users` first`" in ticket
+    assert ticket.index("## Trip-wires") < ticket.index("## Track")
+    record = render_intent_markdown(
+        action, approved_at="2026-09-12T00:00:00Z", session_id="s", ticket_identifier="REQ-9"
+    )
+    assert "## Trip-wires" in record and "security paths" in record
+
+    _visible, clean_action = parse_intent_marker(_marker(track="micro"))
+    assert clean_action is not None and clean_action.track == "micro"
+    assert clean_action.as_dict()["tripwires"] == []
+    assert "- none (heuristic scan" in render_ticket_description(
+        clean_action, approved_at="2026-09-12T00:00:00Z", session_id="s"
+    )
+
+
 def test_parse_intent_marker_rejects_duplicate_json_members() -> None:
     raw = (
         '<symphony-intent>{"slug": "a-b", "slug": "c-d", "title": "t", '
