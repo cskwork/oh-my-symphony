@@ -96,11 +96,31 @@ async def handle_worker_exit(
     entry = _pop_running_entry(orch, issue_id, reason, owning_task=owning_task)
     if entry is None:
         return
+    terminal_cancelled = False
+    cfg = orch._workflow_state.current()
+    if reason == "cancelled" and cfg is not None:
+        # Reconcile can cancel a worker after its card is archived/stopped.
+        # Read current tracker state: an old terminal snapshot must not
+        # suppress recovery if the operator has already reopened the card.
+        refreshed = await orch._refresh_issue_state(cfg, issue_id)
+        if refreshed is not None:
+            entry.issue = replace(entry.issue, state=refreshed.state)
+            terminal_cancelled = normalize_state(refreshed.state) in {
+                normalize_state(state) for state in cfg.tracker.terminal_states
+            }
     if not defer_lease_finish:
         orch._finish_run_lease(issue_id, entry, reason, error)
     debug = _record_exit_accounting(orch, issue_id, entry, reason, error)
 
-    if reason == "normal":
+    if terminal_cancelled:
+        # Workspace cleanup remains owned by reconcile. This is cancellation,
+        # not a successful completion: do not merge or invoke Done hooks here.
+        orch._dispatch_state.cancel_pending_retry(issue_id)
+        orch._claimed.discard(issue_id)
+        orch._persisted_retry_attempts.pop(issue_id, None)
+        orch._clear_issue_flags(issue_id, retry_attempt=True)
+        log.info("terminal_worker_cancelled", issue_id=issue_id, state=entry.issue.state)
+    elif reason == "normal":
         if not await _handle_normal_exit(orch, issue_id, entry, debug, reason, error):
             return
     elif reason == "shutdown_interrupted":

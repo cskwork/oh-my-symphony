@@ -249,6 +249,8 @@
   </div>
 </section>
 
+<section class="border-b border-outline"><div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-8"><p class="font-sans text-on-surface-variant" data-i18n="workflow.current">Default: approve the chat intent once, then Todo → In Progress → Verify → Document → Done runs automatically. Human Review is an exception. Deep: the request reaches Review → Done and unlocks separate Build → QA → Verify → Document tickets. The orchestrator owns the configured merge; release publication is separate.</p></div></section>
+
 <!-- =========================================================
   Features
 ========================================================== -->
@@ -597,7 +599,7 @@
       <div class="terminal-card rounded p-6">
         <div class="font-mono text-[12px] text-primary uppercase tracking-wider mb-2" data-i18n="man.tut.kicker">Tutorial · ~20 minutes</div>
         <h3 class="font-mono text-[17px] text-on-surface mb-2" data-i18n="man.tut.h3">Your first ticket, end to end</h3>
-        <p class="font-sans text-[14px] text-on-surface-variant mb-5" data-i18n="man.tut.p">Install, create a project, read WORKFLOW.md, run doctor, add a ticket, watch it in the TUI or web board, confirm at Human Review, inspect the result.</p>
+        <p class="font-sans text-[14px] text-on-surface-variant mb-5" data-i18n="man.tut.p">Install, create a project, read WORKFLOW.md, run doctor, add a ticket, watch it in the TUI or web board, follow automatic gates, resolve explicit review holds, inspect the result.</p>
         <div class="flex flex-wrap gap-2 font-mono text-[13px]">
           <a href="manual/pdf/oh-my-symphony-tutorial-en.pdf" class="bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">PDF · EN</a>
           <a href="manual/pdf/oh-my-symphony-tutorial-ko.pdf" class="bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">PDF · 한국어</a>
@@ -672,6 +674,7 @@
       "hero.cta2": `View on GitHub`,
       "hero.caption": `<span class="text-primary">›</span> columns are your tracker's states · cards show active agent, turn count, last event, accumulated tokens · ● running, ↻ retry queued, ✓ done.`,
       "feat.title": `Why Symphony`,
+      "workflow.current": `Default: approve the chat intent once, then Todo → In Progress → Verify → Document → Done runs automatically. Human Review is an exception. Deep: the request reaches Review → Done and unlocks separate Build → QA → Verify → Document tickets. The orchestrator owns the configured merge; release publication is separate.`,
       "feat.sub": `A file-first orchestrator fork with eight agents, a Jira-style TUI, a built-in web board, and local reliability guardrails.`,
       "feat.c1.h": `No vendor lock-in`,
       "feat.c1.b": `Swap Codex ↔ Claude Code ↔ Gemini ↔ AGY ↔ Kiro ↔ OpenCode ↔ Pi ↔ Prime Agent with one YAML line. New agents drop in behind a thin <code class="font-mono text-primary text-[13px]">AgentBackend</code> Protocol.`,
@@ -737,7 +740,7 @@
       "man.cheat.p": `CLI subcommands, TUI key bindings, the minimum WORKFLOW.md, ticket states, and what to run when something breaks.`,
       "man.tut.kicker": `Tutorial · ~20 minutes`,
       "man.tut.h3": `Your first ticket, end to end`,
-      "man.tut.p": `Install, create a project, read WORKFLOW.md, run doctor, add a ticket, watch it in the TUI or web board, confirm at Human Review, inspect the result.`,
+      "man.tut.p": `Install, create a project, read WORKFLOW.md, run doctor, add a ticket, watch it in the TUI or web board, follow automatic gates, resolve explicit review holds, inspect the result.`,
       "nav.manual": `manual`,
       "foot.project": `Project`,
       "foot.community": `Community`,
@@ -749,7 +752,8 @@
       "nav.agents": `에이전트`,
       "nav.cta": `시작하기 →`,
       "hero.h1": `터미널 하나.<br/>칸반 보드 하나.<br/><span class="text-primary">AI 코딩 에이전트 여덟.</span>`,
-      "hero.sub": `<span class="font-mono text-secondary">Codex</span> · <span class="font-mono text-secondary">Claude&nbsp;Code</span> · <span class="font-mono text-secondary">Gemini</span> · <span class="font-mono text-secondary">AGY</span> · <span class="font-mono text-secondary">Kiro</span> · <span class="font-mono text-secondary">OpenCode</span> · <span class="font-mono text-secondary">Pi</span> · <span class="font-mono text-secondary">Prime&nbsp;Agent</span> · <span class="font-mono text-secondary">Prime&nbsp;Agent</span> — 티켓마다 골라, 격리된 <span class="font-mono text-primary">git&nbsp;worktree</span> 안에서 병렬로 실행하고, 터미널을 벗어날 필요 없는 Jira 스타일 TUI에서 실시간으로 지켜본다.`,
+      "workflow.current": `기본 흐름은 채팅 의도 승인 후 Todo → In Progress → Verify → Document → Done으로 자동 진행됩니다. Human Review는 예외 상태입니다. Deep은 요청 티켓의 Review → Done 이후 별도 Build → QA → Verify → Document 티켓을 실행합니다. 설정된 병합은 오케스트레이터가 수행하며 릴리스 공개는 별도입니다.`,
+      "hero.sub": `<span class="font-mono text-secondary">Codex</span> · <span class="font-mono text-secondary">Claude&nbsp;Code</span> · <span class="font-mono text-secondary">Gemini</span> · <span class="font-mono text-secondary">AGY</span> · <span class="font-mono text-secondary">Kiro</span> · <span class="font-mono text-secondary">OpenCode</span> · <span class="font-mono text-secondary">Pi</span> · <span class="font-mono text-secondary">Prime&nbsp;Agent</span> — 티켓마다 골라, 격리된 <span class="font-mono text-primary">git&nbsp;worktree</span> 안에서 병렬로 실행하고, 터미널을 벗어날 필요 없는 Jira 스타일 TUI에서 실시간으로 지켜본다.`,
       "hero.cta1": `60초 만에 체험하기 <span>→</span>`,
       "hero.cta2": `GitHub에서 보기`,
       "hero.caption": `<span class="text-primary">›</span> 컬럼은 트래커의 상태 · 카드는 실행 중 에이전트·턴 수·마지막 이벤트·누적 토큰을 표시 · ● 실행 중, ↻ 재시도 대기, ✓ 완료.`,
@@ -819,7 +823,7 @@
       "man.cheat.p": `CLI 하위 명령, TUI 키 바인딩, 최소 WORKFLOW.md, 티켓 상태, 문제가 생겼을 때 실행할 명령.`,
       "man.tut.kicker": `튜토리얼 · 약 20분`,
       "man.tut.h3": `첫 티켓을 처음부터 끝까지`,
-      "man.tut.p": `설치, 프로젝트 생성, WORKFLOW.md 읽기, doctor 실행, 티켓 추가, TUI 또는 웹 보드에서 관찰, Human Review 승인, 결과 확인.`,
+      "man.tut.p": `설치, 프로젝트 생성, WORKFLOW.md 읽기, doctor 실행, 티켓 추가, TUI 또는 웹 보드에서 관찰, 자동 단계 확인, 명시적인 검토 보류 해결, 결과 확인.`,
       "nav.manual": `매뉴얼`,
       "foot.project": `프로젝트`,
       "foot.community": `커뮤니티`,

@@ -11052,3 +11052,71 @@ def test_file_tracker_forced_pin_replaces_an_existing_agent_kind(tmp_path):
     assert front["agent"] == {"kind": "claude"} and "agent_kind" not in front
     [issue] = [i for i in tracker.scan_all() if i.identifier == "MT-P"]
     assert issue.agent_kind == "claude"
+
+
+@pytest.mark.parametrize("terminal_state", ["Archive", "Cancelled", "Blocked"])
+def test_reconcile_cancelled_terminal_worker_releases_single_slot(monkeypatch, terminal_state):
+    cfg = _make_config(max_concurrent=1, terminal_states=("Done", "Archive", "Cancelled", "Blocked"))
+    orch = _orch()
+    issue = _issue("TERMINAL-1", state="In Progress")
+    fresh = replace(issue, state=terminal_state)
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+    monkeypatch.setattr(orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [fresh])
+    monkeypatch.setattr(orch, "_tracker_call_full_by_id", lambda _cfg, _id: fresh)
+
+    async def run():
+        orch._loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+
+        async def worker():
+            try:
+                started.set()
+                await asyncio.Event().wait()
+            finally:
+                await orch._on_worker_exit(issue.id, "cancelled", None, owning_task=asyncio.current_task())
+
+        task = asyncio.create_task(worker())
+        entry = _install_running_entry(orch, issue)
+        entry.worker_task = task
+        entry.last_codex_timestamp = datetime.now(timezone.utc).replace(year=2000)
+        entry.terminal_seen_at = datetime.now(timezone.utc).replace(year=2000)
+        orch._claimed.add(issue.id)
+        await started.wait()
+        try:
+            await orch._reconcile_running(cfg)
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            assert not orch.is_paused(issue.id)
+            assert issue.id not in orch._retry
+            assert issue.id not in orch._claimed
+            assert entry.issue.state == terminal_state
+            assert orch._available_slots(cfg) == 1
+            assert orch._should_dispatch(_issue("NEXT-1"), cfg)
+        finally:
+            task.cancel()
+            for retry in orch._retry.values():
+                retry.timer_handle.cancel()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("refreshed", ["In Progress", None])
+def test_cancelled_worker_does_not_trust_stale_terminal_state(monkeypatch, refreshed):
+    cfg = _make_config(max_concurrent=1, terminal_states=("Done", "Archive"))
+    orch = _orch()
+    issue = _issue("TERMINAL-STALE", state="Archive")
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+    monkeypatch.setattr(orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [replace(issue, state=refreshed)] if refreshed else [])
+
+    async def run():
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        try:
+            await orch._on_worker_exit(issue.id, "cancelled", None)
+            assert orch.is_paused(issue.id)
+            assert orch._retry[issue.id].holds_slot
+        finally:
+            for retry in orch._retry.values():
+                retry.timer_handle.cancel()
+
+    asyncio.run(run())
