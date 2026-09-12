@@ -916,41 +916,20 @@ class CodexAppServerBackend(BaseAgentBackend):
                 self._latest_usage[key] = int(payload[key])
 
     def _update_tokens_from_v2_block(self, usage: dict[str, Any]) -> None:
-        """Codex 0.130+ thread/tokenUsage/updated.tokenUsage.total shape.
+        """Read absolute cumulative totals from Codex app-server v2.
 
-        Fields seen in the wild (camelCase, captured from a real run):
-          inputTokens, cachedInputTokens, outputTokens,
-          reasoningOutputTokens, totalTokens
-
-        Symphony's three-bucket model has no separate cache or reasoning
-        buckets, so cached input is folded into input_tokens and reasoning
-        output is folded into output_tokens.
-
-        Codex's own `totalTokens` field excludes both cache reads and
-        reasoning output (it counts only `inputTokens + outputTokens`),
-        which would make symphony's three-bucket invariant fail —
-        `input_tokens + output_tokens > total_tokens`. To preserve that
-        invariant and stay unit-comparable with the other backends,
-        symphony recomputes `total_tokens` as `folded_in + folded_out`
-        rather than copying codex's narrower value.
-
-        These notifications report ABSOLUTE cumulative totals (not deltas),
-        so we overwrite rather than accumulate.
+        cachedInputTokens is a subset of inputTokens; reasoningOutputTokens
+        is a subset of outputTokens. Adding either subset again inflates
+        the dashboard and token budgets. Keep the existing three-bucket
+        interface and overwrite, rather than accumulate, each notification.
         """
         if not isinstance(usage, dict):
             return
         in_t = int(usage.get("inputTokens") or 0)
-        cached = int(usage.get("cachedInputTokens") or 0)
         out_t = int(usage.get("outputTokens") or 0)
-        reasoning = int(usage.get("reasoningOutputTokens") or 0)
-        folded_in = in_t + cached
-        folded_out = out_t + reasoning
-        # Always compute total = folded_in + folded_out so the invariant
-        # `total_tokens == input_tokens + output_tokens` holds. Codex's
-        # narrower `totalTokens` is intentionally ignored.
-        self._latest_usage["input_tokens"] = folded_in
-        self._latest_usage["output_tokens"] = folded_out
-        self._latest_usage["total_tokens"] = folded_in + folded_out
+        self._latest_usage["input_tokens"] = in_t
+        self._latest_usage["output_tokens"] = out_t
+        self._latest_usage["total_tokens"] = in_t + out_t
 
     async def _handle_approval(self, params: dict[str, Any]) -> None:
         # Best-effort auto-approve. The legacy `respondToApproval` method is

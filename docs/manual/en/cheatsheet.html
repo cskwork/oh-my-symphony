@@ -6,12 +6,12 @@
 <title>oh-my-symphony cheatsheet</title>
 <link rel="stylesheet" href="../manual.css">
 </head>
-<body>
+<body class="cheatsheet">
 <main>
 <header class="doc">
   <div class="kicker">CHEATSHEET</div>
   <h1>oh-my-symphony</h1>
-  <p class="sub">One Kanban board, eight AI coding agents, one ticket per <code>git worktree</code>. Everything you type, on two pages.</p>
+  <p class="sub">One Kanban board, eight AI coding agents, one ticket per <code>git worktree</code>. Commands and the current approval flow.</p>
   <div class="links">
     <a href="../ko/cheatsheet.html">한국어</a>
     <a href="tutorial.html">Tutorial</a>
@@ -29,9 +29,10 @@
   <span>tui / service</span><i>→</i>
   <span>ticket</span><i>→</i>
   <span>agent runs</span><i>→</i>
-  <span>Human Review</span><i>→</i>
+  <span>automatic gates</span><i>→</i>
   <span>Done</span>
 </div>
+<p><strong>Default:</strong> Todo → In Progress → Verify → Document → Done. Approve a chat intent once; workers then proceed automatically. Human Review is an exception. The configured orchestrator owns the single merge at Done; release publication is separate.</p><p><strong>Deep:</strong> the request reaches Review → Done, unlocking separate Build → QA → Verify → Document tickets. Failed evidence rewinds work; max_attempts/max_reopens cap loops. An empty fallback_kinds list does not switch providers.</p>
 
 <h2>Install &amp; first run</h2>
 <pre><code>git clone https://github.com/cskwork/oh-my-symphony.git &amp;&amp; cd oh-my-symphony
@@ -137,7 +138,7 @@ server:
   <tr><th>State</th><th>What happens there</th></tr>
   <tr><td>Todo</td><td>Triage; route to In Progress (a ticket with Acceptance Criteria skips the model turn)</td></tr>
   <tr><td>In Progress</td><td>Plan + TDD implementation + self-critique on the <code>symphony/&lt;ID&gt;</code> branch</td></tr>
-  <tr><td>Verify</td><td>Review + QA + Merge Gate; feature branch merged into the target before Document</td></tr>
+  <tr><td>Verify</td><td>Review + QA + Merge Gate; prove a clean merge before Document; the orchestrator merges at Done</td></tr>
   <tr><td>Document</td><td>Docs + wiki write-back; Done unless intervention (<kbd>S</kbd> skips it)</td></tr>
   <tr><td>Human Review</td><td>Manual intervention or explicit review before Done; confirm with <kbd>c</kbd> in the TUI or from the web board</td></tr>
   <tr><td>Done</td><td>Verified complete; one <code>&lt;ID&gt;: &lt;title&gt;</code> commit; <kbd>a</kbd> archives</td></tr>

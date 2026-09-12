@@ -27,8 +27,24 @@
 <h2>What Symphony is</h2>
 <p>Symphony is a local orchestrator: it polls a Kanban board, hands each ticket to the AI coding agent you chose, and runs those agents concurrently, each inside its own isolated <code>git worktree</code>. You watch progress in a terminal Kanban (the TUI) or in the built-in web board on <code>http://127.0.0.1:9999/</code>. Tickets are Markdown files next to your code: no SaaS, no API key, no signup.</p>
 <div class="flow">
-  <span>install</span><i>→</i><span>project create / add</span><i>→</i><span>doctor</span><i>→</i><span>tui / service</span><i>→</i><span>ticket</span><i>→</i><span>agent runs</span><i>→</i><span>Human Review</span><i>→</i><span>Done</span>
+  <span>install</span><i>→</i><span>project create / add</span><i>→</i><span>doctor</span><i>→</i><span>tui / service</span><i>→</i><span>ticket</span><i>→</i><span>agent runs</span><i>→</i><span>automatic gates</span><i>→</i><span>Done</span>
 </div>
+<h2>Automatic work and human decisions</h2>
+<p>The default ticket flow is <code>Todo → In Progress → Verify → Document → Done</code>. A chat intent remains a proposal until you approve it; direct board creation is already an instruction to run. Once authorized, eligible tickets run without a separate human approval at each lane.</p>
+<table>
+<tr><th>Who</th><th>Responsibility</th></tr>
+<tr><td>You</td><td>Approve the chat intent and choose the project, scope and delivery policy. Decide unresolved questions, explicit Human Review holds, exhausted budgets and missing credentials.</td></tr>
+<tr><td>Worker</td><td>Implement, test, review and document the task; write evidence and move the ticket to the next state.</td></tr>
+<tr><td>Orchestrator</td><td>Check dependencies and mechanical evidence, rewind missing outputs, enforce retry/reopen limits, then perform the configured merge once the ticket reaches Done. Push only when the workflow enables it.</td></tr>
+</table>
+<p><code>Human Review</code> is an exception or an explicitly selected review state, not a mandatory stop before Done. An approval there does not replace tests or evidence. GitHub release tags and publication are separate delivery actions.</p>
+<h3>Deep preset: a request plus a dependency graph</h3>
+<pre><code>Request: Intake → Research → Plan → Review → Done
+                                          │ PASS unlocks
+Separate tickets: Build slices → QA → Verify → Document</code></pre>
+<p>Plan creates dependent tickets. The request's Review PASS and Done state release the Build work; one ticket does not traverse all eight lanes. A micro request may skip Research; tripwire hits require the full track. QA or Verify failures can reopen Build work. Each ticket still produces its own lane evidence, and the final Document ticket closes delivery.</p>
+<p>On the maintained source workflow, <code>stage_contracts: auto</code> checks the shipped presets, <code>max_attempts: 3</code> bounds rewinds, and <code>max_reopens: 3</code> bounds repeat Done cycles. <code>fallback_kinds: []</code> means no alternate backend is configured. Transient rate limits retry the same backend; an explicitly configured fallback handles quota exhaustion. Your project can override these settings. The source repository itself is a control plane and is not a worker project.</p>
+
 <p>It is for solo devs running unattended overnight refactors, teams parallelizing bug fixes across several agents, researchers comparing the eight agents on one task, and anyone who hit the "one chat window per agent" ceiling.</p>
 </li>
 
@@ -202,12 +218,12 @@ symphony service logs ./WORKFLOW.md
   <tr><th>State</th><th>What the agent does</th></tr>
   <tr><td>Todo</td><td>Triage; route to In Progress. A ticket with a body and an Acceptance Criteria section moves on without spending a model turn.</td></tr>
   <tr><td>In Progress</td><td>Plan + TDD implementation + self-critique, on the <code>symphony/&lt;ID&gt;</code> branch inside its worktree.</td></tr>
-  <tr><td>Verify</td><td>Review + QA + Merge Gate. The feature branch must merge into the target branch before the ticket can move to Document.</td></tr>
+  <tr><td>Verify</td><td>Review + QA + Merge Gate. Prove the feature branch can merge cleanly, then move to Document; the orchestrator performs the configured merge at Done.</td></tr>
   <tr><td>Document</td><td>Docs + wiki write-back; Done unless intervention is needed.</td></tr>
   <tr><td>Human Review</td><td>Manual intervention or explicit review before Done. The agent stops here; you decide.</td></tr>
   <tr><td>Done</td><td>Verified complete.</td></tr>
 </table>
-<p>What you should see at Human Review: the card parked in a terminal column, no ● indicator. Focus it and press <kbd>c</kbd> in the TUI to confirm it as Done, or move it to Done from the web board. Symphony never confirms Done for you.</p>
+<p>What you should see at Human Review: the card parked in a terminal column, no ● indicator. Focus it and press <kbd>c</kbd> in the TUI to confirm it as Done, or move it to Done from the web board. This manual confirmation applies only to a ticket explicitly parked in Human Review; the normal Document path reaches Done automatically.</p>
 </li>
 
 <li>
@@ -253,13 +269,15 @@ symphony hub                             # central UI for every registered proje
   <tr><td>Agent silent for minutes</td><td>No progress event inside <code>stall_timeout_ms</code> cancels the worker. Widen only the heavy lane: <code>agent.stall_timeout_ms_by_state: {Verify: 900000}</code>. Logs go to stderr: <code>symphony tui ./WORKFLOW.md 2&gt;&gt; log/symphony.log</code>.</td></tr>
   <tr><td>Port in use</td><td>doctor reports it. Override with <code>--port N</code>, or check <code>symphony service status ./WORKFLOW.md</code>.</td></tr>
   <tr><td>TUI exits silently</td><td>Needs a real TTY: use a foreground terminal, or go headless (<code>symphony ./WORKFLOW.md</code>) and follow <code>WORKFLOW-PROGRESS.md</code>.</td></tr>
+<tr><td>Manual rerun stays blocked</td><td>A FIX remains a dependency. Complete it with current <code>## Fix Resolution</code> on the FIX and source. For manual takeover, disable <code>auto_recover_blocked</code>, cancel/archive the unused FIX, remove only its blocker edge, then reactivate the source. Disabling recovery alone removes no existing blockers or evidence checks.</td></tr>
 </table>
 <p>Next: the <a href="https://github.com/cskwork/oh-my-symphony#readme">README</a> (lane presets, chat intake, JSON API), the <a href="https://github.com/cskwork/oh-my-symphony/blob/main/CHANGELOG.md">CHANGELOG</a>, <a href="https://github.com/cskwork/oh-my-symphony/issues">Issues</a>, and the <a href="cheatsheet.html">cheatsheet</a>.</p>
+<footer class="doc">oh-my-symphony 0.24.0 · Apache-2.0 · generated from README on the same commit</footer>
 </li>
 
 </ol>
 
-<footer class="doc">oh-my-symphony 0.24.0 · Apache-2.0 · generated from README on the same commit</footer>
+
 </main>
 </body>
 </html>

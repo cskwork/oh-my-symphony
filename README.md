@@ -457,9 +457,10 @@ prompts:
 > ⚠ The shipped `WORKFLOW.example.md` / `WORKFLOW.file.example.md` default to
 > attaching the per-ticket workspace as a **git worktree** of the host repo
 > (the directory containing `WORKFLOW.md`) on a `symphony/<ID>` branch. The
-> host working tree is never disturbed; merge results back with
-> `git -C <host> merge symphony/<ID>` (or open a PR from that branch) when
-> you're satisfied. That is an explicit operator action, never automatic.
+> worker edits stay on that ticket branch. When `agent.auto_merge_on_done`
+> is enabled, the orchestrator merges once at Done; do not manually duplicate
+> that merge. With automatic merge disabled, merge or open a PR when
+> you're satisfied.
 >
 > If your code lives in a *different* remote than the WORKFLOW.md repo,
 > swap the hook for `git clone <remote> .` instead. While experimenting

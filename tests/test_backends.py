@@ -3228,21 +3228,12 @@ async def test_codex_handles_v2_token_usage_camelcase_shape(tmp_path: Path) -> N
             },
         }
     )
-    # cachedInputTokens folds into input_tokens; reasoningOutputTokens folds
-    # into output_tokens. total_tokens is recomputed as folded_in + folded_out
-    # so the invariant `total_tokens == input_tokens + output_tokens` holds
-    # — codex's own narrower `totalTokens` (32595, which excludes cache and
-    # reasoning) is intentionally ignored.
+    # Cache and reasoning are subsets of input/output, not extra traffic.
     assert backend.latest_usage == {
-        "input_tokens": 32325 + 3456,             # 35781
-        "output_tokens": 270 + 170,               # 440
-        "total_tokens": (32325 + 3456) + (270 + 170),  # 36221, NOT 32595
+        "input_tokens": 32325,
+        "output_tokens": 270,
+        "total_tokens": 32595,
     }
-    # Three-bucket invariant.
-    assert (
-        backend.latest_usage["total_tokens"]
-        == backend.latest_usage["input_tokens"] + backend.latest_usage["output_tokens"]
-    )
 
 
 @pytest.mark.asyncio
@@ -3872,3 +3863,26 @@ async def test_codex_resume_session_rpc_rejection_falls_back_without_mutation(
 
     assert await backend.resume_session("checkpoint-thread") is False
     assert backend.session_id == "existing-thread"
+
+
+@pytest.mark.asyncio
+async def test_codex_replays_live_usage_without_counting_cached_input_twice(tmp_path):
+    # Actual GPT-6 Astra low session, 2026-09-12: total=31,349, cache=12,928.
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    event = {
+        "method": NOTIF_THREAD_TOKEN_USAGE,
+        "params": {"tokenUsage": {"total": {
+            "inputTokens": 31080, "cachedInputTokens": 12928,
+            "outputTokens": 269, "reasoningOutputTokens": 0, "totalTokens": 31349,
+        }}},
+    }
+    for _ in range(2):
+        await backend._handle_notification(event)
+        assert backend.latest_usage == {
+            "input_tokens": 31080, "output_tokens": 269, "total_tokens": 31349,
+        }
