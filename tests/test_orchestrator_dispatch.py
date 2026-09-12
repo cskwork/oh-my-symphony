@@ -10951,13 +10951,17 @@ def _fallback_error_run(
     return orch, entry, debug, pinned, notes
 
 
-def test_quota_error_pins_the_next_fallback_backend_and_retries(monkeypatch, tmp_path):
+@pytest.mark.parametrize("error", [
+    "turn_failed: codex: You have hit your usage limit for this plan",
+    "429 rate limit exceeded: insufficient_quota; check billing",
+])
+def test_quota_error_pins_the_next_fallback_backend_and_retries(monkeypatch, tmp_path, error):
     orch, entry, debug, pinned, notes = _fallback_error_run(
         monkeypatch,
         tmp_path,
         fallback_kinds=("codex", "claude", "opencode"),
         reason="turn_error",
-        error="turn_failed: codex: You have hit your usage limit for this plan",
+        error=error,
     )
     assert pinned == [("MT-Q", "claude")], "codex is the current kind; claude is next"
     assert entry.agent_kind == "claude" and entry.issue.agent_kind == "claude"
@@ -10991,13 +10995,18 @@ def test_quota_error_without_fallback_config_keeps_the_pause(monkeypatch, tmp_pa
     assert pinned == [] and orch.is_paused(entry.issue.id) is True
 
 
-def test_transient_rate_limit_retries_on_the_same_backend(monkeypatch, tmp_path):
+@pytest.mark.parametrize("error", [
+    "429 too many requests",
+    "429 rate limit exceeded",
+    "rate limit reached; retry after 30 seconds",
+])
+def test_transient_rate_limit_retries_on_the_same_backend(monkeypatch, tmp_path, error):
     orch, entry, _debug, pinned, _notes = _fallback_error_run(
         monkeypatch,
         tmp_path,
         fallback_kinds=("claude",),
         reason="turn_error",
-        error="429 too many requests",
+        error=error,
     )
     assert pinned == [] and entry.agent_kind == "codex"
     assert orch.is_paused(entry.issue.id) is False and entry.issue.id in orch._retry

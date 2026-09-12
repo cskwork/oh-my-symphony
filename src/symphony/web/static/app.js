@@ -2835,7 +2835,8 @@
   function renderStatsContent(data) {
     const content = document.getElementById('stats-content');
     clearNode(content);
-    const hasEvents = data.totals.turns > 0 || data.totals.runs > 0 || data.by_day.length > 0;
+    const hasGateEvents = Object.values(data.gates || {}).some((value) => typeof value === 'number' && value > 0);
+    const hasEvents = data.totals.turns > 0 || data.totals.runs > 0 || data.by_day.length > 0 || hasGateEvents;
     if (!hasEvents) {
       content.appendChild(el('div', { class: 'empty-state' }, t('stats.noActivity')));
       return;

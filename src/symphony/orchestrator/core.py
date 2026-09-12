@@ -369,15 +369,19 @@ _QUOTA_WORKER_ERROR_MARKERS = (
     "plan limit",
     "weekly limit",
     "monthly limit",
-    "limit reached",
-    "limit exceeded",
 )
 
 
 def _is_quota_worker_error(reason: str, error: str | None) -> bool:
     detail = f"{reason}: {error}" if error else reason
     clean = _clean_board_error_message(detail).lower()
-    return any(marker in clean for marker in _QUOTA_WORKER_ERROR_MARKERS)
+    if any(marker in clean for marker in _QUOTA_WORKER_ERROR_MARKERS):
+        return True
+    # Generic limit wording also appears in transient rate-limit errors.
+    # Explicit account/quota markers above still win when both are present.
+    return not _has_retryable_worker_marker(clean) and any(
+        marker in clean for marker in ("limit reached", "limit exceeded")
+    )
 
 
 def _worker_error_pause_reason(reason: str, error: str | None) -> str:
