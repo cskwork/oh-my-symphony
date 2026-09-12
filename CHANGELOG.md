@@ -8,7 +8,7 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.0] - 2026-09-12 - Mechanical gates on every preset, reopen and quota budgets, learning loop
 
 ### Added
 - **Deep preset stage contracts.** `agent.stage_contracts: auto` now enforces
