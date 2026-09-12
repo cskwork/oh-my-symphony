@@ -9,11 +9,13 @@ References (official docs):
 - Search:       GET /rest/api/3/search/jql (token-pagination, `isLast`)
 - Transitions:  GET /rest/api/3/issue/{key}/transitions
                 POST /rest/api/3/issue/{key}/transitions {"transition":{"id":""}}
-- Comments:     POST /rest/api/3/issue/{key}/comment (Atlassian Document Format)
+- Comments:     GET  /rest/api/3/issue/{key}/comment (startAt/maxResults/total)
+                POST /rest/api/3/issue/{key}/comment (Atlassian Document Format)
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
 
 import httpx
@@ -21,6 +23,8 @@ import httpx
 from ..errors import (
     JiraApiRequestError,
     JiraApiStatusError,
+    JiraCommentConflict,
+    JiraCommentDeliveryUncertain,
     JiraTransitionNotFound,
     JiraUnknownPayload,
 )
@@ -39,6 +43,9 @@ from ._retry import send_with_retry
 API_BASE = "/rest/api/3"
 PAGE_SIZE = 50  # mirrors Linear adapter; Jira allows up to 100.
 MAX_PAGES = 20
+COMMENT_PAGE_SIZE = 100
+_INLINE_RE = re.compile(r"(`[^`]+`|\*\*[^*]+\*\*)")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 log = get_logger()
 
 # Fields we explicitly request from /search/jql. Keep this list narrow so
@@ -91,6 +98,75 @@ def _adf_paragraphs(text: str) -> dict[str, Any]:
             }
         )
     return {"type": "doc", "version": 1, "content": paragraphs}
+
+
+def _adf_inline(text: str) -> list[dict[str, Any]]:
+    """`code` and **strong** spans → ADF text nodes with marks."""
+    parts: list[dict[str, Any]] = []
+    for token in _INLINE_RE.split(text):
+        if not token:
+            continue
+        if len(token) > 2 and token.startswith("`") and token.endswith("`"):
+            parts.append({"type": "text", "text": token[1:-1], "marks": [{"type": "code"}]})
+        elif len(token) > 4 and token.startswith("**") and token.endswith("**"):
+            parts.append({"type": "text", "text": token[2:-2], "marks": [{"type": "strong"}]})
+        else:
+            parts.append({"type": "text", "text": token})
+    return parts
+
+
+def _adf_from_markdown(text: str) -> dict[str, Any]:
+    """Small Markdown subset → ADF doc.
+
+    Supports `#`..`######` headings, `- ` bullet lists, and inline `code` /
+    **strong** marks. Everything else is a paragraph; blank lines are
+    dropped. This is enough for structured tracker notes (a heading per
+    section, bullets per finding) without pulling in a Markdown parser.
+    """
+    nodes: list[dict[str, Any]] = []
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        heading = _HEADING_RE.match(line)
+        if heading:
+            nodes.append(
+                {
+                    "type": "heading",
+                    "attrs": {"level": len(heading.group(1))},
+                    "content": _adf_inline(heading.group(2)),
+                }
+            )
+            continue
+        stripped = line.lstrip()
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            if not nodes or nodes[-1]["type"] != "bulletList":
+                nodes.append({"type": "bulletList", "content": []})
+            nodes[-1]["content"].append(
+                {
+                    "type": "listItem",
+                    "content": [{"type": "paragraph", "content": _adf_inline(stripped[2:])}],
+                }
+            )
+            continue
+        nodes.append({"type": "paragraph", "content": _adf_inline(line)})
+    if not nodes:
+        nodes.append({"type": "paragraph", "content": []})
+    return {"type": "doc", "version": 1, "content": nodes}
+
+
+def _note_doc(heading: str, body: str) -> dict[str, Any]:
+    """Comment body: bold heading line, then the Markdown-rendered body."""
+    doc = _adf_from_markdown(body)
+    if heading:
+        doc["content"].insert(
+            0,
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": heading, "marks": [{"type": "strong"}]}],
+            },
+        )
+    return doc
 
 
 def _extract_blockers(issuelinks: Any) -> tuple[BlockerRef, ...]:
@@ -276,14 +352,108 @@ class JiraClient:
             )
 
     def append_note(self, issue: Issue, heading: str, body: str) -> None:
-        """Add a comment to the issue. Heading is rendered as a bold first line."""
+        """Add a comment to the issue.
+
+        Heading is rendered as a bold first line; the body is a small
+        Markdown subset (headings, `- ` bullets, inline code/strong) so
+        structured notes stay readable in Jira instead of collapsing into
+        flat paragraphs.
+        """
+        key = self._key(issue)
+        self._post_comment(key, _note_doc(heading, body))
+
+    def fetch_comments(self, issue: Issue) -> list[dict[str, Any]]:
+        """All comments on the issue, raw (id, author, body ADF).
+
+        Pages GET /issue/{key}/comment until `total` is reached and refuses
+        a truncated result: deciding "no earlier note exists" on a partial
+        page would let a caller post a duplicate.
+        """
+        key = self._key(issue)
+        out: list[dict[str, Any]] = []
+        start = 0
+        total: int | None = None
+        for _ in range(MAX_PAGES):
+            response = self._request(
+                "GET",
+                f"{API_BASE}/issue/{key}/comment",
+                params={"startAt": start, "maxResults": COMMENT_PAGE_SIZE},
+            )
+            payload = self._json_or_raise(response)
+            page = payload.get("comments")
+            if not isinstance(page, list):
+                raise JiraUnknownPayload("comments missing or wrong type", issue_key=key)
+            out.extend(c for c in page if isinstance(c, dict))
+            raw_total = payload.get("total")
+            total = raw_total if isinstance(raw_total, int) else len(out)
+            if not page or len(out) >= total:
+                break
+            start = len(out)
+        if total is not None and len(out) < total:
+            raise JiraUnknownPayload(
+                "comment listing truncated", issue_key=key, fetched=len(out), total=total
+            )
+        if len({c.get("id") for c in out}) != len(out):
+            raise JiraUnknownPayload("duplicate comment ids in listing", issue_key=key)
+        return out
+
+    def find_note(self, issue: Issue, marker: str) -> dict[str, Any] | None:
+        """Latest comment whose text contains `marker`, or None."""
+        if not marker:
+            raise JiraUnknownPayload("marker must be non-empty")
+        matches = [c for c in self.fetch_comments(issue) if marker in _flatten_adf(c.get("body"))]
+        return matches[-1] if matches else None
+
+    def append_note_once(self, issue: Issue, heading: str, body: str, marker: str) -> str:
+        """Post a note at most once per `marker`; return the comment id.
+
+        `marker` is appended as the last line and must be unique per
+        revision (e.g. `<tool> <KEY> <sha256[:16]>`). If a comment carrying
+        the marker already exists and its visible text matches, it is
+        reused; if the text differs, JiraCommentConflict is raised so a
+        human reviews the edit instead of the tool overwriting it. After a
+        POST the comment is read back; a missing or different read-back
+        raises JiraCommentDeliveryUncertain — the caller must not retry
+        blindly, because the POST may have landed.
+        """
+        key = self._key(issue)
+        doc = _note_doc(heading, f"{body.rstrip()}\n\n{marker}")
+        expected = _flatten_adf(doc)
+        existing = self.find_note(issue, marker)
+        if existing is not None:
+            if _flatten_adf(existing.get("body")) != expected:
+                raise JiraCommentConflict(
+                    "existing marked comment differs from the note to post",
+                    issue_key=key,
+                    comment_id=str(existing.get("id")),
+                )
+            return str(existing.get("id"))
+        try:
+            self._post_comment(key, doc)
+            found = self.find_note(issue, marker)
+        except (JiraApiRequestError, JiraApiStatusError, JiraUnknownPayload) as exc:
+            raise JiraCommentDeliveryUncertain(
+                "comment POST or read-back failed; check Jira before retrying",
+                issue_key=key,
+                error=str(exc),
+            ) from exc
+        if found is None or _flatten_adf(found.get("body")) != expected:
+            raise JiraCommentDeliveryUncertain(
+                "comment not found or differs on read-back", issue_key=key
+            )
+        return str(found.get("id"))
+
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _key(issue: Issue) -> str:
         key = issue.identifier or issue.id
         if not key:
             raise JiraUnknownPayload("issue.identifier and issue.id both empty")
-        text = f"{heading}\n\n{body}" if heading else body
-        adf = _adf_paragraphs(text)
-        path = f"{API_BASE}/issue/{key}/comment"
-        response = self._request("POST", path, json={"body": adf})
+        return key
+
+    def _post_comment(self, key: str, doc: dict[str, Any]) -> None:
+        response = self._request("POST", f"{API_BASE}/issue/{key}/comment", json={"body": doc})
         if response.status_code not in (200, 201):
             raise JiraApiStatusError(
                 "comment POST returned non-2xx",

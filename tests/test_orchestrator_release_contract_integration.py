@@ -3306,7 +3306,9 @@ def test_reconcile_terminal_release_holds_lease_until_cleanup_finishes(
                 recent_grace_s=0,
             )
         )
-        await asyncio.wait_for(remove_started.wait(), timeout=1)
+        # Reconcile enforces the release transition first, which shells out to
+        # git a dozen-plus times; allow for a slow host before asserting.
+        await asyncio.wait_for(remove_started.wait(), timeout=10)
         try:
             await asyncio.sleep(0)
             assert peer.has_active_lease(verifier.id)
@@ -3314,8 +3316,8 @@ def test_reconcile_terminal_release_holds_lease_until_cleanup_finishes(
             assert not entry.workspace_cleanup_finished.is_set()
         finally:
             allow_remove.set()
-            await asyncio.wait_for(reconcile_task, timeout=1)
-            await asyncio.wait_for(worker_task, timeout=1)
+            await asyncio.wait_for(reconcile_task, timeout=10)
+            await asyncio.wait_for(worker_task, timeout=10)
         assert not peer.has_active_lease(verifier.id)
 
     try:

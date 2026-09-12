@@ -88,6 +88,14 @@ class JiraTransitionNotFound(SymphonyError):
     code = "jira_transition_not_found"
 
 
+class JiraCommentConflict(SymphonyError):
+    code = "jira_comment_conflict"
+
+
+class JiraCommentDeliveryUncertain(SymphonyError):
+    code = "jira_comment_delivery_uncertain"
+
+
 class MissingTrackerEmail(SymphonyError):
     code = "missing_tracker_email"
 
