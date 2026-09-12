@@ -2067,7 +2067,7 @@ def test_startup_reclaim_skips_invalid_recorded_orphan_agent_pid(
 def test_startup_reclaim_terminates_live_recorded_orphan_agent_group(
     tmp_path, monkeypatch
 ):
-    """AF-10 — recovery kills a real recorded process group before returning."""
+    """AF-10 — recovery kills a real group and finalizes after confirmed removal."""
     import symphony.orchestrator.run_registry as run_registry_module
 
     sleeper = subprocess.Popen(
@@ -2108,9 +2108,16 @@ def test_startup_reclaim_terminates_live_recorded_orphan_agent_group(
 
         restarted._ensure_run_registry(cfg)
 
-        assert sleeper.wait(timeout=5) < 0
         assert restarted._run_registry is not None
-        assert restarted._run_registry.get_run(run_id).status == "orphaned"
+        registry = restarted._run_registry
+        if registry.get_run(run_id).status == "reclaiming":
+            assert registry.has_active_lease(issue.id)
+        # Unlike a real orphan, this test's child still has a live parent.
+        # Reap it before the next normal reclaim pass confirms the group is gone.
+        assert sleeper.wait(timeout=5) < 0
+        restarted._reclaim_dead_owner_runs(registry)
+        assert registry.get_run(run_id).status == "orphaned"
+        assert not registry.has_active_lease(issue.id)
     finally:
         if sleeper.poll() is None:
             sleeper.kill()
@@ -3236,7 +3243,8 @@ def _install_running_entry(orch: Orchestrator, issue: Issue) -> RunningEntry:
     return entry
 
 
-def test_token_totals_track_cache_input_tokens_separately():
+@pytest.mark.parametrize("input_tokens", [10, 100])
+def test_token_totals_track_cache_input_tokens_separately(input_tokens):
     orch = _orch()
     issue = _issue("TOK-1", state="In Progress")
     entry = _install_running_entry(orch, issue)
@@ -3244,7 +3252,7 @@ def test_token_totals_track_cache_input_tokens_separately():
     delta_total, delta_out = orch._apply_token_totals(
         entry,
         {
-            "input_tokens": 10,
+            "input_tokens": input_tokens,
             "cache_input_tokens": 90,
             "output_tokens": 5,
             "total_tokens": 105,
@@ -3255,12 +3263,13 @@ def test_token_totals_track_cache_input_tokens_separately():
 
     assert delta_total == 105
     assert delta_out == 5
-    assert entry.codex_input_tokens == 10
+    assert entry.codex_input_tokens == input_tokens
     assert entry.codex_cache_input_tokens == 90
     assert entry.codex_output_tokens == 5
     assert row["tokens"]["cache_input_tokens"] == 90
     assert row["tokens"]["state_cache_input_tokens"] == 90
     assert snap["codex_totals"]["cache_input_tokens"] == 90
+    assert snap["codex_totals"]["total_tokens"] == 105
 
 
 def test_token_totals_delta_cumulative_reports_without_double_counting():
@@ -11120,3 +11129,87 @@ def test_cancelled_worker_does_not_trust_stale_terminal_state(monkeypatch, refre
                 retry.timer_handle.cancel()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("persist_fails", [False, True])
+def test_on_worker_exit_hit_max_turns_survives_next_tick_prune(monkeypatch, persist_fails):
+    """Per-attempt max_turns without a persisted state must not re-dispatch."""
+    import asyncio
+
+    cfg = _make_config(max_concurrent=1)
+    assert cfg.agent.budget_exhausted_state == "", "precondition"
+    assert "Blocked" not in cfg.tracker.terminal_states, "precondition"
+    orch = _orch()
+    if persist_fails:
+        cfg = replace(
+            cfg, tracker=replace(cfg.tracker, terminal_states=("Done", "Blocked"))
+        )
+
+        def _fail_update(*args):
+            raise OSError("tracker unavailable")
+
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _fail_update)
+    issue = _issue("MT-MAX-PRUNE", state="In Progress")
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        entry = _install_running_entry(orch, issue)
+        entry.hit_max_turns = True
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+        monkeypatch.setattr(orch, "_archive_sweep", _archive)
+        monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+        await orch._on_worker_exit(issue.id, reason="normal", error=None)
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id in orch._claimed
+
+        await orch._on_tick()
+
+        assert dispatched == []
+        assert issue.id in orch._turn_budget_exhausted
+        assert issue.id not in orch._claimed
+
+    asyncio.run(_run())
+
+
+def test_startup_terminal_cleanup_preserves_human_review_workspace(
+    tmp_path: Path, monkeypatch
+):
+    """Human Review is awaiting approval; restart cleanup must not reap it."""
+    workspace = tmp_path / "ws" / "MT-REVIEW"
+    workspace.mkdir(parents=True)
+
+    cfg = _make_config(
+        max_concurrent=1,
+        terminal_states=("Human Review", "Done", "Cancelled", "Blocked"),
+    )
+    issue = _issue("MT-REVIEW", state="Human Review")
+    orch = _orch()
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda c: [issue])
+
+    calls: list[str] = []
+
+    class _StubWS:
+        def path_for(self, ident):
+            return workspace
+
+        async def remove(self, p):
+            calls.append(f"remove:{Path(p).name}")
+
+    orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+    asyncio.run(orch._startup_terminal_cleanup(cfg))
+
+    assert calls == []
+    assert workspace.exists()
