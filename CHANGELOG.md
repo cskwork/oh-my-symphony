@@ -28,6 +28,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   classification, then developer notes with a verdict.
 
 ### Fixed
+- **Empty `auto_merge_target_branch` no longer strands the release verifier.**
+  `WORKFLOW.file.example.md` ships both branch keys empty (meaning "the
+  current branch"), and the deep preset accepts that, but the release binder
+  refused it every tick (`release_dispatch_refused ... resolvable local
+  branch: ''`) while `VERIFY-1` waited in `Verify`. `resolve_configured_target_branch`
+  now resolves the empty value to the checked-out branch for `validate_release_contract`,
+  `inspect_release_contract`, and `resolve_target_release_identity`; a detached
+  HEAD still fails the "resolvable local branch" check.
 - **Symlink loops in project-setup paths.** Python 3.13+ `Path.resolve()`
   no longer raises on a self-referential symlink, so a chat project-setup
   marker pointing at one became a selectable action. `canonical_project_repo`
