@@ -6,7 +6,7 @@
 <title>oh-my-symphony 치트시트</title>
 <link rel="stylesheet" href="../manual.css">
 </head>
-<body>
+<body class="cheatsheet">
 <main>
 <header class="doc">
   <div class="kicker">CHEATSHEET</div>
@@ -29,9 +29,10 @@
   <span>tui / service</span><i>→</i>
   <span>ticket</span><i>→</i>
   <span>agent runs</span><i>→</i>
-  <span>Human Review</span><i>→</i>
+  <span>자동 증거 검사</span><i>→</i>
   <span>Done</span>
 </div>
+<p><strong>기본:</strong> Todo → In Progress → Verify → Document → Done. 채팅 의도를 한 번 승인하면 워커가 자동으로 진행합니다. Human Review는 예외 상태입니다. Done 시 설정된 병합은 오케스트레이터가 한 번 수행하며, 릴리스 공개는 별도입니다.</p><p><strong>Deep:</strong> 요청 티켓의 Review → Done 이후 별도 Build → QA → Verify → Document 티켓이 실행됩니다. 증거가 부족하면 되돌리고 max_attempts/max_reopens로 반복을 제한합니다. fallback_kinds가 비어 있으면 공급자를 전환하지 않습니다.</p>
 
 <h2>설치와 첫 실행</h2>
 <pre><code>git clone https://github.com/cskwork/oh-my-symphony.git &amp;&amp; cd oh-my-symphony
@@ -137,7 +138,7 @@ server:
   <tr><th>상태</th><th>여기서 일어나는 일</th></tr>
   <tr><td>Todo</td><td>분류(triage) 후 In Progress로 보낸다. Acceptance Criteria가 있는 명확한 티켓은 모델 턴 없이 통과</td></tr>
   <tr><td>In Progress</td><td>계획 + TDD 구현 + 자기 검토. <code>symphony/&lt;ID&gt;</code> 브랜치 위에서</td></tr>
-  <tr><td>Verify</td><td>리뷰 + QA + 머지 게이트. 기능 브랜치를 대상 브랜치에 머지해야 Document로 넘어간다</td></tr>
+  <tr><td>Verify</td><td>리뷰 + QA + 머지 게이트. 병합 가능성을 검증한 뒤 Document로 이동합니다. 실제 병합은 Done에서 오케스트레이터가 수행합니다</td></tr>
   <tr><td>Document</td><td>문서 + 위키 반영. 개입이 없으면 Done (<kbd>S</kbd>로 건너뛰기)</td></tr>
   <tr><td>Human Review</td><td>Done 전에 사람이 개입하거나 명시적으로 검토한다. TUI에서 <kbd>c</kbd>, 또는 웹 보드에서 승인</td></tr>
   <tr><td>Done</td><td>검증 완료. <code>&lt;ID&gt;: &lt;title&gt;</code> 커밋 하나로 남는다. <kbd>a</kbd>로 아카이브</td></tr>

@@ -1438,3 +1438,28 @@ async def test_gate_stats_and_intent_tripwires_browser_e2e(
             assert errors == []
         finally:
             await browser.close()
+
+
+async def test_terminal_tickets_do_not_show_first_ticket_hint(
+    web_base_url: str, board_dir: Path
+) -> None:
+    for path in (board_dir / "kanban").glob("E2E-*.md"):
+        path.unlink()
+    assert async_playwright is not None
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch()
+        except Exception as exc:
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = await browser.new_page()
+        try:
+            await page.goto(f"{web_base_url}/#/board", wait_until="networkidle")
+            assert "Seed done card" in await page.locator(".terminal-section").inner_text()
+            assert await page.locator(".board-empty-hint").count() == 0
+            for path in (board_dir / "kanban").glob("*.md"):
+                path.unlink()
+            await page.reload(wait_until="networkidle")
+            await page.locator(".board-empty-hint").wait_for()
+            assert await page.locator(".terminal-section").count() == 0
+        finally:
+            await browser.close()

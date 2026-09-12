@@ -10,6 +10,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.24.0] - 2026-09-12 - Mechanical gates on every preset, reopen and quota budgets, learning loop
 
+### Fixed
+- Boards with only terminal tickets no longer show the misleading first-ticket empty-state hint.
+- Codex v2 token totals no longer count cached input and reasoning output twice; new dashboard usage and token budgets use the inclusive provider input/output totals. Historical stored totals are not migrated.
+- Deep file-board dependency chains no longer overflow Python's recursion limit; topological ordering avoids rescanning every remaining ticket per wave.
+- Prompt-write and turn-processing failures reap a live per-turn backend process before returning the error.
+- Transient rate-limit wording no longer switches backends; explicit quota/billing failures retain configured fallback behavior.
+- Gate-only history now appears on the stats page instead of the empty state.
+- English/Korean manuals clarify automatic completion and the deep request/DAG split; the homepage lists Prime Agent once.
+
 ### Added
 - **Deep preset stage contracts.** `agent.stage_contracts: auto` now enforces
   a contract set on the 8-lane deep preset too (`board_uses_shipped_contracts`).

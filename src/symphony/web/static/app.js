@@ -1714,15 +1714,11 @@
         .filter((row) => row.issues.length > 0);
       if (terminalGroups.length) layout.appendChild(buildTerminalSectionEl(terminalGroups, live, board.read_only));
     }
-    // First-run affordance: when every rendered lane is empty (and no
-    // search filter is hiding cards), teach the two ways to add work.
-    // Skipped while filtering — an empty result there is the filter's doing.
-    if (!query) {
-      const renderedCounts = columnsToRender.map((col) => (byColumn.get(col.name) || []).length);
-      if (renderedCounts.length && renderedCounts.every((n) => n === 0)) {
-        layout.appendChild(el('div', { class: 'board-empty-hint' },
-          board.read_only ? t('board.emptyBoardReadonly') : t('board.emptyBoardHint')));
-      }
+    // A first-ticket hint applies only to a genuinely empty board, not
+    // hidden terminal tickets or an empty mobile lane.
+    if (!query && !issues.length && columnsToRender.length) {
+      layout.appendChild(el('div', { class: 'board-empty-hint' },
+        board.read_only ? t('board.emptyBoardReadonly') : t('board.emptyBoardHint')));
     }
     scrollEl.appendChild(layout);
   }

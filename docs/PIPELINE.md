@@ -44,6 +44,22 @@ the ticket and in `intent.md`; they never block the operator, but a hit
 downgrades a `micro` track to `full`, and the deep Review lane treats each
 hit as a mandatory objection candidate.
 
+## Human decisions and automatic work
+
+Chat intent approval is the normal human entry gate. Direct ticket creation is already an instruction to work. After that, workers implement, verify and document; the orchestrator checks dependencies, evidence and budgets. There is no mandatory Human Review stop on the normal Document-to-Done path. Operators decide explicit review holds, missing inputs or credentials, and budget extensions. Mechanical evidence checks do not replace substantive code review or execution evidence.
+
+The maintained source workflow enables local merge and target push to `dev`, with empty `fallback_kinds`. These are workflow settings, not a universal permission to publish: project operators choose the target and push policy before dispatch. Release tags and public deployments remain separate actions. The protected source checkout itself is not a worker project.
+
+## Deep preset: request and dependent tickets
+
+```text
+Request: Intake -> Research -> Plan -> Review -> Done
+                                             | PASS unlocks
+Separate tickets: Build slices -> QA -> Verify -> Document
+```
+
+Plan creates the dependent task graph. The request ends after Review PASS; it does not continue through Build, QA, Verify and Document as the same ticket. A micro request may skip Research. QA or Verify can reopen a completed Build slice, subject to reopen limits. Each task owns its lane evidence. An application release verifier/finalizer adds the separate host-owned release contract when explicitly configured.
+
 ## Why four stages
 
 The old eight-stage flow spread one delivery story across too many agent

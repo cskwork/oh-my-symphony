@@ -386,10 +386,10 @@ prompts:
 
 > ⚠ 기본 제공되는 `WORKFLOW.example.md` / `WORKFLOW.file.example.md`는 티켓별
 > 워크스페이스를 호스트 레포(`WORKFLOW.md`가 있는 디렉터리)의 **git worktree**로
-> `symphony/<ID>` 브랜치에 붙이는 것을 기본값으로 한다. 호스트 작업 트리는
-> 절대 건드리지 않으며, 만족스러우면 `git -C <host> merge symphony/<ID>`로
-> (또는 그 브랜치에서 PR을 열어) 결과를 다시 머지한다. 명시적 운영자 동작이며,
-> 절대 자동이 아니다.
+> `symphony/<ID>` 브랜치에 붙입니다. 워커는 해당 브랜치에서 작업합니다.
+> `agent.auto_merge_on_done`이 켜져 있으면 Done에서 오케스트레이터가 한 번
+> 병합하므로 수동 병합을 중복 수행하지 않습니다. 자동 병합을 끈 경우에는
+> 검토 후 직접 병합하거나 PR을 여십시오.
 >
 > 코드가 WORKFLOW.md 레포와 *다른* 원격에 있다면, hook을
 > `git clone <remote> .`로 바꾼다. 레포 없이 실험할 때는 `: noop`을 쓴다.
