@@ -130,7 +130,7 @@ server:
   <tr><td><code>tracker.active_states</code></td><td>Columns the orchestrator dispatches agents into</td></tr>
   <tr><td><code>server.port</code></td><td>Web board + JSON API port; drop the block to disable HTTP</td></tr>
   <tr><td><code>agent.feature_base_branch</code></td><td>Start point of <code>symphony/&lt;ID&gt;</code> branches; empty = current host branch</td></tr>
-  <tr><td><code>agent.auto_merge_target_branch</code></td><td>Branch the Verify gate merges into; empty = the branch the feature was cut from</td></tr>
+  <tr><td><code>agent.auto_merge_target_branch</code></td><td>Target for the orchestrator's merge at Done; empty = the host repository's current branch</td></tr>
 </table>
 
 <h2>Ticket states</h2>
