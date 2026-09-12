@@ -386,6 +386,14 @@
     'stats.runs': 'Runs',
     'stats.noActivity': 'No run activity recorded yet. Stats populate once agents start working tickets.',
     'stats.noAgentActivity': 'No agent activity yet',
+    'stats.gates': 'Gates (rewinds and mechanical checks)',
+    'stats.rewinds': 'Rewinds',
+    'stats.contractFailures': 'Contract failures',
+    'stats.reopenHolds': 'Reopen-budget holds',
+    'stats.backendFallbacks': 'Backend fallbacks',
+    'stats.contractMiss': 'Recurring contract miss',
+    'stats.count': 'Count',
+    'stats.noContractMisses': 'No contract misses in this window',
 
     // -- Workflow page ----------------------------------------------------
     'workflow.unsavedChanges': 'You have unsaved changes',
@@ -520,6 +528,7 @@
     'chat.intentExpired': 'Proposal expired',
     'chat.intentSuperseded': 'Superseded',
     'chat.intentConfirmationUnavailable': 'This browser cannot approve this proposal; reopen the chat from the board.',
+    'chat.intentTripwires': 'Trip-wires (heuristic): check these before approving; a hit forces the full track',
 
     // -- Settings page ----------------------------------------------------
     'settings.pageDescription': 'Tune how Symphony plans, dispatches, and presents your board.',
@@ -560,7 +569,7 @@
     'settings.lanePresetApplied': 'Lane preset "{name}" applied',
     'settings.stageContracts': 'Stage contracts',
     'settings.stageContractsOn': 'Enforced — every lane transition must carry its evidence sections.',
-    'settings.stageContractsOff': 'Not enforced on this board: the shipped evidence gate only auto-enables on the default lanes ({lanes}). Set agent.stage_contracts: on in WORKFLOW.md to enforce it anyway.',
+    'settings.stageContractsOff': 'Not enforced on this board: the shipped evidence gate only auto-enables on the default lanes ({lanes}) or the exact deep preset. Set agent.stage_contracts: on in WORKFLOW.md to enforce the default set anyway.',
     'issue.loadFailed': 'Could not load {id}: {error}',
     'stats.loadFailed': 'Could not load stats: {error}',
     'workflow.loadFailed': 'Could not load workflow: {error}',
@@ -977,6 +986,14 @@
     'stats.runs': '실행',
     'stats.noActivity': '아직 기록된 실행이 없습니다. 에이전트가 티켓 작업을 시작하면 통계가 채워집니다.',
     'stats.noAgentActivity': '아직 에이전트 활동이 없습니다',
+    'stats.gates': '게이트 (되감기와 기계적 검사)',
+    'stats.rewinds': '되감기',
+    'stats.contractFailures': '계약 실패',
+    'stats.reopenHolds': '재오픈 예산 보류',
+    'stats.backendFallbacks': '백엔드 대체',
+    'stats.contractMiss': '반복되는 계약 누락',
+    'stats.count': '횟수',
+    'stats.noContractMisses': '이 기간에는 계약 누락이 없습니다',
 
     'workflow.unsavedChanges': '저장하지 않은 변경사항이 있습니다',
     'workflow.columnNameEmpty': '컬럼 이름은 비워 둘 수 없습니다',
@@ -1108,6 +1125,7 @@
     'chat.intentExpired': '제안이 만료됨',
     'chat.intentSuperseded': '대체됨',
     'chat.intentConfirmationUnavailable': '이 브라우저에서는 이 제안을 승인할 수 없습니다; 보드에서 채팅을 다시 여세요.',
+    'chat.intentTripwires': '트립와이어(휴리스틱): 승인 전에 확인하세요; 감지되면 전체 트랙으로 진행합니다',
 
     'settings.pageDescription': 'Symphony가 보드를 계획하고 작업을 배정하며 표시하는 방식을 조정합니다.',
     'settings.automation': '자동화',
@@ -1147,7 +1165,7 @@
     'settings.lanePresetApplied': '레인 프리셋 "{name}"을(를) 적용했습니다',
     'settings.stageContracts': '스테이지 계약',
     'settings.stageContractsOn': '적용 중 — 레인 전환마다 증거 섹션이 있어야 합니다.',
-    'settings.stageContractsOff': '이 보드에서는 적용되지 않습니다: 기본 레인({lanes})일 때만 자동으로 켜집니다. WORKFLOW.md에서 agent.stage_contracts: on으로 강제할 수 있습니다.',
+    'settings.stageContractsOff': '이 보드에서는 적용되지 않습니다: 기본 레인({lanes})이거나 deep 프리셋과 정확히 같을 때만 자동으로 켜집니다. WORKFLOW.md에서 agent.stage_contracts: on으로 기본 계약을 강제할 수 있습니다.',
     'issue.loadFailed': '{id}을(를) 불러오지 못했습니다: {error}',
     'stats.loadFailed': '통계를 불러오지 못했습니다: {error}',
     'workflow.loadFailed': '워크플로를 불러오지 못했습니다: {error}',

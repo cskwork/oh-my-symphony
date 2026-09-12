@@ -122,7 +122,7 @@ The longest remaining downstream dependency chain from a ticket through active w
 
 ## Intent proposal
 
-A server-owned chat action created only from the strict `<symphony-intent>` marker the chat agent emits after its human explanation. It holds a slug, a title, a Track, and the intent markdown in the sdlc-kit stage-1 shape (Problem, Evidence, Success criteria, Out of scope, Constraints, Open questions). It expires after thirty minutes, and any ordinary reply supersedes it so the agent can propose a revision. Prose that is not the exact marker never becomes a proposal.
+A server-owned chat action created only from the strict `<symphony-intent>` marker the chat agent emits after its human explanation. It holds a slug, a title, a Track, and the intent markdown in the sdlc-kit stage-1 shape (Problem, Evidence, Success criteria, Out of scope, Constraints, Open questions). It expires after thirty minutes, and any ordinary reply supersedes it so the agent can propose a revision. Prose that is not the exact marker never becomes a proposal. The server scans the intent with the sdlc-kit trip-wire heuristics; hits ride on the card and the filed ticket (`## Trip-wires`) and force the `full` Track.
 
 ## Intent approval
 

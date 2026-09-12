@@ -1395,3 +1395,46 @@ async def test_web_board_browser_e2e(web_base_url: str) -> None:
             assert errors == []
         finally:
             await browser.close()
+
+
+async def test_gate_stats_and_intent_tripwires_browser_e2e(
+    git_web_base_url: str, git_board_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from symphony.stats import stats_store_for
+    from tests.test_chat_intent import INTENT_BODY, _marker
+
+    store = stats_store_for(git_board_dir / ".symphony" / "stats.jsonl")
+    store.record_gate(issue="E2E-GATE", state="verify", kind="contract_failure", items=["## Verification"])
+    store.record_gate(issue="E2E-GATE", state="verify", kind="backend_fallback")
+    store.record_transition(issue="E2E-GATE", from_state="in progress", to_state="todo")
+    store.flush()
+    monkeypatch.setitem(globals(), "_ANSWER", _marker(track="micro", intent=INTENT_BODY + "\nUpdate token permissions.\n"))
+
+    assert async_playwright is not None
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch()
+        except Exception as exc:
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = await browser.new_page(viewport={"width": 1440, "height": 960})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        try:
+            await page.goto(f"{git_web_base_url}/#/stats", wait_until="networkidle")
+            gates = page.locator(".chart-card", has_text="Gates (rewinds and mechanical checks)")
+            await gates.wait_for()
+            assert "## Verification" in await gates.inner_text()
+            assert await gates.locator(".stat-value").all_text_contents() == ["1", "1", "0", "1"]
+            await page.goto(f"{git_web_base_url}/#/chat", wait_until="networkidle")
+            await page.locator(".chat-mode-toggle").get_by_role("button", name="Edit", exact=True).click()
+            await page.locator(".chat-mode-btn.active", has_text="Edit").wait_for()
+            await page.locator(".chat-input").fill("propose the scoped change")
+            await page.get_by_role("button", name="Send", exact=True).click()
+            tripwires = page.locator(".chat-intent-tripwires")
+            await tripwires.wait_for()
+            assert "security paths" in await tripwires.inner_text()
+            assert "Update token permissions." in await tripwires.inner_text()
+            assert await page.locator(".chat-intent-track").inner_text() == "full track"
+            assert errors == []
+        finally:
+            await browser.close()

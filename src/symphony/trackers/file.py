@@ -932,7 +932,9 @@ class FileBoardTracker:
 
         return self._mutate_ticket(identifier, mutate, missing_ok=True)
 
-    def record_agent_kind(self, identifier: str, agent_kind: str) -> Path | None:
+    def record_agent_kind(
+        self, identifier: str, agent_kind: str, *, force: bool = False
+    ) -> Path | None:
         """Write ``agent_kind`` to ticket frontmatter when missing.
 
         Idempotent and preserves any existing override — recognized in
@@ -940,14 +942,21 @@ class FileBoardTracker:
         ``_parse_agent_kind`` so either user-authored shape is honored.
         New writes use the nested shape to match :meth:`create`.
         ``updated_at`` bumps only when the file is actually modified.
+        ``force=True`` replaces an existing pin (backend fallback after a
+        quota error) and drops the flat form so one pin remains.
         """
         normalized = agent_kind.strip().lower()
 
         def mutate(
             front: dict[str, Any], body: str
         ) -> tuple[dict[str, Any], str] | None:
-            if _parse_agent_kind(front) or not normalized:
+            if not normalized:
                 return None
+            current = _parse_agent_kind(front)
+            if current and (not force or current == normalized):
+                return None
+            if force:
+                front.pop("agent_kind", None)
             front["agent"] = {"kind": normalized}
             front["updated_at"] = datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"

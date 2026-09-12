@@ -1,3 +1,72 @@
+# Session Handoff — 2026-09-12 (improvement pass on the SDLC cycle)
+
+## What landed on `feat/sdlc-cycle-hardening` (from `dev`)
+
+Nine items, one commit each, all gates green at every step (ruff, pyright
+0 errors, i18n, focused suites; full suite serial + `-n auto` at the end —
+see the last section).
+
+| # | Change | Where |
+|---|--------|-------|
+| 1 | Empty `auto_merge_target_branch` resolves to the current branch in the release binder (2026-09-05 item 0) | `release_contracts.resolve_configured_target_branch`, tests in `test_release_contracts.py` |
+| 2 | Deep preset has a mechanical contract set (vault file + verdict line + ticket section); **the move into Done is contract-gated on every preset** — it never was, terminal transitions skipped the phase handler | `contracts.py` (`_evaluate_deep_contract`, `contract_producing_states`), `core._enforce_stage_contract`, `attempt._post_turn_refresh`, `presets.board_uses_shipped_contracts` |
+| 3 | `agent.max_reopens` (default 3) parks a ticket that keeps returning from Done; `## Reopen Approved` buys one cycle | `core._hold_reopened_ticket_over_budget`, config/builder, WORKFLOW comments |
+| 4 | Trip-wire scan on the chat intent card; hits land on the card, `## Trip-wires` on the ticket and `intent.md`, force `full` track; deep Review treats hits as objection candidates | `intent.py` (`scan_tripwires`), `app.js`/`i18n.js`, `deep/review.md` |
+| 5 | `agent.fallback_kinds`: quota/usage-limit exits re-pin the file-board ticket to the next backend and retry instead of pausing | `worker_exit._switch_backend_on_quota_error`, `core._pin_fallback_agent_kind`, `FileBoardTracker.record_agent_kind(force=)` |
+| 6 | `symphony doctor` runs `<agent> --version` after the PATH lookup (warn on non-zero, fail on exec error) | `cli/doctor._probe_agent_binary` |
+| 7 | Learning loop: `gate` stats events, rewinds derived from lane order, per-lane counters + top contract misses on `/api/v1/stats`, web Stats, TUI; Document lane receives `{{ board_health }}` | `stats.py`, `core._record_stats_gate`/`_board_health_for_prompt`, `prompt.py`, the three `document.md` prompts |
+| 8 | sdlc-kit re-seeded at v0.8.0: `.gitignore` set, `memory/POLICY.md`, closed feature archived to `.sdlc/archive/`, evidence/approvals untracked (files stay on disk) | `.sdlc/`, `.gitignore` |
+| 9 | `_enforce_app_release_transition_inner` extracted to `release_transition.py` (core 9822 → 9680 lines); the two `-n auto` load flakes given realistic waits | `orchestrator/release_transition.py`, `test_workspace.py`, `test_orchestrator_release_contract_integration.py` |
+
+Not done from the 2026-09-05 list, still open (see the rewritten list at the
+bottom): `_on_tick` / `_reconcile_one` extractions, Linear/Jira intent gate
+(neither adapter has an issue-create API yet), win32 `process_identity()`,
+the deferred UX items, #31 codex sandbox repro.
+
+## Live end-to-end run (2026-09-12, scratch project, real `claude` worker)
+
+Scratch registry `SYMPHONY_PROJECTS_FILE=/tmp/symphony-smoke.GxHny4/projects.json`,
+project `/tmp/symphony-smoke.GxHny4/smoke` (default 4-lane preset,
+`agent.kind: claude`, `auto_merge_push_target: false`, service on :9999,
+log `log/symphony.log`, stats `.symphony/stats.jsonl`).
+
+| Ticket | Result | Evidence |
+|---|---|---|
+| `SMK-1` | Auto-triaged to In Progress; In Progress contract passed; Verify wrote `## Security Audit` / `## Review` / `## QA Evidence` / `## AC Scorecard` and then `## Environment Block` → `Blocked`, because the headless worker was denied `python3`, `pytest`, and `git merge-tree` (`docs/SMK-1/qa/runtime-block.log`). Not a Symphony defect: the scratch project had no `.claude/settings.json` allow list (bootstrapping.md already says the CLI lanes need a permission mode that allows Bash). | `kanban/SMK-1.md`, log 02:29–02:37 UTC |
+| `SMK-2` | After committing a `.claude/settings.json` allow list: Todo → In Progress → Verify → Document → Done in 13 min / 3 turns; the terminal Done gate passed (`## Wiki Updates` + `## As-Is -> To-Be Report` present), `auto_commit` + `--no-ff` merge landed on `main`, wiki entries written, artifact collected. `python3 hello.py` on `main` prints `hello, symphony`. A soft `## Contract Warning` correctly flagged the one `Not proven` scorecard row. | `kanban/SMK-2.md`, log 04:17–04:30 UTC, `stats.jsonl` (`run_end … state=done`) |
+
+Two pre-existing behaviours surfaced while recovering SMK-1 (neither changed
+by this branch; both worth a ticket):
+
+- **Cancelled worker of a terminal ticket wedges a 1-slot board.** Moving the
+  auto-opened `FIX-SMK-1-1` to `Archive` ejected its worker with
+  `reason=cancelled`; `_handle_worker_error` then auto-paused it and kept a
+  retry entry (`holds_slot=True`) re-scheduling every tick, so `SMK-1` never
+  dispatched until `symphony service restart`. `worker_exit._handle_worker_error`
+  should skip pause/retry when the ticket is already in a terminal state.
+- **`auto_recover_blocked` fights a manual re-run.** The FIX ticket is added
+  as a blocker of the source; hand-moving the source back to an active lane
+  gets it pushed to `Blocked` again (`blocked_recovery_pending`) until the FIX
+  resolves. Document the escape hatch (`auto_recover_blocked: false`, or
+  resolve/remove the FIX blocker first) or let an operator move override it.
+
+Verify-before-trusting notes for the next session:
+
+- Item 2 changes behaviour on existing default boards: `Document -> Done`
+  now requires `## Wiki Updates` plus a completion record, and
+  `artifacts.require_for_done` finally fires. A board whose Document prompt
+  was customised to skip those sections will start rewinding — that is the
+  gate working, but say so to the operator.
+- Item 3 counts prior Done runs in `state.db`; a board migrated from an
+  older Symphony has no history, so the cap starts counting from now.
+- Item 5 only re-pins file boards. Remote trackers keep the pause; the
+  quota marker list (`core._QUOTA_WORKER_ERROR_MARKERS`) is heuristic and
+  was derived from the 2026-09-05 log strings, not from every backend's
+  actual wording — extend it when a real quota exit slips through to
+  `worker_error_auto_paused`.
+
+---
+
 # Session Handoff — 2026-09-05
 
 ## Where things stand
@@ -67,58 +136,36 @@ Findings from the run (not code defects in Symphony unless noted):
   merged by 23:07 → QA Done 23:10, with ~20 minutes lost to the two quota
   failures.
 
-## Open questions / next steps
+## Open questions / next steps (rewritten 2026-09-12)
 
-0. **Deep boards from the example workflow cannot dispatch the app-release
-   verifier (found in the E2E, 23:11 UTC).** `WORKFLOW.file.example.md` ships
-   `feature_base_branch: ""` and `auto_merge_target_branch: ""` (meaning "the
-   current branch"); `symphony doctor` accepts that for the deep preset
-   (`'' == ''`), but `orchestrator/release_contracts.py` refuses to bind the
-   verifier: `release_dispatch_refused ... configured target_branch must name
-   a resolvable local branch: ''`, every tick, while `VERIFY-1` sits in
-   `Verify` and the finalizer waits on it. Setting both keys to `"main"` in
-   the scratch workflow (live reload) dispatched `VERIFY-1` within a tick.
-   Fix candidates: resolve an empty configured target to the repository's
-   current branch inside the binder (matching auto-merge semantics), or have
-   the `preset: deep` bootstrap write the repository's initial branch into
-   both keys; either way `check_deep_preset_merge_contract` and the binder
-   must agree. Add a regression test that binds a verifier on a board whose
-   configured target is empty.
-1. **#31 codex sandbox vs symlinked board files.** Current code already
-   injects resolved symlink targets and git admin dirs
-   (`backends/codex.py:_scan_workspace_symlinks`). The 2026-05 failure has no
-   deterministic repro; it needs a live codex run against a symlinked file
-   board before it can be closed or fixed.
-2. **Next `core.py` extractions** (in order): `_enforce_app_release_transition_inner`
-   (~420 lines) into `release_cycle.py`; `_on_tick` (~400); `_reconcile_one`
-   (~345). Follow the `worker_exit.py` convention: module-level functions that
-   take `orch` explicitly, `_core()` late binding for names tests patch on
-   `core`, full suite as the gate.
-3. **win32 `process_identity()`** still returns `None` (kills stay ungated
-   warn-once on Windows). A `GetProcessTimes`-based fingerprint in
-   `_shell.py` would enable pid-reuse protection.
-4. **Deferred UX items** from the 2026-08-23 audit: scrollable HelpScreen,
-   modal focus trap, web-board rendering for Linear/Jira trackers, TUI↔web
-   action parity.
-5. **Intent gate follow-ups**: Linear/Jira boards are not covered (proposals
-   parse only on file boards); the kit's `tools/tripwire.sh` hedging scan is
-   not run on the intent body; this repository's own `.sdlc/config.md` still
-   has no `lazymode:` line (default 1) — set `lazymode: 3` only on the
-   owner's explicit instruction.
-6. `tests/test_orchestrator_dispatch.py::test_startup_reclaim_terminates_live_recorded_orphan_agent_group`
-   is timing-flaky under CPU load (it kills a real process group). It passed
-   in every full-suite run on this branch; rerun it alone before treating a
-   failure as a regression.
-
-7. **Parallel test suite (pytest-xdist) is not isolation-clean yet.**
-   `pytest -n auto` finishes in ~72 s instead of ~234 s, but two tests fail
-   under parallel load and pass serially:
-   `tests/test_workspace.py::test_setup_worktree_script_supports_linked_workflow_dir[mkdir]`
-   and
-   `tests/test_orchestrator_release_contract_integration.py::test_reconcile_terminal_release_holds_lease_until_cleanup_finishes`
-   (an `asyncio` timeout). Make those two load-tolerant before adding
-   `pytest-xdist` to the dev extra and `-n auto` to CI; nothing in the repo
-   depends on xdist today.
+0. ~~Deep boards from the example workflow cannot dispatch the app-release
+   verifier~~ — **fixed** (`resolve_configured_target_branch`, regression
+   tests for empty and detached-HEAD targets).
+1. **#31 codex sandbox vs symlinked board files.** Unchanged: needs a live
+   codex run against a symlinked file board before it can be closed or fixed.
+2. **Next `core.py` extractions**: `_on_tick` (~400 lines) and
+   `_reconcile_one` (~345). `_enforce_app_release_transition_inner` is done
+   (`release_transition.py`); follow the same recipe — module-level function
+   taking `orch`, `_core()` late binding for names tests patch on `core`,
+   `# noqa: F401` on the seam import, full suite as the gate.
+3. **win32 `process_identity()`** still returns `None`.
+4. **Deferred UX items** from the 2026-08-23 audit: modal focus trap,
+   web-board rendering for Linear/Jira trackers, TUI↔web action parity
+   (the scrollable HelpScreen shipped in 0.23.0).
+5. **Intent gate on Linear/Jira.** `file_intent_request` still requires a
+   file board because neither `LinearClient` nor `JiraClient` exposes an
+   issue-create call; adding one (Linear `issueCreate`, Jira `POST /issue`)
+   is the prerequisite. The trip-wire scan (item 4 above) already runs on
+   every proposal regardless of tracker.
+6. `test_startup_reclaim_terminates_live_recorded_orphan_agent_group` stays
+   timing-flaky under CPU load; rerun alone before calling it a regression.
+7. **Parallel suite.** The two load flakes are fixed; `pytest -n auto` is
+   the way to run the suite locally. Adding `pytest-xdist` to the dev extra
+   and `-n auto` to CI is a one-line follow-up once a second green parallel
+   run on CI-class hardware confirms it.
+8. **Quota marker coverage.** Capture the exact usage-limit strings from
+   claude / codex / opencode / gemini the next time one trips and pin them
+   in `test_backend_contract.py` the way the retryable markers are.
 
 ## Environment notes
 

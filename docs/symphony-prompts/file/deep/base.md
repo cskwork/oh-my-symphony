@@ -39,6 +39,7 @@ unprompted in this preset — the lane gates live in the lane prompts.
 - Ticket file: `kanban/{{ issue.identifier }}.md`. Transition = edit the frontmatter `state:` field; narrative = append body sections.
 - The request ticket's description is the approved intent: the cycle's single human gate. It is the source of truth for scope. Do not reopen the ask with the operator; record assumptions in the vault instead.
 - Honour the hard gate of your lane before closing. Never silence failing tests or invent evidence; use `Not proven` and cite the artifact path for every claim. Fix root cause or set `Blocked`.
+- The orchestrator re-checks your lane's gate at the transition (vault file present, verdict line present, ticket section appended). A missing output appends `## Contract Failure` and rewinds the ticket to your lane.
 - Use `Human Review` only for a real critical/manual intervention.
 {% if token_budget %}
 - Token budget: keep this turn under {{ token_budget }} completion tokens (stage EMA: {{ token_ema }}).

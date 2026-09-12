@@ -47,6 +47,21 @@ here). Concretely:
   fail/error/empty result cell is surfaced as a soft `[contract-warn]`
   note this release (passed stays True) rather than a rewind, so a
   hollow-but-honest scorecard is visible without blocking the pipeline.
+
+Deep preset
+-----------
+
+The 8-lane deep preset keeps its gates in the vault
+(`docs/req/<request>/` or `docs/<ID>/`), not in ticket sections, and every
+lane prompt ends with a literal shell gate such as
+`grep -q '^verdict: PASS' review.md`. Those greps are self-attested: a
+worker that skips them still moves the ticket. `_evaluate_deep_contract`
+re-checks the same external facts at the transition — the lane's vault
+file exists and is non-empty, its verdict line is present (`verdict:
+PASS` before the request ticket may reach Done, `Verdict: APPROVED|BLOCKED`
+for QA, `verdict: GREEN|RED` for Verify), the Build claim names the ticket,
+and the short ticket section the prompt asked for is there. `app-release`
+verifiers are exempt: the host release cycle already owns that gate.
 """
 
 from __future__ import annotations
@@ -161,6 +176,58 @@ _NA_RESULT_TOKENS = frozenset({"n/a", "na"})
 _INLINE_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 
 
+# Producing states whose forward transition is contract-checked, per preset.
+# `core.py` consults this before paying for a full-body issue refresh.
+_DEFAULT_PRODUCING_STATES = frozenset(
+    {"in progress", "verify", "document", "learn", "done"}
+)
+_DEEP_PRODUCING_STATES = frozenset(
+    {"intake", "research", "plan", "review", "build", "qa", "verify", "document"}
+)
+
+# Deep preset: the ticket section each lane prompt appends ...
+_DEEP_TICKET_SECTIONS: dict[str, tuple[str, ...]] = {
+    "intake": ("## Brief",),
+    "research": ("## Research",),
+    "plan": ("## Plan Summary",),
+    "build": ("## Implementation",),
+    "document": ("## Delivery",),
+}
+# ... and the vault file(s) each lane must leave behind.
+_DEEP_VAULT_FILES: dict[str, tuple[str, ...]] = {
+    "intake": ("brief.md",),
+    "research": ("research.md",),
+    "plan": ("plan.md", "contracts.md"),
+    "review": ("review.md",),
+    "build": ("claims.md",),
+    "qa": ("qa-report.md",),
+    "verify": ("verification.md",),
+    "document": ("delivery.md",),
+}
+_DEEP_REVIEW_PASS_RE = re.compile(r"^verdict:\s*PASS\s*$", re.MULTILINE)
+_DEEP_QA_VERDICT_RE = re.compile(r"^Verdict:\s*(APPROVED|BLOCKED)\s*$", re.MULTILINE)
+_DEEP_VERIFY_VERDICT_RE = re.compile(r"^verdict:\s*(GREEN|RED)\s*$", re.MULTILINE)
+
+
+def contract_producing_states(preset: str | None) -> frozenset[str]:
+    """Normalized producing states the contract validator checks for `preset`."""
+    if preset == "deep":
+        return _DEEP_PRODUCING_STATES
+    return _DEFAULT_PRODUCING_STATES
+
+
+def deep_vault_dir(docs_root: Path, identifier: str, request: str | None) -> Path:
+    """Vault directory the deep prompts name for a ticket.
+
+    `docs/req/<request>/` when the ticket carries a request group, else
+    `docs/<ID>/` — mirrors the rule in `docs/symphony-prompts/file/deep/base.md`.
+    """
+    group = (request or "").strip()
+    if group:
+        return docs_root / "req" / group
+    return docs_root / identifier
+
+
 def evaluate_contract(
     producing_state: str,
     ticket_body: str,
@@ -168,19 +235,92 @@ def evaluate_contract(
     *,
     docs_root: Path | None = None,
     artifact_store_root: Path | None = None,
+    preset: str | None = None,
+    request: str | None = None,
+    advanced_state: str | None = None,
+    app_release: bool = False,
 ) -> ContractResult:
     """Evaluate the producing stage's contract against the ticket body.
 
-    Stages outside the 4-stage enforcement set pass through. The
-    orchestrator wires a failing result into a rewind by appending
-    `result.note` and moving state back to the producing stage.
+    Stages outside the enforcement set pass through. The orchestrator wires
+    a failing result into a rewind by appending `result.note` and moving
+    state back to the producing stage.
 
     `artifact_store_root` is passed only when `artifacts.require_for_done`
     is enabled; the Done contract then also requires at least one collected
     file in the ticket's host-owned artifact store.
+
+    `preset="deep"` selects the deep-preset contract set (vault files and
+    verdict lines under `docs_root`); `request` names the ticket's request
+    group, `advanced_state` the lane the ticket moved to, and `app_release`
+    exempts a labelled release verifier whose gate the host already runs.
     """
     state = (producing_state or "").strip().lower()
     body = ticket_body or ""
+    advanced = (advanced_state or "").strip().lower()
+    result = _evaluate_lane_contract(
+        producing_state,
+        state,
+        body,
+        identifier,
+        docs_root,
+        artifact_store_root=artifact_store_root,
+        preset=preset,
+        request=request,
+        advanced=advanced,
+        app_release=app_release,
+    )
+    # `artifacts.require_for_done` guards the move INTO Done from whichever
+    # lane makes it (Document on the default board, any deep lane); the
+    # Done-as-producing-state branch above keeps its own copy for boards
+    # that still run a Done lane.
+    if (
+        artifact_store_root is not None
+        and identifier
+        and advanced == "done"
+        and state != "done"
+        and not _has_collected_artifact(artifact_store_root / identifier / "files")
+    ):
+        missing = list(result.missing) + [_ARTIFACT_STORE_MISSING]
+        result = _build_result(
+            producing_state, missing, warnings=result.warnings, failures=result.failures
+        )
+    return result
+
+
+_ARTIFACT_STORE_MISSING = (
+    "no collected artifacts (`artifacts.require_for_done` is enabled) — save "
+    "at least one deliverable file into the workspace `.symphony-artifacts/` "
+    "directory"
+)
+
+
+def _evaluate_lane_contract(
+    producing_state: str,
+    state: str,
+    body: str,
+    identifier: str,
+    docs_root: Path | None,
+    *,
+    artifact_store_root: Path | None,
+    preset: str | None,
+    request: str | None,
+    advanced: str,
+    app_release: bool,
+) -> ContractResult:
+    if preset == "deep":
+        if state not in _DEEP_PRODUCING_STATES:
+            return ContractResult(passed=True)
+        return _evaluate_deep_contract(
+            producing_state,
+            state,
+            body,
+            identifier,
+            docs_root,
+            request=request,
+            advanced_state=advanced,
+            app_release=app_release,
+        )
 
     if state == "in progress":
         return _evaluate_in_progress_contract(
@@ -280,12 +420,83 @@ def _evaluate_done_contract(
         # contract stays a pure filesystem predicate like the docs checks.
         store_files = artifact_store_root / identifier / "files"
         if not _has_collected_artifact(store_files):
+            missing.append(_ARTIFACT_STORE_MISSING)
+    return _build_result(producing_state, missing)
+
+
+def _evaluate_deep_contract(
+    producing_state: str,
+    state: str,
+    body: str,
+    identifier: str,
+    docs_root: Path | None,
+    *,
+    request: str | None,
+    advanced_state: str,
+    app_release: bool,
+) -> ContractResult:
+    """Re-check a deep lane's hard gate from outside the worker.
+
+    Presence of the lane's ticket section, existence of its vault file(s),
+    and the verdict line the prompt's shell gate greps for. The checks stay
+    at the level of facts the prompt cannot self-certify; prose shape is
+    not re-encoded here.
+    """
+    missing = _missing_sections(body, _DEEP_TICKET_SECTIONS.get(state, ()))
+    if state == "verify" and app_release:
+        # `symphony release check` plus the host release cycle own this gate.
+        return _build_result(producing_state, missing)
+    if docs_root is None or not identifier:
+        return _build_result(producing_state, missing)
+
+    vault = deep_vault_dir(docs_root, identifier, request)
+    texts: dict[str, str] = {}
+    for name in _DEEP_VAULT_FILES.get(state, ()):
+        path = vault / name
+        text = _read_text_file(path)
+        if not text.strip():
+            missing.append(f"vault file `{path}` missing or empty")
+        texts[name] = text
+
+    if state == "review" and texts.get("review.md", "").strip():
+        if advanced_state == "done" and not _DEEP_REVIEW_PASS_RE.search(
+            texts["review.md"]
+        ):
             missing.append(
-                "no collected artifacts (`artifacts.require_for_done` is "
-                "enabled) — save at least one deliverable file into the "
-                "workspace `.symphony-artifacts/` directory"
+                f"`{vault / 'review.md'}` has no `verdict: PASS` line, yet the "
+                "request ticket advanced to Done (which releases the Build DAG)"
+            )
+    if state == "build" and texts.get("claims.md", "").strip():
+        claim_re = re.compile(
+            r"^##\s.*" + re.escape(identifier) + r"\b", re.MULTILINE
+        )
+        if not claim_re.search(texts["claims.md"]):
+            missing.append(
+                f"`{vault / 'claims.md'}` has no `## <UTC time> {identifier}` claim"
+            )
+    if state == "qa" and texts.get("qa-report.md", "").strip():
+        if not _DEEP_QA_VERDICT_RE.search(texts["qa-report.md"]):
+            missing.append(
+                f"`{vault / 'qa-report.md'}` has no `Verdict: APPROVED` or "
+                "`Verdict: BLOCKED` line"
+            )
+    if state == "verify" and texts.get("verification.md", "").strip():
+        if not _DEEP_VERIFY_VERDICT_RE.search(texts["verification.md"]):
+            missing.append(
+                f"`{vault / 'verification.md'}` has no `verdict: GREEN` or "
+                "`verdict: RED` line"
             )
     return _build_result(producing_state, missing)
+
+
+def _read_text_file(path: Path) -> str:
+    """Return a regular file's text, or "" when absent/unreadable/not a file."""
+    try:
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _missing_sections(body: str, required: tuple[str, ...]) -> list[str]:

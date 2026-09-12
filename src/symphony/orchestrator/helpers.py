@@ -267,6 +267,19 @@ def _human_review_target_state(cfg: ServiceConfig) -> str:
     return cfg.tracker.terminal_states[0] if cfg.tracker.terminal_states else ""
 
 
+_SUCCESSFUL_TERMINAL_STATES = frozenset({"done", "completed"})
+
+
+def _is_successful_terminal_state(state: str | None) -> bool:
+    """True for the terminal lane that means "delivered" (Done / Completed).
+
+    Blocked, Cancelled, Archive and Human Review are terminal too, but a
+    lane may reach them without its outputs; only the success lane is
+    stage-contract gated.
+    """
+    return normalize_state(state) in _SUCCESSFUL_TERMINAL_STATES
+
+
 def _rewind_budget_target_state(cfg: ServiceConfig) -> str:
     """Lane for a ticket that exhausted its rewind budget."""
     resolved = _terminal_state_matching(cfg, "block", "human")

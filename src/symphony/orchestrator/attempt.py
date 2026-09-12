@@ -78,7 +78,12 @@ from ..utils import git_inspect
 from ..workflow import ServiceConfig
 from ..workspace import Workspace, WorkspaceManager
 from .entries import RunningEntry, _IssueDebug
-from .helpers import _config_for_issue_agent, _is_rewind_transition
+from .helpers import (
+    _config_for_issue_agent,
+    _is_rewind_transition,
+    _is_successful_terminal_state,
+    _rewind_budget_target_state,
+)
 from .release_cycle import release_failure_target_state as _release_failure_target_state
 from .run_registry import ReleaseGate, RunRegistry
 
@@ -446,6 +451,11 @@ async def _open_session(orch: Orchestrator, st: _AttemptState) -> None:
     skill_context = await asyncio.to_thread(
         render_skill_block, st.cfg.workflow_path.parent, st.issue.skills
     )
+    board_health = ""
+    if orch._board_health_wanted(st.issue.state):
+        board_health = await asyncio.to_thread(
+            orch._board_health_for_prompt, st.cfg, st.issue.state
+        )
     first_prompt, _ = build_first_turn_prompt(
         prompt_template=st.cfg.prompt_template_for_state(st.issue.state),
         issue=st.issue,
@@ -462,6 +472,7 @@ async def _open_session(orch: Orchestrator, st: _AttemptState) -> None:
         full_ticket_path=orch._ticket_prompt_path(st.cfg, st.issue),
         artifacts_dir=orch._prompt_artifacts_dir(st.cfg),
         extra_context=skill_context,
+        board_health=board_health,
     )
     st.first_prompt = first_prompt
     resumed_checkpoint = False
@@ -983,13 +994,51 @@ async def _evaluate_turn_result(
         state = normalize_state(st.issue.state)
     if running.release_verifier_handoff_complete:
         return _TurnFlow.STOP
-    if release_rewound:
+    # Stage contract for the move INTO a terminal success lane. Terminal
+    # transitions never reach `_transition_agent_phase` (the loop stops
+    # below), so without this the last gate of every preset — Document ->
+    # Done on the default board, every lane -> Done on the deep board —
+    # was prompt-only. Blocked / Cancelled / Human Review stay unchecked:
+    # a lane may legitimately give up without its outputs.
+    contract_rewound = False
+    if (
+        not release_rewound
+        and state not in active
+        and _is_successful_terminal_state(state)
+        and st.prev_phase_state in active
+        and st.cfg.agent.stage_contracts_enabled(st.cfg.tracker.active_states)
+    ):
+        try:
+            outcome = await orch._enforce_stage_contract(
+                cfg=st.cfg,
+                running_issue_id=st.running_issue_id,
+                issue=st.issue,
+                producing_state=st.prev_phase_state,
+                producing_state_raw=(st.prev_phase_state_raw or st.prev_phase_state),
+                current_state=state,
+                workspace_path=st.workspace.path,
+                known_app_release=st.known_app_release,
+            )
+        except Exception as exc:
+            return _AttemptExit("phase_transition_error", str(exc))
+        st.issue = outcome.issue
+        st.known_app_release = outcome.known_app_release
+        running.issue = st.issue
+        state = normalize_state(st.issue.state)
+        contract_rewound = outcome.rewound
+        if contract_rewound:
+            orch._record_stats_transition(st.issue.identifier, "done", state)
+    if release_rewound or contract_rewound:
         st.debug.rewind_count += 1
         if (
             st.cfg.agent.max_attempts > 0
             and st.debug.rewind_count > st.cfg.agent.max_attempts
         ):
-            rewind_target = _release_failure_target_state(st.cfg)
+            rewind_target = (
+                _release_failure_target_state(st.cfg)
+                if release_rewound
+                else _rewind_budget_target_state(st.cfg)
+            )
             if rewind_target:
                 await asyncio.to_thread(
                     orch._tracker_call_update_state,
@@ -999,7 +1048,7 @@ async def _evaluate_turn_result(
                 )
                 st.issue = replace(st.issue, state=rewind_target)
                 running.issue = st.issue
-            else:
+            elif release_rewound:
                 running.release_gate_exhausted = True
             log.warning(
                 "rewind_budget_exceeded",

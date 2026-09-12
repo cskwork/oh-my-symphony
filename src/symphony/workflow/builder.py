@@ -83,6 +83,7 @@ from .constants import (
     DEFAULT_HOOK_TIMEOUT_MS,
     DEFAULT_KIRO_COMMAND,
     DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_REOPENS,
     DEFAULT_MAX_CONCURRENT_AGENTS,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_RETRY_BACKOFF_MS,
@@ -353,6 +354,11 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             DEFAULT_MAX_ATTEMPTS,
             name="agent.max_attempts",
         ),
+        max_reopens=_validated_nonnegative_or_default(
+            agent_raw.get("max_reopens"),
+            DEFAULT_MAX_REOPENS,
+            name="agent.max_reopens",
+        ),
         max_retries=_validated_nonnegative_or_default(
             agent_raw.get("max_retries"),
             DEFAULT_MAX_RETRIES,
@@ -415,6 +421,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         budget_exhausted_state=_as_str(
             agent_raw.get("budget_exhausted_state"), ""
         ) or "",
+        fallback_kinds=_validated_fallback_kinds(agent_raw.get("fallback_kinds")),
         stage_kinds=_validated_stage_kinds(
             agent_raw.get("stage_kinds"),
             active_states=tracker.active_states,
@@ -924,6 +931,30 @@ def _validated_nonnegative_or_default(value: Any, default: int, *, name: str) ->
     return ivalue
 
 
+def _validated_fallback_kinds(value: Any) -> tuple[str, ...]:
+    """agent.fallback_kinds — ordered, distinct, supported agent kinds."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        raise ConfigValidationError(
+            "agent.fallback_kinds must be a list of agent kinds", value=value
+        )
+    out: list[str] = []
+    for raw in value:
+        kind = _canonical_agent_kind(_as_str(raw).strip().lower())
+        if kind not in SUPPORTED_AGENT_KINDS:
+            raise ConfigValidationError(
+                f"agent.fallback_kinds entries must be one of "
+                f"{sorted(SUPPORTED_AGENT_KINDS)}",
+                value=raw,
+            )
+        if kind not in out:
+            out.append(kind)
+    return tuple(out)
+
+
 def _validated_stage_kinds(
     value: Any,
     *,
@@ -994,7 +1025,7 @@ def _log_stage_contracts_decision(agent: AgentConfig, tracker: TrackerConfig) ->
     ]
     get_logger().warning(
         "stage_contracts_disabled",
-        reason="board lanes are not the default preset",
+        reason="board lanes are neither the default preset nor the deep preset",
         offending_lanes=offending,
         lanes=list(tracker.active_states),
         hint="set agent.stage_contracts: on to enforce them anyway",

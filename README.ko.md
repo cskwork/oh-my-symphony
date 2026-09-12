@@ -637,7 +637,9 @@ artifacts:
 - **deep.** 복잡한 딜리버리를 위한 선택적 8레인 파이프라인
   `Intake → Research → Plan → Review → Build → QA → Verify → Document`.
   레인마다 자체 경량 게이트를 갖고(Verify/Document는 리터럴
-  `grep 'verdict: GREEN'` 검사를 실행), Plan 레인이 `symphony board new
+  `grep 'verdict: GREEN'` 검사를 실행), 오케스트레이터가 레인 전환마다
+  같은 사실(vault 파일 존재, verdict 줄, 티켓 섹션)을 다시 확인해 빠진
+  산출물이 있으면 `## Contract Failure`와 함께 되감는다. Plan 레인이 `symphony board new
   --blocked-by --request`로 Build/QA/Verify/Document 티켓 DAG를 만든다.
 
 프리셋 전환은 웹 앱의 **Settings** 페이지에서 하거나

@@ -1,9 +1,0 @@
-stage: plan
-artifact: .sdlc/work/linear-polling-schema-drift/plan.md
-sha256: 625c6a098b586d34804f422eefb422795f0254985eb6600a17649d2379279136
-approved_by: danny
-approved_at: 2026-08-29T08:04:53Z
-upstream: .sdlc/work/linear-polling-schema-drift/spec.md
-upstream_sha256: b1e4a9b54a0febacf8ac59d657d53fa98c87a6fd6ecd8ec2a065d6dfbf4f1afa
-mode: agent-adversary (auto-approved: adversary review passed, no trip-wires)
-runner: agent

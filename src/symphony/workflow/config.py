@@ -39,6 +39,7 @@ from .constants import (
     DEFAULT_CODEX_REASONING_EFFORT,
     DEFAULT_KIRO_COMMAND,
     DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_REOPENS,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_STATE_TURNS,
     DEFAULT_MAX_TOTAL_TURNS,
@@ -47,7 +48,7 @@ from .constants import (
     DEFAULT_WORKSPACE_REUSE_POLICY,
     SUPPORTED_CI_MODES,
 )
-from .presets import board_uses_default_contracts
+from .presets import board_uses_shipped_contracts
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,15 @@ class AgentConfig:
     no_stage_change_action: str = "block"
     # Soft cap for Verify/Document rewinds back into In Progress. 0 disables.
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    # Cap on how many times one ticket may be dispatched again after it
+    # already reached Done (deep preset: Verify RED / QA BLOCKED reopen a
+    # merged Build slice; any board: an operator moves a Done card back).
+    # Each reopen is a fresh run, so `max_attempts` never sees it. On the
+    # (max_reopens+1)th reopen the orchestrator appends `## Reopen Budget`
+    # and moves the ticket to Blocked instead of dispatching another cycle;
+    # a `## Reopen Approved` section on the ticket extends the budget by
+    # one. 0 disables.
+    max_reopens: int = DEFAULT_MAX_REOPENS
     # Cap on auto-retries scheduled after a worker exits with a non-normal
     # outcome (timeout, crash, transient backend error). On exhaustion the
     # orchestrator stops scheduling further retries, appends an
@@ -221,6 +231,13 @@ class AgentConfig:
     # Review). Resolution order at dispatch: explicit dispatch arg >
     # per-ticket `agent_kind` frontmatter pin > this map > `kind`.
     stage_kinds: dict[str, str] = field(default_factory=dict)
+    # Backends to fall back to, in order, when a worker exits on a quota /
+    # usage-limit error (not a transient rate limit, which retries on the
+    # same backend). The orchestrator pins the next untried kind onto the
+    # ticket (file boards: `agent.kind` frontmatter), appends
+    # `## Backend Fallback`, and retries instead of auto-pausing. Empty
+    # keeps the pause-for-operator behaviour.
+    fallback_kinds: tuple[str, ...] = ()
     # Whether the shipped stage-contract validator (the mechanical evidence
     # floor in `orchestrator/contracts.py`) runs on this board.
     #   "auto" (default) — on when every active lane is a default-preset lane
@@ -247,7 +264,7 @@ class AgentConfig:
             return True
         if mode == "off":
             return False
-        return board_uses_default_contracts(active_states)
+        return board_uses_shipped_contracts(active_states)
 
     def stall_timeout_ms_for_state(self, state: str | None, fallback: int) -> int:
         """Per-state stall budget with fallback to the backend's value."""

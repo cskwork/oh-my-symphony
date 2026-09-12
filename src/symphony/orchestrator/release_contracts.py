@@ -19,6 +19,7 @@ import yaml
 
 from ..utils.git_inspect import (
     changed_paths_since,
+    current_branch,
     is_git_stageable_path,
     is_merged,
     read_commit_blob,
@@ -1016,6 +1017,26 @@ def _path_is_within(path: PurePosixPath, root: PurePosixPath) -> bool:
     return True
 
 
+
+def resolve_configured_target_branch(
+    repository_root: Path, configured_target_branch: str
+) -> str:
+    """Return the branch the release cycle proves.
+
+    An empty ``agent.auto_merge_target_branch`` means "the repository's
+    current branch" everywhere else in Symphony (auto-merge, feature-branch
+    creation, ``symphony doctor``'s deep-preset contract). The release binder
+    used to reject the empty string outright, so a deep board created from
+    the shipped example (both keys empty) could never dispatch its verifier.
+    Resolve the empty value to the checked-out branch here so every release
+    entry point agrees with the merge semantics. A detached HEAD still
+    yields ``""`` and fails the usual "resolvable local branch" check.
+    """
+    target = configured_target_branch.strip()
+    if target:
+        return target
+    return (current_branch(repository_root) or "").strip()
+
 def validate_release_contract(
     *,
     workspace_root: Path,
@@ -1054,7 +1075,9 @@ def validate_release_contract(
             resolved_contract_path
         )
     evidence_errors.extend(contract_errors)
-    target_branch = configured_target_branch.strip()
+    target_branch = resolve_configured_target_branch(
+        repository_root, configured_target_branch
+    )
     target_sha: str | None = None
     if not target_branch or target_branch.startswith("-") or any(
         char.isspace() or char in "~^:?*[\\" for char in target_branch
@@ -1503,7 +1526,10 @@ def inspect_release_contract(
 ) -> tuple[str, ...]:
     """Return schema/configuration errors without requiring verifier evidence."""
     contract, _contract_hash, _raw, errors = _load_contract(path)
-    if contract is not None and configured_target_branch.strip() != contract.target_branch:
+    target_branch = resolve_configured_target_branch(
+        path.parent, configured_target_branch
+    )
+    if contract is not None and target_branch != contract.target_branch:
         errors.append(
             "release contract target_branch does not match the configured target branch"
         )
@@ -1514,7 +1540,9 @@ def resolve_target_release_identity(
     *, repository_root: Path, configured_target_branch: str
 ) -> TargetReleaseIdentity:
     """Resolve the raw contract identity from the exact configured branch tip."""
-    target_branch = configured_target_branch.strip()
+    target_branch = resolve_configured_target_branch(
+        repository_root, configured_target_branch
+    )
     errors: list[str] = []
     target_sha = resolve_local_branch_commit(repository_root, target_branch) or ""
     if not target_sha:

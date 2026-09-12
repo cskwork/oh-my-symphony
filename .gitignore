@@ -40,3 +40,18 @@ WORKFLOW.demo.*.md
 
 # Rendered at Pages deploy time by scripts/build_manual_pdf.py
 /docs/manual/pdf/
+.sdlc/archive/*/scratch/
+.sdlc/work/*/progress.md
+.sdlc/archive/*/progress.md
+.sdlc/approvals/
+.sdlc/archive/*/approvals/
+.sdlc/work/*/baseline.txt
+.sdlc/archive/*/baseline.txt
+.sdlc/work/*/deviations.md
+.sdlc/archive/*/deviations.md
+.sdlc/work/*/evidence.md
+.sdlc/archive/*/evidence.md
+.sdlc/work/*/harvest.md
+.sdlc/archive/*/harvest.md
+.sdlc/work/*/spec.md
+.sdlc/archive/*/spec.md
