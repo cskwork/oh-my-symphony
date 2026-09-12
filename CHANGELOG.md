@@ -69,6 +69,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   naming the stub's output (the E2E host's `~/.opencode/bin/opencode` was an
   npm postinstall stub), an exec failure is a `fail`.
 
+- **Learning loop closed: gate stats feed the Document lane.** `stats.jsonl`
+  gains `gate` events (contract failure with the missing items, reopen-budget
+  hold, backend fallback) and the aggregate now derives rewinds from the
+  board's lane order, exposing per-lane `rewinds_in/out`,
+  `contract_failures`, and a `gates.top_contract_misses` list on
+  `/api/v1/stats`, the web Stats page, and the TUI stats screen. The
+  Document lane's first prompt receives `{{ board_health }}` — a few lines
+  summarising the last 30 days — so recurring misses become `## Learnings`
+  and wiki entries instead of being rediscovered; healthy boards render
+  nothing.
+
 ### Changed
 - **The move into Done is contract-gated.** Terminal transitions never
   reached the phase handler, so the last gate of every board — `Document ->

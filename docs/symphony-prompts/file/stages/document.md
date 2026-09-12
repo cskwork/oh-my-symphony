@@ -19,3 +19,7 @@ Write scope: `docs/llm-wiki/`, the user-facing docs this change touched (README 
 10. Set state to `Done` for normal success. Set state to `Human Review` only for the recorded critical/manual intervention branch.
 
 Operator skip: the TUI/web skip action may append `## Document Skipped` and move an idle Document ticket to `Human Review`; agents must not simulate that skip themselves.
+{% if board_health %}
+Board health (orchestrator stats, last 30 days). Recurring rewinds or contract misses are lessons: fold them into `## Learnings` and the wiki instead of rediscovering them.
+{{ board_health }}
+{% endif %}

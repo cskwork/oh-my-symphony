@@ -14,6 +14,14 @@ Event shapes (all carry `ts` ISO-8601 UTC and `type`):
     turn        issue, state, agent, in, cache, out, total
     transition  issue, from, to
     run_end     issue, state, agent, outcome, turns, seconds
+    gate        issue, state, kind, items   (orchestrator gate decisions:
+                contract_failure / reopen_budget / backend_fallback)
+
+The aggregate also derives rewinds from transitions (a move backwards in
+the board's active order) and folds gate events into per-lane counters and
+a "top contract misses" list, so the board can see which lane keeps failing
+which section. `board_health_summary` renders that into a few lines the
+Document lane receives as `{{ board_health }}` — the learning loop's input.
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -103,6 +111,25 @@ class StatsStore:
             }
         )
 
+    def record_gate(
+        self,
+        *,
+        issue: str,
+        state: str,
+        kind: str,
+        items: list[str] | tuple[str, ...] = (),
+    ) -> None:
+        """An orchestrator gate decision (see `GATE_KINDS`)."""
+        self._append(
+            {
+                "type": "gate",
+                "issue": issue,
+                "state": state,
+                "kind": kind,
+                "items": [str(item)[:160] for item in list(items)[:8]],
+            }
+        )
+
     def _append(self, event: dict[str, Any]) -> None:
         line = json.dumps({"ts": _utc_now_iso(), **event}, ensure_ascii=False)
         try:
@@ -160,19 +187,38 @@ class StatsStore:
             out.append(event)
         return out
 
-    def aggregate(self, days: int | None = 30, done_states: set[str] | None = None) -> dict[str, Any]:
-        """Aggregate events for the stats page / TUI stats screen."""
-        acc = _Accumulator({s.lower() for s in (done_states or {"done"})})
+    def aggregate(
+        self,
+        days: int | None = 30,
+        done_states: set[str] | None = None,
+        active_states: "tuple[str, ...] | list[str] | None" = None,
+    ) -> dict[str, Any]:
+        """Aggregate events for the stats page / TUI stats screen.
+
+        `active_states` (the board's lane order) lets the fold classify a
+        transition as a rewind; without it rewinds are counted only for the
+        shipped default lane order.
+        """
+        acc = _Accumulator(
+            {s.lower() for s in (done_states or {"done"})},
+            active_order=[s.lower() for s in (active_states or _DEFAULT_ACTIVE_ORDER)],
+        )
         for event in self.read_events(days):
             acc.fold(event)
         return acc.result(days)
 
 
+GATE_KINDS = ("contract_failure", "reopen_budget", "backend_fallback")
+_DEFAULT_ACTIVE_ORDER = ("todo", "in progress", "verify", "document")
+_TOP_MISSES = 8
+
+
 class _Accumulator:
     """Single-pass fold of stats events into the aggregate payload."""
 
-    def __init__(self, done_states: set[str]) -> None:
+    def __init__(self, done_states: set[str], active_order: list[str] | None = None) -> None:
         self.done_states = done_states
+        self.active_index = {s: i for i, s in enumerate(active_order or [])}
         self.totals = {
             "in": 0, "cache": 0, "out": 0, "total": 0, "turns": 0, "runs": 0, "done": 0,
         }
@@ -180,8 +226,19 @@ class _Accumulator:
             lambda: {"total": 0, "turns": 0, "done": 0}
         )
         self.by_state: dict[str, dict[str, float]] = defaultdict(
-            lambda: {"total": 0, "turns": 0, "runs": 0, "seconds": 0.0}
+            lambda: {
+                "total": 0,
+                "turns": 0,
+                "runs": 0,
+                "seconds": 0.0,
+                "rewinds_in": 0,
+                "rewinds_out": 0,
+                "contract_failures": 0,
+            }
         )
+        self.gates: dict[str, int] = {kind: 0 for kind in GATE_KINDS}
+        self.gates["rewinds"] = 0
+        self.contract_misses: Counter[tuple[str, str]] = Counter()
         self.by_agent: dict[str, dict[str, int]] = defaultdict(
             lambda: {"total": 0, "turns": 0, "runs": 0}
         )
@@ -200,6 +257,20 @@ class _Accumulator:
             self._fold_run_end(event)
         elif etype == "transition" and ts is not None:
             self._fold_transition(event, ts, day)
+        elif etype == "gate":
+            self._fold_gate(event)
+
+    def _fold_gate(self, event: dict[str, Any]) -> None:
+        kind = str(event.get("kind") or "")
+        if kind not in GATE_KINDS:
+            return
+        self.gates[kind] += 1
+        state = str(event.get("state") or "?")
+        if kind == "contract_failure":
+            self.by_state[state]["contract_failures"] += 1
+            items = event.get("items")
+            for item in items if isinstance(items, list) else []:
+                self.contract_misses[(state, _miss_key(str(item)))] += 1
 
     def _fold_turn(self, event: dict[str, Any], day: str) -> None:
         total = _as_int(event.get("total"))
@@ -237,6 +308,13 @@ class _Accumulator:
             self.dwell[prev_state].append((ts - entered_at).total_seconds())
         to_state = str(event.get("to") or "")
         self.entered_state[issue] = (to_state, ts)
+        from_state = str(event.get("from") or "").lower()
+        from_index = self.active_index.get(from_state)
+        to_index = self.active_index.get(to_state.lower())
+        if from_index is not None and to_index is not None and from_index > to_index:
+            self.gates["rewinds"] += 1
+            self.by_state[from_state]["rewinds_out"] += 1
+            self.by_state[to_state.lower()]["rewinds_in"] += 1
         if to_state.lower() in self.done_states:
             self.totals["done"] += 1
             self.by_day[day]["done"] += 1
@@ -266,9 +344,19 @@ class _Accumulator:
                     "avg_dwell_seconds": round(sum(self.dwell[s]) / len(self.dwell[s]), 1)
                     if self.dwell.get(s)
                     else 0,
+                    "rewinds_in": int(v["rewinds_in"]),
+                    "rewinds_out": int(v["rewinds_out"]),
+                    "contract_failures": int(v["contract_failures"]),
                 }
                 for s, v in sorted(self.by_state.items())
             ],
+            "gates": {
+                **self.gates,
+                "top_contract_misses": [
+                    {"state": state, "item": item, "count": count}
+                    for (state, item), count in self.contract_misses.most_common(_TOP_MISSES)
+                ],
+            },
             "by_agent": [
                 {"agent": a, "total_tokens": v["total"], "turns": v["turns"], "runs": v["runs"]}
                 for a, v in sorted(self.by_agent.items())
@@ -280,6 +368,67 @@ class _Accumulator:
                 else 0,
             },
         }
+
+
+def _miss_key(item: str) -> str:
+    """Collapse a contract `missing` entry to a stable key.
+
+    `## Wiki Updates` stays as is; a path-bearing message keeps only the
+    first backtick span (`vault file \`/ws/docs/req/x/brief.md\` missing`
+    -> `brief.md`), so the same miss on different tickets counts together.
+    """
+    text = item.strip()
+    if text.startswith("## "):
+        return text.split(":", 1)[0].strip()[:80]
+    start = text.find("`")
+    end = text.find("`", start + 1) if start >= 0 else -1
+    if start >= 0 and end > start:
+        span = text[start + 1 : end]
+        head = span.rsplit("/", 1)[-1] if "/" in span and " " not in span else span
+        return head[:80]
+    return text[:80]
+
+
+def board_health_summary(agg: dict[str, Any], *, max_lines: int = 8) -> str:
+    """A few plain lines the Document lane can turn into lessons.
+
+    Empty when the window holds nothing worth learning from (no rewinds and
+    no gate decisions), so prompts stay short on healthy boards.
+    """
+    gates = agg.get("gates") or {}
+    rewinds = int(gates.get("rewinds") or 0)
+    contract = int(gates.get("contract_failure") or 0)
+    reopen = int(gates.get("reopen_budget") or 0)
+    fallback = int(gates.get("backend_fallback") or 0)
+    if not (rewinds or contract or reopen or fallback):
+        return ""
+    totals = agg.get("totals") or {}
+    lines = [
+        f"- last {agg.get('days') or '?'} days: done={int(totals.get('done') or 0)}, "
+        f"rewinds={rewinds}, contract failures={contract}, reopen-budget holds={reopen}, "
+        f"backend fallbacks={fallback}"
+    ]
+    lanes = [
+        row
+        for row in agg.get("by_state") or []
+        if int(row.get("rewinds_out") or 0) or int(row.get("contract_failures") or 0)
+    ]
+    lanes.sort(
+        key=lambda row: (
+            -(int(row.get("rewinds_out") or 0) + int(row.get("contract_failures") or 0))
+        )
+    )
+    for row in lanes[:3]:
+        lines.append(
+            f"- lane `{row.get('state')}`: rewound {int(row.get('rewinds_out') or 0)}x, "
+            f"contract failed {int(row.get('contract_failures') or 0)}x"
+        )
+    for miss in (gates.get("top_contract_misses") or [])[:4]:
+        lines.append(
+            f"- recurring miss in `{miss.get('state')}`: {miss.get('item')} "
+            f"({int(miss.get('count') or 0)}x)"
+        )
+    return "\n".join(lines[:max_lines])
 
 
 _STORES: dict[str, StatsStore] = {}

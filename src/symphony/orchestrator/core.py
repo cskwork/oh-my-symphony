@@ -70,7 +70,7 @@ from ..prompt import build_first_turn_prompt
 from ..runtime_safety import ensure_workflow_repo_is_safe
 from ..service_identity import SERVICE_INSTANCE_ENV, normalize_service_instance_id
 from ..skills import render_skill_block
-from ..stats import StatsStore, stats_store_for
+from ..stats import StatsStore, board_health_summary, stats_store_for
 from ..trackers import TrackerClient, build_tracker_client
 from ..utils.wiki_sweep import sweep as _wiki_sweep_run
 from ..workflow import (
@@ -664,6 +664,7 @@ def _blocked_rca_labels(issue: Issue) -> list[str]:
     return labels
 
 
+_BOARD_HEALTH_LANES = frozenset({"document", "learn"})
 _REOPEN_APPROVED_RE = re.compile(r"^##\s+Reopen Approved\b", re.MULTILINE)
 
 
@@ -5593,6 +5594,7 @@ class Orchestrator:
             self._record_tracker_error(issue.id, exc)
             return False
         self._clear_tracker_error(issue.id)
+        self._record_stats_gate(issue.identifier, issue.state, "reopen_budget")
         log.warning(
             "reopen_budget_exceeded",
             identifier=issue.identifier,
@@ -7113,6 +7115,9 @@ class Orchestrator:
                 issue,
                 producing_state_raw or producing_state,
             )
+            self._record_stats_gate(
+                issue.identifier, producing_state, "contract_failure", contract.missing
+            )
             # Pull the freshly-rewound body so the next prompt sees the
             # `## Contract Failure` note we just appended (full-body fetch).
             refreshed = await self._refresh_issue_full(cfg, running_issue_id)
@@ -7225,6 +7230,9 @@ class Orchestrator:
             skill_context = await asyncio.to_thread(
                 render_skill_block, cfg.workflow_path.parent, issue.skills
             )
+            board_health = await asyncio.to_thread(
+                self._board_health_for_prompt, cfg, issue.state
+            )
             first_prompt, _ = build_first_turn_prompt(
                 prompt_template=cfg.prompt_template_for_state(issue.state),
                 issue=issue,
@@ -7244,6 +7252,7 @@ class Orchestrator:
                 full_ticket_path=self._ticket_prompt_path(cfg, issue),
                 artifacts_dir=self._prompt_artifacts_dir(cfg),
                 extra_context=skill_context,
+                board_health=board_health,
             )
             await new_client.start_session(
                 initial_prompt=first_prompt,
@@ -8485,6 +8494,36 @@ class Orchestrator:
             from_state=normalize_state(from_state),
             to_state=normalize_state(to_state),
         )
+
+    def _record_stats_gate(
+        self, identifier: str, state: str, kind: str, items: list[str] | tuple[str, ...] = ()
+    ) -> None:
+        """A gate decision (contract failure / reopen hold / backend fallback)."""
+        if self._stats is None:
+            return
+        self._stats.record_gate(
+            issue=identifier, state=normalize_state(state), kind=kind, items=items
+        )
+
+    def _board_health_for_prompt(self, cfg: ServiceConfig, state: str | None) -> str:
+        """`{{ board_health }}` for the write-back lane; "" elsewhere.
+
+        Only the Document lane (and its legacy `learn` name) receives the
+        summary: it is the lane that turns repeat failures into wiki
+        lessons, and every other lane would just pay tokens for it.
+        """
+        if self._stats is None or normalize_state(state) not in _BOARD_HEALTH_LANES:
+            return ""
+        try:
+            terminal = {s.lower() for s in cfg.tracker.terminal_states}
+            done_states = {"done"} if "done" in terminal else terminal
+            aggregate = self._stats.aggregate(
+                30, done_states, active_states=cfg.tracker.active_states
+            )
+            return board_health_summary(aggregate)
+        except Exception as exc:
+            log.warning("board_health_failed", error=str(exc))
+            return ""
 
     # ------------------------------------------------------------------
     # worker exit handling (§16.6)

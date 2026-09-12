@@ -185,6 +185,13 @@ which `max_attempts` never sees. Past the cap the ticket gets a
 `## Reopen Budget` note and parks in Blocked; an operator appends
 `## Reopen Approved` to buy one more cycle.
 
+The learning loop runs on the same counters. Every contract failure,
+reopen hold, and backend fallback is a `gate` event in `.symphony/stats.jsonl`;
+rewinds are derived from the lane order. The Stats page and TUI show them per
+lane with the recurring contract misses, and the Document lane's prompt
+receives the same summary as `{{ board_health }}` so repeat failures turn
+into `## Learnings` and wiki entries.
+
 The web board opens on active agent lanes. `Human Review`, `Done`, `Blocked`,
 and `Archive` stay visible in the compact **Review and parked** group until
 you switch to `All`.

@@ -451,6 +451,9 @@ async def _open_session(orch: Orchestrator, st: _AttemptState) -> None:
     skill_context = await asyncio.to_thread(
         render_skill_block, st.cfg.workflow_path.parent, st.issue.skills
     )
+    board_health = await asyncio.to_thread(
+        orch._board_health_for_prompt, st.cfg, st.issue.state
+    )
     first_prompt, _ = build_first_turn_prompt(
         prompt_template=st.cfg.prompt_template_for_state(st.issue.state),
         issue=st.issue,
@@ -467,6 +470,7 @@ async def _open_session(orch: Orchestrator, st: _AttemptState) -> None:
         full_ticket_path=orch._ticket_prompt_path(st.cfg, st.issue),
         artifacts_dir=orch._prompt_artifacts_dir(st.cfg),
         extra_context=skill_context,
+        board_health=board_health,
     )
     st.first_prompt = first_prompt
     resumed_checkpoint = False

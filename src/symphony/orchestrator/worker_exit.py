@@ -943,6 +943,9 @@ def _switch_backend_on_quota_error(
     entry.issue = replace(entry.issue, agent_kind=next_kind)
     entry.agent_kind = next_kind
     debug.last_error = f"quota on {current}; falling back to {next_kind}"
+    orch._record_stats_gate(
+        entry.issue.identifier, entry.issue.state, "backend_fallback", (current, next_kind)
+    )
     log.warning(
         "worker_quota_backend_fallback",
         issue_id=issue_id,
