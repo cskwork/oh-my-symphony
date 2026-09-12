@@ -806,6 +806,7 @@ async def _stop_on_max_turns(
     # auto-continuation and, when the workflow exposes a Blocked
     # terminal state, persist that state so the web/TUI boards do
     # not look idle while the ticket is actually operator-blocked.
+    orch._mark_budget_exhausted(issue_id)
     orch._claimed.add(issue_id)
     attempt_cap = cfg.agent.max_turns if cfg is not None else 0
     target_state = _max_turns_exhausted_target_state(cfg) if cfg is not None else ""

@@ -56,6 +56,11 @@ A FIX ticket is a real dependency of its source. Moving the source back to an ac
 
 For a deliberate manual takeover, first set `agent.auto_recover_blocked: false` to stop opening new automatic FIX tickets. This setting does not remove existing `blocked_by` edges and does not disable the evidence checks on completed FIX tickets. Cancel or archive an unused FIX, review and remove only its dependency edge from the source while preserving other blockers, then move the source to the intended active lane. Do not mark an unresolved FIX Done merely to release its source. A restart alone does not resolve dependencies.
 
+Open a ticket's **Execution status** section to inspect the last scheduler decision and follow links to unresolved dependencies. Completed dependencies are omitted from that list; a missing card is identified without a broken navigation button. The existing Request view uses the same scheduler projection. A ticket edited after evaluation is marked stale, and missing scheduler data never becomes a ready decision. **Reload execution status** only rereads saved information; it does not trigger dispatch. Wait for the next scheduler pass when a fresh evaluation is needed.
+
+**Execution limits** distinguishes a disabled cap, unknown usage, and a known remaining count. Turns include the current turn, tokens use the current lane's guard, and the initial Done completion is excluded from reopen usage. A current reopened run consumes one reopen. Zero remaining retries or rewinds means there is no further allowance under that cap; it is not a command to stop the current worker. Reopen history is unknown when unavailable or truncated. These rows are a read-only explanation of guard counters, not a second scheduler or a way to approve completion. Review the latest failure and existing run controls before resuming work.
+
+
 ## Deep preset: request and dependent tickets
 
 ```text

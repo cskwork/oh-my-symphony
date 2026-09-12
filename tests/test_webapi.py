@@ -2405,3 +2405,61 @@ async def test_artifact_file_carries_a_sandbox_csp(
     assert "sandbox" in csp
     assert "allow-downloads" in csp  # attachment responses must still save
     assert resp.headers["X-Frame-Options"] == "DENY"
+
+
+@pytest.mark.parametrize("code", ["waiting_global_capacity", "paused", "budget_exhausted"])
+async def test_issue_detail_uses_scheduler_decision_and_detects_changes(client, code):
+    client.stub.schedule_payload = {
+        "available": True, "stale": False, "generated_at": "2026-07-01T00:00:00Z",
+        "entries": [{"identifier": "SEED-1", "status": "waiting", "code": code,
+                     "evaluated_state": "Todo", "evaluated_updated_at": "2026-07-01T00:00:00+00:00"}],
+    }
+    payload = await (await client.get("/api/v1/issues/SEED-1")).json()
+    assert payload["scheduling"]["node"]["decision"]["code"] == code
+    assert payload["scheduling"]["stale"] is False
+    await client.patch("/api/v1/issues/SEED-1", json={"state": "Doing"})
+    changed = await (await client.get("/api/v1/issues/SEED-1")).json()
+    assert changed["scheduling"]["stale"] is True
+    assert changed["scheduling"]["node"]["decision"]["code"] == "decision_stale"
+
+
+async def test_issue_detail_resolves_actual_fix_dependencies_and_missing_cards(client, board_dir):
+    for identifier, state in (("FIX-1", "Doing"), ("FIX-2", "Done")):
+        await client.post("/api/v1/issues", json={"identifier": identifier, "title": identifier, "state": state})
+    path = board_dir / "kanban" / "SEED-1.md"
+    path.write_text(path.read_text().replace("labels: [demo]", "labels: [demo]\nblocked_by: [FIX-1, FIX-2, FIX-MISSING]"))
+    payload = await (await client.get("/api/v1/issues/SEED-1")).json()
+    blockers = {b["identifier"]: b for b in payload["scheduling"]["node"]["blocked_by"]}
+    assert blockers["FIX-1"] == {"identifier": "FIX-1", "state": "Doing", "resolved": False}
+    assert blockers["FIX-2"]["resolved"] is True
+    assert blockers["FIX-MISSING"]["state"] is None
+    assert blockers["FIX-MISSING"]["resolved"] is False
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+async def test_issue_detail_survives_unavailable_schedule_board(client, monkeypatch, oversized):
+    import symphony.webapi as module
+
+    if oversized:
+        monkeypatch.setattr(module, "MAX_DEPENDENCY_NODES", 0)
+    else:
+        def unavailable(*args):
+            raise OSError("board scan unavailable")
+        monkeypatch.setattr(module.FileBoardTracker, "fetch_issues_by_states", unavailable)
+    response = await client.get("/api/v1/issues/SEED-1")
+    assert response.status == 200
+    payload = await response.json()
+    assert payload["description"] == "Seed body."
+    assert payload["scheduling"]["available"] is False
+    assert payload["scheduling"]["node"] is None
+
+
+async def test_issue_detail_survives_budget_projection_failure(client, monkeypatch):
+    async def unavailable(_issue):
+        raise OSError("budget history unavailable")
+    monkeypatch.setattr(client.stub, "issue_budget_snapshot", unavailable, raising=False)
+    response = await client.get("/api/v1/issues/SEED-1")
+    assert response.status == 200
+    payload = await response.json()
+    assert payload["description"] == "Seed body."
+    assert payload["budgets"] == {"available": False, "items": []}

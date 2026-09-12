@@ -1603,6 +1603,32 @@ def _register_issue_routes(
             else {"identifier": identifier}
         )
         live = _live_by_identifier(orchestrator).get(identifier)
+        scheduling: dict[str, Any] = {"available": False, "stale": False, "node": None}
+        budgets: dict[str, Any] = {"available": False, "items": []}
+        if issue is not None:
+            try:
+                issues = await _fetch_all_file_issues(ctx.config())
+                if len(issues) <= MAX_DEPENDENCY_NODES and sum(len(i.blocked_by) for i in issues) <= MAX_DEPENDENCY_EDGES:
+                    projection = _request_group_schedule_payload(
+                        key=RequestGroupKey("ticket", issue.identifier),
+                        members=[issue], all_issues=issues,
+                        schedule=orchestrator.schedule_snapshot(),
+                        orchestrator=orchestrator, cfg=ctx.config(),
+                    )
+                    scheduling = {
+                        key: projection[key] for key in ("available", "stale", "generated_at")
+                    }
+                    scheduling["node"] = next(
+                        (node for node in projection["nodes"] if node["identifier"] == identifier), None
+                    )
+            except Exception as exc:
+                log.warning("issue_schedule_unavailable", identifier=identifier, error=str(exc))
+            budget_reader = getattr(orchestrator, "issue_budget_snapshot", None)
+            if callable(budget_reader):
+                try:
+                    budgets = await orchestrator.issue_budget_snapshot(issue)
+                except Exception as exc:
+                    log.warning("issue_budgets_unavailable", identifier=identifier, error=str(exc))
         store = ctx.artifacts()
         artifacts = (
             [
@@ -1618,6 +1644,8 @@ def _register_issue_routes(
                 "description": body_text,
                 "frontmatter": _json_safe(front),
                 "live": live,
+                "scheduling": scheduling,
+                "budgets": budgets,
                 "artifacts": artifacts,
             }
         )

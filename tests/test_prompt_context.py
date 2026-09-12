@@ -134,8 +134,9 @@ def test_rewind_context_keeps_newest_failure_and_scope() -> None:
     assert "huge historical log line" not in context
 
 
-def test_in_progress_fresh_dispatch_keeps_latest_failure_after_restart() -> None:
-    context = build_issue_prompt_context(_issue("In Progress"), state="In Progress")
+@pytest.mark.parametrize("state", ["In Progress", "Build"])
+def test_build_fresh_dispatch_keeps_latest_failure_after_restart(state) -> None:
+    context = build_issue_prompt_context(_issue(state), state=state)
 
     assert "new failure v2" in context
     assert "docs/TASK-004/qa/latest-failure.md" in context

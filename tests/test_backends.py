@@ -3231,6 +3231,7 @@ async def test_codex_handles_v2_token_usage_camelcase_shape(tmp_path: Path) -> N
     # Cache and reasoning are subsets of input/output, not extra traffic.
     assert backend.latest_usage == {
         "input_tokens": 32325,
+        "cache_input_tokens": 3456,
         "output_tokens": 270,
         "total_tokens": 32595,
     }
@@ -3245,6 +3246,8 @@ async def test_codex_v2_falls_back_to_last_when_total_absent(tmp_path: Path) -> 
     backend = CodexAppServerBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
+    # A later payload that omits cache must not retain an earlier subset.
+    backend._update_tokens_from_v2_block({"inputTokens": 90, "cachedInputTokens": 80})
     await backend._handle_notification(
         {
             "method": NOTIF_THREAD_TOKEN_USAGE,
@@ -3885,4 +3888,5 @@ async def test_codex_replays_live_usage_without_counting_cached_input_twice(tmp_
         await backend._handle_notification(event)
         assert backend.latest_usage == {
             "input_tokens": 31080, "output_tokens": 269, "total_tokens": 31349,
+            "cache_input_tokens": 12928,
         }
