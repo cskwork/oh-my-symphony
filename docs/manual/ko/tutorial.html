@@ -269,6 +269,7 @@ symphony hub                             # central UI for every registered proje
   <tr><td>에이전트가 몇 분째 조용함</td><td><code>stall_timeout_ms</code> 안에 진행 이벤트가 없는 워커는 취소된다. 무거운 레인(lane, 컬럼)만 <code>agent.stall_timeout_ms_by_state: {Verify: 900000}</code>으로 넓힌다. 로그는 stderr로 나가므로 <code>symphony tui ./WORKFLOW.md 2&gt;&gt; log/symphony.log</code>로 남긴다.</td></tr>
   <tr><td>포트가 이미 사용 중</td><td>doctor가 충돌을 보고한다. <code>--port N</code>으로 덮어쓰거나 <code>symphony service status ./WORKFLOW.md</code>를 본다. 같은 워크플로는 두 번 뜨지 않는다.</td></tr>
   <tr><td>TUI가 조용히 꺼짐</td><td>실제 터미널(TTY)이 필요하다. 포그라운드 터미널에서 실행하거나, <code>symphony ./WORKFLOW.md</code>로 headless로 돌리고 <code>WORKFLOW-PROGRESS.md</code>를 따라간다.</td></tr>
+<tr><td>수동 재실행 후에도 Blocked</td><td>FIX가 의존성으로 남아 있습니다. FIX와 원본에 현재 <code>## Fix Resolution</code>을 남겨 해결하십시오. 직접 작업을 이어받으려면 <code>auto_recover_blocked</code>를 끄고, 불필요한 FIX를 취소·보관한 뒤 해당 의존성만 제거하고 원본을 활성 상태로 옮기십시오. 설정을 끄는 것만으로 기존 의존성이나 증거 검사가 해제되지는 않습니다.</td></tr>
 </table>
 <p>다음: <a href="https://github.com/cskwork/oh-my-symphony/blob/main/README.ko.md">README.ko</a>(레인 프리셋, 채팅 인테이크, JSON API), <a href="https://github.com/cskwork/oh-my-symphony/blob/main/CHANGELOG.md">CHANGELOG</a>, <a href="https://github.com/cskwork/oh-my-symphony/issues">Issues</a>, 그리고 <a href="cheatsheet.html">치트시트</a>.</p>
 <footer class="doc">oh-my-symphony 0.24.0 · Apache-2.0 · 같은 커밋의 README에서 생성</footer>

@@ -11,6 +11,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.24.0] - 2026-09-12 - Mechanical gates on every preset, reopen and quota budgets, learning loop
 
 ### Fixed
+- Cancelled workers whose fresh tracker state is terminal no longer create a paused, slot-holding retry that blocks unrelated work. Reopened active tickets and unknown tracker state retain the existing cancellation recovery behavior.
 - Boards with only terminal tickets no longer show the misleading first-ticket empty-state hint.
 - Codex v2 token totals no longer count cached input and reasoning output twice; new dashboard usage and token budgets use the inclusive provider input/output totals. Historical stored totals are not migrated.
 - Deep file-board dependency chains no longer overflow Python's recursion limit; topological ordering avoids rescanning every remaining ticket per wave.

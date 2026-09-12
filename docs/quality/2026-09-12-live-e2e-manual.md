@@ -80,3 +80,14 @@ The new terminal-only browser regression was added after this run's collection a
 ## Limits
 
 The real-provider proof covers a bounded Python task through the default workflow. It does not establish real-provider deep-DAG execution, every backend, remote tracker mutation, public deployment, or app-release verifier/finalizer behavior. Tripwire heuristics also matched the word "authorized" via the broad `auth` pattern, promoting this proposal from micro to full; that documented heuristic behavior was observed, not changed. This pass does not claim absence of other defects.
+
+
+## Follow-up: terminal cancellation and recovery dependencies
+
+Concurrent `origin/dev` handoff evidence at `0d05096` described an archived FIX worker retaining the sole dispatch slot through pause/retry. The finding was reproduced on the integrated branch using an actual asyncio task cancelled by `_reconcile_running`, with controlled tracker responses. Archive, Cancelled and Blocked cases all failed before the fix: 3 failed, 2 passed. The five new cases include reopened-active and missing-refresh counterexamples.
+
+Worker exit now refreshes tracker state after the existing task-ownership pop guard. A cancellation that is still terminal releases its retry/claim and does not create a new pause. Reconcile retains workspace-cleanup ownership; cancellation does not become success or invoke merge/Done hooks. If the fresh card is active, or cannot be read, existing pause/retry behavior is preserved. Existing operator pause flags are not cleared. Focused cancellation, stale-owner and reconciliation tests passed: 12 passed, 264 deselected in 1.28 seconds.
+
+The separate recovery dependency behavior was documented, not bypassed. `auto_recover_blocked: false` stops opening new FIX work; it does not erase blockers or disable completed-FIX evidence checks. The pipeline guide and both tutorials describe resolving the FIX normally, or deliberately cancelling/archiving unused FIX work and removing its reviewed dependency edge before manual rerun. No additional provider run was used for this follow-up.
+
+Follow-up final CI coverage passed, exit 0: `2567 passed, 16 skipped in 497.92s`, coverage **85.45%**, exceeding the required 80%. Command: `.venv/bin/python -m pytest -q --cov=src/symphony --cov-report=term --cov-fail-under=80`. Log: `/private/tmp/symphony-terminal-cancel-coverage.log`. Ruff, Pyright, translation and manual-table synchronization checks passed. Both revised tutorial PDFs remain eight pages; the new recovery row and footer were visually inspected together without clipping. The final tutorial images and PDF hashes were regenerated under `/private/tmp/symphony-manual-renders/reviewed/`.

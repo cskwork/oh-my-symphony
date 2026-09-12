@@ -50,6 +50,12 @@ Chat intent approval is the normal human entry gate. Direct ticket creation is a
 
 The maintained source workflow enables local merge and target push to `dev`, with empty `fallback_kinds`. These are workflow settings, not a universal permission to publish: project operators choose the target and push policy before dispatch. Release tags and public deployments remain separate actions. The protected source checkout itself is not a worker project.
 
+## Taking over a blocked recovery manually
+
+A FIX ticket is a real dependency of its source. Moving the source back to an active lane does not resolve that dependency. Prefer completing the FIX with current `## Fix Resolution` evidence on both the FIX and its source; the recovery checks then decide whether the source may reopen.
+
+For a deliberate manual takeover, first set `agent.auto_recover_blocked: false` to stop opening new automatic FIX tickets. This setting does not remove existing `blocked_by` edges and does not disable the evidence checks on completed FIX tickets. Cancel or archive an unused FIX, review and remove only its dependency edge from the source while preserving other blockers, then move the source to the intended active lane. Do not mark an unresolved FIX Done merely to release its source. A restart alone does not resolve dependencies.
+
 ## Deep preset: request and dependent tickets
 
 ```text
