@@ -1,7 +1,7 @@
 # SDLC config
 
 kit: /Users/danny/.pi/agent/skills/sdlc-kit   # re-point this if the kit is moved or cloned elsewhere
-kit_version: v0.4.0   # kit version this project was seeded with
+kit_version: v0.8.0   # kit version this project was seeded with
 
 # Real commands agents must use for proof (fill these in — brownfield: copy from CI/Makefile)
 

@@ -1,7 +1,0 @@
-linear-polling-schema-drift brownfield baseline
-captured: 2026-08-29 build stage, before implementation edits
-
-command: .venv/bin/python -m pytest -q tests/test_tracker_linear_full.py tests/test_orchestrator_contract_integration.py
-exit: 0
-................................                                         [100%]
-32 passed in 0.28s
