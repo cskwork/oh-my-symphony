@@ -998,6 +998,7 @@ class FileBoardTracker:
             front: dict[str, Any], body: str
         ) -> tuple[dict[str, Any], str] | None:
             nonlocal wrote
+            wrote = False
             if not normalized:
                 return None
             current = _parse_agent_account(front)

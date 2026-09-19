@@ -1560,6 +1560,83 @@ def test_account_pin_does_not_disturb_the_kind_pin(tmp_path):
     assert (issue.agent_kind, issue.agent_account) == ("codex", "secondary")
 
 
+def test_record_agent_account_returns_none_for_unknown_identifier(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    assert fbt.record_agent_account("NOPE-42", "secondary") is None
+
+
+def test_record_agent_account_blank_value_is_a_noop(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-001", title="t")
+
+    assert fbt.record_agent_account("BE-001", "   ") is None
+
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_account is None
+
+
+def test_record_agent_account_force_with_same_value_is_a_noop(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-001", title="t")
+
+    fbt.record_agent_account("BE-001", "primary")
+    front1, _ = parse_ticket_file(path)
+    before = front1["updated_at"]
+
+    assert fbt.record_agent_account("BE-001", "primary", force=True) is None
+
+    front2, _ = parse_ticket_file(path)
+    assert front2["updated_at"] == before
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_account == "primary"
+
+
+def test_record_agent_account_reports_no_write_when_cas_retry_finds_pin_already_set(
+    tmp_path, monkeypatch
+):
+    """The CAS-retry loop in `_write_ticket_with_updated_at_cas` re-invokes
+    `mutate` on freshly re-read frontmatter when an out-of-band edit changed
+    the file between the initial read and the CAS check. If that second call
+    finds the target value already set (a race with a concurrent writer) it
+    correctly declines to write — but `record_agent_account`'s own no-write
+    signal must reflect that LAST call, not a stale "wrote" from the first,
+    pre-empted invocation that decided to write.
+    """
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-CAS", title="t")
+
+    real_parse = file_tracker_module.parse_ticket_file
+    original_front, original_body = real_parse(path)
+
+    # Simulates a concurrent writer that pinned the same account between our
+    # initial read and the CAS re-check, and bumped `updated_at` doing so.
+    concurrent_front = dict(original_front)
+    concurrent_front["agent"] = {"account": "secondary"}
+    concurrent_front["updated_at"] = "2099-01-01T00:00:00Z"
+
+    calls = {"n": 0}
+
+    def fake_parse(target_path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return dict(original_front), original_body
+        return dict(concurrent_front), original_body
+
+    monkeypatch.setattr(file_tracker_module, "parse_ticket_file", fake_parse)
+
+    result = fbt.record_agent_account("BE-CAS", "secondary")
+
+    assert result is None
+    assert calls["n"] == 2
+    # No write actually reached disk — the real file is still pristine.
+    front_on_disk, _ = real_parse(path)
+    assert "agent" not in front_on_disk
+
+
 def test_update_fields_setting_kind_preserves_existing_account_pin(tmp_path):
     root = tmp_path / "board"
     fbt = FileBoardTracker(_tracker(root))
