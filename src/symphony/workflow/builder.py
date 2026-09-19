@@ -1002,7 +1002,9 @@ def _validated_accounts(value: Any) -> dict[str, tuple[AgentAccount, ...]]:
                     f"agent.accounts.{kind} ids must be distinct", value=account_id
                 )
             seen.add(account_id)
-            env_raw = raw.get("env") or {}
+            env_raw = raw.get("env")
+            if env_raw is None:
+                env_raw = {}
             if not isinstance(env_raw, dict) or not all(
                 isinstance(k, str) and isinstance(v, str) for k, v in env_raw.items()
             ):
