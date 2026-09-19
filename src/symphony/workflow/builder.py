@@ -33,6 +33,7 @@ from .coercion import (
     resolve_var_indirection,
 )
 from .config import (
+    AgentAccount,
     AgentConfig,
     AgyConfig,
     ClaudeConfig,
@@ -434,6 +435,10 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             agent_raw.get("stall_timeout_ms_by_state"),
             active_states=tracker.active_states,
             terminal_states=tracker.terminal_states,
+        ),
+        accounts=_validated_accounts(agent_raw.get("accounts")),
+        account_quota_cooldown_ms=_as_int(
+            agent_raw.get("account_quota_cooldown_ms"), 3_600_000
         ),
     )
 
@@ -953,6 +958,62 @@ def _validated_fallback_kinds(value: Any) -> tuple[str, ...]:
         if kind not in out:
             out.append(kind)
     return tuple(out)
+
+
+_ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validated_accounts(value: Any) -> dict[str, tuple[AgentAccount, ...]]:
+    """agent.accounts — {agent kind: ordered, distinct provider accounts}."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigValidationError(
+            "agent.accounts must be a map of agent kind to account list",
+            value=value,
+        )
+    out: dict[str, tuple[AgentAccount, ...]] = {}
+    for raw_kind, raw_list in value.items():
+        kind = _canonical_agent_kind(_as_str(raw_kind).strip().lower())
+        if kind not in SUPPORTED_AGENT_KINDS:
+            raise ConfigValidationError(
+                f"agent.accounts keys must be one of {sorted(SUPPORTED_AGENT_KINDS)}",
+                value=raw_kind,
+            )
+        if not isinstance(raw_list, list):
+            raise ConfigValidationError(
+                f"agent.accounts.{kind} must be a list", value=raw_list
+            )
+        accounts: list[AgentAccount] = []
+        seen: set[str] = set()
+        for raw in raw_list:
+            if not isinstance(raw, dict):
+                raise ConfigValidationError(
+                    f"agent.accounts.{kind} entries must be maps", value=raw
+                )
+            account_id = _as_str(raw.get("id")).strip()
+            if not _ACCOUNT_ID_RE.match(account_id):
+                raise ConfigValidationError(
+                    f"agent.accounts.{kind} id must match [A-Za-z0-9_-]+",
+                    value=raw.get("id"),
+                )
+            if account_id in seen:
+                raise ConfigValidationError(
+                    f"agent.accounts.{kind} ids must be distinct", value=account_id
+                )
+            seen.add(account_id)
+            env_raw = raw.get("env") or {}
+            if not isinstance(env_raw, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in env_raw.items()
+            ):
+                raise ConfigValidationError(
+                    f"agent.accounts.{kind} env must be a string-to-string map",
+                    value=env_raw,
+                )
+            accounts.append(AgentAccount(id=account_id, env=dict(env_raw)))
+        if accounts:
+            out[kind] = tuple(accounts)
+    return out
 
 
 def _validated_stage_kinds(
