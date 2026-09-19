@@ -10967,7 +10967,9 @@ def _account_error_run(
     error: str,
     accounts: tuple[str, ...],
     pinned_account: str | None,
+    fallback_kinds: tuple[str, ...] = (),
     reason: str = "turn_error",
+    entry_agent_account: str = "",
 ):
     from symphony.orchestrator import worker_exit
     from symphony.orchestrator.entries import _IssueDebug
@@ -10981,6 +10983,7 @@ def _account_error_run(
     cfg = replace(cfg, agent=replace(
         cfg.agent,
         accounts={"codex": tuple(AgentAccount(id=a) for a in accounts)},
+        fallback_kinds=fallback_kinds,
     ))
     orch = _orch()
     issue = _issue("MT-Q", state="In Progress")
@@ -10993,19 +10996,26 @@ def _account_error_run(
         worker_task=None,  # type: ignore[arg-type]
         workspace_path=tmp_path / "ws" / "MT-Q",
         agent_kind="codex",
+        agent_account=entry_agent_account,
     )
     debug = _IssueDebug()
     pinned_accounts: list[str] = []
+    pinned_kinds: list[str] = []
     notes: list[tuple[str, str]] = []
 
     def _pin_account(_cfg, identifier, account_id):
         pinned_accounts.append(account_id)
         return True
 
+    def _pin_kind(_cfg, identifier, kind):
+        pinned_kinds.append(kind)
+        return True
+
     def _note(_cfg, _issue, heading, body):
         notes.append((heading, body))
 
     monkeypatch.setattr(orch, "_pin_fallback_agent_account", _pin_account)
+    monkeypatch.setattr(orch, "_pin_fallback_agent_kind", _pin_kind)
     monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_note))
     monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
 
@@ -11014,11 +11024,11 @@ def _account_error_run(
         worker_exit._handle_worker_error(orch, issue.id, entry, debug, reason, error)
 
     asyncio.run(_run())
-    return orch, entry, debug, pinned_accounts, notes
+    return orch, entry, debug, pinned_accounts, pinned_kinds, notes
 
 
 def test_quota_error_rotates_to_the_next_account_and_retries(monkeypatch, tmp_path):
-    orch, entry, debug, pinned_accounts, _notes = _account_error_run(
+    orch, entry, debug, pinned_accounts, _pinned_kinds, _notes = _account_error_run(
         monkeypatch, tmp_path,
         error="You've hit your usage limit.",
         accounts=("primary", "secondary"),
@@ -11030,19 +11040,68 @@ def test_quota_error_rotates_to_the_next_account_and_retries(monkeypatch, tmp_pa
     assert entry.issue.agent_account == "secondary"
 
 
+def test_quota_error_benches_the_account_that_actually_ran_not_pool_order(monkeypatch, tmp_path):
+    # This ticket is unpinned, but `resolve_account` had already skipped a
+    # board-wide-benched "primary" at dispatch time, so it actually ran as
+    # "secondary" (recorded on `entry.agent_account`). The error must bench
+    # "secondary" -- the account that failed -- not guess `pool[0]`, which
+    # would re-bench a healthy "primary" and leave the real offender running.
+    orch, _entry, debug, pinned_accounts, _pinned_kinds, _notes = _account_error_run(
+        monkeypatch, tmp_path,
+        error="You've hit your usage limit.",
+        accounts=("primary", "secondary"),
+        pinned_account=None,
+        entry_agent_account="secondary",
+    )
+    assert debug.quota_exhausted_accounts == {"secondary"}
+    assert orch._account_bench.is_benched("codex", "secondary") is True
+    assert orch._account_bench.is_benched("codex", "primary") is False
+    assert pinned_accounts == ["primary"]
+
+
+def test_quota_error_prefers_account_rotation_over_kind_fallback_when_both_configured(
+    monkeypatch, tmp_path
+):
+    # Account pool AND fallback_kinds are both configured; the account level
+    # must win outright, and the kind level must never even be consulted.
+    # Swapping the two branches in `_handle_worker_error`, or deleting either
+    # of them, makes this test fail.
+    orch, entry, debug, pinned_accounts, pinned_kinds, _notes = _account_error_run(
+        monkeypatch, tmp_path,
+        error="You've hit your usage limit.",
+        accounts=("primary", "secondary"),
+        pinned_account=None,
+        fallback_kinds=("codex", "claude"),
+    )
+    assert pinned_accounts == ["secondary"]
+    assert pinned_kinds == [], "the kind level must not run once the account level succeeds"
+    assert debug.quota_exhausted_kinds == set()
+    assert entry.agent_kind == "codex"
+    assert entry.issue.agent_account == "secondary"
+
+
 def test_quota_error_with_one_account_falls_through_to_fallback_kinds(monkeypatch, tmp_path):
-    orch, _entry, debug, pinned_accounts, _notes = _account_error_run(
+    # Only one account in the pool, so the account level exhausts it and
+    # declines; with `fallback_kinds` configured, the kind level then takes
+    # over and pins the next backend, and the account-level exhaustion state
+    # tied to this ticket is cleared behind it.
+    orch, entry, debug, pinned_accounts, pinned_kinds, _notes = _account_error_run(
         monkeypatch, tmp_path,
         error="You've hit your usage limit.",
         accounts=("primary",),
         pinned_account=None,
+        fallback_kinds=("codex", "claude"),
     )
     assert pinned_accounts == []
+    assert pinned_kinds == ["claude"]
     assert orch._account_bench.is_benched("codex", "primary") is True
+    assert debug.quota_exhausted_accounts == set()
+    assert entry.issue.agent_account is None
+    assert entry.agent_account == ""
 
 
 def test_revoked_token_does_not_rotate_or_bench(monkeypatch, tmp_path):
-    orch, _entry, debug, pinned_accounts, _notes = _account_error_run(
+    orch, entry, debug, pinned_accounts, _pinned_kinds, _notes = _account_error_run(
         monkeypatch, tmp_path,
         error="Your access token could not be refreshed because your refresh token was revoked.",
         accounts=("primary", "secondary"),
@@ -11051,12 +11110,14 @@ def test_revoked_token_does_not_rotate_or_bench(monkeypatch, tmp_path):
     assert pinned_accounts == []
     assert debug.quota_exhausted_accounts == set()
     assert orch._account_bench.is_benched("codex", "primary") is False
+    assert entry.issue.id in orch._paused_issue_ids
 
 
-def test_transient_rate_limit_does_not_consume_the_pool(monkeypatch, tmp_path):
-    orch, _entry, debug, pinned_accounts, _notes = _account_error_run(
+@pytest.mark.parametrize("error", ["429 too many requests", "429 rate limit exceeded"])
+def test_transient_rate_limit_does_not_consume_the_pool(monkeypatch, tmp_path, error):
+    orch, _entry, debug, pinned_accounts, _pinned_kinds, _notes = _account_error_run(
         monkeypatch, tmp_path,
-        error="429 too many requests",
+        error=error,
         accounts=("primary", "secondary"),
         pinned_account=None,
     )

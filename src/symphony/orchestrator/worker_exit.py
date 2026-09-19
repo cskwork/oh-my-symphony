@@ -939,7 +939,7 @@ def _switch_account_on_quota_error(
     pool = cfg.agent.accounts.get(kind, ())
     if not pool:
         return False
-    current = entry.issue.agent_account or pool[0].id
+    current = entry.agent_account or entry.issue.agent_account or pool[0].id
     debug.quota_exhausted_accounts.add(current)
     orch._account_bench.bench(kind, current, cfg.agent.account_quota_cooldown_ms)
     next_account = next(
@@ -1046,10 +1046,10 @@ def _switch_backend_on_quota_error(
             issue_identifier=entry.issue.identifier,
             error=str(exc),
         )
-    entry.issue = replace(entry.issue, agent_kind=next_kind)
+    entry.issue = replace(entry.issue, agent_kind=next_kind, agent_account=None)
     entry.agent_kind = next_kind
+    entry.agent_account = ""
     debug.quota_exhausted_accounts.clear()
-    entry.issue = replace(entry.issue, agent_account=None)
     debug.last_error = f"quota on {current}; falling back to {next_kind}"
     orch._record_stats_gate(
         entry.issue.identifier, entry.issue.state, "backend_fallback", (current, next_kind)

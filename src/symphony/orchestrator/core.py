@@ -6611,6 +6611,7 @@ class Orchestrator:
             "retry" if attempt is not None else "initial"
         )
         agent_kind = cfg.agent.kind_for_state(issue.state, _requested_agent_kind(issue))
+        account = self._resolve_dispatch_account(cfg, issue)
         acquisition = self._try_acquire_run_lease(
             cfg=cfg,
             issue=issue,
@@ -6751,6 +6752,7 @@ class Orchestrator:
             workspace_path=workspace_path,
             attempt_kind=resolved_attempt_kind,
             agent_kind=agent_kind,
+            agent_account=account.id if account is not None else "",
             run_id=run_id,
             continued_from_run_id=acquisition.continued_from_run_id,
             continuation_checkpoint=acquisition.checkpoint,
