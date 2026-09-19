@@ -369,6 +369,7 @@ def issue_from_file(path: Path) -> Issue | None:
         updated_at=parse_iso_timestamp(front.get("updated_at"))
         or parse_iso_timestamp(_file_mtime_iso(path)),
         agent_kind=_parse_agent_kind(front),
+        agent_account=_parse_agent_account(front),
         last_agent_kind=str(front.get("last_agent_kind") or "").strip().lower()
         or None,
         skills=normalize_skill_names(front.get("skills")),
@@ -386,6 +387,17 @@ def _parse_agent_kind(front: dict[str, Any]) -> str | None:
         return None
     kind = raw.strip().lower()
     return kind or None
+
+
+def _parse_agent_account(front: dict[str, Any]) -> str | None:
+    raw = front.get("agent_account")
+    if raw is None:
+        agent = front.get("agent")
+        if isinstance(agent, dict):
+            raw = agent.get("account")
+    if not isinstance(raw, str):
+        return None
+    return raw.strip() or None
 
 
 def _parse_blockers(value: Any) -> list[BlockerRef]:
@@ -957,13 +969,54 @@ class FileBoardTracker:
                 return None
             if force:
                 front.pop("agent_kind", None)
-            front["agent"] = {"kind": normalized}
+            agent = front.get("agent")
+            agent = dict(agent) if isinstance(agent, dict) else {}
+            agent["kind"] = normalized
+            front["agent"] = agent
             front["updated_at"] = datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
             )
             return front, body
 
         return self._mutate_ticket(identifier, mutate, missing_ok=True)
+
+    def record_agent_account(
+        self, identifier: str, account_id: str, *, force: bool = False
+    ) -> Path | None:
+        """Write ``agent.account`` to ticket frontmatter when missing.
+
+        Idempotent, and preserves an operator override unless ``force``
+        (the account rotation after a quota error). Merges into any existing
+        ``agent`` map so the `kind` pin survives. Returns ``None`` whenever
+        no write happened — unknown identifier, blank ``account_id``, or a
+        pin already in place — and the written path only on an actual write.
+        """
+        normalized = account_id.strip()
+        wrote = False
+
+        def mutate(
+            front: dict[str, Any], body: str
+        ) -> tuple[dict[str, Any], str] | None:
+            nonlocal wrote
+            if not normalized:
+                return None
+            current = _parse_agent_account(front)
+            if current and (not force or current == normalized):
+                return None
+            if force:
+                front.pop("agent_account", None)
+            agent = front.get("agent")
+            agent = dict(agent) if isinstance(agent, dict) else {}
+            agent["account"] = normalized
+            front["agent"] = agent
+            front["updated_at"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            wrote = True
+            return front, body
+
+        path = self._mutate_ticket(identifier, mutate, missing_ok=True)
+        return path if wrote else None
 
     def record_last_agent_kind(self, identifier: str, agent_kind: str) -> Path | None:
         """Audit stamp: which backend last ran this ticket.
@@ -1215,10 +1268,17 @@ class FileBoardTracker:
             if agent_kind is not None:
                 cleaned = agent_kind.strip().lower()
                 front.pop("agent_kind", None)
+                agent = front.get("agent")
+                agent = dict(agent) if isinstance(agent, dict) else {}
                 if cleaned:
-                    front["agent"] = {"kind": cleaned}
+                    agent["kind"] = cleaned
+                    front["agent"] = agent
                 else:
-                    front.pop("agent", None)
+                    agent.pop("kind", None)
+                    if agent:
+                        front["agent"] = agent
+                    else:
+                        front.pop("agent", None)
             if blocked_by is not None:
                 if blocked_by:
                     front["blocked_by"] = [str(item) for item in blocked_by]

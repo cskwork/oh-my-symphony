@@ -1496,3 +1496,92 @@ def test_upsert_artifacts_section_strips_markers_from_the_payload(tmp_path):
     assert body.count("<!-- symphony-artifacts -->") == 1
     assert body.count("<!-- /symphony-artifacts -->") == 1
     assert body.count("## Artifacts") == 1
+
+
+def test_record_agent_account_writes_nested_pin(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-001", title="t")
+
+    fbt.record_agent_account("BE-001", "secondary")
+
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_account == "secondary"
+
+
+def test_record_agent_account_is_idempotent(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-001", title="t")
+
+    fbt.record_agent_account("BE-001", "secondary")
+    front1, _ = parse_ticket_file(path)
+    before = front1["updated_at"]
+
+    assert fbt.record_agent_account("BE-001", "secondary") is None
+    front2, _ = parse_ticket_file(path)
+    assert front2["updated_at"] == before
+
+
+def test_record_agent_account_preserves_pin_without_force(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-001", title="t")
+
+    fbt.record_agent_account("BE-001", "primary")
+    fbt.record_agent_account("BE-001", "secondary")
+
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_account == "primary"
+
+
+def test_force_replaces_the_pin(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-001", title="t")
+
+    fbt.record_agent_account("BE-001", "primary")
+    fbt.record_agent_account("BE-001", "secondary", force=True)
+
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_account == "secondary"
+
+
+def test_account_pin_does_not_disturb_the_kind_pin(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="BE-001", title="t")
+
+    fbt.record_agent_kind("BE-001", "codex")
+    fbt.record_agent_account("BE-001", "secondary")
+
+    issue = issue_from_file(path)
+    assert issue is not None
+    assert (issue.agent_kind, issue.agent_account) == ("codex", "secondary")
+
+
+def test_update_fields_setting_kind_preserves_existing_account_pin(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="UPD-2", title="t")
+    fbt.record_agent_account("UPD-2", "secondary")
+
+    fbt.update_fields("UPD-2", agent_kind="claude")
+
+    issue = issue_from_file(path)
+    assert issue is not None
+    assert (issue.agent_kind, issue.agent_account) == ("claude", "secondary")
+
+
+def test_update_fields_clearing_kind_preserves_existing_account_pin(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="UPD-3", title="t", agent_kind="codex")
+    fbt.record_agent_account("UPD-3", "secondary")
+
+    fbt.update_fields("UPD-3", agent_kind="")
+
+    issue = issue_from_file(path)
+    assert issue is not None
+    assert issue.agent_kind is None
+    assert issue.agent_account == "secondary"
