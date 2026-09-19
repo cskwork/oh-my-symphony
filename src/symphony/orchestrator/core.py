@@ -9459,6 +9459,39 @@ class Orchestrator:
             return False
         return pinned
 
+    def _pin_fallback_agent_account(
+        self, cfg: ServiceConfig, identifier: str, account_id: str
+    ) -> bool:
+        """Replace the ticket's account pin; False when the tracker cannot.
+
+        Unlike the kind pin, this is safe on `stage_kinds`-routed boards:
+        accounts are not lane-routed, so pinning one cannot freeze a lane's
+        backend (F-20 does not apply).
+        """
+        pinned = False
+
+        def _record(client: TrackerClient) -> None:
+            nonlocal pinned
+            record = getattr(client, "record_agent_account", None)
+            if record is None:
+                return
+            record(identifier, account_id, force=True)
+            pinned = True
+
+        try:
+            self._invoke_shared_tracker_client(cfg, _record)
+        except _TrackerClientUnavailable:
+            return False
+        except Exception as exc:
+            log.warning(
+                "account_fallback_pin_failed",
+                identifier=identifier,
+                account_id=account_id,
+                error=str(exc),
+            )
+            return False
+        return pinned
+
     def _next_fallback_agent_kind(
         self, cfg: ServiceConfig, entry: RunningEntry, debug: _IssueDebug
     ) -> str | None:

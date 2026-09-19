@@ -10960,6 +10960,110 @@ def _fallback_error_run(
     return orch, entry, debug, pinned, notes
 
 
+def _account_error_run(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    error: str,
+    accounts: tuple[str, ...],
+    pinned_account: str | None,
+    reason: str = "turn_error",
+):
+    from symphony.orchestrator import worker_exit
+    from symphony.orchestrator.entries import _IssueDebug
+    from symphony.workflow.config import AgentAccount
+
+    cfg = _make_config(
+        tracker_kind="file",
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+    )
+    cfg = replace(cfg, agent=replace(
+        cfg.agent,
+        accounts={"codex": tuple(AgentAccount(id=a) for a in accounts)},
+    ))
+    orch = _orch()
+    issue = _issue("MT-Q", state="In Progress")
+    if pinned_account is not None:
+        issue = replace(issue, agent_account=pinned_account)
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws" / "MT-Q",
+        agent_kind="codex",
+    )
+    debug = _IssueDebug()
+    pinned_accounts: list[str] = []
+    notes: list[tuple[str, str]] = []
+
+    def _pin_account(_cfg, identifier, account_id):
+        pinned_accounts.append(account_id)
+        return True
+
+    def _note(_cfg, _issue, heading, body):
+        notes.append((heading, body))
+
+    monkeypatch.setattr(orch, "_pin_fallback_agent_account", _pin_account)
+    monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_note))
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        worker_exit._handle_worker_error(orch, issue.id, entry, debug, reason, error)
+
+    asyncio.run(_run())
+    return orch, entry, debug, pinned_accounts, notes
+
+
+def test_quota_error_rotates_to_the_next_account_and_retries(monkeypatch, tmp_path):
+    orch, entry, debug, pinned_accounts, _notes = _account_error_run(
+        monkeypatch, tmp_path,
+        error="You've hit your usage limit.",
+        accounts=("primary", "secondary"),
+        pinned_account=None,
+    )
+    assert pinned_accounts == ["secondary"]
+    assert debug.quota_exhausted_accounts == {"primary"}
+    assert orch._account_bench.is_benched("codex", "primary") is True
+    assert entry.issue.agent_account == "secondary"
+
+
+def test_quota_error_with_one_account_falls_through_to_fallback_kinds(monkeypatch, tmp_path):
+    orch, _entry, debug, pinned_accounts, _notes = _account_error_run(
+        monkeypatch, tmp_path,
+        error="You've hit your usage limit.",
+        accounts=("primary",),
+        pinned_account=None,
+    )
+    assert pinned_accounts == []
+    assert orch._account_bench.is_benched("codex", "primary") is True
+
+
+def test_revoked_token_does_not_rotate_or_bench(monkeypatch, tmp_path):
+    orch, _entry, debug, pinned_accounts, _notes = _account_error_run(
+        monkeypatch, tmp_path,
+        error="Your access token could not be refreshed because your refresh token was revoked.",
+        accounts=("primary", "secondary"),
+        pinned_account=None,
+    )
+    assert pinned_accounts == []
+    assert debug.quota_exhausted_accounts == set()
+    assert orch._account_bench.is_benched("codex", "primary") is False
+
+
+def test_transient_rate_limit_does_not_consume_the_pool(monkeypatch, tmp_path):
+    orch, _entry, debug, pinned_accounts, _notes = _account_error_run(
+        monkeypatch, tmp_path,
+        error="429 too many requests",
+        accounts=("primary", "secondary"),
+        pinned_account=None,
+    )
+    assert pinned_accounts == []
+    assert orch._account_bench.is_benched("codex", "primary") is False
+
+
 @pytest.mark.parametrize("error", [
     "turn_failed: codex: You have hit your usage limit for this plan",
     "429 rate limit exceeded: insufficient_quota; check billing",

@@ -865,7 +865,11 @@ def _handle_worker_error(
     failure_reason = f"{reason}: {error}" if error else reason
     cleaned_failure = core._clean_board_error_message(failure_reason)
     cfg = orch._workflow_state.current()
-    if _switch_backend_on_quota_error(
+    if _switch_account_on_quota_error(
+        orch, cfg, issue_id, entry, debug, reason, error, cleaned_failure
+    ):
+        pass
+    elif _switch_backend_on_quota_error(
         orch, cfg, issue_id, entry, debug, reason, error, cleaned_failure
     ):
         pass
@@ -908,6 +912,87 @@ def _handle_worker_error(
         kind="retry",
         touched_files=frozenset(orch._touched_files_for(entry.issue)),
     )
+
+
+def _switch_account_on_quota_error(
+    orch: Orchestrator,
+    cfg: ServiceConfig | None,
+    issue_id: str,
+    entry: RunningEntry,
+    debug: _IssueDebug,
+    reason: str,
+    error: str | None,
+    cleaned_failure: str,
+) -> bool:
+    """Bench the quota-exhausted account and pin the ticket to the next one.
+
+    Returns True when the ticket was re-pinned (the caller then schedules the
+    normal retry instead of pausing). Runs BEFORE the kind-level fallback, so
+    a pool exhausts within its backend before escalating to another one.
+    """
+    core = _core()
+    if cfg is None:
+        return False
+    if not core._is_quota_worker_error(reason, error):
+        return False
+    kind = orch._entry_agent_kind(entry)
+    pool = cfg.agent.accounts.get(kind, ())
+    if not pool:
+        return False
+    current = entry.issue.agent_account or pool[0].id
+    debug.quota_exhausted_accounts.add(current)
+    orch._account_bench.bench(kind, current, cfg.agent.account_quota_cooldown_ms)
+    next_account = next(
+        (a for a in pool if a.id not in debug.quota_exhausted_accounts), None
+    )
+    if next_account is None:
+        log.warning(
+            "account_fallback_exhausted",
+            issue_id=issue_id,
+            issue_identifier=entry.issue.identifier,
+            kind=kind,
+            tried=sorted(debug.quota_exhausted_accounts),
+            error=error,
+        )
+        return False
+    if not orch._pin_fallback_agent_account(
+        cfg, entry.issue.identifier, next_account.id
+    ):
+        return False
+    note = (
+        f"Account `{current}` of `{kind}` reported a quota/usage limit: "
+        f"{cleaned_failure}. Symphony pinned this ticket to account "
+        f"`{next_account.id}` (agent.accounts) and scheduled a retry instead "
+        "of pausing. Remove the `agent.account` pin from the frontmatter to "
+        "return to the board default."
+    )
+    try:
+        orch._tracker_call_append_note(cfg, entry.issue, "Account Fallback", note)
+    except Exception as exc:
+        log.warning(
+            "account_fallback_note_failed",
+            issue_id=issue_id,
+            issue_identifier=entry.issue.identifier,
+            error=str(exc),
+        )
+    entry.issue = replace(entry.issue, agent_account=next_account.id)
+    debug.last_error = f"quota on {kind}/{current}; rotating to {next_account.id}"
+    orch._record_stats_gate(
+        entry.issue.identifier,
+        entry.issue.state,
+        "account_fallback",
+        (current, next_account.id),
+    )
+    log.warning(
+        "worker_quota_account_fallback",
+        issue_id=issue_id,
+        issue_identifier=entry.issue.identifier,
+        kind=kind,
+        from_account=current,
+        to_account=next_account.id,
+        error=error,
+    )
+    return True
 
 
 def _switch_backend_on_quota_error(
@@ -963,6 +1048,8 @@ def _switch_backend_on_quota_error(
         )
     entry.issue = replace(entry.issue, agent_kind=next_kind)
     entry.agent_kind = next_kind
+    debug.quota_exhausted_accounts.clear()
+    entry.issue = replace(entry.issue, agent_account=None)
     debug.last_error = f"quota on {current}; falling back to {next_kind}"
     orch._record_stats_gate(
         entry.issue.identifier, entry.issue.state, "backend_fallback", (current, next_kind)

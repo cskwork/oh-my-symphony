@@ -207,6 +207,10 @@ class _IssueDebug:
     rewind_count: int = 0
     # Backends that already hit a quota/usage limit on this ticket.
     quota_exhausted_kinds: set[str] = field(default_factory=set)
+    # Accounts of the CURRENT kind that already hit a quota limit on this
+    # ticket. Cleared when the ticket escalates to a different kind, since
+    # account ids are scoped to their backend.
+    quota_exhausted_accounts: set[str] = field(default_factory=set)
     state_turn_state: str = ""
     state_turn_count: int = 0
     last_workspace: Path | None = None
