@@ -6563,14 +6563,36 @@ class Orchestrator:
     def _resolve_dispatch_account(
         self, cfg: ServiceConfig, issue: Issue
     ) -> AgentAccount | None:
-        """The account this dispatch runs as, or None when no pool is configured."""
+        """The account this dispatch runs as, or None when no pool is configured.
+
+        Also writes the result back onto the live `RunningEntry`, if one is
+        already registered for this issue. This is called from three places
+        (`_dispatch`, and `_dispatch_env_for` at both the initial-dispatch and
+        phase-transition-rebuild call sites), each resolving independently
+        against the live bench. Without the write-back, a bench that lands in
+        the window between `_dispatch` registering the entry and a later
+        resolve here can make the run actually dispatch as a different
+        account than `entry.agent_account` records -- and a subsequent quota
+        error then benches the wrong (healthy) account while the real
+        offender stays free board-wide. `entry.agent_account` must always
+        match the overlay that was actually applied, not just the one
+        `_dispatch` guessed at registration time.
+
+        `_dispatch` calls this before the entry exists in `self._running`, so
+        the lookup below is a no-op there; the explicit `agent_account=`
+        kwarg on that call site still records the first resolution.
+        """
         kind = self._issue_agent_kind(cfg, issue)
-        return resolve_account(
+        account = resolve_account(
             cfg.agent.accounts.get(kind, ()),
             kind,
             issue.agent_account,
             self._account_bench,
         )
+        entry = self._running.get(issue.id)
+        if entry is not None and account is not None:
+            entry.agent_account = account.id
+        return account
 
     # ------------------------------------------------------------------
     # dispatch (§16.4)
@@ -6610,7 +6632,7 @@ class Orchestrator:
         resolved_attempt_kind = attempt_kind or (
             "retry" if attempt is not None else "initial"
         )
-        agent_kind = cfg.agent.kind_for_state(issue.state, _requested_agent_kind(issue))
+        agent_kind = self._issue_agent_kind(cfg, issue)
         acquisition = self._try_acquire_run_lease(
             cfg=cfg,
             issue=issue,

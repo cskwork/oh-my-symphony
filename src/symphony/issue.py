@@ -63,6 +63,10 @@ class Issue:
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "agent_kind": self.agent_kind or "",
             "last_agent_kind": self.last_agent_kind or "",
+            # `agent_account` is deliberately NOT exposed here: it is an
+            # internal dispatch/rotation detail, not a prompt-rendering
+            # input, and including it would make the rendered prompt (and
+            # therefore the prompt cache key) vary with account rotation.
             "skills": list(self.skills),
             "request": self.request or "",
         }

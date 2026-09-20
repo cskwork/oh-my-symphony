@@ -10970,6 +10970,7 @@ def _account_error_run(
     fallback_kinds: tuple[str, ...] = (),
     reason: str = "turn_error",
     entry_agent_account: str = "",
+    pre_benched: tuple[str, ...] = (),
 ):
     from symphony.orchestrator import worker_exit
     from symphony.orchestrator.entries import _IssueDebug
@@ -10986,6 +10987,8 @@ def _account_error_run(
         fallback_kinds=fallback_kinds,
     ))
     orch = _orch()
+    for account_id in pre_benched:
+        orch._account_bench.bench("codex", account_id, 3_600_000)
     issue = _issue("MT-Q", state="In Progress")
     if pinned_account is not None:
         issue = replace(issue, agent_account=pinned_account)
@@ -11057,6 +11060,93 @@ def test_quota_error_benches_the_account_that_actually_ran_not_pool_order(monkey
     assert orch._account_bench.is_benched("codex", "secondary") is True
     assert orch._account_bench.is_benched("codex", "primary") is False
     assert pinned_accounts == ["primary"]
+
+
+def test_quota_error_skips_a_board_wide_benched_account_when_rotating(monkeypatch, tmp_path):
+    # "primary" fails; "secondary" is already benched by a completely
+    # different ticket (board-wide bench). Rotation must pin "third" -- the
+    # first genuinely un-benched account -- not "secondary", which dispatch
+    # would pass over anyway (`resolve_account` honours a pin only when it
+    # isn't benched). Pinning "secondary" here would be an operator-facing
+    # lie: the note and log would say "secondary" while the ticket actually
+    # runs as "third".
+    orch, entry, debug, pinned_accounts, _pinned_kinds, notes = _account_error_run(
+        monkeypatch, tmp_path,
+        error="You've hit your usage limit.",
+        accounts=("primary", "secondary", "third"),
+        pinned_account=None,
+        pre_benched=("secondary",),
+    )
+    assert pinned_accounts == ["third"]
+    assert entry.issue.agent_account == "third"
+    assert notes, "expected an Account Fallback note to be appended"
+    _heading, body = notes[0]
+    assert "third" in body
+    assert "secondary" not in body
+
+
+def test_quota_error_rotates_to_a_previously_exhausted_account_once_its_bench_expires(
+    monkeypatch, tmp_path
+):
+    # `debug.quota_exhausted_accounts` is monotonic for the ticket's
+    # in-process lifetime, but it must not permanently exclude an account
+    # from rotation: the board-wide bench (time-based) is the sole gate.
+    # Simulate "primary" having quota-errored earlier in this ticket's life
+    # (already recorded in the per-ticket set) but its bench having since
+    # expired (cooldown 0 -> expires immediately), and "secondary" now
+    # failing. "primary" must be eligible again.
+    from symphony.orchestrator import worker_exit
+    from symphony.orchestrator.entries import _IssueDebug
+    from symphony.workflow.config import AgentAccount
+
+    cfg = _make_config(
+        tracker_kind="file",
+        workflow_path=tmp_path / "WORKFLOW.md",
+        workspace_root=tmp_path / "ws",
+    )
+    cfg = replace(cfg, agent=replace(
+        cfg.agent,
+        accounts={"codex": (AgentAccount(id="primary"), AgentAccount(id="secondary"))},
+    ))
+    orch = _orch()
+    # "primary" quota-errored earlier and its (already-expired) bench is long gone.
+    orch._account_bench.bench("codex", "primary", 0)
+    issue = replace(_issue("MT-Q", state="In Progress"), agent_account="secondary")
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws" / "MT-Q",
+        agent_kind="codex",
+        agent_account="secondary",
+    )
+    debug = _IssueDebug()
+    debug.quota_exhausted_accounts.add("primary")  # tried earlier, per-ticket record
+    pinned_accounts: list[str] = []
+
+    def _pin_account(_cfg, identifier, account_id):
+        pinned_accounts.append(account_id)
+        return True
+
+    def _note(_cfg, _issue, heading, body):
+        pass
+
+    monkeypatch.setattr(orch, "_pin_fallback_agent_account", _pin_account)
+    monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_note))
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        worker_exit._handle_worker_error(
+            orch, issue.id, entry, debug,
+            "turn_error", "You've hit your usage limit.",
+        )
+
+    asyncio.run(_run())
+
+    assert pinned_accounts == ["primary"]
+    assert debug.quota_exhausted_accounts == {"primary", "secondary"}
 
 
 def test_dispatch_records_the_resolved_account_on_the_running_entry(monkeypatch):
@@ -11171,6 +11261,61 @@ def test_revoked_token_does_not_rotate_or_bench(monkeypatch, tmp_path):
     assert pinned_accounts == []
     assert debug.quota_exhausted_accounts == set()
     assert orch._account_bench.is_benched("codex", "primary") is False
+    assert entry.issue.id in orch._paused_issue_ids
+
+
+def test_quota_error_falls_through_to_pause_on_a_tracker_without_record_agent_account(
+    monkeypatch, tmp_path
+):
+    # A remote tracker adapter (e.g. Linear) has no `record_agent_account`,
+    # mirroring the existing remote-tracker behavior of
+    # `_pin_fallback_agent_kind`/`fallback_kinds`. `_pin_fallback_agent_account`
+    # must therefore return False and the ticket falls through -- past the
+    # (unconfigured) kind step -- to today's pause-for-operator path, instead
+    # of rotating. Every other rotation test in this file monkeypatches
+    # `_pin_fallback_agent_account` itself, which would hide a regression
+    # here; this test drives the real method against a fake tracker client
+    # that has no `record_agent_account` attribute at all.
+    from symphony.orchestrator import worker_exit
+    from symphony.orchestrator.entries import _IssueDebug
+    from symphony.workflow.config import AgentAccount
+
+    cfg = _make_config(tracker_kind="linear")  # remote tracker: no file-board adapter
+    cfg = replace(cfg, agent=replace(
+        cfg.agent,
+        accounts={"codex": (AgentAccount(id="primary"), AgentAccount(id="secondary"))},
+    ))
+    orch = _orch()
+    issue = _issue("MT-Q", state="In Progress")
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws" / "MT-Q",
+        agent_kind="codex",
+    )
+    debug = _IssueDebug()
+
+    class _RemoteTrackerClient:
+        """Stands in for a real remote adapter: no `record_agent_account`."""
+
+    monkeypatch.setattr(
+        orch, "_shared_tracker_client", lambda _cfg: _RemoteTrackerClient()
+    )
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        worker_exit._handle_worker_error(
+            orch, issue.id, entry, debug,
+            "turn_error", "You've hit your usage limit.",
+        )
+
+    asyncio.run(_run())
+
+    assert orch._account_bench.is_benched("codex", "primary") is True
+    assert entry.issue.agent_account is None
     assert entry.issue.id in orch._paused_issue_ids
 
 

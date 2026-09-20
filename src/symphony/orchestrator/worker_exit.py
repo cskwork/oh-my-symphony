@@ -940,10 +940,23 @@ def _switch_account_on_quota_error(
     if not pool:
         return False
     current = entry.agent_account or entry.issue.agent_account or pool[0].id
+    # `quota_exhausted_accounts` is monotonic for the ticket's in-process
+    # lifetime and is kept only as the log payload below (and as evidence an
+    # account was tried at all); it must NOT gate rotation, or a board-wide
+    # bench that has since expired would still look "exhausted" here and the
+    # ticket would auto-pause instead of recovering. The bench (time-based,
+    # board-wide) is the sole source of truth for whether an account is
+    # eligible; `a.id != current` is the only other guard, and only to avoid
+    # trivially re-selecting the account that just failed.
     debug.quota_exhausted_accounts.add(current)
     orch._account_bench.bench(kind, current, cfg.agent.account_quota_cooldown_ms)
     next_account = next(
-        (a for a in pool if a.id not in debug.quota_exhausted_accounts), None
+        (
+            a
+            for a in pool
+            if a.id != current and not orch._account_bench.is_benched(kind, a.id)
+        ),
+        None,
     )
     if next_account is None:
         log.warning(
