@@ -184,10 +184,13 @@ agent:
   #   Document: gemini
   # Provider accounts per agent kind, in preference order. A quota/usage-limit
   # error benches the active account board-wide for `account_quota_cooldown_ms`
-  # and pins the ticket to the next one, retrying instead of auto-pausing.
-  # Accounts exhaust within a kind before `fallback_kinds` escalates to another
-  # kind. `env` is overlaid on the dispatch environment, so an account is
-  # whatever variable that backend reads for its profile.
+  # -- this works on any tracker, including this Linear example, so the next
+  # dispatch avoids the exhausted account. The per-ticket pin that lets a
+  # ticket retry instead of pausing is file boards only, though, so on this
+  # Linear board a quota error still pauses the ticket for an operator.
+  # Accounts exhaust within a kind before `fallback_kinds` escalates to
+  # another kind. `env` is overlaid on the dispatch environment, so an
+  # account is whatever variable that backend reads for its profile.
   # accounts: {}
   account_quota_cooldown_ms: 3600000
   max_concurrent_agents: 1

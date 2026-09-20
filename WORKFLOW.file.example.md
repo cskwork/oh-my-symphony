@@ -199,6 +199,18 @@ agent:
   # appends `## Backend Fallback`, and retries instead of pausing for an
   # operator. Empty list keeps the pause. File boards only.
   fallback_kinds: []
+  # Provider accounts per agent kind, in preference order. A quota/usage-limit
+  # error benches the active account board-wide for `account_quota_cooldown_ms`
+  # -- this works on any tracker and keeps the next dispatch off an exhausted
+  # account. Symphony then pins the ticket to the next account and retries
+  # instead of auto-pausing, but that per-ticket pin (`agent.account`
+  # frontmatter) is file boards only; on a remote tracker the ticket still
+  # pauses for an operator, same as `fallback_kinds`. Accounts exhaust within
+  # a kind before `fallback_kinds` escalates to another kind. `env` is
+  # overlaid on the dispatch environment, so an account is whatever variable
+  # that backend reads for its profile.
+  # accounts: {}
+  account_quota_cooldown_ms: 3600000
   # Optional per-state backend routing: cheap/fast agents on light lanes,
   # the default `kind` everywhere else. Precedence per dispatch:
   # per-ticket `agent_kind` frontmatter pin > stage_kinds > kind.
