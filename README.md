@@ -52,7 +52,9 @@ usage, and whatever rate-limit headroom the selected CLI reports.
 - **No vendor lock-in.** Swap Codex ↔ Claude Code ↔ Gemini ↔ AGY ↔ Kiro ↔ OpenCode ↔ Pi ↔ Prime Agent with one
   YAML line, mix backends per ticket, or list `agent.fallback_kinds` so a
   quota-exhausted backend hands the ticket to the next one instead of
-  pausing for an operator. New agents (Ollama, local models,
+  pausing for an operator. `agent.accounts` rotates through several accounts
+  of the same backend first; `fallback_kinds` only escalates to a different
+  backend once those are exhausted. New agents (Ollama, local models,
   anything with a CLI) drop in behind a thin `AgentBackend` Protocol without
   changing the orchestrator.
 - **See what your agents are actually doing.** Live Kanban shows turn count,
