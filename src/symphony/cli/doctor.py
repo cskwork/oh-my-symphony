@@ -887,6 +887,40 @@ def check_agent_git_grant(cfg: ServiceConfig) -> CheckResult:
     )
 
 
+def check_agent_accounts(cfg: ServiceConfig) -> CheckResult:
+    """Whether every configured provider account actually overlays something.
+
+    An account whose ``env`` is empty contributes no overlay, so the backend
+    silently runs on its default profile and the pool is an illusion — the
+    same class of failure as copying a rotated credential over a profile.
+    This is structural only; doctor makes no network calls, so a revoked
+    token still surfaces at dispatch, not here.
+    """
+    name = "agent accounts"
+    pools = cfg.agent.accounts
+    if not pools:
+        return CheckResult(name, "pass", "no account pool configured")
+    empty = [
+        f"{kind}/{account.id}"
+        for kind, pool in sorted(pools.items())
+        for account in pool
+        if not account.env
+    ]
+    if empty:
+        return CheckResult(
+            name,
+            "fail",
+            "accounts with an empty env overlay fall back to the backend's "
+            f"default profile: {', '.join(empty)}",
+        )
+    total = sum(len(pool) for pool in pools.values())
+    summary = "; ".join(
+        f"{kind}: {', '.join(a.id for a in pool)}"
+        for kind, pool in sorted(pools.items())
+    )
+    return CheckResult(name, "pass", f"{total} account(s) — {summary}")
+
+
 def check_tracker(cfg: ServiceConfig) -> CheckResult:
     tracker = cfg.tracker
     if tracker.kind == "file":
@@ -1119,6 +1153,7 @@ def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]
         check_workspace_root(cfg),
         check_git_history_writable(cfg),
         check_agent_git_grant(cfg),
+        check_agent_accounts(cfg),
         check_tracker(cfg),
         check_board_reachable_from_workspace(cfg),
         check_deep_preset_merge_contract(cfg),
