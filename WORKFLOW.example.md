@@ -182,6 +182,17 @@ agent:
   # stage_kinds:
   #   Todo: gemini
   #   Document: gemini
+  # Provider accounts per agent kind, in preference order. A quota/usage-limit
+  # error benches the active account board-wide for `account_quota_cooldown_ms`
+  # -- this works on any tracker, including this Linear example, so the next
+  # dispatch avoids the exhausted account. The per-ticket pin that lets a
+  # ticket retry instead of pausing is file boards only, though, so on this
+  # Linear board a quota error still pauses the ticket for an operator.
+  # Accounts exhaust within a kind before `fallback_kinds` escalates to
+  # another kind. `env` is overlaid on the dispatch environment, so an
+  # account is whatever variable that backend reads for its profile.
+  # accounts: {}
+  account_quota_cooldown_ms: 3600000
   max_concurrent_agents: 1
   # This is the per-attempt execution cap. In prompt templates,
   # {{ turn_number }}/{{ max_turns }} reports the ticket lifetime position/cap.

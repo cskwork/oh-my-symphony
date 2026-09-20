@@ -632,6 +632,56 @@ def test_phase_transition_stop_failure_retains_old_backend_ownership(
     assert replacements == []
 
 
+def test_rebuild_backend_for_phase_updates_stale_running_entry_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # FIX 2: `_dispatch_env_for` (called from the phase-transition rebuild,
+    # `core.py` ~7328) resolves the account independently and later than
+    # `_dispatch` did. If another ticket benches the entry's recorded
+    # account in that window, this rebuild must dispatch as -- and record --
+    # whichever account the resolver actually picks now, not the stale one
+    # `_dispatch` wrote at registration time. Otherwise a later quota error
+    # would bench the wrong (healthy) account and leave the real offender
+    # running free board-wide.
+    from symphony.workflow.config import AgentAccount
+
+    cfg = _make_config(max_turns=2)
+    cfg = replace(cfg, agent=replace(
+        cfg.agent,
+        accounts={"codex": (AgentAccount(id="primary"), AgentAccount(id="secondary"))},
+    ))
+    issue = _make_issue(state="In Progress")
+    issue = replace(issue, agent_account="primary")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    # `_dispatch` recorded "primary" as the account this run started as.
+    o._running[issue.id].agent_account = "primary"
+    old_client = _FakeBackend(init_id=0)
+    _install_fake_backend(monkeypatch)
+
+    # Another ticket benches "primary" board-wide in the window between the
+    # initial dispatch and this phase-transition rebuild.
+    o._account_bench.bench("codex", "primary", 3_600_000)
+
+    asyncio.run(
+        o._rebuild_backend_for_phase(
+            issue=issue,
+            running_issue_id=issue.id,
+            cfg=cfg,
+            workspace_path=tmp_path,
+            attempt=None,
+            doc_language="en",
+            old_client=old_client,
+            is_rewind=False,
+            turn_number=2,
+        )
+    )
+
+    # The rebuild resolved "secondary" (the only un-benched account) and
+    # must have written that back onto the live running entry.
+    assert o._running[issue.id].agent_account == "secondary"
+
+
 def test_phase_stop_failure_stays_unconfirmed_after_idempotent_final_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

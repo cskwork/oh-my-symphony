@@ -65,6 +65,7 @@ from ..continuous_improvement import (
     lease_path_for,
 )
 from ..issue import BlockerRef, Issue, normalize_state
+from ..workflow.config import AgentAccount
 from ..logging import get_logger
 from ..prompt import build_first_turn_prompt
 from ..runtime_safety import ensure_workflow_repo_is_safe
@@ -133,6 +134,7 @@ from .release_cycle import (
     release_ticket_version_token as _release_ticket_version_token,
     release_verifier_state as _release_verifier_state,
 )
+from .accounts import AccountBench, resolve_account
 from .dispatch_state import DispatchState
 from .entries import RetryEntry, RunningEntry, _CodexTotals, _IssueDebug
 from .executors import LegacyStageExecutor, TicketExecutor, TicketRunContext
@@ -943,6 +945,10 @@ class Orchestrator:
         # read-only properties below keep the many legacy read sites (and
         # tests) working; mutations should go through its methods.
         self._dispatch_state = DispatchState()
+        # Board-wide record of quota-exhausted provider accounts (Task B5
+        # benches into this on a quota error); dispatch resolves against it
+        # below so every ticket sees the same exhausted set.
+        self._account_bench = AccountBench()
         # C5 — `Done`-transition counter for the periodic wiki sweep. Lives
         # in-process; restart resets it (acceptable — the sweep is a
         # housekeeping nudge, not a correctness gate). Wraparound at
@@ -3521,14 +3527,23 @@ class Orchestrator:
             "worker_task": _task_debug(entry.worker_task),
         }
 
+    def _issue_agent_kind(self, cfg: ServiceConfig, issue: Issue) -> str:
+        """The backend kind a dispatch of `issue` runs as, under `cfg`.
+
+        The single definition of the precedence `stage_kinds` routing relies
+        on: ticket pin > stage entry > workflow default. `_entry_agent_kind`
+        and the account resolver must agree, or dispatch would overlay one
+        kind's account pool while the quota rotation benched another's.
+        """
+        return cfg.agent.kind_for_state(issue.state, _requested_agent_kind(issue))
+
     def _entry_agent_kind(self, entry: RunningEntry) -> str:
         if entry.agent_kind:
             return entry.agent_kind
-        requested = _requested_agent_kind(entry.issue)
         cfg = self._workflow_state.current()
         if cfg is None:
-            return requested or ""
-        return cfg.agent.kind_for_state(entry.issue.state, requested)
+            return _requested_agent_kind(entry.issue) or ""
+        return self._issue_agent_kind(cfg, entry.issue)
 
     # ------------------------------------------------------------------
     # operator-driven pause / resume
@@ -6540,7 +6555,44 @@ class Orchestrator:
             except (TypeError, ValueError):
                 payload = "[]"
             env["SYMPHONY_REWIND_SCOPE"] = payload
+        account = self._resolve_dispatch_account(cfg, issue)
+        if account is not None:
+            env.update(account.env)
         return env
+
+    def _resolve_dispatch_account(
+        self, cfg: ServiceConfig, issue: Issue
+    ) -> AgentAccount | None:
+        """The account this dispatch runs as, or None when no pool is configured.
+
+        Also writes the result back onto the live `RunningEntry`, if one is
+        already registered for this issue. This is called from three places
+        (`_dispatch`, and `_dispatch_env_for` at both the initial-dispatch and
+        phase-transition-rebuild call sites), each resolving independently
+        against the live bench. Without the write-back, a bench that lands in
+        the window between `_dispatch` registering the entry and a later
+        resolve here can make the run actually dispatch as a different
+        account than `entry.agent_account` records -- and a subsequent quota
+        error then benches the wrong (healthy) account while the real
+        offender stays free board-wide. `entry.agent_account` must always
+        match the overlay that was actually applied, not just the one
+        `_dispatch` guessed at registration time.
+
+        `_dispatch` calls this before the entry exists in `self._running`, so
+        the lookup below is a no-op there; the explicit `agent_account=`
+        kwarg on that call site still records the first resolution.
+        """
+        kind = self._issue_agent_kind(cfg, issue)
+        account = resolve_account(
+            cfg.agent.accounts.get(kind, ()),
+            kind,
+            issue.agent_account,
+            self._account_bench,
+        )
+        entry = self._running.get(issue.id)
+        if entry is not None and account is not None:
+            entry.agent_account = account.id
+        return account
 
     # ------------------------------------------------------------------
     # dispatch (§16.4)
@@ -6580,7 +6632,7 @@ class Orchestrator:
         resolved_attempt_kind = attempt_kind or (
             "retry" if attempt is not None else "initial"
         )
-        agent_kind = cfg.agent.kind_for_state(issue.state, _requested_agent_kind(issue))
+        agent_kind = self._issue_agent_kind(cfg, issue)
         acquisition = self._try_acquire_run_lease(
             cfg=cfg,
             issue=issue,
@@ -6713,6 +6765,7 @@ class Orchestrator:
                     error=str(exc),
                 )
                 return False
+        account = self._resolve_dispatch_account(cfg, issue)
         entry = RunningEntry(
             issue=issue,
             started_at=datetime.now(timezone.utc),
@@ -6721,6 +6774,7 @@ class Orchestrator:
             workspace_path=workspace_path,
             attempt_kind=resolved_attempt_kind,
             agent_kind=agent_kind,
+            agent_account=account.id if account is not None else "",
             run_id=run_id,
             continued_from_run_id=acquisition.continued_from_run_id,
             continuation_checkpoint=acquisition.checkpoint,
@@ -9424,6 +9478,39 @@ class Orchestrator:
                 "backend_fallback_pin_failed",
                 identifier=identifier,
                 agent_kind=agent_kind,
+                error=str(exc),
+            )
+            return False
+        return pinned
+
+    def _pin_fallback_agent_account(
+        self, cfg: ServiceConfig, identifier: str, account_id: str
+    ) -> bool:
+        """Replace the ticket's account pin; False when the tracker cannot.
+
+        Unlike the kind pin, this is safe on `stage_kinds`-routed boards:
+        accounts are not lane-routed, so pinning one cannot freeze a lane's
+        backend (F-20 does not apply).
+        """
+        pinned = False
+
+        def _record(client: TrackerClient) -> None:
+            nonlocal pinned
+            record = getattr(client, "record_agent_account", None)
+            if record is None:
+                return
+            record(identifier, account_id, force=True)
+            pinned = True
+
+        try:
+            self._invoke_shared_tracker_client(cfg, _record)
+        except _TrackerClientUnavailable:
+            return False
+        except Exception as exc:
+            log.warning(
+                "account_fallback_pin_failed",
+                identifier=identifier,
+                account_id=account_id,
                 error=str(exc),
             )
             return False

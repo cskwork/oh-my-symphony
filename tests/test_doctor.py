@@ -701,9 +701,10 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
     # protected repository + port + api_token + shell + max_turns + agent
     # + pi_auth + prime_agent_auth + gemini_auth + agy_state + kiro_auth
     # + prompts + after_create + workspace + git_history + agent_git_grant
-    # + tracker + board.reachable + deep_merge_contract + stage_contracts
-    # + board.cli + board.dependencies + app.release-contract + state.db = 24
-    assert len(results) == 24
+    # + agent_accounts + tracker + board.reachable + deep_merge_contract
+    # + stage_contracts + board.cli + board.dependencies
+    # + app.release-contract + state.db = 25
+    assert len(results) == 25
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",

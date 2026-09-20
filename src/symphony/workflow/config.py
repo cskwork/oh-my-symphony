@@ -103,6 +103,20 @@ class HooksConfig:
 
 
 @dataclass(frozen=True)
+class AgentAccount:
+    """One provider account for a backend kind.
+
+    ``env`` is overlaid on the per-dispatch environment, so an account is
+    whatever env var that backend's profile mechanism reads (codex:
+    ``SYMPHONY_CODEX_HOME``, claude: ``CLAUDE_CONFIG_DIR``). Core never
+    interprets these keys.
+    """
+
+    id: str
+    env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     kind: str
     max_concurrent_agents: int
@@ -256,6 +270,13 @@ class AgentConfig:
     # to raise the *backend's* stall_timeout_ms for every lane at once.
     # Falls back to the resolved backend's `stall_timeout_ms`.
     stall_timeout_ms_by_state: dict[str, int] = field(default_factory=dict)
+    # Provider accounts per agent kind, in preference order. A quota error
+    # benches the active account board-wide and rotates the ticket to the
+    # next one; accounts exhaust within a kind before `fallback_kinds`
+    # escalates to another kind. Absent or empty keeps today's behaviour.
+    accounts: dict[str, tuple[AgentAccount, ...]] = field(default_factory=dict)
+    # How long a quota-exhausted account is skipped, in milliseconds.
+    account_quota_cooldown_ms: int = 3_600_000
 
     def stage_contracts_enabled(self, active_states: "tuple[str, ...]") -> bool:
         """Resolve `agent.stage_contracts` against the board's lanes."""

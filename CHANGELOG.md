@@ -8,6 +8,26 @@ this file is the in-repo summary.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`agent.accounts` — provider-account pool per agent kind.** A single
+  `agent.kind` block can now hold several named provider accounts (an `env`
+  overlay merged into the existing dispatch environment), so two accounts
+  of the same provider no longer have to fight over one config block. A
+  quota/usage-limit error benches the active account board-wide for
+  `agent.account_quota_cooldown_ms` and force-pins the file-board ticket to
+  the next un-benched account in the pool
+  (`FileBoardTracker.record_agent_account(..., force=True)`), appends
+  `## Account Fallback`, and schedules the normal retry instead of
+  auto-pausing. Accounts exhaust within a kind before `agent.fallback_kinds`
+  escalates to another kind. Remote trackers cannot carry the pin and keep
+  the pause.
+- **`symphony doctor` validates configured agent accounts.** `check_agent_accounts`
+  fails when a configured account's `env` overlay is empty (it would silently
+  dispatch on the backend's default profile instead of that account), and
+  otherwise reports the pool per kind.
+
 ## [0.25.0] - 2026-09-12 - Execution diagnostics and Deep workflow reliability
 
 ### Fixed

@@ -30,6 +30,11 @@ class Issue:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     agent_kind: str | None = None
+    # Which provider account of `agent_kind` this ticket is pinned to
+    # (`agent.account` frontmatter). Set by the quota rotation so a ticket
+    # stays on the account it moved to — prompt caches are account-scoped,
+    # so flapping would re-bill the uncached prefix on every crossing.
+    agent_account: str | None = None
     skills: tuple[str, ...] = field(default_factory=tuple)
     request: str | None = None
     # Audit-only record of the backend that last ran this ticket. NEVER read
@@ -58,6 +63,10 @@ class Issue:
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "agent_kind": self.agent_kind or "",
             "last_agent_kind": self.last_agent_kind or "",
+            # `agent_account` is deliberately NOT exposed here: it is an
+            # internal dispatch/rotation detail, not a prompt-rendering
+            # input, and including it would make the rendered prompt (and
+            # therefore the prompt cache key) vary with account rotation.
             "skills": list(self.skills),
             "request": self.request or "",
         }

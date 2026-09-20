@@ -15,6 +15,7 @@ from symphony.backends import (
     build_backend,
 )
 from symphony.backends.prime_agent import PrimeAgentBackend
+from symphony.cli.doctor import check_agent_accounts
 from symphony.errors import ConfigValidationError, TurnTimeout
 import symphony.workflow as workflow_module
 from symphony.workflow import (
@@ -23,6 +24,7 @@ from symphony.workflow import (
     build_service_config,
     parse_workflow_text,
 )
+from symphony.workflow.config import AgentAccount
 from symphony.workflow.preflight import validate_for_dispatch
 from tests.test_backends import (
     _BlockingStream,
@@ -182,3 +184,33 @@ async def test_prime_backend_timeout_error_uses_prime_label(
 
     with pytest.raises(TurnTimeout, match=r"prime-agent turn timed out"):
         await backend.run_turn(prompt="wait", is_continuation=False)
+
+
+def _cfg_with(cfg: ServiceConfig, accounts: dict[str, tuple[AgentAccount, ...]]) -> ServiceConfig:
+    return replace(cfg, agent=replace(cfg.agent, accounts=accounts))
+
+
+def test_no_pool_passes(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    result = check_agent_accounts(cfg)
+    assert result.status == "pass"
+    assert "no account pool" in result.message
+
+
+def test_configured_accounts_are_summarised(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg = _cfg_with(cfg, {"codex": (
+        AgentAccount(id="primary", env={"SYMPHONY_CODEX_HOME": "/a"}),
+        AgentAccount(id="secondary", env={"SYMPHONY_CODEX_HOME": "/b"}),
+    )})
+    result = check_agent_accounts(cfg)
+    assert result.status == "pass"
+    assert "primary" in result.message and "secondary" in result.message
+
+
+def test_empty_env_overlay_fails(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    cfg = _cfg_with(cfg, {"codex": (AgentAccount(id="primary", env={}),)})
+    result = check_agent_accounts(cfg)
+    assert result.status == "fail"
+    assert "codex/primary" in result.message

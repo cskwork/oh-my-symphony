@@ -30,6 +30,11 @@ class RunningEntry:
     workspace_path: Path
     attempt_kind: str = "initial"
     agent_kind: str = ""
+    # Which provider account of `agent_kind` this run actually dispatched
+    # as, as chosen by `resolve_account`. The quota rotation benches THIS
+    # account; inferring it from the pool order would bench a healthy one
+    # whenever the resolver had skipped a benched entry.
+    agent_account: str = ""
     run_id: str = ""
     # A recovered attempt always owns a new run id. The predecessor link is
     # public history; the private checkpoint is consumed only by the backend
@@ -207,6 +212,10 @@ class _IssueDebug:
     rewind_count: int = 0
     # Backends that already hit a quota/usage limit on this ticket.
     quota_exhausted_kinds: set[str] = field(default_factory=set)
+    # Accounts of the CURRENT kind that already hit a quota limit on this
+    # ticket. Cleared when the ticket escalates to a different kind, since
+    # account ids are scoped to their backend.
+    quota_exhausted_accounts: set[str] = field(default_factory=set)
     state_turn_state: str = ""
     state_turn_count: int = 0
     last_workspace: Path | None = None
