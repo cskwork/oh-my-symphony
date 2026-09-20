@@ -11059,6 +11059,63 @@ def test_quota_error_benches_the_account_that_actually_ran_not_pool_order(monkey
     assert pinned_accounts == ["primary"]
 
 
+def test_dispatch_records_the_resolved_account_on_the_running_entry(monkeypatch):
+    # This is the producer side of the fix above: `_dispatch` must thread
+    # whatever `resolve_account` actually picked into `RunningEntry.agent_account`,
+    # not leave it at the field default. With "primary" already benched
+    # board-wide, `resolve_account` skips it, so the dispatched entry must
+    # record "secondary" -- deleting the `agent_account=...` kwarg from
+    # `_dispatch` silently restores the pool[0]-guessing bug and this test
+    # would then see `entry.agent_account == ""`.
+    from symphony.workflow.config import AgentAccount
+
+    cfg = _make_config(max_concurrent=5)
+    cfg = replace(cfg, agent=replace(
+        cfg.agent,
+        accounts={"codex": (
+            AgentAccount(id="primary"),
+            AgentAccount(id="secondary"),
+        )},
+    ))
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+    orch._account_bench.bench("codex", "primary", 3_600_000)
+
+    entered_workspace_create = asyncio.Event()
+
+    class _BlockingWorkspaceManager:
+        def path_for(self, identifier):
+            return Path("/tmp/ws-fake") / identifier
+
+        async def create_or_reuse(self, identifier):
+            entered_workspace_create.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_record_agent_kind",
+        staticmethod(lambda _cfg, _identifier, _agent_kind: None),
+    )
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workspace_manager = _BlockingWorkspaceManager()  # type: ignore[assignment]
+
+        orch._dispatch(issue, cfg, attempt=None)
+        entry = orch._running[issue.id]
+        worker = entry.worker_task
+        assert worker is not None
+        await asyncio.wait_for(entered_workspace_create.wait(), timeout=5)
+
+        assert entry.agent_account == "secondary"
+
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+
+    asyncio.run(_run())
+
+
 def test_quota_error_prefers_account_rotation_over_kind_fallback_when_both_configured(
     monkeypatch, tmp_path
 ):
@@ -11084,12 +11141,16 @@ def test_quota_error_with_one_account_falls_through_to_fallback_kinds(monkeypatc
     # Only one account in the pool, so the account level exhausts it and
     # declines; with `fallback_kinds` configured, the kind level then takes
     # over and pins the next backend, and the account-level exhaustion state
-    # tied to this ticket is cleared behind it.
+    # tied to this ticket is cleared behind it. The ticket starts out both
+    # frontmatter-pinned AND actually dispatched on "primary" (non-empty on
+    # both `entry.issue.agent_account` and `entry.agent_account`), so the
+    # clearing assertions below have something real to clear.
     orch, entry, debug, pinned_accounts, pinned_kinds, _notes = _account_error_run(
         monkeypatch, tmp_path,
         error="You've hit your usage limit.",
         accounts=("primary",),
-        pinned_account=None,
+        pinned_account="primary",
+        entry_agent_account="primary",
         fallback_kinds=("codex", "claude"),
     )
     assert pinned_accounts == []

@@ -6611,7 +6611,6 @@ class Orchestrator:
             "retry" if attempt is not None else "initial"
         )
         agent_kind = cfg.agent.kind_for_state(issue.state, _requested_agent_kind(issue))
-        account = self._resolve_dispatch_account(cfg, issue)
         acquisition = self._try_acquire_run_lease(
             cfg=cfg,
             issue=issue,
@@ -6744,6 +6743,7 @@ class Orchestrator:
                     error=str(exc),
                 )
                 return False
+        account = self._resolve_dispatch_account(cfg, issue)
         entry = RunningEntry(
             issue=issue,
             started_at=datetime.now(timezone.utc),
