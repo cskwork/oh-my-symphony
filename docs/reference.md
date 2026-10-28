@@ -4,6 +4,7 @@ This page holds the detail behind the [README](../README.md) quickstart,
 organized by topic. Release history lives in [CHANGELOG.md](../CHANGELOG.md).
 
 - [Install and agent CLIs](#install-and-agent-clis)
+- [Optional components](#optional-components)
 - [Projects and the protected source checkout](#projects-and-the-protected-source-checkout)
 - [Autonomous development factory](#autonomous-development-factory)
 - [Mock demo: no agent CLI required](#mock-demo-no-agent-cli-required)
@@ -16,6 +17,8 @@ organized by topic. Release history lives in [CHANGELOG.md](../CHANGELOG.md).
 - [Web app and JSON API](#web-app-and-json-api)
 - [Reverse proxy, tunnels, and API token](#reverse-proxy-tunnels-and-api-token)
 - [Lane presets and stage contracts](#lane-presets-and-stage-contracts)
+- [Verify gates](#verify-gates)
+- [Needs: tickets waiting for an operator](#needs-tickets-waiting-for-an-operator)
 - [Skills](#skills)
 - [Chat intake](#chat-intake)
 - [Per-ticket artefacts and board deliverables](#per-ticket-artefacts-and-board-deliverables)
@@ -31,15 +34,23 @@ organized by topic. Release history lives in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Install and agent CLIs
 
+Symphony is not on PyPI yet. Install it as a tool from GitHub, or editable
+from a checkout:
+
 ```bash
+uv tool install git+https://github.com/cskwork/oh-my-symphony
+
+# or, inside a clone of the repository
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 ```
 
-Symphony is not on PyPI yet; the editable install from this checkout is the
-supported path. Contributors add the test and lint toolchain with
-`pip install -e ".[dev]"` (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
+Both paths can create projects; `symphony project create` reads its bootstrap
+files from the installed package, not from a checkout. Contributors install
+core, the three optional packages, and the test toolchain with
+`python -m pip install -e ".[dev]" -e packages/pm -e packages/chat -e packages/release`
+(see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 Make the CLI for each backend you use available on `$PATH`:
 
@@ -53,6 +64,45 @@ Make the CLI for each backend you use available on `$PATH`:
 | `opencode`   | `opencode` (OpenCode CLI, install with `npm install -g opencode-ai`; authenticate providers with `opencode auth login`) |
 | `pi`         | `pi` (Pi coding-agent, `npm i -g @earendil-works/pi-coding-agent` or `curl -fsSL https://pi.dev/install.sh \| sh`; sign in once via `pi` → `/login` (OAuth, credentials cached at `~/.pi/agent/auth.json`), no env var needed) |
 | `prime-agent` | `prime-agent` (Prime Agent, install with `curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh \| sh`; sign in once via `prime-agent` → `/login`, or provide a provider API key; credentials cached at `~/.prime/agent/auth.json`) |
+
+## Optional components
+
+Three features ship as separate distributions in this repository. They are
+not on PyPI; install them from a checkout, next to core. Import paths are
+unchanged (`symphony.pm`, `symphony.chat`, `symphony.release`).
+
+| Directory | Distribution | Adds |
+|-----------|--------------|------|
+| `packages/pm` | `oh-my-symphony-pm` | PM Workspace (Artifacts page, `/api/v1/pm/*`, `pm:` keys), `symphony pm demo` |
+| `packages/chat` | `oh-my-symphony-chat` | Web operator chat, `/api/v1/chat/*`, intent cards and intent filing |
+| `packages/release` | `oh-my-symphony-release` | App release contracts (ADR 0002), `symphony release check` |
+
+```bash
+python -m pip install ./packages/pm ./packages/chat ./packages/release
+# editable, for development
+python -m pip install -e ".[dev]" -e packages/pm -e packages/chat -e packages/release
+# uv tool install, from the checkout
+uv tool install --force . --with ./packages/pm --with ./packages/chat --with ./packages/release
+```
+
+Each package pins the exact core version (`oh-my-symphony==0.29.0`). XLSX
+exchange in the PM Workspace also needs the core extra `pm-exchange`.
+
+Without a package, core keeps working and says what is missing:
+
+- `symphony pm` and `symphony release` print
+  `... is not installed; install it from the oh-my-symphony checkout: python -m pip install ./packages/<name>`
+  and exit 2.
+- The web UI hides the Artifacts (PM) and Chat entries; the `/board` payload
+  reports `pm_available` and `components` (`{"pm": ..., "chat": ..., "release": ...}`).
+- Enabling any `pm:` capability (`authoring`, `exchange`, `assistance`,
+  `handoff`) is a config error that names the install command.
+- A ticket labelled `app-release`, `app-release-finalizer`, or
+  `release-cycle-verifier` (or one with durable release authority in
+  `state.db`) is refused, parked in `Blocked` with the install hint, and never
+  merged (fail closed).
+- `symphony doctor` FAILs `app.release-contract` on a board that uses app
+  release delivery.
 
 ## Projects and the protected source checkout
 
@@ -72,16 +122,29 @@ symphony hub                          # multi-project hub, default 127.0.0.1:878
 Other project commands: `symphony project list` (`ls`), `status [ID]`,
 `stop ID [--timeout 10] [--force]`, `remove ID` (`rm`; unregisters without
 deleting files). `create` and `add` accept `--id`, `--workflow` (default
-`WORKFLOW.md`), `--host`, and `--port` (default: next unused port from 9999);
-`create --path` defaults to a sibling of the Symphony source. `start` accepts
-`--replace` and `--skip-doctor`.
+`WORKFLOW.md`), `--host`, `--port` (default: next unused port from 9999), and
+`--with-skill`. `create --path` defaults to a sibling of the Symphony source
+for an editable install, otherwise to `./<id>` in the current directory.
+`start` accepts `--replace` and `--skip-doctor`.
 
-A bootstrapped project receives `WORKFLOW.md` (from
-[`examples/advanced/WORKFLOW.file.example.md`](../examples/advanced/WORKFLOW.file.example.md)),
-`scripts/symphony-setup-worktree.sh`, `docs/symphony-prompts/`, `skills/`, and
-an `AGENTS.md` copied from [`examples/project/AGENTS.md`](../examples/project/AGENTS.md).
-Gemini CLI users can point Gemini at that file by setting `context.fileName`
-to `AGENTS.md` in `.gemini/settings.json`.
+A bootstrapped project receives three tracked files, committed in one
+`chore: initialize Symphony project` commit:
+
+- `WORKFLOW.md`: about 20 lines with `defaults: standard` (see
+  [WORKFLOW.md essentials](#workflowmd-essentials)); `server.host` and
+  `server.port` are the registered values, so `symphony doctor` checks the
+  port this project will really use.
+- `AGENTS.md`: the project-facing agent guide from
+  [`src/symphony/templates/project/AGENTS.md`](../src/symphony/templates/project/AGENTS.md).
+  Gemini CLI users set `context.fileName` to `AGENTS.md` in
+  `.gemini/settings.json`.
+- `kanban/.gitkeep`.
+
+Prompts and the worktree setup script are read from the package until you run
+`symphony eject`. `--with-skill` also copies the operator skill to
+`skills/symphony-skill/` and links `.claude/skills/symphony-skill` to it.
+With `preset: deep` (web project creation), the deep preset's prompt files are
+copied as well.
 
 The Hub and every project board show the canonical repository, workflow, and
 "Issues are stored here" board paths. Use **Manage projects** to enter a name
@@ -142,8 +205,9 @@ dependencies finish; `--frontier-only` imports only tickets whose
 dependencies are already Done. Add optional overlays explicitly in Wayfinder
 frontmatter: `superdesign` for UI, `superpm` for product research/spec work,
 and `superqa` for browser/runtime proof. The former production profile
-remains at `examples/advanced/WORKFLOW.file.example.md`, and
-`symphony project create` keeps using it.
+remains at `examples/advanced/WORKFLOW.file.example.md` as a fully explicit
+example; `symphony project create` writes the minimal `defaults: standard`
+workflow instead.
 
 Verified Done tickets merge into the launch branch locally, and bounded
 Build/Verify budgets stop runaway agent loops. Publishing is opt-in through
@@ -159,9 +223,9 @@ real merge succeeds, Symphony-written recovery diagnostics are marked
 `Resolved Blocker (history)` and the original text stays as history;
 operator-written Blockers are kept. Board `Done` alone does not confirm the
 target merge or worktree cleanup. See the
-[factory guide](../skills/symphony-skill/reference/factory.md) for limits and
+[factory guide](../src/symphony/templates/project/skills/symphony-skill/reference/factory.md) for limits and
 recovery, and the
-[PowerShell recovery steps](../skills/symphony-skill/reference/factory.md#powershell-recovery).
+[PowerShell recovery steps](../src/symphony/templates/project/skills/symphony-skill/reference/factory.md#powershell-recovery).
 
 **Bundled skills and browser runtimes.** The four standard skills are pinned
 inside the Symphony package and copied into each project, so beginners do not
@@ -229,12 +293,56 @@ indicator with a turn counter and climbing token totals. Quit with `Ctrl-C`.
 
 ## WORKFLOW.md essentials
 
-`symphony project create` / `project add` write a four-lane file-board
-`WORKFLOW.md` from
-[`examples/advanced/WORKFLOW.file.example.md`](../examples/advanced/WORKFLOW.file.example.md).
+`symphony project create` / `project add` write a minimal four-lane file-board
+`WORKFLOW.md`:
+
+```yaml
+---
+defaults: standard
+tracker:
+  kind: file
+  board_root: ./kanban
+workspace:
+  root: ~/symphony_workspaces/my-app
+  reuse_policy: refresh
+agent:
+  kind: codex
+  auto_merge_push_target: false
+server:
+  host: 127.0.0.1
+  port: 9999
+---
+
+You are working on {{ issue.identifier }}: {{ issue.title }}.
+```
+
+**`defaults: standard`** (opt-in) merges the package defaults in
+[`src/symphony/templates/project/defaults.yaml`](../src/symphony/templates/project/defaults.yaml)
+under your keys: the four-lane `tracker` states and descriptions, `prompts`
+(pointing at the package's prompt files), all four `hooks` (the
+`after_create` hook runs the package copy of `symphony-setup-worktree.sh`), and
+the per-agent command blocks (`codex`, `claude`, `gemini`, `agy`, `kiro`,
+`opencode`, `pi`, `prime_agent`).
+
+- **Explicit keys win.** Maps merge key by key, so a partial `hooks:` block
+  overrides only the hooks it names. `prompts.stages` and
+  `tracker.state_descriptions` are replaced as a whole when you set them.
+- `standard` is the only accepted value; anything else is a config error.
+- Without the key, nothing is filled in and the workflow behaves exactly as
+  in 0.28.
+
+**`symphony eject [prompts|hooks|all] [WORKFLOW]`** (default `all`) copies the
+package files into the project (`docs/symphony-prompts/file/...` for
+`prompts`, `scripts/symphony-setup-worktree.sh` for `hooks`) and writes the
+matching `prompts:` / `hooks:` keys into `WORKFLOW.md`, so you can edit them.
+It refuses to overwrite any existing file or symlink and undoes its writes on
+failure.
+
 [`WORKFLOW.example.md`](../WORKFLOW.example.md) targets Linear and needs an API
 key; the root [`WORKFLOW.file.example.md`](../WORKFLOW.file.example.md) is the
-factory profile. Four blocks matter for first-run sanity:
+factory profile; [`examples/advanced/WORKFLOW.file.example.md`](../examples/advanced/WORKFLOW.file.example.md)
+spells every block out. Without `defaults: standard`, four blocks matter for
+first-run sanity:
 
 ```yaml
 tracker:
@@ -418,7 +526,7 @@ agent:
   profiles:
     my-cli:
       command: 'my-cli run "$(cat)"'   # required
-      format: text                     # only `text` is supported today
+      format: text                     # `text` (default) or `acp`, below
       unattended_flags: [--yes]        # appended unless already in command
       continuation_flag: --continue    # added on continuation turns
       continuation_position: before_prompt_arg  # or `append` (default)
@@ -429,12 +537,43 @@ agent:
 `before_prompt_arg` inserts the flags before a trailing `"$(cat)"` argument
 and appends them otherwise. Profile names are lowercased and cannot reuse a
 built-in kind (`agy`, `antigravity`, `codex`, ...): that is a config error,
-not an override. Unknown keys and formats other than `text` are config
-errors. `agent.kind`, `agent.stage_kinds`, ticket pins, chat sessions,
+not an override. Unknown keys and formats other than `text` and `acp` are
+config errors. `agent.kind`, `agent.stage_kinds`, ticket pins, chat sessions,
 `agent.fallback_kinds` and `continuous_improvement.agent_kind` can select a
 profile. `symphony doctor` checks the profile command's
 executable. The built-in `agy` and `kiro` kinds run on the same profile
 engine, configured through their own blocks.
+
+**Agent Client Protocol (ACP) profiles.** `format: acp` runs any CLI that
+speaks [ACP](https://agentclientprotocol.com) (protocol v1, JSON-RPC over
+stdio) through one backend, [`backends/acp.py`](../src/symphony/backends/acp.py),
+with no Python per agent. One agent process and one ACP session live for the
+whole worker run; continuation turns send another `session/prompt` on the same
+session. Verified on 2026-10-28 with Kiro (a "Reply with exactly: ok" turn
+returned `ok` in 18.6 s):
+
+```yaml
+agent:
+  kind: kiro-acp
+  profiles:
+    kiro-acp:
+      command: kiro-cli acp --trust-all-tools
+      format: acp
+```
+
+- The CLI must already be logged in; Symphony does not authenticate it.
+- Permission requests are approved unattended, except commands flagged
+  dangerous, which are denied.
+- `unattended_flags`, `continuation_flag`, and `continuation_position` are
+  ignored, because turns reuse the session.
+- Per-turn token counts are not reported (the ACP usage field is still a
+  draft); context size and cost are passed through as events.
+- Not verified on Windows. `gemini --acp` (license error at `session/new`) and
+  `opencode acp` (local plugin load failure) did not work on the test machine
+  for account and plugin reasons outside Symphony.
+
+**Codex model.** `codex.model` is unset by default, so the Codex CLI's own
+default model applies. Set it to pin one (0.28 pinned `gpt-5.5`).
 
 **Per-ticket pin.** A file-board ticket can opt into a different backend with
 frontmatter:
@@ -486,6 +625,7 @@ board.
 | Kiro | `kiro-cli chat --no-interactive --trust-all-tools ...` headless chat. Kiro does not treat piped stdin as the first message, so Symphony bridges stdin into the positional input with `"$(cat)"` and adds `--resume` on continuation turns. Accepts `KIRO_API_KEY` or `kiro-cli login`. |
 | OpenCode | `opencode run --format json --auto`, prompt passed as the documented `message` argument; adds `--session <id>` once OpenCode reports a real session id. |
 | Pi | `pi --mode json -p ""` (JSONL), fresh process per turn with `--session <id>` from turn 2; usage accumulated from `message_end` events. Supports Anthropic / OpenAI / Gemini / Bedrock under one CLI ([pi.dev](https://pi.dev)); auth delegated to `~/.pi/agent/auth.json`. |
+| ACP profile | The profile `command` as one long-lived process: `initialize` → `session/new` → `session/prompt` per turn, streaming `session/update`. A dead agent is relaunched between turns and the session resumed when the agent supports `session/resume` or `session/load`. |
 | Prime Agent | `prime-agent -p --mode json` (same JSONL protocol as Pi), fresh process per turn with `--resume <id>` from turn 2. Auth through `~/.prime/agent/auth.json` or provider environment variables ([Prime Agent](https://github.com/cskwork/prime-agent)). On file boards, a clean exit after the ticket reaches a terminal state is accepted even if Prime Agent closes stdout before flushing `agent_end`; non-zero exits still fail. |
 
 The `AgentBackend` Protocol hides these differences. The orchestrator only
@@ -529,6 +669,30 @@ port collision, missing CLI on `$PATH`, the shipped placeholder clone URL,
 unwritable workspace, missing board directory. It also reports
 `board.deep_merge_contract`, `agent.stage_contracts`, the API token gate, and
 (on Windows) `shell.bash`.
+
+Checks added in 0.29:
+
+- `verify.command=<lane>`: each [verify command](#verify-gates)'s executable
+  resolves on `$PATH` (WARN if not; shell builtins are skipped).
+  `verify.config` FAILs on an invalid `verify:` block.
+- `claude.bash_permissions`: WARN when an active lane runs Claude with
+  `--permission-mode acceptEdits` and neither `.claude/settings.json` nor
+  `.claude/settings.local.json` has a `permissions.allow` entry starting with
+  `Bash`. Headless workers are then denied every shell command; a v0.25 live
+  run lost a ticket to exactly this. Fix it with a rule like this, and commit
+  the file, because workers run in worktrees of the committed tree:
+
+  ```json
+  {"permissions": {"allow": ["Bash(python3 -m pytest:*)", "Bash(git merge-tree:*)"]}}
+  ```
+
+- `app.release-contract`: FAIL when the board uses app release delivery but
+  `packages/release` is not installed.
+
+`symphony doctor --run-verify` also runs each verify command once in a
+temporary detached worktree of `HEAD` (`verify.run=<lane>`: exit code,
+timeout, duration, and the output tail on failure). The worktree is always
+removed; a removal failure is reported as `verify.cleanup`.
 
 `symphony [WORKFLOW]` and `symphony tui` run a doctor-lite preflight (agent
 CLI on `$PATH`, `after_create` placeholder) before starting and print one
@@ -954,6 +1118,67 @@ your prompts become the gate. It is never silent: Symphony logs
 See [PIPELINE.md](PIPELINE.md) for the stage contracts in depth and
 [PIPELINE-DEMO.md](PIPELINE-DEMO.md) for a walkthrough.
 
+## Verify gates
+
+Stage contracts check what the agent *wrote*. Verify gates let your own
+command decide whether a ticket may leave a lane (implementation:
+[`workflow/verify.py`](../src/symphony/workflow/verify.py)).
+
+```yaml
+verify:
+  timeout_ms: 600000              # default; per command run
+  commands:                       # keyed by the lane being LEFT
+    "In Progress": python -m pytest -q
+    Verify: python -m pytest -q && ruff check .
+```
+
+- When a worker moves a ticket forward out of a listed lane (to the next
+  active lane or to a successful terminal state such as Done), Symphony runs
+  the command with `bash -c` in the ticket workspace. Rewinds and moves to
+  `Blocked` do not trigger it.
+- The environment adds `SYMPHONY_ISSUE_ID`, `SYMPHONY_ISSUE_IDENTIFIER`,
+  `SYMPHONY_FROM_STATE`, `SYMPHONY_TO_STATE`, `SYMPHONY_WORKFLOW_DIR`,
+  `SYMPHONY_WORKSPACE_ROOT`, and `SYMPHONY_PYTHON` to the hook branch
+  variables.
+- Exit 0 passes. A non-zero exit or a timeout (the whole process group is
+  killed) appends a `## Verify Failure` section to the ticket, with the
+  command, the exit code or "timed out after N s", the duration, and the last
+  60 lines of combined output, then rewinds the ticket to the lane it left.
+  The usual rewind budget applies.
+- Verify runs whether or not `agent.stage_contracts` is on. When the lane also
+  has a stage contract, both must pass.
+- Every run appends one JSON line to `.symphony/traces/<ID>.jsonl`: `ts`,
+  `issue`, `from`, `to`, `command`, `exit_code`, `timed_out`, `duration_ms`,
+  `passed`.
+- Lane names match case-insensitively. Unknown keys under `verify:`, empty
+  commands, and a non-positive `timeout_ms` are config errors.
+
+Check commands before launching with `symphony doctor` (PATH lookup) and
+`symphony doctor --run-verify` (one real run against `HEAD`).
+
+## Needs: tickets waiting for an operator
+
+Symphony keeps `.symphony/needs.json` next to `WORKFLOW.md`, refreshed off the
+main tick (implementation: [`needs.py`](../src/symphony/needs.py)). It lists
+every ticket in a Blocked terminal lane or the budget-exhausted lane:
+
+```json
+{"TASK-1": {"state": "Blocked", "since": "2026-10-28T09:12:00Z",
+            "reason": "verify command failed: python -m pytest -q",
+            "action": "make this command pass: python -m pytest -q"}}
+```
+
+- `reason` and `action` come from the last `## Verify Failure`,
+  `## Environment Block`, `## Blocked`, or `## Contract Failure` section of the
+  ticket (`Reason:` / `Action:` lines when present, otherwise its first two
+  lines). Without one, they read `unknown` and `open the ticket`.
+- `since` is the first time the ticket was seen waiting.
+- With notifications configured, one message goes out per reason group (all
+  tickets sharing a reason) per UTC day; `.symphony/needs-sent.json` records
+  what was sent.
+- `symphony board show <ID>` prints
+  `needs: <reason>; action: <action> (since <time>)`.
+
 ## Skills
 
 Drop a skill next to `WORKFLOW.md` and attach it to a ticket in frontmatter:
@@ -976,7 +1201,9 @@ instead of silently dropped.
 
 ## Chat intake
 
-The admin UI's **Chat** page is backed by the same agent CLIs. Each new session
+Requires the optional `packages/chat` distribution (see
+[Optional components](#optional-components)); without it the Chat entry is
+hidden. The admin UI's **Chat** page is backed by the same agent CLIs. Each new session
 can use Claude Code, Codex, Gemini CLI, AGY, Kiro, OpenCode, Pi, or Prime
 Agent; the workflow's configured agent is the default. Chat is the front door
 of a delivery cycle with exactly one human gate:
@@ -1036,7 +1263,10 @@ artifacts:
 
 ## Machine gate for application releases
 
-Production application delivery is opt-in. Add the `app-release` label to the
+Requires the optional `packages/release` distribution (see
+[Optional components](#optional-components)); without it, release-labelled
+tickets are parked in `Blocked` and never merged. Production application
+delivery is opt-in. Add the `app-release` label to the
 Verify ticket, add `app-release-finalizer` to the delivery ticket the contract
 names, and commit `release-contract.yaml` at the project root. Background:
 [ADR 0002](adr/0002-machine-enforced-app-release-contracts.md).
@@ -1227,7 +1457,11 @@ symphony pm demo --lang ko   # Korean; --path DIR picks the folder
 ```
 
 The demo needs `git` and Node.js 20.19.0 or newer, and is not verified on
-Windows. Details: [pm-workspace.md](pm-workspace.md) and
+Windows. PM Workspace requires the optional `packages/pm` distribution (see
+[Optional components](#optional-components)). Its browser assets live in
+`packages/pm/src/symphony/pm/static/`; rebuild the vendored bundle with
+`npm ci && npm run build:pm-assets` inside `packages/pm`. Details:
+[pm-workspace.md](pm-workspace.md) and
 [pm-workspace-operations.md](pm-workspace-operations.md).
 
 ## Language (i18n)
@@ -1249,16 +1483,16 @@ Symphony runs on macOS, Linux, and Windows. Windows needs Git Bash (Git for
 Windows); doctor reports `FAIL shell.bash` without it, and the WSL `bash.exe`
 launcher is rejected. On Windows, prefer Windows Terminal for the TUI; the
 legacy cmd.exe console may glitch colors. See
-[platform-compat.md](../skills/symphony-skill/reference/platform-compat.md)
+[platform-compat.md](../src/symphony/templates/project/skills/symphony-skill/reference/platform-compat.md)
 for per-platform setup and caveats, and the factory guide's
-[Windows notes](../skills/symphony-skill/reference/factory.md#windows-service-interruption).
+[Windows notes](../src/symphony/templates/project/skills/symphony-skill/reference/factory.md#windows-service-interruption).
 
 ## Architecture and source layout
 
 A multi-agent fork of [OpenAI's Symphony reference implementation](https://github.com/openai/symphony).
 Upstream polls a tracker and runs a Codex session inside a per-issue
 workspace. This fork keeps that file-first orchestrator and adds eight agent
-backends, the TUI and web operator surfaces, SQLite run leases, restart-safe
+backends plus data-only `agent.profiles` (plain-text and ACP), the TUI and web operator surfaces, SQLite run leases, restart-safe
 issue flags, and locked Markdown ticket writes.
 
 **Reliability ledger.** `.symphony/state.db` is a single-node SQLite ledger.
@@ -1274,7 +1508,9 @@ See [architecture.md](architecture.md) and the [ADRs](adr/).
 src/symphony/
   backends/          AgentBackend Protocol + factory + normalized events;
                      codex.py, claude_code.py, gemini.py, agy.py, kiro.py,
-                     opencode.py, pi.py, prime_agent.py adapters
+                     opencode.py, pi.py, prime_agent.py adapters;
+                     plain_cli.py (format: text) and acp.py (format: acp)
+                     run agent.profiles
   trackers/          TrackerClient Protocol + factory; file.py (locked
                      Markdown ticket mutations), jira.py, linear.py, _retry.py
   workflow/
@@ -1284,17 +1520,23 @@ src/symphony/
     mutate.py        comment-preserving workflow edits for the web UI
     presets.py       lane presets (4-lane default, 8-lane deep)
     preflight.py     dispatch-time validation
+    verify.py        verify: gates (config, runner, traces)
   orchestrator/
     core.py          scheduler/state machine (blocked_by-aware dispatch)
     run_registry.py  SQLite WAL run leases + issue flags
     contracts.py     stage-contract validation helpers
+    release_seam.py  only door to the optional release package; fail-closed
+                     parking when it is absent
   cli/
     main.py          root dispatch + `symphony [WORKFLOW]`
     board.py         `symphony board ...` validated ticket tool + `graph`
     doctor.py        `symphony doctor` WORKFLOW.md preflight checks
-    factory.py, project.py, pm.py, release.py   subcommands
+    eject.py         `symphony eject`
+    factory.py, project.py, pm.py, release.py   subcommands (pm/release
+                     print an install hint without their package)
   factory/           factory templates and bundled skills
-  pm/                PM Workspace
+  templates/project/ project bootstrap: WORKFLOW.md, AGENTS.md,
+                     defaults.yaml, prompts, setup script, operator skill
   utils/             auto_merge.py, git_inspect.py, git_ops.py, git_sandbox.py,
                      archive.py, keep_awake.py, wiki_sweep.py
   notifications/     Slack state-transition notifications
@@ -1305,7 +1547,8 @@ src/symphony/
   hub.py             multi-project hub
   projects.py        multi-project registry + managed service metadata
   product_preview.py detached target-branch preview lifecycle
-  chat.py            operator chat sessions + intent gate (intent.py files the ticket)
+  agent_modes.py     qa/edit interaction-mode configs (chat + improvement sweep)
+  needs.py           .symphony/needs.json + daily needs notifications
   continuous_improvement.py  idle-time improvement-proposal loop
   i18n.py            TUI/doc language switching
   stats.py           .symphony/stats.jsonl aggregation
@@ -1314,6 +1557,11 @@ src/symphony/
   progress_md.py     WORKFLOW-PROGRESS.md live mirror
   mock_codex.py      demo backend via `python -m symphony.mock_codex`
   agent.py           back-compat shim re-exporting backends.* symbols
+
+packages/            optional distributions (same `symphony.*` namespace)
+  pm/src/symphony/pm/            PM Workspace, routes, static/ browser assets
+  chat/src/symphony/chat/        chat sessions (__init__), intent.py, routes.py
+  release/src/symphony/release/  authority, contracts, cycle, transition, cli
 ```
 
 ## Tests and contributing
@@ -1322,11 +1570,16 @@ PRs welcome. External contributions target `dev` by default; see
 [CONTRIBUTING.md](../CONTRIBUTING.md) and the PR template. Before opening one:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev]" -e packages/pm -e packages/chat -e packages/release
+npm ci --prefix packages/pm  # PM Node UI tests
 python -m pytest -q          # must stay green
-python -m ruff check src tests
+python -m ruff check src tests packages/pm packages/chat packages/release
 symphony-pyright             # pins Pyright to the interpreter that runs it
 ```
+
+`tests/test_core_without_pm.py`, `test_core_without_chat.py`, and
+`test_core_without_release.py` check that core works without each package;
+CI also installs the core wheel alone.
 
 The suite covers the upstream conformance suite, backend unit tests (factory,
 event normalization, per-CLI command/session handling), board-tool DAG
@@ -1356,6 +1609,10 @@ Fork-specific:
 - Gemini has no multi-turn continuity (the CLI has no session protocol). AGY
   and Kiro continuations use their CLI flags but do not expose token
   accounting.
+- ACP profiles report no per-turn token counts, and are not verified on
+  Windows.
+- PRD LR-4 (one engine, thin clients) is not done: `symphony tui` still runs
+  its own orchestrator in-process.
 
 ## Acknowledgements
 

@@ -6,11 +6,19 @@ host-owned release gates for `app-release` tickets, repair cycles, finalizer
 guards and `symphony release check`. The core `oh-my-symphony` package runs
 without it.
 
-Install it next to core from a checkout of this repository:
+Not on PyPI. Install it next to core from a checkout of this repository; it
+pins the same core version (`oh-my-symphony==0.29.0`):
 
 ```bash
+python -m pip install ./packages/release
+# editable:
 python -m pip install -e . -e packages/release
+# into a uv tool install:
+uv tool install --force . --with ./packages/release
 ```
+
+Install it before upgrading a board that already has release tickets.
+Usage: [Machine gate for application releases](../../docs/reference.md#machine-gate-for-application-releases).
 
 Without this package, core fails closed for release work: a ticket that
 carries the `app-release`, `app-release-finalizer` or `release-cycle-verifier`

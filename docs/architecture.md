@@ -11,15 +11,17 @@ of greps.
 
 ```
 src/symphony/
-├── __init__.py          # package docstring + __version__ only
+├── __init__.py          # __version__ + optional-component helpers (component_installed, install_hint)
 ├── __main__.py          # `python -m symphony` entry point
 ├── _shell.py            # safe subprocess wrappers
 ├── agent.py             # backwards-compat shim for symphony.backends
+├── agent_modes.py       # qa/edit interaction-mode configs (cfg_for_mode)
 ├── errors.py            # typed exceptions
 ├── i18n.py              # message catalog (Korean + English)
 ├── issue.py             # Issue dataclass (canonical board card)
 ├── logging.py           # structured logger setup
 ├── mock_codex.py        # offline codex stub used in tests + demos
+├── needs.py             # .symphony/needs.json + daily needs notifications
 ├── progress_md.py       # WORKFLOW-PROGRESS.md renderer
 ├── prompt.py            # symphony-prompts loader / variable expansion
 ├── server.py            # aiohttp app, state / health / refresh routes
@@ -29,16 +31,22 @@ src/symphony/
 ├── webapi/             # web board REST routes + static SPA serving — see below
 ├── workspace.py         # git-worktree lifecycle + commit_workspace_on_done
 │
-├── backends/            # agent CLI adapters (codex, claude, gemini, opencode, pi, prime_agent)
-├── cli/                 # `symphony` argparse surface (board, doctor, main)
+├── backends/            # agent CLI adapters (codex, claude, gemini, opencode, pi, prime_agent) + plain_cli / acp profiles
+├── cli/                 # `symphony` argparse surface (board, doctor, eject, main, ...)
 ├── notifications/       # opt-in Slack dispatcher
 ├── orchestrator/        # state machine + run registry — see below
+├── templates/project/   # project bootstrap files + defaults.yaml for `defaults: standard`
 ├── trackers/            # board adapters (file, jira, linear)
 ├── tui/                 # Textual Kanban UI — see "TUI package"
 ├── utils/               # archive, auto-merge, keep-awake, wiki-sweep
 ├── web/static/           # built-in browser board assets
 └── workflow/            # WORKFLOW.md loader + typed config — see below
 ```
+
+The PM Workspace (`symphony.pm`), operator chat (`symphony.chat`), and app
+release contracts (`symphony.release`) are optional distributions under
+`packages/{pm,chat,release}/src/symphony/`; `symphony/__init__.py` extends
+`__path__` so they join the same namespace.
 
 The old single-file `workflow.py`, `tui.py`, and `orchestrator.py`
 surfaces are now packages. Public imports are preserved through package
@@ -62,6 +70,7 @@ and state.
 | `builder.py` | `build_service_config` + strict validators |
 | `mutate.py` | comment-preserving `WORKFLOW.md` edits for web column / prompt / branch policy UI |
 | `preflight.py` | `validate_for_dispatch` |
+| `verify.py` | `verify:` gate config, `run_verify`, `.symphony/traces/<ID>.jsonl` |
 | `state.py` | `WorkflowState` hot reload |
 | `__init__.py` | re-exports the full surface from `symphony.workflow.*` |
 
