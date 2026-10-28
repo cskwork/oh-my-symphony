@@ -433,3 +433,73 @@ def test_exit_after_reconcile_started_cleanup_is_not_gated_twice(
     asyncio.run(worker_exit.handle_worker_exit(orchestrator, issue.id, "cancelled", None))
 
     assert calls == []
+
+
+def test_shutdown_after_a_forward_edit_is_gated_on_the_next_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shutdown skips exit commands, so the restart must gate the lane left."""
+    from symphony.orchestrator import worker_exit
+    from symphony.workflow.verify import gate_lane_of, remember_gate_lane
+
+    cfg, ticket, workspace, orchestrator, issue = _forward_edited_entry(
+        tmp_path, monkeypatch, "Verify"
+    )
+    # The turn that made the edit started in In Progress and recorded it.
+    remember_gate_lane(cfg, "MT-1", "in progress")
+    orchestrator._stopping = True
+
+    asyncio.run(
+        worker_exit.handle_worker_exit(orchestrator, issue.id, "shutdown_interrupted", None)
+    )
+
+    assert parse_ticket_file(ticket)[0]["state"] == "Verify"
+    assert gate_lane_of(cfg, "MT-1") == "in progress"
+
+    front, body = parse_ticket_file(ticket)
+    _run_attempt(cfg, ticket, workspace, monkeypatch, [("Done", body)])
+
+    front, body = parse_ticket_file(ticket)
+    assert front["state"] != "Done"
+    assert "\n## Verify Failure\n" in body
+    traces = _records(cfg, "traces/MT-1.jsonl")
+    # The restart gate ran before any new turn: In Progress -> Verify, failed.
+    assert (traces[0]["from"], traces[0]["to"], traces[0]["passed"]) == (
+        "in progress", "verify", False
+    )
+    assert not any(trace["passed"] for trace in traces)
+
+
+def test_turns_record_their_gated_lane_and_handled_exits_forget_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from symphony.orchestrator import worker_exit
+    from symphony.workflow.verify import gate_lane_of
+
+    cfg, ticket, workspace = _prepare(tmp_path, command="true", contracts="off")
+    seen: list[str | None] = []
+    real_run_turn = agent_phase_mod.agent_attempt._run_turn
+
+    async def spy(orch, st, prompt, is_continuation):
+        seen.append(gate_lane_of(cfg, "MT-1"))
+        return await real_run_turn(orch, st, prompt, is_continuation)
+
+    monkeypatch.setattr(agent_phase_mod.agent_attempt, "_run_turn", spy)
+    orchestrator, _ = _run_attempt(
+        cfg, ticket, workspace, monkeypatch, [("Verify", _IN_PROGRESS_BODY_COMPLETE)]
+    )
+
+    # Turn 1 starts in the gated lane; turn 2 starts in Verify, which has no gate.
+    assert seen == ["in progress", None]
+    # The gate passed on the forward move, so nothing is left to re-check.
+    assert gate_lane_of(cfg, "MT-1") is None
+    assert parse_ticket_file(ticket)[0]["state"] == "Verify"
+
+    from symphony.workflow.verify import remember_gate_lane
+
+    remember_gate_lane(cfg, "MT-1", "in progress")
+    issue = _make_issue_from_disk("Verify", _IN_PROGRESS_BODY_COMPLETE)
+    _seed_running_entry(orchestrator, issue, workspace)
+    monkeypatch.setattr(orchestrator._workflow_state, "current", lambda: cfg)
+    asyncio.run(worker_exit.handle_worker_exit(orchestrator, issue.id, "normal", None))
+    assert gate_lane_of(cfg, "MT-1") is None

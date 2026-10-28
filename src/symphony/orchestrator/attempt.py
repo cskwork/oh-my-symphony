@@ -75,11 +75,18 @@ from ..issue import Issue, normalize_state
 from ..logging import get_logger
 from ..prompt import build_continuation_prompt, build_first_turn_prompt
 from ..utils import git_inspect
-from ..workflow.verify import gates_from, verify_config
+from ..workflow.verify import (
+    crossed_commands,
+    gate_lane_of,
+    gates_from,
+    remember_gate_lane,
+    verify_config,
+)
 from ..workflow import ServiceConfig
 from ..workspace import Workspace, WorkspaceManager
 from .entries import RunningEntry, _IssueDebug
 from .helpers import (
+    _canonical_state_label,
     _config_for_issue_agent,
     _is_rewind_transition,
     _is_successful_terminal_state,
@@ -168,6 +175,8 @@ class _AttemptState:
     prev_phase_state_raw: str = ""
     known_app_release: bool = False
     current_state: str = ""
+    # Last gated lane persisted for this ticket (see `_remember_turn_lane`).
+    remembered_gate_lane: str = ""
 
 
 # ----------------------------------------------------------------------
@@ -264,11 +273,65 @@ async def _run_attempt(
         return started
     st = started
     try:
+        await _gate_move_left_by_unhandled_exit(orch, st)
         await _start_backend(orch, st)
         await _open_session(orch, st)
         return await _run_turn_loop(orch, st)
     finally:
         await _cleanup_backend(orch, st)
+
+
+async def _remember_turn_lane(st: _AttemptState) -> None:
+    """Persist the gated lane this turn starts in, so a shutdown cannot skip it."""
+    commands = verify_config(st.cfg).commands
+    if (
+        not commands
+        or st.current_state == st.remembered_gate_lane
+        or not gates_from(commands, st.current_state, st.cfg.tracker.active_states)
+    ):
+        return
+    try:
+        await asyncio.to_thread(
+            remember_gate_lane, st.cfg, st.issue.identifier, st.current_state
+        )
+    except OSError as exc:
+        # Losing the record only weakens restart recovery; the in-run gates hold.
+        log.warning("verify_gate_lane_write_failed", identifier=st.issue.identifier, error=str(exc))
+        return
+    st.remembered_gate_lane = st.current_state
+
+
+async def _gate_move_left_by_unhandled_exit(
+    orch: Orchestrator, st: _AttemptState
+) -> None:
+    """Gate a forward move whose worker exit never ran (shutdown, host crash).
+
+    The previous attempt persisted the lane its last turn started in; a ticket
+    that now sits further along must pass the crossed lanes' commands before
+    a new turn starts, exactly as if its exit had been handled.
+    """
+    commands = verify_config(st.cfg).commands
+    if not commands:
+        return
+    lane = await asyncio.to_thread(gate_lane_of, st.cfg, st.issue.identifier)
+    current = normalize_state(st.issue.state)
+    if not lane or not crossed_commands(
+        commands, lane, current, st.cfg.tracker.active_states
+    ):
+        return
+    outcome = await orch._enforce_stage_contract(
+        cfg=st.cfg,
+        running_issue_id=st.running_issue_id,
+        issue=st.issue,
+        producing_state=lane,
+        producing_state_raw=_canonical_state_label(st.cfg, lane),
+        current_state=current,
+        workspace_path=st.workspace.path,
+        known_app_release=st.known_app_release,
+        running_entry=st.running,
+    )
+    st.issue = outcome.issue
+    st.running.issue = outcome.issue
 
 
 # ----------------------------------------------------------------------
@@ -620,6 +683,7 @@ async def _run_turn_loop(orch: Orchestrator, st: _AttemptState) -> _AttemptExit 
         await _honour_pause_gate(orch, st)
 
         st.current_state = normalize_state(st.issue.state)
+        await _remember_turn_lane(st)
         st.debug = orch._issue_debug.setdefault(st.running_issue_id, _IssueDebug())
         if (
             st.cfg.agent.max_total_turns > 0

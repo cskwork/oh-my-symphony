@@ -49,7 +49,7 @@ from ..errors import SymphonyError
 from ..issue import Issue, normalize_state
 from ..logging import get_logger
 from ..workflow import ServiceConfig
-from ..workflow.verify import verify_config
+from ..workflow.verify import gates_from, remember_gate_lane, verify_config
 from ..workspace import HISTORY_PUSH_FAILED, HistoryGateResult
 from .constants import CONTINUATION_RETRY_DELAY_MS, RETRY_BASE_MS
 from .entries import RunningEntry, _IssueDebug
@@ -85,6 +85,13 @@ def _core():
 # ----------------------------------------------------------------------
 
 
+async def _write_gate_lane(cfg: ServiceConfig, entry: RunningEntry, lane: str | None) -> None:
+    try:
+        await asyncio.to_thread(remember_gate_lane, cfg, entry.issue.identifier, lane)
+    except OSError as exc:
+        log.warning("verify_gate_lane_write_failed", identifier=entry.issue.identifier, error=str(exc))
+
+
 async def handle_worker_exit(
     orch: Orchestrator,
     issue_id: str,
@@ -116,6 +123,17 @@ async def handle_worker_exit(
         )
     ):
         await orch._enforce_factory_exit_contract(cfg, entry)
+    if cfg is not None and verify_config(cfg).commands:
+        if reason != "shutdown_interrupted" and not orch._stopping:
+            # Handled: gated above, or by reconcile before it started cleanup.
+            await _write_gate_lane(cfg, entry, None)
+        else:
+            turn_lane = normalize_state(entry.state_at_turn_start)
+            if turn_lane and gates_from(
+                verify_config(cfg).commands, turn_lane, cfg.tracker.active_states
+            ):
+                # A shutdown runs no commands; the next dispatch gates the move.
+                await _write_gate_lane(cfg, entry, turn_lane)
     if reason == "cancelled" and cfg is not None:
         # Reconcile can cancel a worker after its card is archived/stopped.
         # Read current tracker state: an old terminal snapshot must not

@@ -41,6 +41,7 @@ from ..workflow.verify import (
     append_verify_trace,
     crossed_commands,
     gates_from,
+    remember_gate_lane,
     run_verify,
     verification_scope,
     verify_config,
@@ -420,6 +421,11 @@ async def _evaluate_stage_gates(
                     heading="Verify Failure",
                     body=note,
                 )
+        # Every crossed gate passed; nothing is left to re-check after a restart.
+        try:
+            await asyncio.to_thread(remember_gate_lane, cfg, issue.identifier, None)
+        except OSError as exc:
+            log.warning("verify_gate_lane_clear_failed", identifier=issue.identifier, error=str(exc))
     if not contract_enabled:
         return _StageContractOutcome(issue, current_state, known_app_release, False)
     contract = evaluate_contract(

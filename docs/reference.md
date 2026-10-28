@@ -1143,8 +1143,10 @@ verify:
   too, in lane order, and a failure names the skipped lane. A worker that
   crashes, or is cancelled for a stall or budget, after a forward edit still
   faces the gate when its exit is handled. Reconcile gates a ticket it finds
-  in Done before it cancels the worker; only a service shutdown exits without
-  running commands. Rewinds and moves to
+  in Done before it cancels the worker. A service shutdown runs no commands;
+  instead each turn records its gated lane in `.symphony/verify-pending.json`,
+  and the next dispatch gates any forward move made since (this also covers a
+  host crash). Rewinds and moves to
   `Blocked` do not trigger it. `SYMPHONY_GATE_LANE` names the lane whose
   command is running.
 - The environment adds `SYMPHONY_ISSUE_ID`, `SYMPHONY_ISSUE_IDENTIFIER`,

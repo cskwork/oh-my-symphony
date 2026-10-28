@@ -12,11 +12,13 @@ from pathlib import Path
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from typing import TYPE_CHECKING, Iterator
 
 from .._shell import resolve_bash
 from ..errors import ConfigValidationError
+from ..utils.atomic_json import write_json_atomic
 from .coercion import _normalize_state_key
 
 if TYPE_CHECKING:
@@ -113,6 +115,46 @@ def gates_from(
 ) -> bool:
     """Whether a forward move out of *producing_state* can cross any gate."""
     return bool(crossed_commands(commands, producing_state, "", active_states))
+
+
+_GATE_LANES_LOCK = threading.Lock()
+
+
+def _gate_lanes_path(cfg: ServiceConfig) -> Path:
+    return cfg.workflow_path.parent / ".symphony" / "verify-pending.json"
+
+
+def _read_gate_lanes(path: Path) -> dict[str, str]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): v for k, v in value.items() if isinstance(v, str)}
+
+
+def gate_lane_of(cfg: ServiceConfig, identifier: str) -> str | None:
+    """The gated lane the ticket's last unfinished turn started in, if any."""
+    return _read_gate_lanes(_gate_lanes_path(cfg)).get(identifier)
+
+
+def remember_gate_lane(cfg: ServiceConfig, identifier: str, lane: str | None) -> None:
+    """Persist (or with ``None`` forget) the gated lane a turn starts in.
+
+    A forward move whose exit is never handled (service shutdown, host crash)
+    is gated from this lane on the next dispatch instead of being lost.
+    """
+    path = _gate_lanes_path(cfg)
+    with _GATE_LANES_LOCK:
+        lanes = _read_gate_lanes(path)
+        if lanes.get(identifier) == lane:
+            return
+        if lane is None:
+            lanes.pop(identifier, None)
+        else:
+            lanes[identifier] = lane
+        write_json_atomic(path, lanes)
 
 
 @dataclass(frozen=True)
