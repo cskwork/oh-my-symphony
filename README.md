@@ -15,7 +15,59 @@ are Markdown files in your repo by default; Linear and Jira also work.
 ![Symphony web board](docs/admin-ui-screenshot.png)
 
 Forked from [OpenAI's Symphony reference implementation](https://github.com/openai/symphony).
-Full details: **[docs/reference.md](docs/reference.md)**.
+Full details: **[docs/reference.md](docs/reference.md)**. Live site:
+**[cskwork.github.io/oh-my-symphony](https://cskwork.github.io/oh-my-symphony/)**.
+
+## Why
+
+Running several coding agents at once usually means several terminals, agents
+editing the same checkout, and no record of who is working on what. Symphony
+gives each ticket its own branch and worktree, dispatches it to the agent CLI
+you chose, and keeps the run state (leases, retries, pauses) in a local
+database so a restart does not start the same ticket twice.
+
+## How it works
+
+```mermaid
+flowchart LR
+  B["Tracker<br/>file board (kanban/*.md) · Linear · Jira<br/>src/symphony/trackers/"] -->|poll| O["Orchestrator<br/>src/symphony/orchestrator/"]
+  O <-->|"leases · retry · pause"| R[("SQLite (WAL)<br/>run_registry.py")]
+  O -->|"after_create hook"| W["git worktree per ticket<br/>symphony/ID branch"]
+  O -->|"build_backend(agent.kind)"| A["Agent backend<br/>codex · claude · gemini · agy · kiro<br/>opencode · pi · prime-agent<br/>src/symphony/backends/"]
+  A -->|runs in| W
+  A -->|"turns · tokens · rate limits"| O
+  W -->|"state: Done + Resolution"| B
+  O --> UI["TUI (Textual) · web board :9999<br/>/api/v1/* (aiohttp)"]
+```
+
+Module map, invariants, and test seams: [docs/architecture.md](docs/architecture.md).
+
+**Key decisions**
+
+- **One factory, many agents.** `build_backend` in
+  [`src/symphony/backends/__init__.py`](src/symphony/backends/__init__.py)
+  picks the adapter from `agent.kind`; a ticket's `agent_kind` frontmatter or
+  `agent.stage_kinds` overrides it, and `agent.profiles` adds a plain CLI
+  without code.
+- **Isolation by git worktree, not containers.** The `after_create` hook runs
+  [`scripts/symphony-setup-worktree.sh`](scripts/symphony-setup-worktree.sh)
+  to attach each workspace on a `symphony/<ID>` branch, so the host checkout
+  stays untouched.
+- **Durable run leases.** `RunRegistry.acquire_run` in
+  [`src/symphony/orchestrator/run_registry.py`](src/symphony/orchestrator/run_registry.py)
+  must own a SQLite (WAL) lease before a worker starts; dead owners are
+  reclaimed, and retry/pause/budget flags survive restarts.
+- **Files as the default tracker.** Tickets are Markdown in `kanban/`; writes
+  go through a lock and compare-and-swap path in
+  [`src/symphony/trackers/file.py`](src/symphony/trackers/file.py), so no SaaS
+  or API key is needed to start.
+- **Cheap health.** `/api/v1/health` reads counters only, so `symphony service`
+  can probe it even when tracker refresh is degraded
+  ([`src/symphony/server.py`](src/symphony/server.py)).
+
+Recorded decisions: [docs/adr/](docs/adr/) (immutable project runtimes,
+machine-enforced release contracts, bounded run diagnostics, crash
+continuation, opt-in DAG scheduling, lean core).
 
 ## Install
 
@@ -192,6 +244,33 @@ python -m pytest -q
 python -m ruff check src tests
 symphony-pyright
 ```
+
+## Testing
+
+Last observed (2026-10-28, CI on ubuntu-latest, Python 3.12,
+[run 40613870510](https://github.com/cskwork/oh-my-symphony/actions/runs/40613870510)):
+
+| Command | Passed | Failed | Skipped |
+|---|---|---|---|
+| `python -m pytest -q -n auto -m "not timing"` | 3772 | 0 | 134 |
+| `python -m pytest -q -n0 -m timing` | 11 | 0 | 1 |
+
+Line coverage 85.52% (`--cov-fail-under=80`). The suite has 141 `test_*.py`
+files under `tests/`.
+
+CI ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs ruff,
+the i18n check, pyright, and the suite with an 80% coverage floor on Ubuntu,
+plus a native Windows lifecycle job.
+
+## Limitations
+
+- Not on PyPI yet; install from a checkout.
+- Windows needs Git Bash; some lifecycle behavior is only verified by the
+  Windows CI job.
+- Linear and Jira boards are read-only in the browser; editing is file-board
+  only.
+- Browser end-to-end tests are opt-in (`SYMPHONY_BROWSER_E2E=1` plus
+  Playwright browsers) and are not part of the default run.
 
 ## License
 

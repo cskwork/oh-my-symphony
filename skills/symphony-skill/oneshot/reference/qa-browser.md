@@ -171,8 +171,8 @@ The `qa-engineer` skill exists for *deployed* (dev/stg/prod) environments
 on the user's company stack. Use it instead of the localhost Playwright
 flow when:
 
-- `brief.md`'s "How to run" points at an `https://*.aidt.*` (or other
-  company-deployed) URL, not `localhost:*`.
+- `brief.md`'s "How to run" points at a company-deployed URL (for example
+  `https://app.example.com`), not `localhost:*`.
 - The product is being shipped *to* a deployed environment, not just built.
 
 In that case the QA lane prompt should:
