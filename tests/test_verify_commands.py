@@ -79,12 +79,14 @@ def test_timeout_kills_whole_process_group(tmp_path: Path):
         "import os, pathlib, signal, time; "
         "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
         f"pathlib.Path({str(pidfile)!r}).write_text(str(os.getpid())); "
-        f"time.sleep(0.8); pathlib.Path({str(marker)!r}).touch()"
+        f"time.sleep(3); pathlib.Path({str(marker)!r}).touch()"
     )
-    result = run_verify(f"{shlex.quote(sys.executable)} -c {shlex.quote(script)} & wait", tmp_path, 300)
+    # 2 s leaves a loaded CI host time to start Python and write the pid file
+    # before the timeout fires; the grandchild would survive until 3 s.
+    result = run_verify(f"{shlex.quote(sys.executable)} -c {shlex.quote(script)} & wait", tmp_path, 2000)
     assert result.timed_out
     assert not result.passed
-    assert "timed out after 0.3 s" in result.failure_note("example", 300)
+    assert "timed out after 2 s" in result.failure_note("example", 2000)
     pid = int(pidfile.read_text())
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
