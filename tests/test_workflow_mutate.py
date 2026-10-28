@@ -64,7 +64,7 @@ def install_shipped_prompts(root: Path) -> None:
     preset test must start from a board that has them — exactly like the
     `cp -R docs/symphony-prompts` step the error message names.
     """
-    source = Path(__file__).resolve().parents[1] / "docs" / "symphony-prompts"
+    source = Path(__file__).resolve().parents[1] / "src/symphony/templates/project" / "docs" / "symphony-prompts"
     target = root / "docs" / "symphony-prompts"
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
@@ -501,10 +501,33 @@ def test_apply_lane_preset_points_at_the_real_shipped_prompt_bodies(
     ).read_text(encoding="utf-8")
 
 
-def test_apply_lane_preset_refuses_a_board_without_the_prompt_files(
+def test_apply_lane_preset_fills_missing_prompt_files_from_the_package(
     tmp_path: Path,
 ) -> None:
+    """A `defaults: standard` board has no prompt files: copy the shipped bodies."""
+    path = tmp_path / "WORKFLOW.md"
+    path.write_text(WORKFLOW_TEXT, encoding="utf-8")
+
+    apply_lane_preset(path, "deep")
+
+    deep_dir = tmp_path / "docs" / "symphony-prompts" / "file" / "deep"
+    assert "PLAN -- decompose into a ticket DAG" in (deep_dir / "plan.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Do the work this column stands for" not in (
+        deep_dir / "build.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_apply_lane_preset_refuses_when_the_package_lacks_the_prompt_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The upgrade case: refuse loudly instead of degrading the board."""
+    import symphony.templates.project as project_templates
+
+    monkeypatch.setattr(
+        project_templates, "resource_path", lambda relative: tmp_path / "absent" / relative
+    )
     path = tmp_path / "WORKFLOW.md"
     path.write_text(WORKFLOW_TEXT, encoding="utf-8")
     before = path.read_text(encoding="utf-8")
@@ -517,6 +540,7 @@ def test_apply_lane_preset_refuses_a_board_without_the_prompt_files(
     assert "cp -R" in message
     assert "Nothing was changed" in message
     assert path.read_text(encoding="utf-8") == before
+    assert not (tmp_path / "docs").exists()
 
 
 def test_apply_lane_preset_round_trips_back_to_default(workflow: Path) -> None:

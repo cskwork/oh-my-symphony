@@ -633,9 +633,9 @@ def _require_preset_prompt_files(workflow_path: Path, preset: LanePreset) -> Non
     stands for…") and report success. That is the normal state of any repo
     bootstrapped before a preset shipped, so the board silently degraded from
     a gated pipeline to "do something" — with the mutation already written.
-    The prompt bodies are documentation files (`docs/symphony-prompts/**`),
-    not package data, so the honest answer is to name the missing files and
-    the one command that fixes them.
+    Missing bodies that the package bundles are copied into the board; only
+    files the package does not ship are refused, naming them and the one
+    command that fixes them.
     """
     workflow_dir = workflow_path.parent.resolve()
 
@@ -653,6 +653,18 @@ def _require_preset_prompt_files(workflow_path: Path, preset: LanePreset) -> Non
         if not _resolved(rel).is_file()
     ]
     if not missing:
+        return
+    # Projects created with `defaults: standard` carry no prompt files; the
+    # package ships every preset's prompt bodies, so copy them in, but only
+    # when all of them are available (all or nothing).
+    from ..templates.project import resource_path
+
+    bundled = {rel: resource_path(rel.removeprefix("./")) for rel in missing}
+    if all(source.is_file() for source in bundled.values()):
+        for rel, source in bundled.items():
+            target = _resolved(rel)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
         return
     raise WorkflowMutationError(
         f"lane preset {preset.name!r} needs prompt files this board does not "

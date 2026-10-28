@@ -7,17 +7,23 @@ import asyncio
 import os
 import socket
 import sys
+from typing import Any
 
+from .. import PM_INSTALL_HINT, pm_installed
 from ..orchestrator import Orchestrator
-from ..pm.demo import (
-    DemoError,
-    DemoWorkspace,
-    claim_demo_directory,
-    create_demo,
-    preflight_demo,
-)
-from ..pm.demo_server import bind_demo_socket, build_demo_app, start_demo_server
 from ..workflow import WorkflowState
+
+# The PM Workspace is an optional distribution; without it `main` only prints
+# the install hint. The names stay module attributes for test monkeypatching.
+if pm_installed():
+    from ..pm.demo import (  # pyright: ignore[reportMissingImports]
+        DemoError,
+        DemoWorkspace,
+        claim_demo_directory,
+        create_demo,
+        preflight_demo,
+    )
+    from ..pm.demo_server import bind_demo_socket, build_demo_app, start_demo_server  # pyright: ignore[reportMissingImports]
 
 
 async def _serve(workspace: DemoWorkspace, sock: socket.socket, trusted_origins: bool) -> None:
@@ -50,13 +56,17 @@ async def _serve(workspace: DemoWorkspace, sock: socket.socket, trusted_origins:
 def _failure(exc: Exception) -> int:
     print(str(exc), file=sys.stderr)
     if isinstance(exc, DemoError):
-        for finding in exc.findings:
+        demo_error: Any = exc  # Pyright cannot resolve the optional PM package.
+        for finding in demo_error.findings:
             print(f"{finding.code}: {finding.message}", file=sys.stderr)
-        return exc.exit_code
+        return demo_error.exit_code
     return 1
 
 
 def main(argv: list[str] | None = None) -> int:
+    if not pm_installed():
+        print(f"symphony pm: {PM_INSTALL_HINT}", file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(prog="symphony pm")
     subcommands = parser.add_subparsers(dest="command", required=True)
     demo = subcommands.add_parser("demo", help="create and serve a disposable PM Workspace demo")

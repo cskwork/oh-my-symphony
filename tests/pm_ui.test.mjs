@@ -3,18 +3,18 @@ import test from 'node:test';
 import { readFile, readdir } from 'node:fs/promises';
 import vm from 'node:vm';
 
-import { applyUnifiedDiff, capabilityAvailability, chooseAvailableChange, directHistoryChangeId, mountArtifacts, moveOperations, parseTsv, pmText, serializeWbsTsv, withProjectIdentity } from '../src/symphony/web/static/pm/index.js';
-import { createPmApi } from '../src/symphony/web/static/pm/api.js';
-import { diagramSummary, diagramWindows } from '../src/symphony/web/static/pm/diagrams.js';
-import { exchangeControlState, validateWorkbookFilename } from '../src/symphony/web/static/pm/exchange.js';
-import { sourceEditPolicy } from '../src/symphony/web/static/pm/documents.js';
-import { storyboardPatchOperation } from '../src/symphony/web/static/pm/storyboard.js';
-import { createPmOverlay } from '../src/symphony/web/static/pm/overlay.js';
-import { planningActionRequest, verificationActions } from '../src/symphony/web/static/pm/assistance.js';
-import { analyzeSafeDiagram } from '../scripts/pm_diagram_entry.mjs';
+import { applyUnifiedDiff, capabilityAvailability, chooseAvailableChange, directHistoryChangeId, mountArtifacts, moveOperations, parseTsv, pmText, serializeWbsTsv, withProjectIdentity } from '../packages/pm/src/symphony/pm/static/index.js';
+import { createPmApi } from '../packages/pm/src/symphony/pm/static/api.js';
+import { diagramSummary, diagramWindows } from '../packages/pm/src/symphony/pm/static/diagrams.js';
+import { exchangeControlState, validateWorkbookFilename } from '../packages/pm/src/symphony/pm/static/exchange.js';
+import { sourceEditPolicy } from '../packages/pm/src/symphony/pm/static/documents.js';
+import { storyboardPatchOperation } from '../packages/pm/src/symphony/pm/static/storyboard.js';
+import { createPmOverlay } from '../packages/pm/src/symphony/pm/static/overlay.js';
+import { planningActionRequest, verificationActions } from '../packages/pm/src/symphony/pm/static/assistance.js';
+import { analyzeSafeDiagram } from '../packages/pm/scripts/pm_diagram_entry.mjs';
 // Namespace imports keep a missing round9 export a per-test failure instead of a module link error.
-import * as pmDocumentsModule from '../src/symphony/web/static/pm/documents.js';
-import * as pmIndexModule from '../src/symphony/web/static/pm/index.js';
+import * as pmDocumentsModule from '../packages/pm/src/symphony/pm/static/documents.js';
+import * as pmIndexModule from '../packages/pm/src/symphony/pm/static/index.js';
 
 test('quoted TSV preserves tabs, quotes, and multiline values', () => {
   assert.deepEqual(parseTsv('"T-1"\t"notes"\t"first\nsecond\t""quoted"""\n'), [
@@ -219,7 +219,7 @@ test('an explicit pmView deep link wins over the remembered subview once', async
   globalThis.history = { replaceState: () => {} };
   globalThis.location = { href: 'http://127.0.0.1/?pmChange=c1&pmTab=design&pmView=architecture#/artifacts' };
   store.set('symphony.pm.p1.c1.design', 'storyboard');
-  const { createPmState } = await import('../src/symphony/web/static/pm/state.js');
+  const { createPmState } = await import('../packages/pm/src/symphony/pm/static/state.js');
   const state = createPmState(() => {}, 'p1');
   state.change = { change_id: 'c1' };
   state.restoreViewState();
@@ -309,7 +309,7 @@ const DEVELOPMENT_SENTENCE = 'Development verification is active for configured 
 const NODE_REASON = 'Bundled OpenSpec needs Node.js 20.19.0 or newer on PATH (found: none)';
 const CODEX_REASON = 'Codex schema probe is missing restricted app-server controls. Install a compatible Codex CLI supporting restricted app-server controls, then retry. No fallback is used. Planning assistant needs a Codex login: ~/.codex/auth.json is missing. Run codex login.';
 const ARCHIVED_REASON = 'Archived planning history is read-only.';
-const PM_DIRECTORY = new URL('../src/symphony/web/static/pm/', import.meta.url);
+const PM_DIRECTORY = new URL('../packages/pm/src/symphony/pm/static/', import.meta.url);
 
 async function guideEntries() {
   // A missing future module must fail these tests, not abort the original suite.
@@ -1427,7 +1427,7 @@ test('round9 F1 readable heading keeps its accessible name while visually compac
     const heading = root.querySelector('.pm-preview-readable').querySelector('h2');
     assert.equal(heading.textContent, pmText('Readable view', {}, language));
     assert.equal(heading.getAttribute('class'), 'sr-only');
-    const css = await readFile(new URL('../src/symphony/web/static/pm/pm.css', import.meta.url), 'utf8');
+    const css = await readFile(new URL('../packages/pm/src/symphony/pm/static/pm.css', import.meta.url), 'utf8');
     assert.match(css, /\.pm-preview-readable \{[^}]*padding: 24px clamp\(24px, 5vw, 64px\) clamp\(24px, 5vw, 64px\);/);
     assert.match(css, /@media \(max-width: 900px\)[\s\S]*\.pm-preview-readable \{ padding: 24px 18px; \}/, 'mobile override unchanged');
   });

@@ -70,7 +70,7 @@ _DEEP_ACTIVE = DEEP_PRESET.active_states
 def _seed_workflow(tmp_path: Path) -> Path:
     # F-11: `apply_lane_preset` refuses a board that lacks the preset's
     # prompt bodies, so start from a board that carries the shipped set.
-    source = Path(__file__).resolve().parents[1] / "docs" / "symphony-prompts"
+    source = Path(__file__).resolve().parents[1] / "src/symphony/templates/project" / "docs" / "symphony-prompts"
     target = tmp_path / "docs" / "symphony-prompts"
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, target)
@@ -513,7 +513,7 @@ def test_approved_intent_ticket_walks_the_deep_pipeline(
     same as any deep request: Intake -> Research -> Plan -> Review -> Done,
     with the Plan lane spawning the Build/Verify DAG.
     """
-    from symphony.intent import IntentAction, file_intent_request
+    from symphony.chat.intent import IntentAction, file_intent_request
 
     from tests.test_chat_intent import INTENT_BODY
 
@@ -578,7 +578,7 @@ def test_approved_intent_ticket_walks_the_deep_pipeline(
 
 
 def test_deep_intake_prompt_consumes_the_approved_intent() -> None:
-    root = Path(__file__).resolve().parents[1] / "docs" / "symphony-prompts" / "file" / "deep"
+    root = Path(__file__).resolve().parents[1] / "src/symphony/templates/project" / "docs" / "symphony-prompts" / "file" / "deep"
     intake = (root / "intake.md").read_text(encoding="utf-8")
     assert "Do NOT re-ask" in intake
     assert "## Track" in intake and "`micro`" in intake

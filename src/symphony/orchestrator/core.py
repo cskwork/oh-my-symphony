@@ -18,7 +18,7 @@ through this module's globals, so tests patch
 Layout (LR-3 lean-core split): this module keeps construction, the
 dispatch-state views, supervised background tasks, start/stop, observers,
 and the tick loop. The remaining methods live as module-level functions in
-``run_leases``, ``release_authority``, ``api_views``, ``sweeps``,
+``run_leases``, ``release_seam``, ``api_views``, ``sweeps``,
 ``blocked_recovery``, ``tracker_bridge``, ``dispatch``, ``agent_phase``, and
 ``retry_reconcile`` and are bound onto ``Orchestrator`` as class attributes
 at the end of the class body. Those modules read monkeypatch seams through
@@ -68,7 +68,7 @@ from . import (
     api_views,
     blocked_recovery,
     dispatch,
-    release_authority,
+    release_seam,
     retry_reconcile,
     run_leases,
     sweeps,
@@ -94,14 +94,6 @@ from ..workspace import (
     commit_workspace_on_done as commit_workspace_on_done,
     finalize_delivery_history as finalize_delivery_history,
     verify_branch_history as verify_branch_history,
-)
-from .release_contracts import (
-    resolve_target_release_identity as resolve_target_release_identity,
-    validate_release_contract as validate_release_contract,
-)
-from .release_cycle import (
-    ReleaseCycleWriteResult as _ReleaseCycleWriteResult,  # noqa: F401
-    release_verifier_state as _release_verifier_state,  # noqa: F401
 )
 from .helpers import (
     _branch_already_merged_into_target as _branch_already_merged_into_target,
@@ -139,10 +131,8 @@ from .core_support import (
     _worker_error_pause_reason as _worker_error_pause_reason,
     _worktree_status_snapshot as _worktree_status_snapshot,
 )
-from .release_authority import (
-    _APP_RELEASE_FILE_TRACKER_ONLY as _APP_RELEASE_FILE_TRACKER_ONLY,
+from .release_seam import (
     _ReleaseDispatchAuthority as _ReleaseDispatchAuthority,
-    _ReleaseTransitionAuthorityLost as _ReleaseTransitionAuthorityLost,
 )
 from .agent_phase import (
     _AgentPhaseState as _AgentPhaseState,
@@ -265,6 +255,7 @@ class Orchestrator:
         # (ARCHIVE_SWEEP_INTERVAL_SEC). Monotonic clock so a wall-clock jump
         # can't wedge it; None = never swept, so the first tick sweeps once.
         self._last_archive_sweep_monotonic: float | None = None
+        self._needs_sweep_task: asyncio.Task[None] | None = None
         self._lease_blocked: dict[str, str] = {}
         self._blocked_rca_source_ids: set[str] = set()
         # Serialize the board check + create sequence.  The in-memory source
@@ -410,7 +401,6 @@ class Orchestrator:
         workspace_path: Path | None = None,
     ):
         from ..backends import noop_process_launch_guard
-        from ..pm.authority import PmAuthority
 
         running = self._running.get(running_issue_id)
         permit = running.pm_dispatch_permit if running is not None else None
@@ -418,6 +408,9 @@ class Orchestrator:
         if permit is None or registry is None:
             return noop_process_launch_guard
         assert running is not None
+        # Only a PM dispatch permit reaches here, so the optional PM package is installed.
+        from ..pm.authority import PmAuthority  # pyright: ignore[reportMissingImports]
+
         authority = PmAuthority(
             registry, cfg.workflow_path.parent / ".symphony" / "pm-locks",
             successful_states={
@@ -822,27 +815,31 @@ class Orchestrator:
     _confirm_entry_backend_cleanup_async = run_leases._confirm_entry_backend_cleanup_async
     _try_acquire_run_lease = run_leases._try_acquire_run_lease
 
-    # -- release_authority.py -------------------------------------------
-    _release_registry_required = release_authority._release_registry_required
-    _release_registry_call = release_authority._release_registry_call
-    _pending_release_gate = staticmethod(release_authority._pending_release_gate)
-    _persist_pending_release_gate = release_authority._persist_pending_release_gate
-    _create_initial_release_gate = release_authority._create_initial_release_gate
-    _reopen_stale_release_gate = release_authority._reopen_stale_release_gate
-    _guard_release_finalizer = release_authority._guard_release_finalizer
-    _mark_release_finalizer_completed = release_authority._mark_release_finalizer_completed
-    _invalidate_release_finalizer_version = release_authority._invalidate_release_finalizer_version
-    _guard_release_finalizer_with_version = release_authority._guard_release_finalizer_with_version
-    _require_running_release_authority = release_authority._require_running_release_authority
-    _require_release_transition_verifier_authority = release_authority._require_release_transition_verifier_authority
-    _prepare_release_dispatch = release_authority._prepare_release_dispatch
-    _release_verifier_handoff_is_durable = release_authority._release_verifier_handoff_is_durable
-    _rewind_app_release_transition = release_authority._rewind_app_release_transition
-    _app_release_transition_lock = release_authority._app_release_transition_lock
-    _enforce_app_release_transition = release_authority._enforce_app_release_transition
-    _enforce_app_release_transition_guarded = release_authority._enforce_app_release_transition_guarded
-    _enforce_app_release_transition_inner = release_authority._enforce_app_release_transition_inner
-    _startup_release_terminal_guard = release_authority._startup_release_terminal_guard
+    # -- release_seam.py (optional app release contracts) ----------------
+    # Each `authority_method` delegate runs `symphony.release.authority` when
+    # the package is installed and fails closed without it.
+    _release_registry_required = release_seam._release_registry_required
+    _release_registry_call = release_seam._release_registry_call
+    _hold_release_ticket_without_component = release_seam._hold_release_ticket_without_component
+    _pending_release_gate = staticmethod(release_seam.authority_method("_pending_release_gate"))
+    _persist_pending_release_gate = release_seam.authority_method("_persist_pending_release_gate")
+    _create_initial_release_gate = release_seam.authority_method("_create_initial_release_gate")
+    _reopen_stale_release_gate = release_seam.authority_method("_reopen_stale_release_gate")
+    _guard_release_finalizer = release_seam.authority_method("_guard_release_finalizer")
+    _mark_release_finalizer_completed = release_seam.authority_method("_mark_release_finalizer_completed")
+    _invalidate_release_finalizer_version = release_seam.authority_method("_invalidate_release_finalizer_version")
+    _guard_release_finalizer_with_version = release_seam.authority_method("_guard_release_finalizer_with_version")
+    _require_running_release_authority = release_seam.authority_method("_require_running_release_authority")
+    _require_release_transition_verifier_authority = release_seam.authority_method("_require_release_transition_verifier_authority")
+    _prepare_release_dispatch = release_seam.authority_method("_prepare_release_dispatch")
+    _release_verifier_handoff_is_durable = release_seam.authority_method("_release_verifier_handoff_is_durable")
+    _rewind_app_release_transition = release_seam.authority_method("_rewind_app_release_transition")
+    _app_release_transition_lock = release_seam.authority_method("_app_release_transition_lock")
+    _enforce_app_release_transition = release_seam.authority_method("_enforce_app_release_transition")
+    _enforce_app_release_transition_guarded = release_seam.authority_method("_enforce_app_release_transition_guarded")
+    _enforce_app_release_transition_inner = release_seam.authority_method("_enforce_app_release_transition_inner")
+    _startup_release_terminal_guard = release_seam.authority_method("_startup_release_terminal_guard")
+    _tracker_call_reconcile_release_cycle = staticmethod(release_seam.authority_method("_tracker_call_reconcile_release_cycle"))
 
     # -- api_views.py ---------------------------------------------------
     confirm_done = api_views.confirm_done
@@ -883,6 +880,7 @@ class Orchestrator:
     _ensure_artifact_dir_git_excluded = sweeps._ensure_artifact_dir_git_excluded
     _archive_sweep = sweeps._archive_sweep
     _maybe_schedule_continuous_improvement = sweeps._maybe_schedule_continuous_improvement
+    _maybe_schedule_needs_sweep = sweeps._maybe_schedule_needs_sweep
     _run_continuous_improvement = sweeps._run_continuous_improvement
     _run_improvement_agent = sweeps._run_improvement_agent
     _enforce_improvement_write_contract = sweeps._enforce_improvement_write_contract
@@ -920,7 +918,6 @@ class Orchestrator:
     _tracker_call_update_state = tracker_bridge._tracker_call_update_state
     _tracker_call_append_note = staticmethod(tracker_bridge._tracker_call_append_note)
     _tracker_call_fetch_issue_full_by_id = staticmethod(tracker_bridge._tracker_call_fetch_issue_full_by_id)
-    _tracker_call_reconcile_release_cycle = staticmethod(tracker_bridge._tracker_call_reconcile_release_cycle)
     _fetch_candidates = tracker_bridge._fetch_candidates
     _record_tracker_error = tracker_bridge._record_tracker_error
     _clear_tracker_error = tracker_bridge._clear_tracker_error

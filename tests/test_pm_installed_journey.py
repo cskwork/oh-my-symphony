@@ -10,8 +10,8 @@ import time
 from pathlib import Path
 
 import pytest
-import scripts.pm_workspace_installed_e2e as installed_runner
-from scripts.pm_workspace_installed_e2e import (
+import packages.pm.scripts.pm_workspace_installed_e2e as installed_runner
+from packages.pm.scripts.pm_workspace_installed_e2e import (
     await_worker_release,
     exercise_fallback_authority,
     remove_planning_marker,
@@ -24,7 +24,7 @@ from symphony.workflow import WorkflowState
 
 
 ROOT = Path(__file__).parents[1]
-RUNNER = ROOT / "scripts" / "pm_workspace_installed_e2e.py"
+RUNNER = ROOT / "packages" / "pm" / "scripts" / "pm_workspace_installed_e2e.py"
 
 
 def test_installed_fixture_hold_uses_durable_pause_flags(tmp_path: Path) -> None:

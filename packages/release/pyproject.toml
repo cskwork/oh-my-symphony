@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oh-my-symphony-release"
+version = "0.28.0"
+description = "Optional machine-enforced app release contracts for oh-my-symphony: release gates, repair cycles and `symphony release check`."
+readme = "README.md"
+requires-python = ">=3.12"
+# Same license as the core distribution; see LICENSE and NOTICE at the repository root.
+license = "Apache-2.0"
+authors = [{ name = "oh-my-symphony" }]
+dependencies = [
+    # The release authority binds onto core orchestrator internals, so the two
+    # ship in lockstep.
+    "oh-my-symphony==0.28.0",
+]
+
+[tool.setuptools]
+include-package-data = false
+# `symphony` belongs to the core distribution; this one contributes only
+# `symphony.release` (merged at import time by `pkgutil.extend_path`).
+packages = ["symphony.release"]
+package-dir = { "" = "src" }

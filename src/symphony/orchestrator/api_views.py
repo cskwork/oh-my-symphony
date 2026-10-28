@@ -22,7 +22,7 @@ from ..issue import Issue, normalize_state
 from ..workflow import ServiceConfig
 from ..workspace import HISTORY_PUSH_FAILED
 from .constants import TICK_DEGRADED_AFTER_CONSECUTIVE_FAILURES
-from .release_cycle import is_release_evidence_issue as _is_release_evidence_issue
+from .release_seam import is_release_evidence_issue as _is_release_evidence_issue
 from .entries import RetryEntry, RunningEntry, _IssueDebug
 from .helpers import (
     _is_successful_terminal_state,

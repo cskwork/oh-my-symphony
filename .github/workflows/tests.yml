@@ -32,15 +32,17 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        # The PM Workspace, the operator chat and app release contracts are
+        # separate in-repo distributions under packages/.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev]" -e packages/pm -e packages/chat -e packages/release
 
       - name: Install frontend test dependencies
-        run: npm ci
+        run: npm ci --prefix packages/pm
 
       - name: Lint (ruff)
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests packages/pm packages/chat packages/release
 
       - name: Check SPA translations
         run: python scripts/check_i18n.py
@@ -51,6 +53,57 @@ jobs:
       - name: Run tests with coverage
         # Parallel suite, then the wall-clock budget tests alone (see the `timing` marker).
         run: python -m pytest -q -n auto -m "not timing" --cov=src/symphony --cov-report= && python -m pytest -q -n0 -m timing --cov=src/symphony --cov-append --cov-report=term --cov-fail-under=80
+
+  core-without-pm:
+    name: Core wheel without PM
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the core wheel alone
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist .
+          python -m venv /tmp/core
+          /tmp/core/bin/python -m pip install dist/oh_my_symphony-*.whl
+
+      - name: Core runs and `symphony pm` points at the PM install
+        working-directory: /tmp
+        run: |
+          /tmp/core/bin/python -c "import symphony; assert not symphony.pm_installed()"
+          /tmp/core/bin/symphony --help > /dev/null
+          set +e
+          /tmp/core/bin/symphony pm demo 2> pm.err
+          status=$?
+          set -e
+          cat pm.err
+          test "$status" -eq 2
+          grep -q "pip install ./packages/pm" pm.err
+
+      - name: Core runs without the operator chat
+        working-directory: /tmp
+        run: |
+          /tmp/core/bin/python -c "import symphony; assert not symphony.component_installed('chat')"
+          /tmp/core/bin/python -c "import symphony.webapi, symphony.orchestrator, symphony.tui"
+      - name: Core runs and `symphony release` points at the release install
+        working-directory: /tmp
+        run: |
+          /tmp/core/bin/python -c "import symphony; assert not symphony.component_installed('release')"
+          set +e
+          /tmp/core/bin/symphony release check --ticket V-1 --workspace . 2> release.err
+          status=$?
+          set -e
+          cat release.err
+          test "$status" -eq 2
+          grep -q "pip install ./packages/release" release.err
 
   windows-lifecycle:
     name: Windows lifecycle
@@ -67,7 +120,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]" -e packages/pm -e packages/chat -e packages/release
 
       - name: Verify native ownership, recovery, and cleanup
         # Keep these native: mocks cannot prove Windows job or junction behavior.

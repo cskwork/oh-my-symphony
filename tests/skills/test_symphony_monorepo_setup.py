@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MONOREPO = REPO_ROOT / "skills" / "symphony-skill" / "monorepo"
+MONOREPO = REPO_ROOT / "src/symphony/templates/project" / "skills" / "symphony-skill" / "monorepo"
 SETUP = MONOREPO / "scripts" / "setup-monorepo.sh"
 TEMPLATE = MONOREPO / "references" / "workflow-template.md"
 

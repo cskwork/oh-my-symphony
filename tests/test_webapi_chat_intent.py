@@ -9,8 +9,8 @@ from typing import Any, cast
 from aiohttp.test_utils import TestClient, TestServer
 
 from symphony import chat as chat_module
-from symphony import webapi
-from symphony.intent import IntentAction
+from symphony.chat.intent import IntentAction
+from symphony.chat.routes import CHAT_MANAGER_KEY
 from symphony.orchestrator import Orchestrator
 from symphony.server import build_app
 from symphony.workflow import ServiceConfig, WorkflowState
@@ -67,7 +67,7 @@ async def test_intent_approve_route_and_reply(
             f"/api/v1/chat/sessions/{session_id}/message", json={"text": "build a todo app"}
         )
         assert response.status == 202
-        manager = app[webapi.CHAT_MANAGER_KEY]
+        manager = app[CHAT_MANAGER_KEY]
         session = manager.session(session_id)
         assert session is not None and session.turn_task is not None
         await session.turn_task
@@ -152,7 +152,7 @@ async def test_intent_approve_route_reports_failure(
         session_id = (await created.json())["session_id"]
         fake_backends[-1].other_frames = [_intent_frame("broken")]
         await cli.post(f"/api/v1/chat/sessions/{session_id}/message", json={"text": "go"})
-        session = app[webapi.CHAT_MANAGER_KEY].session(session_id)
+        session = app[CHAT_MANAGER_KEY].session(session_id)
         assert session is not None and session.turn_task is not None
         await session.turn_task
         [action] = (await (await cli.get(f"/api/v1/chat/sessions/{session_id}")).json())[

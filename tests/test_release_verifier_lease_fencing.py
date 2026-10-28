@@ -189,7 +189,7 @@ def test_serialized_red_loser_accepts_exact_retired_cycle_without_mutation(
         raise AssertionError("retired serialized loser rewound the board")
 
     monkeypatch.setattr(
-        "symphony.orchestrator.core.validate_release_contract",
+        "symphony.release.transition.validate_release_contract",
         forbidden,
     )
     monkeypatch.setattr(

@@ -323,7 +323,7 @@ def board_dir(tmp_path: Path) -> Path:
     # F-11: preset applies refuse a board without the shipped prompt bodies,
     # so the fixture mirrors the documented `cp -R docs/symphony-prompts` step.
     shutil.copytree(
-        Path(__file__).resolve().parents[1] / "docs" / "symphony-prompts",
+        Path(__file__).resolve().parents[1] / "src/symphony/templates/project" / "docs" / "symphony-prompts",
         tmp_path / "docs" / "symphony-prompts",
     )
     return tmp_path
@@ -1912,7 +1912,8 @@ class _FakeProjectRegistry:
 async def _project_client(
     board_dir: Path, monkeypatch: pytest.MonkeyPatch, registry: Any
 ) -> TestClient:
-    from symphony.webapi import chat_routes, project_routes
+    from symphony.chat import routes as chat_routes
+    from symphony.webapi import project_routes
 
     state = WorkflowState(board_dir / "WORKFLOW.md")
     cfg, err = state.reload()

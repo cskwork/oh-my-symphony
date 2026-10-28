@@ -47,4 +47,50 @@ Layout (see ``AGENTS.md`` for full SPEC references):
     - ``mock_codex``    — mock Codex app-server, runnable as ``python -m symphony.mock_codex``
 """
 
+from importlib.util import find_spec as _find_spec
+from pkgutil import extend_path as _extend_path
+
 __version__ = "0.28.0"
+
+# Optional components ship as separate distributions under `packages/` and
+# contribute `symphony.<name>` subpackages from their own install location.
+# Editable installs keep the trees apart, so merge every `symphony/` directory
+# on sys.path; wheels installed together already share one. Pyright cannot
+# follow this merge, so core imports of optional subpackages carry an ignore
+# comment.
+__path__ = _extend_path(__path__, __name__)
+
+# name -> (importable module that proves the install, human label, package dir)
+OPTIONAL_COMPONENTS: dict[str, tuple[str, str, str]] = {
+    "pm": ("symphony.pm", "the PM Workspace", "packages/pm"),
+    "release": ("symphony.release", "app release contracts", "packages/release"),
+    "chat": ("symphony.chat", "the operator chat", "packages/chat"),
+}
+
+
+def component_installed(name: str) -> bool:
+    """Whether the optional component *name* can be imported."""
+    module, _label, _directory = OPTIONAL_COMPONENTS[name]
+    return _find_spec(module) is not None
+
+
+def install_hint(name: str) -> str:
+    """One-line explanation of how to install the optional component *name*."""
+    _module, label, directory = OPTIONAL_COMPONENTS[name]
+    return (
+        f"{label} is not installed; install it from the oh-my-symphony "
+        f"checkout: python -m pip install ./{directory}"
+    )
+
+
+def installed_components() -> dict[str, bool]:
+    """Availability of every optional component, for API payloads."""
+    return {name: component_installed(name) for name in OPTIONAL_COMPONENTS}
+
+
+PM_INSTALL_HINT = install_hint("pm")
+
+
+def pm_installed() -> bool:
+    """Whether the optional ``symphony.pm`` package can be imported."""
+    return component_installed("pm")

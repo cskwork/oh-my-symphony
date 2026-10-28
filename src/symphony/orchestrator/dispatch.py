@@ -23,6 +23,7 @@ from ..errors import SymphonyError
 from ..factory.wayfinder import factory_proof_commands
 from ..issue import BlockerRef, Issue, normalize_state
 from ..skills import render_skill_block, select_skills_for_stage
+from ..workflow.verify import verify_config
 from ..workflow import ServiceConfig, selectable_agent_kinds
 from ..workspace import WorkspaceManager
 from .constants import ARCHIVE_SWEEP_INTERVAL_SEC, WAIT_AGE_BUMP_MIN, _TOKEN_EMA_ALPHA
@@ -34,6 +35,7 @@ from .helpers import (
     _canonical_state_label,
     _from_monotonic_to_iso,
     _is_rewind_transition,
+    _is_successful_terminal_state,
     _requested_agent_kind,
     _utc_iso_z,
 )
@@ -236,6 +238,7 @@ async def _on_tick(self: Orchestrator) -> None:
         ):
             self._last_artifact_sweep_monotonic = now_monotonic
             await self._artifact_sweep(cfg)
+        self._maybe_schedule_needs_sweep(cfg)
         self._maybe_schedule_continuous_improvement(cfg)
         await self._notify_observers()
         return
@@ -414,6 +417,14 @@ async def _on_tick(self: Orchestrator) -> None:
                 dispatch_outcome="blocked",
             )
             continue
+        if await self._hold_release_ticket_without_component(issue, cfg):
+            entry.update(
+                status="needs_action",
+                code="refused_dispatch_authority",
+                reason="app release contracts are not installed; ticket was parked",
+                dispatch_outcome="blocked",
+            )
+            continue
         persisted_attempt = self._persisted_retry_attempts.get(issue.id)
         started = self._dispatch(
             issue,
@@ -482,6 +493,8 @@ async def _on_tick(self: Orchestrator) -> None:
         self._last_artifact_sweep_monotonic = now_monotonic
         await self._artifact_sweep(cfg)
 
+    self._maybe_schedule_needs_sweep(cfg)
+
     # Continuous-improvement heartbeat (plan §4). Cheap, non-blocking:
     # evaluates due-math + guards and, at most, fires one background task.
     self._maybe_schedule_continuous_improvement(cfg)
@@ -520,6 +533,8 @@ async def _dispatch_fifo_without_schedule_projection(
             await self._block_ticket_for_conflict(
                 cfg, issue, other_identifier, overlap
             )
+            continue
+        if await self._hold_release_ticket_without_component(issue, cfg):
             continue
         persisted_attempt = self._persisted_retry_attempts.get(issue.id)
         self._dispatch(
@@ -1124,12 +1139,21 @@ async def _enforce_factory_exit_contract(
 ) -> bool:
     """Use the same gate when a worker exit/reconcile skips the phase loop."""
     producing = normalize_state(entry.state_at_turn_start)
-    if not self._is_factory_profile(cfg) or producing not in {"build", "verify"}:
+    if not (
+        (self._is_factory_profile(cfg) and producing in {"build", "verify"})
+        or producing in verify_config(cfg).commands
+    ):
         return True
     latest = await self._refresh_issue_full(cfg, entry.issue.id)
     if latest is not None:
         entry.issue = latest
     current = normalize_state(entry.issue.state)
+    if (
+        not self._is_factory_profile(cfg)
+        and current not in {normalize_state(state) for state in cfg.tracker.active_states}
+        and not _is_successful_terminal_state(current)
+    ):
+        return True
     if current == producing or _is_rewind_transition(
         producing, current, cfg.tracker.active_states
     ):

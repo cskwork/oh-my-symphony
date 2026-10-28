@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from scripts.pm_workspace_supplemental_qa import _padded_workbook, _record
+from packages.pm.scripts.pm_workspace_supplemental_qa import _padded_workbook, _record
 
 
 def test_padded_workbook_preserves_parts_and_controls_compression() -> None:

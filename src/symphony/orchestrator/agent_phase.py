@@ -11,6 +11,8 @@ through the late-bound ``_core()`` handle at call time, never bound here.
 from __future__ import annotations
 
 import asyncio
+import sys
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +37,7 @@ from ..prompt import build_first_turn_prompt
 from ..stats import board_health_summary
 from ..workflow import ServiceConfig
 from ..workflow.presets import guess_lane_preset
+from ..workflow.verify import append_verify_trace, run_verify, verification_scope, verify_config
 from .constants import EMPTY_TURN_LOOP_THRESHOLD
 from .contracts import _build_result, contract_producing_states, evaluate_contract
 from .factory_contracts import (
@@ -50,6 +53,7 @@ from .helpers import (
     _is_rewind_transition,
     _rewind_budget_target_state,
     _utc_iso_z,
+    _branch_hook_env,
 )
 from .parsing import _parse_findings_rows
 from . import attempt as agent_attempt
@@ -113,6 +117,7 @@ async def run_legacy_stage_loop(
 async def _run_agent_attempt(
     self: Orchestrator, issue: Issue, attempt: int | None, cfg: ServiceConfig
 ) -> None:
+    verify_config(cfg)
     return await agent_attempt.run_agent_attempt(self, issue, attempt, cfg)
 
 
@@ -158,6 +163,7 @@ async def _transition_agent_phase(
     if not is_rewind and (
         self._is_factory_profile(cfg)
         or cfg.agent.stage_contracts_enabled(cfg.tracker.active_states)
+        or producing_state in verify_config(cfg).commands
     ):
         outcome = await self._enforce_stage_contract(
             cfg=cfg,
@@ -276,14 +282,42 @@ async def _enforce_stage_contract(
     known_app_release: bool,
     running_entry: RunningEntry | None = None,
 ) -> _StageContractOutcome:
+    # Reconcile must not mistake a quiet host command for a stuck agent or
+    # remove a terminal workspace before its verification finishes.
+    scope = (
+        verification_scope(self, running_issue_id)
+        if producing_state in verify_config(cfg).commands else nullcontext()
+    )
+    with scope:
+        return await _evaluate_stage_gates(
+            self, cfg=cfg, running_issue_id=running_issue_id, issue=issue,
+            producing_state=producing_state, producing_state_raw=producing_state_raw,
+            current_state=current_state, workspace_path=workspace_path,
+            known_app_release=known_app_release, running_entry=running_entry,
+        )
+
+
+async def _evaluate_stage_gates(
+    self: Orchestrator,
+    *,
+    cfg: ServiceConfig,
+    running_issue_id: str,
+    issue: Issue,
+    producing_state: str,
+    producing_state_raw: str,
+    current_state: str,
+    workspace_path: Path,
+    known_app_release: bool,
+    running_entry: RunningEntry | None = None,
+) -> _StageContractOutcome:
     """Evaluate the producing lane's stage contract after a forward move.
 
         Refreshes the full ticket body, evaluates the preset's contract set,
         and on failure appends `## Contract Failure` and writes the tracker
         state back to the producing lane. Returns the (possibly refreshed
         and rewound) issue, its normalized state, and whether it rewound.
-        Producing states outside the preset's contract set pass through
-        without the full-body refresh.
+        Configured verify commands also gate custom lanes independently of
+        preset contracts. Both gates must pass before the move is accepted.
         """
     # Defensive: the raw label must denote `producing_state`; a caller
     # that hands us the advanced state's casing would make the rewind
@@ -296,7 +330,12 @@ async def _enforce_stage_contract(
     lane_preset = (
         "factory" if factory else guess_lane_preset(cfg.tracker.active_states)
     )
-    if producing_state not in contract_producing_states(lane_preset):
+    verification = verify_config(cfg)
+    command = verification.commands.get(producing_state)
+    contract_enabled = (
+        factory or cfg.agent.stage_contracts_enabled(cfg.tracker.active_states)
+    ) and producing_state in contract_producing_states(lane_preset)
+    if not command and not contract_enabled:
         return _StageContractOutcome(
             issue=issue,
             current_state=current_state,
@@ -318,6 +357,50 @@ async def _enforce_stage_contract(
         if running_entry is not None:
             running_entry.issue = issue
         current_state = normalize_state(issue.state)
+    # Refresh can observe an operator's concurrent rewind. Never execute a
+    # forward gate against a ticket that is already back in its source lane.
+    if command and current_state != producing_state and not _is_rewind_transition(
+        producing_state, current_state, cfg.tracker.active_states
+    ) and (
+        current_state in {normalize_state(s) for s in cfg.tracker.active_states}
+        or _is_successful_terminal_state(current_state)
+    ):
+        result = await asyncio.to_thread(
+            run_verify, command, workspace_path, verification.timeout_ms,
+            {
+                **_branch_hook_env(cfg),
+                "SYMPHONY_WORKFLOW_DIR": str(cfg.workflow_path.parent),
+                "SYMPHONY_WORKSPACE_ROOT": str(cfg.workspace_root),
+                "SYMPHONY_PYTHON": sys.executable,
+                "SYMPHONY_ISSUE_ID": issue.id,
+                "SYMPHONY_ISSUE_IDENTIFIER": issue.identifier,
+                "SYMPHONY_FROM_STATE": producing_state_raw or producing_state,
+                "SYMPHONY_TO_STATE": issue.state,
+            },
+        )
+        try:
+            await asyncio.to_thread(
+                append_verify_trace, cfg, issue.identifier, producing_state,
+                current_state, command, result,
+            )
+        except OSError as exc:
+            # A trace write failure must not bypass the authoritative rewind.
+            log.warning("verify_trace_write_failed", identifier=issue.identifier, error=str(exc))
+        self._record_stats_gate(
+            issue.identifier, producing_state,
+            "verify_pass" if result.passed else "verify_failure", (command,),
+        )
+        if not result.passed:
+            return await _rewind_failed_gate(
+                self, cfg=cfg, running_issue_id=running_issue_id, issue=issue,
+                producing_state=producing_state,
+                producing_state_raw=producing_state_raw,
+                current_state=current_state, known_app_release=known_app_release,
+                heading="Verify Failure",
+                body=result.failure_note(command, verification.timeout_ms),
+            )
+    if not contract_enabled:
+        return _StageContractOutcome(issue, current_state, known_app_release, False)
     contract = evaluate_contract(
         producing_state=producing_state,
         ticket_body=issue.description or "",
@@ -392,36 +475,14 @@ async def _enforce_stage_contract(
             advanced_to=current_state,
             missing=contract.missing,
         )
-        await asyncio.to_thread(
-            self._tracker_call_append_note,
-            cfg,
-            issue,
-            contract.note_heading,
-            contract.note_body,
-        )
-        await asyncio.to_thread(
-            self._tracker_call_update_state,
-            cfg,
-            issue,
-            producing_state_raw or producing_state,
-        )
         self._record_stats_gate(
             issue.identifier, producing_state, "contract_failure", contract.missing
         )
-        # Pull the freshly-rewound body so the next prompt sees the
-        # `## Contract Failure` note we just appended (full-body fetch).
-        refreshed = await self._refresh_issue_full(cfg, running_issue_id)
-        if refreshed is not None:
-            issue = refreshed
-        issue = replace(issue, state=(producing_state_raw or producing_state))
-        running_entry = self._running.get(running_issue_id)
-        if running_entry is not None:
-            running_entry.issue = issue
-        return _StageContractOutcome(
-            issue=issue,
-            current_state=normalize_state(issue.state),
-            known_app_release=known_app_release,
-            rewound=True,
+        return await _rewind_failed_gate(
+            self, cfg=cfg, running_issue_id=running_issue_id, issue=issue,
+            producing_state=producing_state, producing_state_raw=producing_state_raw,
+            current_state=current_state, known_app_release=known_app_release,
+            heading=contract.note_heading, body=contract.note_body,
         )
     if contract.warnings:
         # Soft S2 advisories (e.g. a non-passing AC Scorecard row):
@@ -447,6 +508,28 @@ async def _enforce_stage_contract(
         known_app_release=known_app_release,
         rewound=False,
     )
+
+
+async def _rewind_failed_gate(
+    self: Orchestrator, *, cfg: ServiceConfig, running_issue_id: str,
+    issue: Issue, producing_state: str, producing_state_raw: str,
+    current_state: str, known_app_release: bool, heading: str, body: str,
+) -> _StageContractOutcome:
+    """Use the existing contract rewind path and budgets for every hard gate."""
+    log.warning(
+        "stage_gate_failed", identifier=issue.identifier,
+        producing_state=producing_state, advanced_to=current_state, gate=heading,
+    )
+    await asyncio.to_thread(self._tracker_call_append_note, cfg, issue, heading, body)
+    await asyncio.to_thread(
+        self._tracker_call_update_state, cfg, issue, producing_state_raw or producing_state,
+    )
+    refreshed = await self._refresh_issue_full(cfg, running_issue_id)
+    issue = replace(refreshed or issue, state=producing_state_raw or producing_state)
+    running_entry = self._running.get(running_issue_id)
+    if running_entry is not None:
+        running_entry.issue = issue
+    return _StageContractOutcome(issue, normalize_state(issue.state), known_app_release, True)
 
 
 def _reset_phase_accounting(

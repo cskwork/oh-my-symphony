@@ -422,7 +422,7 @@ def test_workflow_with_no_tracker_block_at_all_fails_preflight(tmp_path: Path) -
         "WORKFLOW.md",
         "WORKFLOW.example.md",
         "examples/advanced/WORKFLOW.file.example.md",
-        "skills/symphony-skill/oneshot/templates/WORKFLOW.oneshot.md",
+        "src/symphony/templates/project/skills/symphony-skill/oneshot/templates/WORKFLOW.oneshot.md",
     ],
 )
 def test_shipped_claude_commands_accept_edits_and_extend_write_scope(

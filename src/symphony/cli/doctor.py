@@ -11,6 +11,9 @@ launches `symphony tui` or the headless service:
   clone-mode hook but forgot to change the remote).
 - `workspace.root` exists and is writable.
 - File-tracker `tracker.board_root` exists; Linear-tracker `api_key` resolves.
+- Verification command launchers resolve; `--run-verify` executes them in a
+  disposable detached HEAD worktree.
+- Active Claude stages using acceptEdits have a project Bash allow rule.
 
 Exit codes:
     0  — all checks passed (warnings allowed)
@@ -35,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
 
+from .. import component_installed, install_hint
 from .._shell import _is_wsl_launcher, resolve_bash
 from ..backends.codex import _sandbox_uses_workspace_write
 from ..errors import SymphonyError
@@ -43,8 +47,7 @@ from ..runtime_safety import (
     PROTECTED_REPOSITORY_MESSAGE,
     workflow_uses_protected_source_repo,
 )
-from ..orchestrator.release_contracts import inspect_release_contract
-from ..orchestrator.release_cycle import (
+from ..orchestrator.release_seam import (
     has_release_finalizer_lane,
     has_release_success_terminal,
 )
@@ -60,6 +63,7 @@ from ..workflow import (
 )
 from ..workflow.preflight import stage_turn_budget_error
 from ..workflow.presets import guess_lane_preset
+from ..workflow.verify import run_verify, verify_config
 
 
 Status = Literal["pass", "warn", "fail"]
@@ -549,11 +553,19 @@ def _hook_script_text(cfg: ServiceConfig, hook: str) -> str:
     """
     parts = [hook]
     workflow_dir = cfg.workflow_path.parent
-    for raw in _HOOK_SCRIPT_RE.findall(hook):
-        relative = raw.replace("$SYMPHONY_WORKFLOW_DIR", "").replace(
-            "${SYMPHONY_WORKFLOW_DIR}", ""
+    scripts = _HOOK_SCRIPT_RE.findall(hook)
+    try:
+        scripts.extend(part for part in shlex.split(hook) if part.endswith(".sh"))
+    except ValueError:
+        pass
+    for raw in dict.fromkeys(scripts):
+        expanded = raw.replace("$SYMPHONY_WORKFLOW_DIR", str(workflow_dir)).replace(
+            "${SYMPHONY_WORKFLOW_DIR}", str(workflow_dir)
         )
-        candidate = (workflow_dir / relative.lstrip("/")).resolve()
+        script = Path(expanded)
+        candidate = (
+            script if script.is_absolute() else workflow_dir / script
+        ).resolve()
         try:
             if candidate.is_file():
                 parts.append(candidate.read_text(encoding="utf-8"))
@@ -1070,6 +1082,12 @@ def check_app_release_contract(cfg: ServiceConfig) -> CheckResult:
             )
     if not release_enabled:
         return CheckResult(name, "pass", "app release delivery is not enabled on this board")
+    if not component_installed("release"):
+        return CheckResult(
+            name,
+            "fail",
+            f"this board uses app release delivery, but {install_hint('release')}",
+        )
     if not any(
         normalize_state(state) == "verify" for state in cfg.tracker.active_states
     ):
@@ -1094,6 +1112,8 @@ def check_app_release_contract(cfg: ServiceConfig) -> CheckResult:
             "such as Done or Completed; ambiguous terminals cannot authorize delivery",
         )
 
+    from ..release.contracts import inspect_release_contract  # pyright: ignore[reportMissingImports]
+
     contract_path = cfg.workflow_path.parent / "release-contract.yaml"
     errors = inspect_release_contract(
         contract_path,
@@ -1112,8 +1132,157 @@ def _has_app_release_label(labels: Iterable[str]) -> bool:
     return any(label.strip().lower() == "app-release" for label in labels)
 
 
-def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]:
-    return [
+_SHELL_BUILTINS_AND_KEYWORDS = frozenset(
+    "! . : [ [[ ]] { } ( ) alias bg bind break builtin caller case cd command "
+    "compgen complete compopt continue coproc declare dirs disown do done echo "
+    "elif else enable esac eval exec exit export false fc fg fi for function "
+    "getopts hash help history if in jobs kill let local logout mapfile popd "
+    "printf pushd pwd read readarray readonly return select set shift shopt "
+    "source test then time times trap true type typeset ulimit umask unalias "
+    "unset until wait while".split()
+)
+
+
+def check_verify_commands(cfg: ServiceConfig) -> list[CheckResult]:
+    """Inspect command launchers without executing operator verification."""
+    try:
+        commands = verify_config(cfg).commands
+    except SymphonyError as exc:
+        return [CheckResult("verify.config", "fail", str(exc))]
+    results: list[CheckResult] = []
+    for state, command in commands.items():
+        name = f"verify.command={state}"
+        try:
+            argv = shlex.split(command, comments=True, posix=not _IS_WIN32)
+        except ValueError as exc:
+            results.append(CheckResult(name, "warn", f"command not parseable: {exc}"))
+            continue
+        while argv and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0]):
+            argv.pop(0)
+        if _IS_WIN32 and argv:
+            argv[0] = argv[0].strip("\"'")
+        if not argv or argv[0] in _SHELL_BUILTINS_AND_KEYWORDS:
+            results.append(CheckResult(name, "pass", "shell builtin/keyword (PATH check skipped)"))
+            continue
+        binary = argv[0]
+        lookup = binary
+        if "/" in binary and not Path(binary).is_absolute():
+            lookup = str(cfg.workflow_path.parent / binary)
+        located = shutil.which(lookup)
+        if located is None:
+            results.append(CheckResult(name, "warn", f"{binary!r} not on $PATH (configured: {command!r})"))
+        else:
+            results.append(CheckResult(name, "pass", f"{binary} → {located}"))
+    return results
+
+
+def check_claude_bash_permissions(cfg: ServiceConfig) -> CheckResult:
+    name = "claude.bash_permissions"
+    states = [
+        state for state in cfg.tracker.active_states
+        if cfg.agent.kind_for_state(state) == "claude"
+    ]
+    try:
+        argv = shlex.split(cfg.claude.command)
+    except ValueError:
+        argv = []
+    mode = ""
+    for index, token in enumerate(argv):
+        if token == "--permission-mode" and index + 1 < len(argv):
+            mode = argv[index + 1]
+        elif token.startswith("--permission-mode="):
+            mode = token.split("=", 1)[1]
+    if not states or mode != "acceptEdits":
+        return CheckResult(name, "pass", "no active Claude stage using acceptEdits (skipped)")
+    for filename in ("settings.json", "settings.local.json"):
+        settings = cfg.workflow_path.parent / ".claude" / filename
+        try:
+            data = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        permissions = data.get("permissions") if isinstance(data, dict) else None
+        allow = permissions.get("allow") if isinstance(permissions, dict) else None
+        if isinstance(allow, list) and any(
+            isinstance(rule, str) and rule.startswith("Bash") for rule in allow
+        ):
+            return CheckResult(name, "pass", f"{settings} allows Bash")
+    return CheckResult(
+        name,
+        "warn",
+        f"Claude acceptEdits in active states {', '.join(states)} permits edits; "
+        "headless workers will be denied shell commands without a Bash allow rule. Add one to project "
+        '.claude/settings.json or .claude/settings.local.json, for example '
+        '{"permissions":{"allow":["Bash(python3 -m pytest:*)","Bash(git merge-tree:*)"]}}',
+    )
+
+
+def check_run_verify(cfg: ServiceConfig) -> list[CheckResult]:
+    """Run configured checks once in a disposable detached checkout of HEAD."""
+    try:
+        config = verify_config(cfg)
+    except SymphonyError as exc:
+        return [CheckResult("verify.config", "fail", str(exc))]
+    if not config.commands:
+        return [CheckResult("verify.run", "pass", "no verification commands configured")]
+    repo = cfg.workflow_path.parent
+    results: list[CheckResult] = []
+    with tempfile.TemporaryDirectory(prefix="symphony-doctor-verify-") as scratch:
+        workspace = Path(scratch) / "worktree"
+        added = False
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(repo), "worktree", "add", "--detach", str(workspace), "HEAD"],
+                capture_output=True, text=True, timeout=120, check=False,
+            )
+            if completed.returncode != 0:
+                detail = (completed.stderr + completed.stdout)[-2000:].strip()
+                results.append(CheckResult(
+                    "verify.worktree", "fail",
+                    f"cannot create detached HEAD worktree: exit_code={completed.returncode}; {detail}",
+                ))
+            else:
+                added = True
+                for state, command in config.commands.items():
+                    try:
+                        result = run_verify(command, workspace, config.timeout_ms)
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        results.append(CheckResult(
+                            f"verify.run={state}", "fail", f"verification could not run: {exc}",
+                        ))
+                        continue
+                    status: Status = "pass" if result.passed else "fail"
+                    detail = (
+                        f"exit_code={result.exit_code}, timed_out={str(result.timed_out).lower()}, "
+                        f"duration_ms={result.duration_ms}"
+                    )
+                    tail = result.output.rstrip()
+                    if not result.passed and tail:
+                        detail += f"; output tail:\n{tail}"
+                    results.append(CheckResult(f"verify.run={state}", status, detail))
+        except (OSError, subprocess.SubprocessError) as exc:
+            results.append(CheckResult("verify.run", "fail", f"verification could not run: {exc}"))
+        finally:
+            if added or workspace.exists():
+                try:
+                    removed = subprocess.run(
+                        ["git", "-C", str(repo), "worktree", "remove", "--force", str(workspace)],
+                        capture_output=True, text=True, timeout=120, check=False,
+                    )
+                    if removed.returncode != 0:
+                        detail = (removed.stderr + removed.stdout)[-2000:].strip()
+                        results.append(CheckResult(
+                            "verify.cleanup", "fail",
+                            f"cannot remove verification worktree: exit_code={removed.returncode}; {detail}",
+                        ))
+                except (OSError, subprocess.SubprocessError) as exc:
+                    results.append(CheckResult("verify.cleanup", "fail", str(exc)))
+    return results
+
+
+def run_checks(
+    cfg: ServiceConfig, host: str = "127.0.0.1", *, run_verification: bool = False,
+) -> list[CheckResult]:
+    results = [
         check_source_repository(cfg),
         check_port(cfg, host=host),
         check_api_token_env(cfg),
@@ -1139,6 +1308,12 @@ def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]
         check_board_dependencies(cfg),
         check_workflow_registry(cfg),
     ]
+    if any(cfg.agent.kind_for_state(state) == "claude" for state in cfg.tracker.active_states):
+        results.append(check_claude_bash_permissions(cfg))
+    results.extend(check_verify_commands(cfg))
+    if run_verification:
+        results.extend(check_run_verify(cfg))
+    return results
 
 
 _STATUS_ICON: dict[Status, str] = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}
@@ -1187,6 +1362,11 @@ def main(argv: list[str]) -> int:
         help="override the workflow server port for this preflight",
     )
     parser.add_argument(
+        "--run-verify",
+        action="store_true",
+        help="run verification commands once in a temporary detached HEAD worktree",
+    )
+    parser.add_argument(
         "--no-color",
         action="store_true",
         help="disable ANSI color even when stdout is a tty",
@@ -1207,6 +1387,9 @@ def main(argv: list[str]) -> int:
         cfg = replace(cfg, server=replace(cfg.server, port=args.port))
 
     color = (not args.no_color) and sys.stdout.isatty()
-    results = run_checks(cfg, host=args.host)
+    if args.run_verify:
+        results = run_checks(cfg, host=args.host, run_verification=True)
+    else:
+        results = run_checks(cfg, host=args.host)
     print(format_results(results, color=color))
     return _exit_code(results)

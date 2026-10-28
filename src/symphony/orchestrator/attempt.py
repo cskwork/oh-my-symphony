@@ -61,6 +61,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, cast
 
+from .. import PM_INSTALL_HINT, pm_installed
 from ..backends import AgentBackend, BackendInit, redact_session_id
 from ..backends.codex import linear_graphql_tool
 from ..errors import (
@@ -74,6 +75,7 @@ from ..issue import Issue, normalize_state
 from ..logging import get_logger
 from ..prompt import build_continuation_prompt, build_first_turn_prompt
 from ..utils import git_inspect
+from ..workflow.verify import verify_config
 from ..workflow import ServiceConfig
 from ..workspace import Workspace, WorkspaceManager
 from .entries import RunningEntry, _IssueDebug
@@ -83,7 +85,7 @@ from .helpers import (
     _is_successful_terminal_state,
     _rewind_budget_target_state,
 )
-from .release_cycle import release_failure_target_state as _release_failure_target_state
+from .release_seam import release_failure_target_state as _release_failure_target_state
 from .run_registry import ReleaseGate, RunRegistry
 
 if TYPE_CHECKING:
@@ -296,9 +298,20 @@ async def _start_attempt(
             "pm_dispatch_denied",
             "PM registry authority is unavailable",
         )
-    if running is not None and orch._run_registry is not None:
-        from ..pm.authority import PmAuthority
-        from ..pm.identity import host_project_identity
+    if (
+        running is not None
+        and orch._run_registry is not None
+        and not pm_installed()
+    ):
+        # Without the optional PM distribution nothing can grant PM authority;
+        # refuse only work that carries a PM trace, as the identity fallback below does.
+        if issue.planning_ref is not None or orch._run_registry.pm_ticket_identifier_known(
+            issue.identifier
+        ):
+            return _AttemptExit("pm_dispatch_denied", PM_INSTALL_HINT)
+    elif running is not None and orch._run_registry is not None:
+        from ..pm.authority import PmAuthority  # pyright: ignore[reportMissingImports]
+        from ..pm.identity import host_project_identity  # pyright: ignore[reportMissingImports]
 
         authority = PmAuthority(
             orch._run_registry, cfg.workflow_path.parent / ".symphony" / "pm-locks",
@@ -307,7 +320,7 @@ async def _start_attempt(
                 if state.casefold() not in {"cancelled", "blocked", cfg.tracker.archive_state.casefold()}
             },
         )
-        from ..pm.models import PmError
+        from ..pm.models import PmError  # pyright: ignore[reportMissingImports]
 
         try:
             try:
@@ -1073,6 +1086,7 @@ async def _evaluate_turn_result(
         and (
             orch._is_factory_profile(st.cfg)
             or st.cfg.agent.stage_contracts_enabled(st.cfg.tracker.active_states)
+            or st.prev_phase_state in verify_config(st.cfg).commands
         )
     ):
         try:

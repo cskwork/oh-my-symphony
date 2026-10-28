@@ -13,6 +13,7 @@ import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
 
 from symphony import chat as chat_module
+from symphony.chat import routes as chat_routes
 from symphony import webapi as webapi_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
@@ -811,7 +812,7 @@ async def git_web_base_url(
 
     # This browser test proves the Chat UI/API handshake; the domain service's
     # real Git/registry behavior is covered separately without a global fixture.
-    for module in (webapi_module.chat_routes, webapi_module.project_routes):
+    for module in (chat_routes, webapi_module.project_routes):
         monkeypatch.setattr(module, "ProjectRegistry", lambda: registry)
         monkeypatch.setattr(
             module, "_create_or_adopt_registered_project", create_project

@@ -1202,7 +1202,7 @@
         renderGitPage(view);
         break;
       case 'chat':
-        renderChatPage(view);
+        renderChatRoute(view);
         break;
       case 'preview':
         renderPreviewPage(view);
@@ -1218,7 +1218,58 @@
     }
   }
 
+  // The PM Workspace ships as the optional oh-my-symphony-pm distribution;
+  // /board reports whether it is installed. Unknown (no board yet) counts as
+  // available so a failed poll never hides a working page.
+  function pmAvailable(board) {
+    return !(board && board.board && board.board.pm_available === false);
+  }
+
+  function applyPmAvailability(board) {
+    const available = pmAvailable(board);
+    document.querySelectorAll('.nav-item[data-route="artifacts"]').forEach((item) => {
+      // style.css gives .nav-item display:flex, which outranks the hidden attribute.
+      item.style.display = available ? '' : 'none';
+    });
+    return available;
+  }
+
+  // The operator chat ships as the optional oh-my-symphony-chat distribution;
+  // /board lists it under `components`. Unknown counts as available, as above.
+  function chatAvailable(board) {
+    const components = board && board.board && board.board.components;
+    return !(components && components.chat === false);
+  }
+
+  function applyChatAvailability(board) {
+    const available = chatAvailable(board);
+    document.querySelectorAll('.nav-item[data-route="chat"]').forEach((item) => {
+      item.style.display = available ? '' : 'none';
+    });
+    return available;
+  }
+
+  async function renderChatRoute(view) {
+    const board = state.board || await api.getBoard().catch(() => null);
+    if (state.route !== 'chat') return;
+    // Without the chat distribution there are no /chat routes: never open
+    // the WebSocket or request sessions, so the console stays clean.
+    if (!applyChatAvailability(board)) {
+      view.appendChild(el('div', { class: 'banner banner-info', role: 'status' }, t('chat.notInstalled')));
+      return;
+    }
+    renderChatPage(view);
+  }
+
   async function renderArtifactsPage(view) {
+    const board = state.board || await api.getBoard().catch(() => null);
+    if (!applyPmAvailability(board)) {
+      view.appendChild(el('div', { class: 'banner banner-info', role: 'status' }, t('pm.notInstalled')));
+      return;
+    }
+    if (!document.querySelector('link[href="/static/pm/pm.css"]')) {
+      document.head.appendChild(el('link', { rel: 'stylesheet', href: '/static/pm/pm.css' }));
+    }
     view.appendChild(el('div', { class: 'pm-host-loading', role: 'status' }, 'Loading PM Workspace…'));
     try {
       const module = await import('/static/pm/index.js');
@@ -5432,6 +5483,8 @@
       const board = await api.getBoard();
       state.connected = true;
       state.lastSuccessfulPollAt = Date.now();
+      applyPmAvailability(board);
+      applyChatAvailability(board);
       if (!holdRender) {
         const firstLoad = !state.board;
         state.board = board;

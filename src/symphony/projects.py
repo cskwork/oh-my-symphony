@@ -330,20 +330,22 @@ class ProjectRegistry:
         return service.main(["stop", project.workflow])
 
 
-# Files required to operate a standalone Symphony project.  Directory bundles
-# are merged recursively so adopting a repository never replaces local files.
-_BUNDLE_FILES = {
-    "WORKFLOW.file.example.md": "WORKFLOW.md",
-    "scripts/symphony-setup-worktree.sh": "scripts/symphony-setup-worktree.sh",
-    # Project-facing entry point. The source checkout's own AGENTS.md
-    # describes *Symphony's* repository and must not be copied into a user
-    # project, where it would tell agents "this repo is Symphony".
-    "examples/project/AGENTS.md": "AGENTS.md",
-}
-_BUNDLE_DIRS = {
-    "docs/symphony-prompts": "docs/symphony-prompts",
-    "skills": "skills",
-}
+# Minimal project files; operator skills are opt-in.
+_BUNDLE_FILES = {"WORKFLOW.md": "WORKFLOW.md", "AGENTS.md": "AGENTS.md"}
+
+
+def _bundle_mappings(repo: Path, workflow_path: Path, preset: str) -> dict[str, str]:
+    mappings = dict(_BUNDLE_FILES)
+    mappings["WORKFLOW.md"] = str(workflow_path.relative_to(repo))
+    if preset != "default":
+        from .workflow.presets import get_lane_preset
+
+        lane_preset = get_lane_preset(preset)
+        for relative in (lane_preset.base_prompt, *lane_preset.stage_prompts.values()):
+            mappings[relative.removeprefix("./")] = str(
+                (workflow_path.parent / relative).relative_to(repo)
+            )
+    return mappings
 
 
 def _run_git(cwd: Path, *args: str) -> str:
@@ -441,15 +443,13 @@ def project_target_expectation(candidate: str | Path) -> ProjectTargetExpectatio
     )
 
 
-def source_checkout() -> Path:
-    """Return the canonical Git checkout containing this installed package."""
-    checkout = _git_toplevel(Path(__file__).resolve().parent)
-    if checkout is None:
-        raise ProjectError(
-            "cannot locate the oh-my-symphony source checkout; run this command "
-            "from an editable/source installation"
-        )
-    return checkout
+def source_checkout() -> Path | None:
+    """Return the editable source checkout, or ``None`` for a wheel install."""
+    from .runtime_safety import protected_source_common_dir
+
+    if protected_source_common_dir() is None:
+        return None
+    return _git_toplevel(Path(__file__).resolve().parent)
 
 
 def _slug(value: str) -> str:
@@ -501,16 +501,18 @@ def _workflow_path(repo: Path, value: str) -> Path:
     return workflow
 
 
-def _validate_source_bundle(source: Path) -> None:
+def _validate_source_bundle(
+    source: Path, mappings: dict[str, str], *, with_skill: bool
+) -> None:
     missing: list[str] = []
     conflicts: list[str] = []
-    for source_name in _BUNDLE_FILES:
+    for source_name in mappings:
         path = source / source_name
         if not path.exists():
             missing.append(source_name)
         elif not path.is_file():
             conflicts.append(f"{source_name} is not a file")
-    for source_name in _BUNDLE_DIRS:
+    for source_name in (["skills"] if with_skill else []):
         path = source / source_name
         if not path.exists():
             missing.append(source_name)
@@ -518,10 +520,10 @@ def _validate_source_bundle(source: Path) -> None:
             conflicts.append(f"{source_name} is not a directory")
     if missing:
         raise ProjectError(
-            f"source checkout is missing bootstrap files: {', '.join(missing)}"
+            f"installed package is missing bootstrap files: {', '.join(missing)}"
         )
     if conflicts:
-        raise ProjectError(f"invalid source bootstrap bundle: {', '.join(conflicts)}")
+        raise ProjectError(f"invalid packaged bootstrap bundle: {', '.join(conflicts)}")
 
 
 def _ensure_directory(path: Path, created_dirs: list[Path]) -> None:
@@ -590,45 +592,48 @@ def _merge_missing_tree(
             raise ProjectError(f"unsupported source bundle entry: {child}")
 
 
-def _validate_target_conflicts(repo: Path, workflow_path: Path) -> None:
-    """Validate the complete merge before writing anything to an existing path."""
-    mappings = dict(_BUNDLE_FILES)
-    mappings["WORKFLOW.file.example.md"] = str(workflow_path.relative_to(repo))
-    for source_name, target_name in mappings.items():
-        target = repo / target_name
-        if target.exists() or target.is_symlink():
-            if target.is_dir() and not target.is_symlink():
-                raise ProjectError(f"project bundle path requires a file: {target}")
-        parent = target.parent
-        while parent != repo:
-            if parent.exists() or parent.is_symlink():
-                if parent.is_symlink() or not parent.is_dir():
-                    raise ProjectError(
-                        f"project bundle path requires a directory: {parent}"
-                    )
-                break
-            parent = parent.parent
-    for target_name in _BUNDLE_DIRS.values():
-        target = repo / target_name
+def _validate_target_conflicts(
+    source: Path, repo: Path, mappings: dict[str, str], *, with_skill: bool
+) -> None:
+    """Validate selected files and trees before mutating an existing path."""
+    def require_directory(target: Path) -> None:
+        if target == repo:
+            return
         if target.exists() or target.is_symlink():
             if target.is_symlink() or not target.is_dir():
                 raise ProjectError(
                     f"project bundle path requires a directory: {target}"
                 )
-    # These operator-owned additions have fixed shapes as well.
-    for target in (repo / "kanban", repo / ".claude", repo / ".claude/skills"):
-        if target.exists() or target.is_symlink():
-            if target.is_symlink() or not target.is_dir():
-                raise ProjectError(
-                    f"project bundle path requires a directory: {target}"
-                )
-    skill_link = repo / ".claude/skills/symphony-skill"
-    if skill_link.exists() or skill_link.is_symlink():
-        if not skill_link.is_symlink() and not skill_link.is_dir():
+        require_directory(target.parent)
+
+    def require_file(target: Path) -> None:
+        if target.exists() and target.is_dir() and not target.is_symlink():
+            raise ProjectError(f"project bundle path requires a file: {target}")
+        require_directory(target.parent)
+
+    def require_tree(origin: Path, target: Path) -> None:
+        require_directory(target)
+        for child in origin.iterdir():
+            if child.name in {".DS_Store", "__pycache__"} or child.suffix in {
+                ".pyc", ".pyo",
+            }:
+                continue
+            if child.is_dir() and not child.is_symlink():
+                require_tree(child, target / child.name)
+            else:
+                require_file(target / child.name)
+
+    for target_name in mappings.values():
+        require_file(repo / target_name)
+    require_file(repo / "kanban/.gitkeep")
+    if with_skill:
+        require_tree(source / "skills", repo / "skills")
+        require_directory(repo / ".claude/skills")
+        skill_link = repo / ".claude/skills/symphony-skill"
+        if skill_link.exists() and not skill_link.is_symlink() and not skill_link.is_dir():
             raise ProjectError(
                 f"project bundle path requires a directory: {skill_link}"
             )
-        # Existing symlinks and real skill directories are never overwritten.
 
 
 def _mklink_junction(link: Path, target: Path) -> bool:
@@ -777,64 +782,42 @@ def _bootstrap_missing(
     created_files: list[Path],
     created_dirs: list[Path],
     tracked_paths: set[Path],
+    *,
+    mappings: dict[str, str],
+    with_skill: bool,
+    host: str,
+    port: int,
 ) -> None:
-    mappings = dict(_BUNDLE_FILES)
-    mappings["WORKFLOW.file.example.md"] = str(workflow_path.relative_to(repo))
     for source_name, target_name in mappings.items():
         destination = repo / target_name
-        source_file = source / source_name
-        if source_name == "WORKFLOW.file.example.md":
-            advanced = source / "examples/advanced/WORKFLOW.file.example.md"
-            if advanced.is_file():
-                source_file = advanced
         _copy_missing_file(
-            source_file,
-            destination,
-            created_files,
-            created_dirs,
-            tracked_paths,
+            source / source_name, destination, created_files, created_dirs, tracked_paths
         )
         if destination == workflow_path and destination in created_files:
             content = destination.read_text(encoding="utf-8")
-            content = re.sub(
-                r"(?m)^(\s*root:\s*)~/symphony_workspaces\s*$",
-                rf"\1~/symphony_workspaces/{project_id}",
-                content,
-                count=1,
-            )
+            for placeholder, value in {
+                "__PROJECT_ID__": project_id, "__PORT__": str(port), "__HOST__": host,
+            }.items():
+                content = content.replace(placeholder, value)
             destination.write_text(content, encoding="utf-8")
-        if (
-            os.name != "nt"
-            and target_name == "scripts/symphony-setup-worktree.sh"
-            and destination in created_files
-        ):
-            destination.chmod(destination.stat().st_mode | 0o111)
-    for source_name, target_name in _BUNDLE_DIRS.items():
-        _merge_missing_tree(
-            source / source_name,
-            repo / target_name,
-            created_files,
-            created_dirs,
-            tracked_paths,
-        )
     _ensure_directory(repo / "kanban", created_dirs)
     _copy_missing_file(
-        source / "WORKFLOW.file.example.md",
-        repo / "kanban/.gitkeep",
-        created_files,
-        created_dirs,
-        tracked_paths,
+        source / "WORKFLOW.md", repo / "kanban/.gitkeep",
+        created_files, created_dirs, tracked_paths,
     )
-    # .gitkeep must be empty, not a copy of the workflow template.
     gitkeep = repo / "kanban/.gitkeep"
     if gitkeep in created_files:
         gitkeep.write_text("", encoding="utf-8")
-    skills_dir = repo / ".claude/skills"
-    _ensure_directory(skills_dir, created_dirs)
-    link = skills_dir / "symphony-skill"
-    if link not in tracked_paths and not link.exists() and not link.is_symlink():
-        if _link_skill_dir(link):
-            created_files.append(link)
+    if with_skill:
+        _merge_missing_tree(
+            source / "skills", repo / "skills", created_files, created_dirs, tracked_paths
+        )
+        skills_dir = repo / ".claude/skills"
+        _ensure_directory(skills_dir, created_dirs)
+        link = skills_dir / "symphony-skill"
+        if link not in tracked_paths and not link.exists() and not link.is_symlink():
+            if _link_skill_dir(link):
+                created_files.append(link)
 
 
 def _workflow_resources(
@@ -916,7 +899,7 @@ def _registered_repo(projects: list[Project], repo: Path) -> Project | None:
 def _create_or_adopt_project_locked(
     target: str | Path,
     *,
-    source: str | Path,
+    source: str | Path | None = None,
     name: str | None = None,
     project_id: str | None = None,
     workflow: str = "WORKFLOW.md",
@@ -926,19 +909,22 @@ def _create_or_adopt_project_locked(
     expected_repo: str | Path | None = None,
     expected_target: ProjectTargetExpectation | None = None,
     preset: str = "default",
+    with_skill: bool = False,
 ) -> Project:
     """Create or safely adopt a repository and register it.
 
     The operation merges only absent Symphony bundle files, commits only files
     it created, and returns an existing record when the repository is already
     registered (the stored record remains authoritative over newly requested
-    display metadata). Callers supply the source checkout so CLI and web entry
-    points share identical filesystem and Git semantics.
+    display metadata). The installed package supplies the bundle; ``source``
+    optionally identifies an additional source checkout to protect.
     """
     registry = registry or ProjectRegistry()
-    source_path = Path(source).expanduser().resolve()
+    from .templates.project import resource_path
+
+    bundle_path = resource_path(".")
+    source_path = Path(source).expanduser().resolve() if source is not None else None
     candidate = Path(target).expanduser().resolve()
-    _validate_source_bundle(source_path)
     from .workflow.presets import preset_names
 
     if preset not in preset_names():
@@ -999,24 +985,22 @@ def _create_or_adopt_project_locked(
             ):
                 raise target_changed()
 
-    source_repo = _git_toplevel(source_path)
-    if source_repo is None:
-        raise ProjectError(f"source checkout is not a Git repository: {source_path}")
-    protected = False
-    if existing_toplevel is not None:
-        protected = _git_common_dir(existing_toplevel) == _git_common_dir(source_repo)
-    else:
+    from .runtime_safety import protected_source_common_dir
+
+    protected_dirs = {protected_source_common_dir()}
+    source_repo = _git_toplevel(source_path) if source_path is not None else None
+    if source_repo is not None:
+        protected_dirs.add(_git_common_dir(source_repo))
+    protected_dirs.discard(None)
+    identity_repo = existing_toplevel
+    if identity_repo is None:
         ancestor = candidate.parent
         while not ancestor.exists() and ancestor != ancestor.parent:
             ancestor = ancestor.parent
-        ancestor_repo = _git_toplevel(ancestor) if ancestor.is_dir() else None
-        protected = _inside(candidate, source_repo) or (
-            ancestor_repo is not None
-            and _git_common_dir(ancestor_repo) == _git_common_dir(source_repo)
-        )
-    if protected:
+        identity_repo = _git_toplevel(ancestor) if ancestor.is_dir() else None
+    if identity_repo is not None and _git_common_dir(identity_repo) in protected_dirs:
         raise ProjectError(
-            f"refusing to register protected Symphony source checkout: {source_repo}"
+            f"refusing to register protected Symphony source checkout: {identity_repo}"
         )
 
     workflow_path = _workflow_path(repo, workflow)
@@ -1035,8 +1019,10 @@ def _create_or_adopt_project_locked(
     if any(item.port == resolved_port for item in projects):
         raise ProjectError(f"service port already registered: {resolved_port}")
 
+    mappings = _bundle_mappings(repo, workflow_path, preset)
+    _validate_source_bundle(bundle_path, mappings, with_skill=with_skill)
     if candidate_existed:
-        _validate_target_conflicts(repo, workflow_path)
+        _validate_target_conflicts(bundle_path, repo, mappings, with_skill=with_skill)
 
     created_root = False
     created_git = False
@@ -1055,13 +1041,17 @@ def _create_or_adopt_project_locked(
             repo / relative for relative in tracked_raw.split("\0") if relative
         }
         _bootstrap_missing(
-            source_path,
+            bundle_path,
             repo,
             workflow_path,
             resolved_id,
             created_files,
             created_dirs,
             tracked_paths,
+            mappings=mappings,
+            with_skill=with_skill,
+            host=host,
+            port=resolved_port,
         )
         if not workflow_path.is_file():
             raise ProjectError(f"workflow file not found: {workflow_path}")
@@ -1166,7 +1156,7 @@ def _create_or_adopt_project_locked(
 def create_or_adopt_project(
     target: str | Path,
     *,
-    source: str | Path,
+    source: str | Path | None = None,
     name: str | None = None,
     project_id: str | None = None,
     workflow: str = "WORKFLOW.md",
@@ -1176,6 +1166,7 @@ def create_or_adopt_project(
     expected_repo: str | Path | None = None,
     expected_target: ProjectTargetExpectation | None = None,
     preset: str = "default",
+    with_skill: bool = False,
 ) -> Project:
     """Serialize and perform one complete project create/adopt transaction.
 
@@ -1183,7 +1174,8 @@ def create_or_adopt_project(
     ``expected_target`` additionally binds its Git/non-Git identity. Both are
     checked inside the registry transaction before any setup mutation.
     ``preset`` names the lane preset applied to a workflow this setup creates
-    (``"deep"`` for the autonomous app-delivery pipeline).
+    (``"deep"`` for the autonomous app-delivery pipeline). ``with_skill``
+    copies the packaged operator skill bundle and its Claude discovery link.
     """
     resolved_registry = registry or ProjectRegistry()
     with resolved_registry.transaction():
@@ -1199,6 +1191,7 @@ def create_or_adopt_project(
             expected_repo=expected_repo,
             expected_target=expected_target,
             preset=preset,
+            with_skill=with_skill,
         )
 
 

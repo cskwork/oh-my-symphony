@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from symphony.errors import ChatIntentActionError
-from symphony.intent import (
+from symphony.chat.intent import (
     IntentAction,
     file_intent_request,
     intent_artifact_path,

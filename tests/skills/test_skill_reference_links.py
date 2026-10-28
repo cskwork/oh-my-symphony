@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILLS_DIR = REPO_ROOT / "skills"
+SKILLS_DIR = REPO_ROOT / "src/symphony/templates/project" / "skills"
 
 SKILL_MD_FILES = sorted(SKILLS_DIR.glob("*/SKILL.md"))
 

@@ -53,7 +53,7 @@ from ..workspace import HISTORY_PUSH_FAILED, HistoryGateResult
 from .constants import CONTINUATION_RETRY_DELAY_MS, RETRY_BASE_MS
 from .entries import RunningEntry, _IssueDebug
 from .helpers import _is_successful_terminal_state, _max_turns_exhausted_target_state
-from .release_cycle import (
+from .release_seam import (
     is_release_success_state as _is_release_success_state,
     release_verifier_state as _release_verifier_state,
 )
