@@ -99,12 +99,21 @@ async def handle_worker_exit(
         return
     terminal_cancelled = False
     cfg = orch._workflow_state.current()
-    # A worker that moved its ticket forward and then crashed must still face
-    # the verify gate; only an operator/reconcile cancellation skips it.
+    # A worker that moved its ticket forward and then crashed, or was cancelled
+    # for a stall or budget, must still face the verify gate. Reconcile already
+    # gated (and started cleanup) before cancelling a terminal or inactive
+    # ticket, and a service shutdown must not run commands while stopping.
     if (
         cfg is not None
         and not entry.workspace_cleanup_started
-        and (reason == "normal" or (reason != "cancelled" and verify_config(cfg).commands))
+        and (
+            reason == "normal"
+            or (
+                reason != "shutdown_interrupted"
+                and not orch._stopping
+                and verify_config(cfg).commands
+            )
+        )
     ):
         await orch._enforce_factory_exit_contract(cfg, entry)
     if reason == "cancelled" and cfg is not None:

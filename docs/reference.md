@@ -1141,8 +1141,10 @@ verify:
   the command with `bash -c` in the ticket workspace. A move that jumps over
   listed lanes (In Progress straight to Done) runs each skipped lane's command
   too, in lane order, and a failure names the skipped lane. A worker that
-  crashes after a forward edit still faces the gate when its exit is handled;
-  only an operator or reconcile cancellation skips it. Rewinds and moves to
+  crashes, or is cancelled for a stall or budget, after a forward edit still
+  faces the gate when its exit is handled. Reconcile gates a ticket it finds
+  in Done before it cancels the worker; only a service shutdown exits without
+  running commands. Rewinds and moves to
   `Blocked` do not trigger it. `SYMPHONY_GATE_LANE` names the lane whose
   command is running.
 - The environment adds `SYMPHONY_ISSUE_ID`, `SYMPHONY_ISSUE_IDENTIFIER`,

@@ -356,15 +356,48 @@ def test_crash_after_moving_forward_still_faces_the_gate(
     assert "\n## Verify Failure\n" in body
 
 
-def test_cancelled_exit_leaves_gating_to_reconcile(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from symphony.orchestrator import worker_exit
-
+def _forward_edited_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str):
     cfg, ticket, workspace = _prepare(tmp_path, command="exit 3", contracts="off")
     orchestrator = _orch(workspace)
     issue = _make_issue_from_disk("In Progress", _IN_PROGRESS_BODY_COMPLETE)
     _seed_running_entry(orchestrator, issue, workspace)
+    entry = orchestrator._running[issue.id]
+    entry.state_at_turn_start = "in progress"
+    entry.workspace_path = workspace
+    ticket.write_text(ticket.read_text().replace("state: In Progress", f"state: {target}", 1))
+    monkeypatch.setattr(orchestrator._workflow_state, "current", lambda: cfg)
+    return cfg, ticket, workspace, orchestrator, issue
+
+
+@pytest.mark.parametrize("target", ["Verify", "Done"])
+def test_stall_cancel_after_a_forward_edit_still_faces_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """A stall cancellation must not let the next dispatch start past the gate."""
+    from symphony.orchestrator import worker_exit
+
+    cfg, ticket, workspace, orchestrator, issue = _forward_edited_entry(
+        tmp_path, monkeypatch, target
+    )
+
+    asyncio.run(worker_exit.handle_worker_exit(orchestrator, issue.id, "cancelled", None))
+
+    front, body = parse_ticket_file(ticket)
+    assert front["state"] == "In Progress"
+    assert "\n## Verify Failure\n" in body
+    # The re-dispatch starts from the gated lane, so it cannot reach Done unchecked.
+    _run_attempt(cfg, ticket, workspace, monkeypatch, [("Done", body)])
+    assert parse_ticket_file(ticket)[0]["state"] != "Done"
+
+
+def test_shutdown_exit_does_not_run_verify_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from symphony.orchestrator import worker_exit
+
+    cfg, ticket, workspace, orchestrator, issue = _forward_edited_entry(
+        tmp_path, monkeypatch, "Verify"
+    )
     calls: list[str] = []
 
     async def record(cfg, entry):
@@ -372,7 +405,30 @@ def test_cancelled_exit_leaves_gating_to_reconcile(
         return True
 
     monkeypatch.setattr(orchestrator, "_enforce_factory_exit_contract", record)
-    monkeypatch.setattr(orchestrator._workflow_state, "current", lambda: cfg)
+
+    asyncio.run(
+        worker_exit.handle_worker_exit(orchestrator, issue.id, "shutdown_interrupted", None)
+    )
+
+    assert calls == []
+
+
+def test_exit_after_reconcile_started_cleanup_is_not_gated_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from symphony.orchestrator import worker_exit
+
+    cfg, ticket, workspace, orchestrator, issue = _forward_edited_entry(
+        tmp_path, monkeypatch, "Done"
+    )
+    orchestrator._running[issue.id].workspace_cleanup_started = True
+    calls: list[str] = []
+
+    async def record(cfg, entry):
+        calls.append(entry.issue.id)
+        return True
+
+    monkeypatch.setattr(orchestrator, "_enforce_factory_exit_contract", record)
 
     asyncio.run(worker_exit.handle_worker_exit(orchestrator, issue.id, "cancelled", None))
 
