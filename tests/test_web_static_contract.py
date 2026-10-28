@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 STATIC_ROOT = Path("src/symphony/web/static")
+# PM Workspace assets ship with the optional `packages/pm` distribution.
+PM_STATIC_ROOT = Path("packages/pm/src/symphony/pm/static")
 
 
 def _script_bundle() -> str:
@@ -341,7 +343,7 @@ def test_web_api_token_prompt_contract() -> None:
 
 def test_pm_artifact_downloads_use_authenticated_host_fetch() -> None:
     js = _script_bundle()
-    pm = (STATIC_ROOT / "pm" / "index.js").read_text(encoding="utf-8")
+    pm = (PM_STATIC_ROOT / "index.js").read_text(encoding="utf-8")
     assert "async function authenticatedDownload(path, filename)" in js
     assert "const target = String(path).startsWith(API_BASE) ? String(path) : `${API_BASE}${path}`" in js
     download = js.split("async function authenticatedDownload(path, filename)", 1)[1].split("function handleRouteChange()", 1)[0]
@@ -354,7 +356,7 @@ def test_pm_artifact_downloads_use_authenticated_host_fetch() -> None:
 
 
 def test_pm_korean_validation_and_handoff_controls_are_complete() -> None:
-    pm = (STATIC_ROOT / "pm" / "index.js").read_text(encoding="utf-8")
+    pm = (PM_STATIC_ROOT / "index.js").read_text(encoding="utf-8")
     assert "'Validation results': '검증 결과'" in pm
     assert "'Ready for review': '검토 준비 완료'" in pm
     assert "'No findings.': '발견된 문제가 없습니다.'" in pm
@@ -365,8 +367,8 @@ def test_pm_korean_validation_and_handoff_controls_are_complete() -> None:
 
 
 def test_pm_korean_import_conflict_and_approval_controls_are_complete() -> None:
-    pm = (STATIC_ROOT / "pm" / "index.js").read_text(encoding="utf-8")
-    exchange = (STATIC_ROOT / "pm" / "exchange.js").read_text(encoding="utf-8")
+    pm = (PM_STATIC_ROOT / "index.js").read_text(encoding="utf-8")
+    exchange = (PM_STATIC_ROOT / "exchange.js").read_text(encoding="utf-8")
     assert "'Apply reviewed import': '검토한 가져오기 적용'" in pm
     assert "'{count} conflicts require resolution': '해결이 필요한 충돌 {count}개'" in pm
     assert "'Resolve {key}': '{key} 해결'" in pm

@@ -6,22 +6,23 @@ the discovery point that Codex (and any other `AGENTS.md`-respecting CLI)
 reads on startup. It gives the operator, meaning the human or agent running
 `symphony`, the same skill guidance Claude Code gets from `.claude/skills/`.
 
-## Source of truth: `skills/symphony-skill`
+## Source of truth: `src/symphony/templates/project/skills/symphony-skill`
 
 Operator-side routing lives in one skill:
-`skills/symphony-skill/SKILL.md`. It has YAML frontmatter (`name`,
+`src/symphony/templates/project/skills/symphony-skill/SKILL.md`. It has YAML frontmatter (`name`,
 `description`, optional triggers) and routes requests to the right reference
 or support bundle. `.claude/skills/` is a thin symlink layer for Claude Code's
 native discovery. Do not edit through it. Edit the canonical files under
-`skills/`.
+`src/symphony/templates/project/skills/` (the same files `symphony project
+create --with-skill` copies into a project).
 
-`skills/symphony-skill/oneshot/` and `skills/symphony-skill/monorepo/` are
+`src/symphony/templates/project/skills/symphony-skill/oneshot/` and `src/symphony/templates/project/skills/symphony-skill/monorepo/` are
 branch-specific subfolders with templates, scripts, and references used by the
 router. They intentionally do not expose separate `SKILL.md` activation routes.
 
 ## Available skill (operator-facing)
 
-Load `skills/symphony-skill/SKILL.md` when the user's request matches the
+Load `src/symphony/templates/project/skills/symphony-skill/SKILL.md` when the user's request matches the
 trigger description below. Open only the reference page named by the router's
 decision table.
 
@@ -41,7 +42,7 @@ decision table.
 > silent for N seconds", "one-shot this", "decompose and dispatch with proof",
 > or "symphony monorepo".
 
-Entry: `skills/symphony-skill/SKILL.md`
+Entry: `src/symphony/templates/project/skills/symphony-skill/SKILL.md`
 
 ## Worker-side guidance
 
@@ -57,5 +58,5 @@ rendered prompt for a given ticket state.
 - Read `WORKFLOW.md` and a couple of `kanban/*.md` files before any
   recommendation. Settings vary per fork.
 - Run `symphony doctor ./WORKFLOW.md` before launching anything.
-- See the `BOOTSTRAP` route in `skills/symphony-skill/SKILL.md` for the full
+- See the `BOOTSTRAP` route in `src/symphony/templates/project/skills/symphony-skill/SKILL.md` for the full
   file set required when copying Symphony into another project.

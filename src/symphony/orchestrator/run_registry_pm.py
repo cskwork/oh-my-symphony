@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from ..pm.models import canonical_receipt_set_hash
 from .run_registry_base import _RunRegistryBase
 from .run_registry_records import (
     DEFAULT_LEASE_TTL,
@@ -1325,6 +1324,9 @@ class _PmRegistry(_RunRegistryBase):
             observed.add(procedure_id)
         if observed != set(required):
             return None
+        # PM receipts exist only when the optional PM package wrote them.
+        from ..pm.models import canonical_receipt_set_hash  # pyright: ignore[reportMissingImports]
+
         expected_set_hash = canonical_receipt_set_hash(
             tuple(str(item) for item in receipt_ids)
         )

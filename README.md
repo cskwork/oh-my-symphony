@@ -8,9 +8,10 @@
 
 Symphony turns a Kanban board into a queue of work for AI coding agents. Each
 ticket runs in its own `git worktree` with the agent you pick (Codex, Claude
-Code, Gemini, AGY/Antigravity, Kiro, OpenCode, Pi, or Prime Agent), and you
-watch progress in a terminal TUI or a local web board on port 9999. Tickets
-are Markdown files in your repo by default; Linear and Jira also work.
+Code, Gemini, AGY/Antigravity, Kiro, OpenCode, Pi, Prime Agent, or any Agent
+Client Protocol agent), and you watch progress in a terminal TUI or a local web
+board. Tickets are Markdown files in your repo by default; Linear and Jira also
+work.
 
 ![Symphony web board](docs/admin-ui-screenshot.png)
 
@@ -22,9 +23,9 @@ Full details: **[docs/reference.md](docs/reference.md)**. Live site:
 
 Running several coding agents at once usually means several terminals, agents
 editing the same checkout, and no record of who is working on what. Symphony
-gives each ticket its own branch and worktree, dispatches it to the agent CLI
-you chose, and keeps the run state (leases, retries, pauses) in a local
-database so a restart does not start the same ticket twice.
+gives each ticket its own branch and worktree, dispatches it to your agent CLI,
+keeps run state in a local database so a restart does not start the same
+ticket twice, and can let your scripts, not the agent, decide when a lane is done.
 
 ## How it works
 
@@ -33,244 +34,214 @@ flowchart LR
   B["Tracker<br/>file board (kanban/*.md) · Linear · Jira<br/>src/symphony/trackers/"] -->|poll| O["Orchestrator<br/>src/symphony/orchestrator/"]
   O <-->|"leases · retry · pause"| R[("SQLite (WAL)<br/>run_registry.py")]
   O -->|"after_create hook"| W["git worktree per ticket<br/>symphony/ID branch"]
-  O -->|"build_backend(agent.kind)"| A["Agent backend<br/>codex · claude · gemini · agy · kiro<br/>opencode · pi · prime-agent<br/>src/symphony/backends/"]
+  O -->|"build_backend(agent.kind)"| A["Agent backend<br/>8 built-in CLIs · agent.profiles<br/>(format: text or acp)<br/>src/symphony/backends/"]
   A -->|runs in| W
-  A -->|"turns · tokens · rate limits"| O
-  W -->|"state: Done + Resolution"| B
-  O --> UI["TUI (Textual) · web board :9999<br/>/api/v1/* (aiohttp)"]
+  W -->|"forward move"| V{"verify: command<br/>exit 0?"}
+  V -->|"yes"| B
+  V -->|"no: Verify Failure note, rewind"| W
+  O --> UI["TUI (Textual) · web board<br/>/api/v1/* (aiohttp)"]
 ```
-
-Module map, invariants, and test seams: [docs/architecture.md](docs/architecture.md).
 
 **Key decisions**
 
 - **One factory, many agents.** `build_backend` in
   [`src/symphony/backends/__init__.py`](src/symphony/backends/__init__.py)
-  picks the adapter from `agent.kind`; a ticket's `agent_kind` frontmatter or
-  `agent.stage_kinds` overrides it, and `agent.profiles` adds a plain CLI
-  without code.
-- **Isolation by git worktree, not containers.** The `after_create` hook runs
-  [`scripts/symphony-setup-worktree.sh`](scripts/symphony-setup-worktree.sh)
-  to attach each workspace on a `symphony/<ID>` branch, so the host checkout
-  stays untouched.
-- **Durable run leases.** `RunRegistry.acquire_run` in
-  [`src/symphony/orchestrator/run_registry.py`](src/symphony/orchestrator/run_registry.py)
-  must own a SQLite (WAL) lease before a worker starts; dead owners are
-  reclaimed, and retry/pause/budget flags survive restarts.
-- **Files as the default tracker.** Tickets are Markdown in `kanban/`; writes
-  go through a lock and compare-and-swap path in
-  [`src/symphony/trackers/file.py`](src/symphony/trackers/file.py), so no SaaS
-  or API key is needed to start.
-- **Cheap health.** `/api/v1/health` reads counters only, so `symphony service`
-  can probe it even when tracker refresh is degraded
-  ([`src/symphony/server.py`](src/symphony/server.py)).
+  picks the adapter from `agent.kind`; `agent.profiles` adds a plain-text CLI
+  (`format: text`) or an ACP agent (`format: acp`) with no Python.
+- **Isolation by git worktree, not containers.** [`scripts/symphony-setup-worktree.sh`](scripts/symphony-setup-worktree.sh)
+  attaches each workspace on a `symphony/<ID>` branch.
+- **Scripts decide done.** A `verify:` command runs when a ticket leaves a lane;
+  non-zero rewinds it ([`workflow/verify.py`](src/symphony/workflow/verify.py)).
+- **Durable run leases.** [`run_registry.py`](src/symphony/orchestrator/run_registry.py)
+  holds SQLite (WAL) leases and retry, pause, and budget flags across restarts.
+- **Small core, optional extras.** PM Workspace, operator chat, and app release
+  contracts are separate distributions under [`packages/`](packages/).
 
-Recorded decisions: [docs/adr/](docs/adr/) (immutable project runtimes,
-machine-enforced release contracts, bounded run diagnostics, crash
-continuation, opt-in DAG scheduling, lean core).
+Module map: [docs/architecture.md](docs/architecture.md). Decisions: [docs/adr/](docs/adr/).
 
 ## Install
 
-Requires Python 3.12+ and Git. Symphony is not on PyPI yet; install from this
-checkout:
+Requires Python 3.12+ and Git. Symphony is not on PyPI; install from GitHub or
+a checkout.
 
 ```bash
-git clone https://github.com/cskwork/oh-my-symphony.git
-cd oh-my-symphony
+uv tool install git+https://github.com/cskwork/oh-my-symphony   # as a tool
+# or from a checkout
+git clone https://github.com/cskwork/oh-my-symphony.git && cd oh-my-symphony
 python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e .
 ```
 
-Then put at least one agent CLI on `$PATH`:
+**Optional components** install from a checkout, next to core:
 
-| `agent.kind` | CLI | Install / sign-in |
-|--------------|-----|-------------------|
-| `codex` | `codex` | needs the `app-server` subcommand |
-| `claude` | `claude` | Claude Code |
-| `gemini` | `gemini` | Gemini CLI |
-| `agy` | `agy` | Google Antigravity |
-| `kiro` | `kiro-cli` | `kiro-cli login` or `KIRO_API_KEY` |
-| `opencode` | `opencode` | `npm install -g opencode-ai`, `opencode auth login` |
-| `pi` | `pi` | `npm i -g @earendil-works/pi-coding-agent`, then `/login` |
-| `prime-agent` | `prime-agent` | Prime Agent installer, then `/login` or a provider API key |
+| Package | Adds | Install |
+|---------|------|---------|
+| `packages/pm` | PM Workspace, `symphony pm` | `python -m pip install ./packages/pm` |
+| `packages/chat` | web operator chat and intent cards | `python -m pip install ./packages/chat` |
+| `packages/release` | app release contracts, `symphony release` | `python -m pip install ./packages/release` |
 
-Exact install commands are in the [reference](docs/reference.md#install-and-agent-clis).
+With `uv tool`, run `uv tool install . --with ./packages/pm` (one `--with` per
+package). Without a package, its command prints an install hint and exits 2.
+
+Then put at least one [agent CLI](docs/reference.md#install-and-agent-clis) on
+`$PATH`: `codex`, `claude`, `gemini`, `agy`, `kiro-cli`, `opencode`, `pi`, `prime-agent`.
 
 ## 5-minute quickstart
 
-**Do not run tickets inside the `oh-my-symphony` checkout.** Doctor and
-startup refuse a `WORKFLOW.md` in Symphony's own repository so agents cannot
-edit the orchestrator. Create or register a separate project instead.
+**Do not run tickets inside the `oh-my-symphony` checkout.** Doctor and startup
+refuse a `WORKFLOW.md` in Symphony's own repository.
 
-**1. Create or register a project.** This writes `WORKFLOW.md`, a `kanban/`
-board, stage prompts, skills, and `AGENTS.md`.
-
-```bash
-symphony project create "My App" --path ../my-app
-# or adopt an existing directory (Git and missing files are added safely)
-symphony project add /path/to/existing-project --name "My App"
-cd ../my-app
-```
-
-For a bare directory with your own `WORKFLOW.md`, run `symphony board init ./kanban`.
-
-**2. Pick the agent.** Set `agent.kind` in `WORKFLOW.md`, for example
-`kind: claude`.
-
-**3. Check the setup.**
+**1. Create a project.** This commits three files: `WORKFLOW.md`, `AGENTS.md`,
+and `kanban/.gitkeep`. From an editable install the default path is next to
+the checkout instead of the current directory.
 
 ```bash
-symphony doctor ./WORKFLOW.md      # every line should read PASS
+symphony project create "My App"      # ./my-app; --path DIR to choose
+cd my-app
+# or adopt an existing directory: symphony project add /path/to/dir --name "My App"
 ```
 
-Exit code `0` means all checks passed, `1` means a FAIL, `2` means
-`WORKFLOW.md` could not be loaded.
+The generated `WORKFLOW.md` is about 20 lines. `defaults: standard` fills the
+four lanes, prompts, worktree hooks, and per-agent command blocks from the
+package; any key you write wins. `server.port` is the next free registry port
+from 9999.
 
-**4. Add a ticket.**
+```yaml
+---
+defaults: standard
+tracker:
+  kind: file
+  board_root: ./kanban
+workspace:
+  root: ~/symphony_workspaces/my-app
+  reuse_policy: refresh
+agent:
+  kind: codex
+  auto_merge_push_target: false
+server:
+  host: 127.0.0.1
+  port: 9999
+---
+
+You are working on {{ issue.identifier }}: {{ issue.title }}.
+```
+
+**2. Pick the agent and the done check.** Set `agent.kind` (for example
+`claude`), and optionally add a `verify:` block keyed by the lane being left:
+
+```yaml
+verify:
+  commands:
+    "In Progress": python -m pytest -q
+```
+
+Claude workers run with `--permission-mode acceptEdits`, which denies shell
+commands unless the project allows them. Add and commit `.claude/settings.json`
+(workers run in worktrees of the committed tree):
+
+```json
+{"permissions": {"allow": ["Bash(python -m pytest:*)", "Bash(git merge-tree:*)"]}}
+```
+
+**3. Check the setup** with `symphony doctor ./WORKFLOW.md` (add
+`--run-verify` to run each verify command once). Exit code `0` means no FAIL,
+`1` a FAIL, `2` an unloadable `WORKFLOW.md`; a missing Claude Bash rule WARNs.
+
+**4. Add a ticket and run it.**
 
 ```bash
 symphony board new TASK-1 "Fix flaky pagination test" \
   --priority 2 --description "tests/test_pagination.py is flaky on CI."
+symphony tui ./WORKFLOW.md             # interactive terminal
+symphony service start ./WORKFLOW.md   # or a background service; open the board URL
 ```
 
-**5. Run it.** Use the terminal TUI or the web board:
+Within one poll tick (30 s) the card shows a green ● with turns and tokens. The
+agent moves the card by editing `kanban/TASK-1.md`; a failed verify command
+appends `## Verify Failure` and rewinds it. Stuck tickets are listed in
+`.symphony/needs.json`; `symphony board show TASK-1` prints why.
 
-```bash
-symphony tui ./WORKFLOW.md                        # needs an interactive terminal
-symphony service start ./WORKFLOW.md --port 9999  # background service
-# open http://127.0.0.1:9999/
-```
+> **Each ticket workspace is a `git worktree` on a `symphony/<ID>` branch.**
+> With `agent.auto_merge_on_done` enabled the orchestrator merges once at Done;
+> do not merge that branch by hand as well.
 
-Within one poll tick (30 s by default) the card shows a green ● with turn
-count and tokens. When the agent finishes, it sets `state: Done` in
-`kanban/TASK-1.md` and appends a `## Resolution` section; that edit moves the
-card. If the port is busy, `symphony tui` reports which process holds it.
-
-> **The default hook attaches each ticket workspace as a `git worktree` on a
-> `symphony/<ID>` branch.** With `agent.auto_merge_on_done` enabled the
-> orchestrator merges once at Done; do not merge that branch by hand as well.
-
-**No agent CLI yet?** The bundled mock backend moves cards without calling an
-LLM. See [Mock demo](docs/reference.md#mock-demo-no-agent-cli-required).
+**Customize prompts or hooks** with `symphony eject prompts|hooks|all`: it copies
+the package defaults into the project and points `WORKFLOW.md` at them (never
+overwrites). **No agent CLI?** The [mock backend](docs/reference.md#mock-demo-no-agent-cli-required)
+shows turns and tokens without an LLM, but cards do not move.
 
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `symphony project create\|add\|list\|start\|stop\|status\|remove` | Register and run independent project services |
+| `symphony project create\|add\|list\|start\|stop\|status\|remove` | Register and run project services (`--with-skill` copies the operator skill) |
 | `symphony hub` | Multi-project hub (default `127.0.0.1:8787`) |
-| `symphony doctor [WORKFLOW]` | Preflight checks for `WORKFLOW.md` |
+| `symphony doctor [WORKFLOW] [--run-verify]` | Preflight checks for `WORKFLOW.md` |
+| `symphony eject [prompts\|hooks\|all] [WORKFLOW]` | Copy default prompts/hooks into the project for editing |
 | `symphony board init\|ls\|new\|mv\|update\|show\|graph` | Validated file-board ticket tool |
 | `symphony tui [WORKFLOW]` | Orchestrator + terminal Kanban TUI |
 | `symphony [WORKFLOW]` | Orchestrator headless, with web board and `WORKFLOW-PROGRESS.md` |
 | `symphony service start\|stop\|restart\|status\|logs` | Managed background orchestrator |
 | `symphony runs [WORKFLOW]` | Recent run attempts |
 | `symphony factory init\|sync\|start` | Autonomous development factory |
-| `symphony pm demo` | Disposable PM Workspace demo |
-| `symphony release check` | Validate app release evidence |
+| `symphony pm demo` | PM Workspace demo (needs `packages/pm`) |
+| `symphony release check` | Validate app release evidence (needs `packages/release`) |
 
-Useful flags: `--port`, `--host`, `--tui`, `--no-progress-md`,
-`--no-keep-awake`, `--log-level`. Logs go to stderr only; redirect with
-`2>> log/symphony.log`.
+## What's new in 0.29
+
+- `project create` writes 3 files, picks a free port, works from `uv tool install`.
+- `defaults: standard`, `symphony eject`, and `verify:` gates (scripts decide done).
+- `.symphony/needs.json`, `symphony doctor --run-verify`, and ACP agent profiles.
+- PM, chat, and release are optional packages; core wheel 3.0 MB → 1.2 MB.
+
+Details and upgrade steps: [CHANGELOG.md](CHANGELOG.md#0290---2026-10-28---lean-and-easy).
 
 ## Features
 
-**Agent backends.** Set a global `agent.kind`, pin one per ticket with
-`agent_kind: codex` in ticket frontmatter (or `board new --agent-kind`), route
-per lane with `agent.stage_kinds`, and fail over with `agent.fallback_kinds`.
-See [Agent backends](docs/reference.md#agent-backends).
-
-**Trackers.** File board by default (`tracker.kind: file`). Linear:
-[`WORKFLOW.example.md`](WORKFLOW.example.md). Jira:
-[`examples/WORKFLOW.jira.example.md`](examples/WORKFLOW.jira.example.md).
-Browser editing is file-board only; Linear/Jira boards are read-only status.
-See [Trackers](docs/reference.md#trackers-file-linear-jira).
-
-**Web board and TUI.** Projects, board CRUD and drag-and-drop, workflow and
-prompt editing, Git review and merge, operator chat, product preview, runs,
-stats, and settings at `http://127.0.0.1:9999/`. The TUI covers ticket
-create/edit, pause/resume, skip Document, filter, and stats (`?` lists keys).
-Before exposing the board through a proxy or tunnel, read
-[Reverse proxy, tunnels, and API token](docs/reference.md#reverse-proxy-tunnels-and-api-token).
-
-**Autonomous development factory.** A Wayfinder -> Symphony -> Supergoal loop
-with a `Ready -> Build -> Verify -> Done` board:
-
-```bash
-git init my-product && cd my-product
-symphony factory init . --agent opencode
-git add . && git commit -m "Initialize Symphony factory"
-# create Wayfinder tickets under wayfinder/tickets/, then:
-symphony factory start ./wayfinder
-```
-
+Per-ticket, per-lane, and failover [agent routing](docs/reference.md#agent-backends);
+file, Linear, and Jira trackers; web board and TUI (read
+[Reverse proxy, tunnels, and API token](docs/reference.md#reverse-proxy-tunnels-and-api-token)
+before exposing the board); `default` and `deep` [lane presets](docs/PIPELINE.md);
+and the autonomous development factory (`symphony factory init|start`).
 Superdesign browser gates need Node.js 18+, `@playwright/cli`
-(`npm install -g @playwright/cli@latest`), and `playwright-cli install --skills`. See
-[Autonomous development factory](docs/reference.md#autonomous-development-factory)
-and the [factory guide](skills/symphony-skill/reference/factory.md).
-
-**PM Workspace.** Plan a change (idea, requirements, design, plan) and hand
-it off as board tickets. Try `symphony pm demo` (or `--lang ko`); it needs Git
-and Node.js 20.19.0+. See [docs/pm-workspace.md](docs/pm-workspace.md).
-
-**Lane presets.** `default` (Todo, In Progress, Verify, Document) or `deep`
-(eight lanes from Intake to Document), switchable in Settings. See
-[Lane presets](docs/reference.md#lane-presets-and-stage-contracts) and
-[docs/PIPELINE.md](docs/PIPELINE.md).
-
-**Also included:** chat intake with one approval gate, opt-in app release
-contracts, experimental continuous improvement, Slack notifications, English
-and Korean UI (`tui.language` / `SYMPHONY_LANG`), and macOS keep-awake.
-Windows needs Git Bash; see [Platforms](docs/reference.md#platforms).
+(`npm install -g @playwright/cli@latest`), and `playwright-cli install --skills`;
+see the [factory guide](src/symphony/templates/project/skills/symphony-skill/reference/factory.md).
 
 ## Documentation
 
-- [docs/reference.md](docs/reference.md): configuration, commands, API, and caveats
-- [docs/architecture.md](docs/architecture.md): how the orchestrator works
-- [docs/PIPELINE.md](docs/PIPELINE.md) and [docs/PIPELINE-DEMO.md](docs/PIPELINE-DEMO.md): stage contracts
-- [docs/pm-workspace.md](docs/pm-workspace.md) and [operations](docs/pm-workspace-operations.md)
-- [docs/adr/](docs/adr/): architecture decisions
-- [docs/prd/v1.0-lean-core.md](docs/prd/v1.0-lean-core.md): v1.0 plan (reduce bloat, keep shipped features)
-- [skills/symphony-skill/](skills/symphony-skill/): agent skill and operator guides
-- [CHANGELOG.md](CHANGELOG.md): release history
+[Reference](docs/reference.md) (configuration, commands, API, caveats),
+[architecture](docs/architecture.md), [v1.0 plan and status](docs/prd/v1.0-lean-core.md),
+[operator skill](src/symphony/templates/project/skills/symphony-skill/), and
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 
-PRs target `dev`. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-```bash
-python -m pip install -e ".[dev]"
-python -m pytest -q
-python -m ruff check src tests
-symphony-pyright
-```
+PRs target `dev`. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup (core plus
+the three packages, `npm ci --prefix packages/pm`) and the required checks
+(`python -m pytest -q`, `ruff`, `symphony-pyright`).
 
 ## Testing
 
-Last observed (2026-10-28, CI on ubuntu-latest, Python 3.12,
-[run 40613870510](https://github.com/cskwork/oh-my-symphony/actions/runs/40613870510)):
+Last observed locally (2026-10-28, macOS, Python 3.12):
 
 | Command | Passed | Failed | Skipped |
 |---|---|---|---|
-| `python -m pytest -q -n auto -m "not timing"` | 3772 | 0 | 134 |
+| `python -m pytest -q -n auto -m "not timing"` | 3925 | 6 | 136 |
 | `python -m pytest -q -n0 -m timing` | 11 | 0 | 1 |
 
-Line coverage 85.52% (`--cov-fail-under=80`). The suite has 141 `test_*.py`
-files under `tests/`.
-
-CI ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs ruff,
-the i18n check, pyright, and the suite with an 80% coverage floor on Ubuntu,
-plus a native Windows lifecycle job.
+The full run was under heavy machine load: 4 of the 6 failures pass when rerun
+serially. The other 2 (`test_workspace` hook-output tests) also fail on the
+v0.28.0 baseline on this machine because the login shell prints a Kiro banner.
+CI results will be recorded on the release PR.
 
 ## Limitations
 
-- Not on PyPI yet; install from a checkout.
+- Not on PyPI yet; install from GitHub or a checkout. The optional packages
+  also install from the checkout.
 - Windows needs Git Bash; some lifecycle behavior is only verified by the
-  Windows CI job.
-- Linear and Jira boards are read-only in the browser; editing is file-board
-  only.
-- Browser end-to-end tests are opt-in (`SYMPHONY_BROWSER_E2E=1` plus
-  Playwright browsers) and are not part of the default run.
+  Windows CI job. ACP agents are not verified on Windows.
+- Linear and Jira boards are read-only in the browser; browser E2E tests are
+  opt-in (`SYMPHONY_BROWSER_E2E=1`).
 
 ## License
 

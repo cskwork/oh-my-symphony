@@ -86,7 +86,7 @@ def test_deep_prompts_are_succinct_and_carry_the_gates() -> None:
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parent.parent
-    deep_dir = repo_root / "docs" / "symphony-prompts" / "file" / "deep"
+    deep_dir = repo_root / "src/symphony/templates/project" / "docs" / "symphony-prompts" / "file" / "deep"
     for rel in DEEP_PRESET.stage_prompts.values():
         text = (repo_root / rel).read_text(encoding="utf-8")
         assert text.count("\n") <= 45, f"{rel} is not succinct"

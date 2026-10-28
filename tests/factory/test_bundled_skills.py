@@ -291,7 +291,7 @@ def test_superqa_editable_install_metadata_has_its_readme() -> None:
     [
         Path("README.md"),
         Path("README.ko.md"),
-        Path("skills/symphony-skill/reference/factory.md"),
+        Path("src/symphony/templates/project/skills/symphony-skill/reference/factory.md"),
     ],
 )
 def test_beginner_docs_name_superdesign_runtime_prerequisites(path: Path) -> None:

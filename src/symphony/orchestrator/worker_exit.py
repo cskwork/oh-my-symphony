@@ -49,11 +49,16 @@ from ..errors import SymphonyError
 from ..issue import Issue, normalize_state
 from ..logging import get_logger
 from ..workflow import ServiceConfig
+from ..workflow.verify import crossed_commands, gates_from, remember_gate_lane, verify_config
 from ..workspace import HISTORY_PUSH_FAILED, HistoryGateResult
 from .constants import CONTINUATION_RETRY_DELAY_MS, RETRY_BASE_MS
 from .entries import RunningEntry, _IssueDebug
-from .helpers import _is_successful_terminal_state, _max_turns_exhausted_target_state
-from .release_cycle import (
+from .helpers import (
+    _canonical_state_label,
+    _is_successful_terminal_state,
+    _max_turns_exhausted_target_state,
+)
+from .release_seam import (
     is_release_success_state as _is_release_success_state,
     release_verifier_state as _release_verifier_state,
 )
@@ -84,6 +89,43 @@ def _core():
 # ----------------------------------------------------------------------
 
 
+async def _write_gate_lane(cfg: ServiceConfig, entry: RunningEntry, lane: str | None) -> None:
+    try:
+        await asyncio.to_thread(remember_gate_lane, cfg, entry.issue.identifier, lane)
+    except OSError as exc:
+        log.warning("verify_gate_lane_write_failed", identifier=entry.issue.identifier, error=str(exc))
+
+
+async def return_unverified_success_to_lane(
+    orch: Orchestrator, cfg: ServiceConfig, issue: Issue, lane: str
+) -> bool:
+    """Send a ticket that reached Done past an unrun verify gate back to *lane*.
+
+    Done tickets are never dispatched again, so a gate skipped by a shutdown
+    or host crash would never run. Nothing was merged (delivery waits for a
+    handled exit), so returning the card is safe; the gate then runs on the
+    next forward move.
+    """
+    state = normalize_state(issue.state)
+    if not _is_successful_terminal_state(state) or not crossed_commands(
+        verify_config(cfg).commands, lane, state, cfg.tracker.active_states
+    ):
+        return False
+    label = _canonical_state_label(cfg, lane) or lane
+    await asyncio.to_thread(
+        orch._tracker_call_append_note,
+        cfg,
+        issue,
+        "Verify Pending",
+        f"Moved to `{issue.state}` while Symphony was stopping, before the verify "
+        f"gate for `{label}` ran. Returned to `{label}`; the gate runs on the next "
+        "forward move.",
+    )
+    await asyncio.to_thread(orch._tracker_call_update_state, cfg, issue, label)
+    log.warning("verify_pending_returned", identifier=issue.identifier, lane=label)
+    return True
+
+
 async def handle_worker_exit(
     orch: Orchestrator,
     issue_id: str,
@@ -98,8 +140,43 @@ async def handle_worker_exit(
         return
     terminal_cancelled = False
     cfg = orch._workflow_state.current()
-    if cfg is not None and reason == "normal" and not entry.workspace_cleanup_started:
+    # A worker that moved its ticket forward and then crashed, or was cancelled
+    # for a stall or budget, must still face the verify gate. Reconcile already
+    # gated (and started cleanup) before cancelling a terminal or inactive
+    # ticket, and a service shutdown must not run commands while stopping.
+    if (
+        cfg is not None
+        and not entry.workspace_cleanup_started
+        and (
+            reason == "normal"
+            or (
+                reason != "shutdown_interrupted"
+                and not orch._stopping
+                and verify_config(cfg).commands
+            )
+        )
+    ):
         await orch._enforce_factory_exit_contract(cfg, entry)
+    if cfg is not None and verify_config(cfg).commands:
+        if reason != "shutdown_interrupted" and not orch._stopping:
+            # Handled: gated above, or by reconcile before it started cleanup.
+            await _write_gate_lane(cfg, entry, None)
+        else:
+            turn_lane = normalize_state(entry.state_at_turn_start)
+            if turn_lane and gates_from(
+                verify_config(cfg).commands, turn_lane, cfg.tracker.active_states
+            ):
+                # A shutdown runs no commands; the next dispatch gates the move.
+                await _write_gate_lane(cfg, entry, turn_lane)
+                refreshed = await orch._refresh_issue_state(cfg, entry.issue.id)
+                if refreshed is not None:
+                    try:
+                        await return_unverified_success_to_lane(
+                            orch, cfg, replace(entry.issue, state=refreshed.state), turn_lane
+                        )
+                    except Exception as exc:
+                        # Startup returns the card instead (it reads the same record).
+                        log.warning("verify_pending_return_failed", identifier=entry.issue.identifier, error=str(exc))
     if reason == "cancelled" and cfg is not None:
         # Reconcile can cancel a worker after its card is archived/stopped.
         # Read current tracker state: an old terminal snapshot must not

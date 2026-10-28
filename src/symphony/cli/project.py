@@ -45,6 +45,7 @@ def _setup_from_args(args: argparse.Namespace, target: Path, *, name: str) -> Pr
         host=args.host,
         port=args.port,
         registry=ProjectRegistry(),
+        with_skill=args.with_skill,
     )
 
 
@@ -63,10 +64,11 @@ def cmd_create(args: argparse.Namespace) -> int:
     ).strip("-")
     if not default_id:
         raise ProjectError("name must contain at least one letter or digit")
+    default_parent = source.parent if source is not None else Path.cwd()
     target = (
         Path(args.path).expanduser().resolve()
         if args.path
-        else (source.parent / default_id[:64].rstrip("-")).resolve()
+        else (default_parent / default_id[:64].rstrip("-")).resolve()
     )
     # Avoid locating the source checkout twice while retaining the small common
     # CLI adapter used by add.
@@ -79,6 +81,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         registry=ProjectRegistry(),
+        with_skill=args.with_skill,
     )
     print(f"created project {project.id} at {project.git_repo} ({project.host}:{project.port})")
     return 0
@@ -144,6 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("list", aliases=["ls"], help="list registered projects").set_defaults(func=cmd_list)
 
     def add_registration_options(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--with-skill", action="store_true",
+            help="copy the packaged operator skills and Claude discovery link",
+        )
         command.add_argument("--id", default=None, help="stable lowercase project id")
         command.add_argument("--workflow", default="WORKFLOW.md", help="workflow path relative to repository")
         command.add_argument("--host", default=DEFAULT_HOST)
@@ -155,9 +162,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_registration_options(add)
     add.set_defaults(func=cmd_add)
 
-    create = sub.add_parser("create", help="create and bootstrap a sibling git repository")
+    create = sub.add_parser("create", help="create and bootstrap a git repository")
     create.add_argument("name", help="display name")
-    create.add_argument("--path", default=None, help="target path (default: sibling of Symphony source)")
+    create.add_argument("--path", default=None, help="target path (default: sibling of editable source, otherwise current directory)")
     add_registration_options(create)
     create.set_defaults(func=cmd_create)
 

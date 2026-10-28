@@ -216,11 +216,16 @@ def test_create_bootstraps_sibling_repo_and_initial_commit(
     target = tmp_path / "demo"
     record = ProjectRegistry().get("demo")
     assert Path(record.git_repo) == target
-    assert (target / "WORKFLOW.md").read_text() == "workflow\n"
-    assert (target / "docs/symphony-prompts/base.md").is_file()
-    assert (target / "skills/demo/SKILL.md").is_file()
-    assert not (target / "skills/.DS_Store").exists()
-    assert (target / "scripts/symphony-setup-worktree.sh").is_file()
+    workflow = (target / "WORKFLOW.md").read_text()
+    assert "defaults: standard" in workflow
+    assert "root: ~/symphony_workspaces/demo" in workflow
+    assert "port: 10010" in workflow
+    assert (target / "AGENTS.md").is_file()
+    assert not (target / "docs").exists()
+    assert not (target / "skills").exists()
+    assert not (target / "scripts").exists()
+    assert not (target / ".claude").exists()
+    assert len(git(target, "ls-files").splitlines()) <= 10
     assert (target / "kanban/.gitkeep").is_file()
     assert git(target, "branch", "--show-current") == "main"
     assert git(target, "rev-list", "--count", "HEAD") == "1"
@@ -460,7 +465,7 @@ def test_conflict_and_workflow_escape_leave_existing_directory_untouched(
     source = source_bundle(tmp_path / "source")
     target = tmp_path / "existing"
     target.mkdir()
-    (target / "docs").write_text("not a directory\n", encoding="utf-8")
+    (target / "skills").write_text("not a directory\n", encoding="utf-8")
     before = {
         path.relative_to(target): path.read_bytes()
         for path in target.rglob("*")
@@ -472,6 +477,7 @@ def test_conflict_and_workflow_escape_leave_existing_directory_untouched(
             target,
             source=source,
             project_id="conflict",
+            with_skill=True,
             registry=ProjectRegistry(tmp_path / "projects.json"),
         )
     assert target.is_dir()
@@ -500,7 +506,7 @@ def test_conflict_and_workflow_escape_leave_existing_directory_untouched(
         )
 
 
-def test_project_bootstrap_preserves_advanced_workflow_when_factory_is_default(
+def test_project_bootstrap_uses_package_even_when_source_has_other_workflows(
     tmp_path: Path,
 ) -> None:
     source = source_bundle(tmp_path / "source")
@@ -521,7 +527,8 @@ def test_project_bootstrap_preserves_advanced_workflow_when_factory_is_default(
         registry=ProjectRegistry(tmp_path / "projects.json"),
     )
     workflow = (target / "WORKFLOW.md").read_text(encoding="utf-8")
-    assert "[Todo, In Progress, Verify, Document]" in workflow
+    assert "defaults: standard" in workflow
+    assert "Advanced workflow" not in workflow
     assert "root: ~/symphony_workspaces/new" in workflow
     assert "contract_profile: factory" not in workflow
 
@@ -886,14 +893,18 @@ def test_windows_skill_junction_stays_machine_local(
 
     assert (
         project_cli.main(
-            ["create", "Junction App", "--id", "junction-app", "--port", "10120"]
+            ["create", "Junction App", "--id", "junction-app", "--port", "10120", "--with-skill"]
         )
         == 0
     )
     target = tmp_path / "junction-app"
     link = target / ".claude" / "skills" / "symphony-skill"
     assert link.is_junction()
-    assert (link / "SKILL.md").read_text(encoding="utf-8") == "router skill\n"
+    from symphony.templates.project import resource_path
+
+    assert (link / "SKILL.md").read_bytes() == resource_path(
+        "skills/symphony-skill/SKILL.md"
+    ).read_bytes()
 
     tracked = git(target, "ls-files").splitlines()
     # The canonical bundle content is committed once...

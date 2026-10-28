@@ -14,6 +14,7 @@ import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
 
 from symphony import chat as chat_module
+from symphony.chat import routes as chat_routes
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
     EVENT_TURN_COMPLETED,
@@ -275,11 +276,9 @@ async def test_chat_message_validation_and_busy(
 async def test_chat_message_without_backend_returns_conflict_without_user_row(
     client: TestClient,
 ) -> None:
-    from symphony import webapi
-
     created = await client.post("/api/v1/chat/session", json={"mode": "qa"})
     session_id = (await created.json())["session_id"]
-    manager = client.server.app[webapi.CHAT_MANAGER_KEY]
+    manager = client.server.app[chat_routes.CHAT_MANAGER_KEY]
     session = manager.session(session_id)
     assert session is not None
     assert session.backend is not None
@@ -327,7 +326,7 @@ async def test_chat_numeric_project_choice_uses_server_owned_registration(
             port=10000,
         )
 
-    for module in (webapi.chat_routes, webapi.project_routes):
+    for module in (chat_routes, webapi.project_routes):
         monkeypatch.setattr(module, "_create_or_adopt_registered_project", create_project)
         monkeypatch.setattr(module, "ProjectRegistry", lambda: object())
     state = WorkflowState(board_dir / "WORKFLOW.md")
@@ -372,7 +371,7 @@ async def test_chat_numeric_project_choice_uses_server_owned_registration(
             f"/api/v1/chat/sessions/{session_id}/message", json={"text": "offer"}
         )
         assert response.status == 202
-        manager = app[webapi.CHAT_MANAGER_KEY]
+        manager = app[chat_routes.CHAT_MANAGER_KEY]
         session = manager.session(session_id)
         assert session is not None and session.turn_task is not None
         await session.turn_task

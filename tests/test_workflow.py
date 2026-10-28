@@ -122,7 +122,7 @@ def test_build_service_config_defaults(tmp_path, monkeypatch):
     assert cfg.tracker.api_key == "lin_test_token"
     assert cfg.tracker.project_slug == "my-proj"
     assert cfg.codex.command == "codex app-server"
-    assert cfg.codex.model == "gpt-5.5"
+    assert cfg.codex.model == ""
     assert cfg.codex.reasoning_effort == "high"
     assert cfg.agent.max_concurrent_agents == 1
     assert cfg.agent.max_attempts == 3

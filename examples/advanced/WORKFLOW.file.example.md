@@ -280,7 +280,6 @@ agent:
 
 codex:
   command: codex app-server
-  model: gpt-5.5
   reasoning_effort: high
   approval_policy: never
   # `workspace-write` is the safe default. When `after_create` symlinks

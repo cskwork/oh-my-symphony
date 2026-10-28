@@ -20,7 +20,9 @@ from typing import TYPE_CHECKING, Any
 
 from ..artifacts import ArtifactRecord, format_bytes
 from ..backends import BackendInit
-from ..chat import cfg_for_mode
+from ..agent_modes import cfg_for_mode
+from ..issue import normalize_state
+from ..needs import needs_path, needs_states, refresh_needs
 from ..utils import git_inspect
 from ..utils.archive import select_archivable
 from ..utils.atomic_json import state_file_name, write_json_atomic
@@ -422,6 +424,42 @@ async def _archive_sweep(self: Orchestrator, cfg: ServiceConfig) -> None:
 # ------------------------------------------------------------------
 # continuous-improvement heartbeat (plan §4)
 # ------------------------------------------------------------------
+
+async def _needs_sweep(self: Orchestrator, cfg: ServiceConfig) -> None:
+    def refresh() -> None:
+        states = needs_states(cfg)
+        if not states:
+            refresh_needs(cfg, [])
+            return
+        terminals = {normalize_state(state) for state in cfg.tracker.terminal_states}
+        if all(normalize_state(state) in terminals for state in states):
+            issues = self._tracker_call_terminal_issues(cfg)
+        else:
+            issues = self._invoke_shared_tracker_client(
+                cfg, lambda client: client.fetch_issues_by_states(states),
+            )
+        refresh_needs(cfg, issues)
+
+    try:
+        await asyncio.to_thread(refresh)
+    except Exception as exc:
+        log.warning("needs_sweep_failed", error=str(exc))
+
+
+def _maybe_schedule_needs_sweep(self: Orchestrator, cfg: ServiceConfig) -> None:
+    """Refresh `.symphony/needs.json` off the tick. Called every tick.
+
+    Keeps at most one pending task so a slow tracker or notifier cannot pile
+    up work; a board without Blocked lanes or a needs file does nothing.
+    """
+    needs_task = self._needs_sweep_task
+    if (needs_states(cfg) or needs_path(cfg.workflow_path).exists()) and (
+        needs_task is None or needs_task.done()
+    ):
+        self._needs_sweep_task = self._spawn_supervised(
+            _needs_sweep(self, cfg), name="symphony-needs-sweep",
+        )
+
 
 def _maybe_schedule_continuous_improvement(self: Orchestrator, cfg: ServiceConfig) -> None:
     """Fire at most one heartbeat run when due. Called every tick.

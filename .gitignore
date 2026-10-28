@@ -37,6 +37,7 @@ WORKFLOW.demo.*.md
 /.symphony*-demo/
 
 /node_modules/
-scripts/openspec-bundle/node_modules/
-# sdlc-kit intent artifacts written by chat intake (src/symphony/intent.py)
+/packages/pm/node_modules/
+packages/pm/scripts/openspec-bundle/node_modules/
+# sdlc-kit intent artifacts written by chat intake (packages/chat: symphony.chat.intent)
 /.sdlc/

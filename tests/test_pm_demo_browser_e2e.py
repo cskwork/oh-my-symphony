@@ -1,9 +1,10 @@
 """Installed-wheel PM journeys. Required Node proof enables the browser run too.
 
 By default this remains opt-in via SYMPHONY_BROWSER_E2E=1. A clean wheel venv
-is built once per session; SYMPHONY_PM_DEMO_WHEEL can reuse a wheel file,
-including a separately built base-code wheel for the red proof. Both paths
-create a clean venv and install only the wheel and its dependencies; neither
+is built once per session from the core and PM distributions;
+SYMPHONY_PM_DEMO_WHEEL can reuse wheel files (os.pathsep-separated), including
+a separately built base-code wheel for the red proof. Both paths create a clean
+venv and install only the wheels and their dependencies; neither
 installs pm-exchange. All generated projects and hostile config live in pytest
 temporary folders, never in an SDLC scratch fixture.
 """
@@ -111,8 +112,10 @@ def installed_python(tmp_path_factory):
     folder = tmp_path_factory.mktemp("pm-installed-wheel")
     reused = os.environ.get("SYMPHONY_PM_DEMO_WHEEL")
     if reused:
-        wheel = Path(reused).absolute()
-        assert wheel.is_file() and wheel.suffix == ".whl", wheel
+        # Core and PM wheels, separated by os.pathsep (a base-code wheel alone
+        # predates the PM split and carries both).
+        wheel_files = [Path(item).absolute() for item in reused.split(os.pathsep) if item]
+        assert all(item.is_file() and item.suffix == ".whl" for item in wheel_files), wheel_files
     else:
         wheels = folder / "wheel"
         wheels.mkdir()
@@ -125,11 +128,22 @@ def installed_python(tmp_path_factory):
             ROOT / "src", source / "src",
             ignore=shutil.ignore_patterns("*.egg-info", "__pycache__"),
         )
+        pm_source = folder / "pm-source"
+        pm_source.mkdir()
+        for name in ("pyproject.toml", "README.md"):
+            shutil.copy2(ROOT / "packages/pm" / name, pm_source / name)
+        shutil.copytree(
+            ROOT / "packages/pm/src", pm_source / "src",
+            ignore=shutil.ignore_patterns("*.egg-info", "__pycache__"),
+        )
         _command([builder, "-m", "pip", "wheel", ".", "--no-deps", "--wheel-dir", str(wheels)], source, folder / "wheel.log")
-        wheel, = wheels.glob("oh_my_symphony-*.whl")
+        _command([builder, "-m", "pip", "wheel", ".", "--no-deps", "--wheel-dir", str(wheels)], pm_source, folder / "pm-wheel.log")
+        core_wheel, = wheels.glob("oh_my_symphony-*.whl")
+        pm_wheel, = wheels.glob("oh_my_symphony_pm-*.whl")
+        wheel_files = [core_wheel, pm_wheel]
     _command([builder, "-m", "venv", str(folder / "venv")], folder, folder / "venv.log")
     executable = folder / "venv/bin/python"
-    _command([str(executable), "-m", "pip", "install", "--force-reinstall", str(wheel)], folder, folder / "install.log")
+    _command([str(executable), "-m", "pip", "install", "--force-reinstall", *map(str, wheel_files)], folder, folder / "install.log")
     assert executable.is_file(), executable
     check = subprocess.run([str(executable), "-c", "import importlib.util, symphony; print(symphony.__file__); assert importlib.util.find_spec('openpyxl') is None"],
                            capture_output=True, text=True, timeout=15, cwd=executable.parent,

@@ -18,7 +18,7 @@ import pytest
 
 from symphony.chat import ChatManager
 from symphony.errors import ChatIntentActionError, ChatIntentAuthorizationError
-from symphony.intent import IntentAction, parse_intent_marker
+from symphony.chat.intent import IntentAction, parse_intent_marker
 from symphony.workflow import ServiceConfig, WorkflowState
 
 from tests.test_chat import (
@@ -109,7 +109,7 @@ def test_parse_intent_marker_rejects_malformed_payloads(text: str) -> None:
 
 
 def test_parse_intent_marker_scans_tripwires_and_forces_full_track() -> None:
-    from symphony.intent import render_intent_markdown, render_ticket_description, scan_tripwires
+    from symphony.chat.intent import render_intent_markdown, render_ticket_description, scan_tripwires
 
     clean = scan_tripwires(INTENT_BODY)
     assert clean == ()

@@ -44,6 +44,7 @@ from ..workflow import WorkflowState, resolve_workflow_path
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
     ("tui", "open the Kanban TUI (same as --tui)"),
     ("doctor", "preflight a WORKFLOW.md before launching"),
+    ("eject", "copy default prompts and hooks into a project for editing"),
     ("board", "manage the file-based Kanban board (init/ls/new/mv/update/show/graph)"),
     ("factory", "initialize, sync, and start an autonomous development factory"),
     ("service", "run the orchestrator as a managed background service"),
@@ -465,6 +466,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import factory
 
         return factory.main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "eject":
+        from . import eject
+
+        return eject.main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "doctor":
         from . import doctor
 

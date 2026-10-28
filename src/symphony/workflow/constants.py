@@ -50,7 +50,7 @@ DEFAULT_CODEX_TURN_TIMEOUT_MS = 3_600_000
 # 20 s keeps startup hangs detectable while clearing that latency band.
 DEFAULT_CODEX_READ_TIMEOUT_MS = 20_000
 DEFAULT_CODEX_STALL_TIMEOUT_MS = 300_000
-DEFAULT_CODEX_MODEL = "gpt-5.5"
+DEFAULT_CODEX_MODEL = ""
 DEFAULT_CODEX_REASONING_EFFORT = "high"
 DEFAULT_WORKSPACE_REUSE_POLICY = "preserve"
 SUPPORTED_WORKSPACE_REUSE_POLICIES = {"preserve", "refresh"}
@@ -96,10 +96,9 @@ DEFAULT_CI_MAX_IMPROVEMENT_TICKETS_PER_RUN = 3
 
 SUPPORTED_AGENT_KINDS = {"agy", "codex", "claude", "gemini", "kiro", "opencode", "pi", "prime-agent"}
 DEFAULT_AGENT_KIND = "codex"
-# `agent.profiles` — plain-CLI backends declared as data. Only `text` (stdout
-# is the final assistant message) is implemented; stream protocols keep their
-# own backend modules.
-SUPPORTED_PROFILE_FORMATS = ("text",)
+# `agent.profiles` — backends declared as data. `text`: stdout is the final
+# assistant message; `acp`: the CLI speaks the Agent Client Protocol.
+SUPPORTED_PROFILE_FORMATS = ("text", "acp")
 # Where a profile's continuation flag goes: appended to the command, or
 # inserted before a trailing `"$(cat)"` positional prompt argument.
 SUPPORTED_PROFILE_CONTINUATION_POSITIONS = ("append", "before_prompt_arg")

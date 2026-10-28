@@ -316,6 +316,8 @@ def cmd_update(args: argparse.Namespace) -> int:
 
 
 def cmd_show(args: argparse.Namespace) -> int:
+    from ..needs import load_needs
+
     tracker = _get_tracker(args)
     fbt = FileBoardTracker(tracker)
     path = fbt.find_path(args.id)
@@ -336,6 +338,9 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"agent: {agent['kind']}")
     elif front.get("agent_kind"):
         print(f"agent: {front['agent_kind']}")
+    need = load_needs(resolve_workflow_path(args.workflow)).get(str(front.get("identifier", args.id)))
+    if need is not None:
+        print(f"needs: {need['reason']}; action: {need['action']} (since {need['since']})")
     state = front.get("state")
     if isinstance(state, str) and normalize_state(state.strip()) == "done":
         print("delivery: Done alone does not confirm target merge or workspace cleanup.")

@@ -141,7 +141,7 @@ def test_cached_binding_rehashes_same_size_tampered_code_static_and_metadata(
 ) -> None:
     site = tmp_path / "site"
     code = site / "symphony" / "pm" / "models.py"
-    asset = site / "symphony" / "web" / "static" / "pm" / "index.js"
+    asset = site / "symphony" / "pm" / "static" / "index.js"
     code.parent.mkdir(parents=True)
     asset.parent.mkdir(parents=True)
     code.write_bytes(b"trusted-code\n")
@@ -160,7 +160,7 @@ def test_cached_binding_rehashes_same_size_tampered_code_static_and_metadata(
     (dist_info / "RECORD").write_text(
         "\n".join((
             record_row("symphony/pm/models.py", code.read_bytes()),
-            record_row("symphony/web/static/pm/index.js", asset.read_bytes()),
+            record_row("symphony/pm/static/index.js", asset.read_bytes()),
             record_row(
                 "oh_my_symphony-1.0.dist-info/METADATA",
                 (dist_info / "METADATA").read_bytes(),

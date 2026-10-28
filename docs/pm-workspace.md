@@ -2,6 +2,8 @@
 
 PM Workspace adds a local Artifacts screen for planning a change before implementation. It is disabled unless the corresponding `pm` switches are enabled in `WORKFLOW.md`.
 
+Since v0.29.0 PM Workspace is the optional `oh-my-symphony-pm` distribution. It is not on PyPI; install it from a checkout with `python -m pip install ./packages/pm` (see [packages/pm](../packages/pm/README.md)). Without it, `symphony pm` prints the install hint and exits 2, and enabling a `pm` switch is a config error.
+
 The workflow is explicit:
 
 1. Select an isolated Git worktree and create a planning change.

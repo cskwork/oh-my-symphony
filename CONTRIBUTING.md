@@ -17,8 +17,23 @@ requests are welcome.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev]" -e packages/pm -e packages/chat -e packages/release
+npm ci --prefix packages/pm
 ```
+
+The PM Workspace is a separate, optional distribution (`oh-my-symphony-pm`)
+under `packages/pm/`. It is not on PyPI, so install it from the checkout next
+to core as shown. The full suite expects it, and its Node UI tests need
+`npm ci --prefix packages/pm`. Core must also keep working without it:
+`tests/test_core_without_pm.py` covers that in-process, and CI installs the
+core wheel alone. The operator chat (`oh-my-symphony-chat`, `packages/chat/`)
+follows the same pattern; `tests/test_core_without_chat.py` covers core without
+it.
+
+App release contracts (ADR 0002) are the optional distribution
+`oh-my-symphony-release` under `packages/release/`, installed the same way.
+Without it core fails closed for `app-release` tickets;
+`tests/test_core_without_release.py` covers that.
 
 ## Required verification
 
@@ -27,7 +42,7 @@ dependencies before opening or updating a PR:
 
 ```bash
 python -m pytest -q
-python -m ruff check src tests
+python -m ruff check src tests packages/pm packages/chat packages/release
 symphony-pyright
 ```
 

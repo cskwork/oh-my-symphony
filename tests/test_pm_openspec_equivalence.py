@@ -17,7 +17,7 @@ from tests._pm_support import skip_or_fail
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CLI = ROOT / "scripts/openspec-bundle/node_modules/.bin/openspec"
+DEFAULT_CLI = ROOT / "packages/pm/scripts/openspec-bundle/node_modules/.bin/openspec"
 REQUIRED = "SYMPHONY_PM_EQUIVALENCE_REQUIRED"
 
 
@@ -61,7 +61,7 @@ def commands(tmp_path):
         reason = f"R14 needs an executable OpenSpec 1.14.2 CLI: {override or DEFAULT_CLI}"
         if override is not None:
             pytest.fail(reason + " (SYMPHONY_PM_OPENSPEC is set; no fallback)")
-        skip_or_fail(reason + "; run npm ci --prefix scripts/openspec-bundle", flag=REQUIRED)
+        skip_or_fail(reason + "; run npm ci --prefix packages/pm/scripts/openspec-bundle", flag=REQUIRED)
     try:
         node, _ = openspec.resolve_node()
     except PmError as exc:

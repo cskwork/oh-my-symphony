@@ -164,6 +164,14 @@ def build_service_config(
     *other* projects' workflows.
     """
     cfg = workflow.config
+    if "defaults" in cfg:
+        if cfg["defaults"] != "standard":
+            raise ConfigValidationError(
+                "defaults must be 'standard'", value=cfg["defaults"]
+            )
+        from ..templates.project import fill_missing, standard_defaults
+
+        cfg = fill_missing(cfg, standard_defaults())
     base_dir = workflow.base_dir()
 
     tracker_raw = cfg.get("tracker") or {}
@@ -771,12 +779,17 @@ def build_service_config(
         # The installed runtime and fixed model/effort have no workflow overrides;
         # accepting these keys would
         # suggest an effect they never have.
-        from ..pm.planning import EFFORT, MODEL
+        from .. import pm_installed
 
+        if pm_installed():
+            from ..pm.planning import EFFORT, MODEL  # pyright: ignore[reportMissingImports]
+
+            pinned = f"pinned model {MODEL}, reasoning effort {EFFORT}"
+        else:
+            pinned = "its pinned model and reasoning effort"
         raise ConfigValidationError(
             f"pm.{pinned_planning_keys[0]} is not configurable; the PM planning "
-            "assistant uses the compatible installed Codex CLI, pinned model "
-            f"{MODEL}, reasoning effort {EFFORT}. Remove "
+            f"assistant uses the compatible installed Codex CLI, {pinned}. Remove "
             + ", ".join(f"pm.{key}" for key in pinned_planning_keys)
             + " from WORKFLOW.md",
             value={key: pm_raw[key] for key in pinned_planning_keys},
@@ -859,6 +872,18 @@ def build_service_config(
             )),
         ),
     )
+    if pm.enabled:
+        from .. import PM_INSTALL_HINT, pm_installed
+
+        if not pm_installed():
+            raise ConfigValidationError(
+                f"pm capabilities are enabled but {PM_INSTALL_HINT}",
+                value={
+                    key: pm_raw[key]
+                    for key in ("authoring", "exchange", "assistance", "handoff")
+                    if key in pm_raw
+                },
+            )
 
     tui_raw = cfg.get("tui") or {}
     if not isinstance(tui_raw, dict):
@@ -1123,7 +1148,7 @@ def _validated_agent_profiles(value: Any) -> dict[str, AgentProfileConfig]:
         if fmt not in SUPPORTED_PROFILE_FORMATS:
             raise ConfigValidationError(
                 f"{label}.format must be one of {list(SUPPORTED_PROFILE_FORMATS)}; "
-                "stream protocols need a dedicated backend",
+                "other stream protocols need a dedicated backend",
                 value=fmt,
             )
         flags = raw.get("unattended_flags", [])

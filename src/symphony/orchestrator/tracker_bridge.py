@@ -17,11 +17,6 @@ from ..errors import SymphonyError
 from ..issue import Issue
 from ..trackers import TrackerClient
 from ..workflow import ServiceConfig
-from .release_contracts import ReleaseValidationResult
-from .release_cycle import (
-    ReleaseCycleService,
-    ReleaseCycleWriteResult as _ReleaseCycleWriteResult,
-)
 from .entries import RunningEntry, _IssueDebug
 from ..logging import get_logger
 
@@ -101,22 +96,6 @@ def _tracker_call_fetch_issue_full_by_id(
         return client.fetch_issue_full_by_id(identifier)
     finally:
         client.close()
-
-
-def _tracker_call_reconcile_release_cycle(
-    cfg: ServiceConfig,
-    source_issue: Issue,
-    validation: ReleaseValidationResult,
-    source_agent_kind: str,
-    *,
-    before_finalizer_relink: Callable[[Issue], None] | None = None,
-) -> _ReleaseCycleWriteResult:
-    return ReleaseCycleService(cfg).reconcile(
-        source_issue,
-        validation,
-        source_agent_kind,
-        before_finalizer_relink=before_finalizer_relink,
-    )
 
 
 # ------------------------------------------------------------------

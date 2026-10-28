@@ -14,7 +14,9 @@ uses `gemini -p` one-shot, AGY uses `agy --print "$(cat)"`, Kiro uses
 uses `pi --mode json -p ""`, and Prime Agent uses `prime-agent -p --mode json`.
 
 AGY and Kiro are plain-text CLIs expressed as profile data (`plain_cli.py`);
-WORKFLOW.md `agent.profiles` adds more of them without new Python.
+WORKFLOW.md `agent.profiles` adds more of them without new Python. A profile
+with `format: acp` instead drives any Agent Client Protocol agent through one
+long-lived JSON-RPC process (`acp.py`).
 
 Normalized event vocabulary is shared across backends (see `events.py` style
 constants below). Per-turn backends emit `turn_started` immediately after
@@ -280,7 +282,13 @@ def build_backend(init: BackendInit) -> AgentBackend:
         from .prime_agent import PrimeAgentBackend
 
         return cast(AgentBackend, PrimeAgentBackend(init))
-    if init.cfg.agent_profile(kind) is not None:
+    profile = init.cfg.agent_profile(kind)
+    if profile is not None and profile.format == "acp":
+        # `agent.profiles` entry speaking the Agent Client Protocol.
+        from .acp import AcpBackend
+
+        return cast(AgentBackend, AcpBackend(init))
+    if profile is not None:
         # `agent.profiles` entry: plain-text CLI described entirely by data.
         from .plain_cli import PlainCliBackend
 

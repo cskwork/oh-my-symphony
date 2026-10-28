@@ -1,0 +1,129 @@
+tracker:
+  kind: file
+  board_root: ./kanban
+  active_states:
+  - Todo
+  - In Progress
+  - Verify
+  - Document
+  terminal_states:
+  - Human Review
+  - Done
+  - Blocked
+  - Archive
+  archive_state: Archive
+  archive_after_days: 30
+  state_descriptions:
+    Todo: Triage; route to In Progress
+    In Progress: Plan + TDD implementation + self-critique
+    Verify: Review + QA + Merge Gate
+    Document: Docs + wiki write-back; Done unless intervention
+    Human Review: Manual intervention or explicit review before Done
+    Done: Verified complete
+    Archive: Auto-archived after 30 days idle
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    In Progress: ./docs/symphony-prompts/file/stages/in-progress.md
+    Verify: ./docs/symphony-prompts/file/stages/verify.md
+    Document: ./docs/symphony-prompts/file/stages/document.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
+hooks:
+  after_create: 'bash "$SYMPHONY_WORKFLOW_DIR/scripts/symphony-setup-worktree.sh"
+
+    '
+  before_run: "# NEVER `git reset --hard` inside a worktree — it discards in-progress\n\
+    # work between turns. Just refresh remotes; let the agent decide if/when\n# to\
+    \ rebase.\nset -uo pipefail\nHOST_REPO=\"${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR\
+    \ not set}\"\nfor dir in ${SYMPHONY_BOARD_ROOT_NAME:-kanban}; do\n  source=\"\
+    $HOST_REPO/$dir\"\n  target=\"$PWD/$dir\"\n  [ -e \"$source\" ] || continue\n\
+    \  if [ ! -L \"$target\" ] && [ \"${OS:-}\" != \"Windows_NT\" ]; then\n    echo\
+    \ \"FAIL: workspace $dir must be a symlink to $source; got non-symlink $target\"\
+    \ >&2\n    exit 42\n  fi\n  if [ ! \"$target\" -ef \"$source\" ]; then\n    echo\
+    \ \"FAIL: workspace $dir points to $(readlink \"$target\"), expected $source\"\
+    \ >&2\n    exit 42\n  fi\ndone\ngit fetch origin --quiet || true\n"
+  after_run: "# Per-turn commit-or-amend. The branch stays at the same number of\n\
+    # commits across turns (amends in place when HEAD is already a `wip:`\n# commit),\
+    \ but every completed turn is durably written to .git/objects\n# so even a hard\
+    \ crash (SIGKILL, host reboot) won't lose work. The\n# orchestrator squashes everything\
+    \ into a single `<ID>: <title>` commit\n# on exit — see auto_commit_on_done.\n\
+    set -uo pipefail\ngit add -A -- . ':(exclude)kanban' ':(exclude).symphony' 2>/dev/null\
+    \ || true\nif git diff --cached --quiet 2>/dev/null; then\n  echo \"run finished\
+    \ at $(date) (no changes)\"\n  exit 0\nfi\n# Classify the staged diff so the wip\
+    \ subject carries machine-readable\n# markers. `[no-test]` = production code changed\
+    \ with no paired test\n# file in the same diff (workflow-v0.5.2 § B1 — review.md\
+    \ promotes it\n# to a HIGH finding). `[scope-expand]` = a rewind dispatch (set\
+    \ by the\n# orchestrator when SYMPHONY_REWIND_SCOPE is exported) but the diff\n\
+    # touched a file outside the parsed scope list (workflow-v0.5.2 § A2).\n# Both\
+    \ markers can stack.\nSTAGED_FILES=\"$(git diff --cached --name-only 2>/dev/null\
+    \ || true)\"\nPROD_CHANGED=0\nTESTS_CHANGED=0\nSCOPE_EXPAND=0\nSCOPE_FILES=\"\"\
+    \nif [ -n \"${SYMPHONY_REWIND_SCOPE:-}\" ]; then\n  SCOPE_FILES=\"$(printf '%s'\
+    \ \"$SYMPHONY_REWIND_SCOPE\" \\\n    | tr ',' '\\n' \\\n    | sed -n 's/.*\"file\"\
+    [[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p')\"\nfi\nNL=$(printf '\\nx');\
+    \ NL=${NL%x}\nOLDIFS=\"$IFS\"\nIFS=\"$NL\"\nfor f in $STAGED_FILES; do\n  [ -n\
+    \ \"$f\" ] || continue\n  case \"$f\" in\n    tests/*|*_test.py|*.test.ts|*.test.tsx|*_test.go)\n\
+    \      TESTS_CHANGED=1\n      ;;\n  esac\n  case \"$f\" in\n    tests/*|docs/*|kanban/*|.symphony/*|*.md|LICENSE|LICENSE.*|NOTICE|CHANGELOG*|README*|AGENTS.md|GEMINI.md)\n\
+    \      : # carve-out: docs/license/wiki edits never count as production change\n\
+    \      ;;\n    *)\n      PROD_CHANGED=1\n      ;;\n  esac\n  if [ -n \"$SCOPE_FILES\"\
+    \ ] && [ \"$SCOPE_EXPAND\" = 0 ]; then\n    in_scope=0\n    for s in $SCOPE_FILES;\
+    \ do\n      if [ \"$f\" = \"$s\" ]; then\n        in_scope=1\n        break\n\
+    \      fi\n    done\n    if [ \"$in_scope\" = 0 ]; then\n      SCOPE_EXPAND=1\n\
+    \    fi\n  fi\ndone\nIFS=\"$OLDIFS\"\nPREFIX=\"\"\nif [ \"$PROD_CHANGED\" = 1\
+    \ ] && [ \"$TESTS_CHANGED\" = 0 ]; then\n  PREFIX=\"${PREFIX}[no-test]\"\nfi\n\
+    if [ -n \"${SYMPHONY_REWIND_SCOPE:-}\" ] && [ \"$SCOPE_EXPAND\" = 1 ]; then\n\
+    \  PREFIX=\"${PREFIX}[scope-expand]\"\nfi\n# Honors any pre-commit hooks in the\
+    \ host repo — if they fail, this\n# turn's snapshot fails and the next turn picks\
+    \ up where files are.\nMSG=\"$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}'\
+    \ .symphony/commit-message.txt 2>/dev/null || true)\"\n[ -n \"$MSG\" ] || MSG=\"\
+    turn $(date -u +%FT%TZ)\"\ncase \"$MSG\" in wip:*) COMMIT_MSG=\"$MSG\" ;; *) COMMIT_MSG=\"\
+    wip: $MSG\" ;; esac\nLAST=\"$(git log -1 --format=%s 2>/dev/null || echo \"\"\
+    )\"\n# On amend, preserve any markers the previous turn already set so a\n# later\
+    \ test-passing turn doesn't drop the historical `[no-test]`.\n# Markers are sticky\
+    \ within a wip subject.\nPRIOR_PREFIX=\"\"\ncase \"$LAST\" in\n  *\"[no-test]\"\
+    *) PRIOR_PREFIX=\"${PRIOR_PREFIX}[no-test]\" ;;\nesac\ncase \"$LAST\" in\n  *\"\
+    [scope-expand]\"*) PRIOR_PREFIX=\"${PRIOR_PREFIX}[scope-expand]\" ;;\nesac\nMERGED_PREFIX=\"\
+    \"\ncase \"$PRIOR_PREFIX$PREFIX\" in\n  *\"[no-test]\"*) MERGED_PREFIX=\"${MERGED_PREFIX}[no-test]\"\
+    \ ;;\nesac\ncase \"$PRIOR_PREFIX$PREFIX\" in\n  *\"[scope-expand]\"*) MERGED_PREFIX=\"\
+    ${MERGED_PREFIX}[scope-expand]\" ;;\nesac\nif [ -n \"$MERGED_PREFIX\" ]; then\n\
+    \  COMMIT_MSG=\"${MERGED_PREFIX} ${COMMIT_MSG}\"\nfi\nif [ \"${LAST#wip:}\" !=\
+    \ \"$LAST\" ]; then\n  git -c user.email=symphony@local -c user.name=symphony\
+    \ \\\n      commit --amend -m \"$COMMIT_MSG\" >/dev/null 2>&1 || true\nelse\n\
+    \  git -c user.email=symphony@local -c user.name=symphony \\\n      commit -m\
+    \ \"$COMMIT_MSG\" >/dev/null 2>&1 || true\nfi\necho \"run finished at $(date)\"\
+    \n"
+  before_remove: "# Detach the worktree before Symphony rmtree's the dir, otherwise\n\
+    # `.git/worktrees/<ID>` lingers until `git worktree prune`. By this\n# point the\
+    \ orchestrator has already auto-committed any leftover\n# changes (see agent.auto_commit_on_done).\n\
+    set -euo pipefail\nworkspace=\"$PWD\"\nif [ \"${OS:-}\" = \"Windows_NT\" ]; then\n\
+    \  workspace=\"$(cygpath -w \"$workspace\")\"\nfi\ncd \"${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR\
+    \ not set}\"\nexec \"${SYMPHONY_PYTHON:?SYMPHONY_PYTHON not set}\" -m symphony._worktree_cleanup\
+    \ \"$workspace\" --restore-board-tracking\n"
+codex:
+  command: codex app-server
+  reasoning_effort: high
+  approval_policy: never
+  thread_sandbox: workspace-write
+  turn_sandbox_policy:
+    type: workspaceWrite
+    networkAccess: true
+claude:
+  command: claude -p --output-format stream-json --verbose --permission-mode acceptEdits
+    --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"
+gemini:
+  command: gemini -p ""
+  resume_across_turns: true
+agy:
+  command: agy --print "$(cat)"
+  resume_across_turns: true
+kiro:
+  command: kiro-cli chat --no-interactive --trust-all-tools "$(cat)"
+  resume_across_turns: true
+opencode:
+  command: opencode run --format json --auto
+  resume_across_turns: true
+pi:
+  command: pi --mode json -p ""
+prime_agent:
+  command: prime-agent -p --mode json
+  resume_across_turns: true
