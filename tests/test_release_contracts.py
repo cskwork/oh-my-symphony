@@ -11,8 +11,8 @@ from pathlib import PurePosixPath
 import pytest
 import yaml
 
-from symphony.orchestrator import release_contracts as release_contracts_module
-from symphony.orchestrator.release_contracts import (
+from symphony.release import contracts as release_contracts_module
+from symphony.release.contracts import (
     inspect_release_contract,
     resolve_configured_target_branch,
     release_workspace_target_errors,

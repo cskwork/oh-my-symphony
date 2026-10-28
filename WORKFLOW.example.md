@@ -34,6 +34,13 @@ wiki:
 workspace:
   root: ~/symphony_workspaces
 
+# Optional deterministic gates, keyed by the lane being left.
+# verify:
+#   timeout_ms: 600000
+#   commands:
+#     "In Progress": "python -m pytest -q"
+#     Verify: "python -m pytest -q && ruff check ."
+
 hooks:
   # Default: attach the per-ticket workspace as a git worktree of the
   # host repo on a symphony/<ID> branch. The host working tree is never
@@ -283,7 +290,6 @@ agent:
 
 codex:
   command: codex app-server
-  model: gpt-5.5
   reasoning_effort: high
   approval_policy: never
   # Sandbox trade-off — read before changing:

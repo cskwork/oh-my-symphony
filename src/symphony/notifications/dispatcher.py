@@ -34,16 +34,18 @@ class NotificationDispatcher:
 
     notifiers: Sequence[Notifier]
 
-    def dispatch(self, event: NotificationEvent) -> None:
+    def dispatch(self, event: NotificationEvent) -> bool:
+        """Return whether at least one enabled channel delivered the event."""
         # Guard transitions where ``prev == next``: e.g. a re-write that
         # lands on the same state shouldn't ping Slack. The orchestrator
         # currently doesn't issue identity transitions, but defensive
         # filtering here keeps the contract clear.
         if event.prev_state.strip().lower() == event.next_state.strip().lower():
-            return
+            return False
+        delivered = False
         for notifier in self.notifiers:
             try:
-                notifier.notify(event)
+                delivered = notifier.notify(event) or delivered
             except Exception as exc:
                 # A misbehaving notifier must not break the orchestrator's
                 # transition path. Log loudly so the operator notices.
@@ -53,6 +55,7 @@ class NotificationDispatcher:
                     identifier=event.identifier,
                     error=str(exc),
                 )
+        return delivered
 
 
 def build_dispatcher(config: NotificationsConfig) -> NotificationDispatcher:
@@ -66,13 +69,14 @@ def build_dispatcher(config: NotificationsConfig) -> NotificationDispatcher:
 def dispatch_notification(
     config: NotificationsConfig,
     event: NotificationEvent,
-) -> None:
+) -> bool:
     """Convenience entry point: build + dispatch in one call.
 
+    Returns whether at least one channel delivered the event.
     Cheap to call repeatedly — building a dispatcher is just instantiating
     a handful of dataclasses. The orchestrator uses this so it doesn't have
     to track dispatcher lifecycle across config reloads.
     """
     if not config.has_any():
-        return
-    build_dispatcher(config).dispatch(event)
+        return False
+    return build_dispatcher(config).dispatch(event)

@@ -6,11 +6,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-VENDOR = ROOT / "src/symphony/web/static/pm/vendor"
+PM_ROOT = ROOT / "packages/pm"
+VENDOR = PM_ROOT / "src/symphony/pm/static/vendor"
 
 
 def test_exact_browser_dependency_pins_and_local_asset_inventory() -> None:
-    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    package = json.loads((PM_ROOT / "package.json").read_text(encoding="utf-8"))
     assert package["dependencies"] == {
         "dompurify": "3.4.16",
         "mermaid": "12.1.0",
@@ -42,7 +43,7 @@ def test_diagram_distribution_excludes_non_allowlisted_named_chunks() -> None:
 
 
 def test_notices_cover_resolved_package_identities_and_static_routes_are_lazy() -> None:
-    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    lock = json.loads((PM_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     expected = sum(1 for key in lock["packages"] if "node_modules/" in key)
     notices = (VENDOR / "THIRD_PARTY_NOTICES.txt").read_text(encoding="utf-8")
     assert len([line for line in notices.splitlines() if " — " in line and not line.startswith("PM Workspace")]) == expected

@@ -1,0 +1,228 @@
+{
+  "workflow_path": "<project>/WORKFLOW.md",
+  "poll_interval_ms": 30000,
+  "workspace_root": "<project>/workspaces",
+  "tracker": {
+    "kind": "file",
+    "endpoint": "",
+    "api_key": "",
+    "project_slug": "",
+    "active_states": [
+      "Todo",
+      "In Progress",
+      "Verify",
+      "Document"
+    ],
+    "terminal_states": [
+      "Human Review",
+      "Done",
+      "Archive",
+      "Blocked",
+      "Cancelled",
+      "Canceled",
+      "Closed",
+      "Duplicate"
+    ],
+    "board_root": "<project>/board",
+    "state_descriptions": {},
+    "archive_state": "Archive",
+    "archive_after_days": 30,
+    "email": "",
+    "network_timeout_seconds": 30.0
+  },
+  "hooks": {
+    "after_create": null,
+    "before_run": "echo custom",
+    "after_run": null,
+    "before_remove": null,
+    "timeout_ms": 60000,
+    "after_done": null,
+    "fail_on_warning_patterns": false
+  },
+  "agent": {
+    "kind": "codex",
+    "max_concurrent_agents": 1,
+    "max_turns": 100,
+    "max_retry_backoff_ms": 300000,
+    "max_concurrent_agents_by_state": {},
+    "max_total_turns": 200,
+    "max_state_turns": 30,
+    "max_state_turns_by_state": {},
+    "no_stage_change_action": "block",
+    "max_attempts": 3,
+    "max_reopens": 3,
+    "max_retries": 3,
+    "auto_triage_actionable_todo": true,
+    "auto_recover_blocked": true,
+    "compact_issue_context": true,
+    "crash_continuation": true,
+    "scheduling_policy": "fifo",
+    "auto_commit_on_done": true,
+    "auto_merge_on_done": true,
+    "auto_merge_push_target": true,
+    "auto_merge_target_branch": "",
+    "feature_base_branch": "",
+    "auto_merge_exclude_paths": [],
+    "auto_merge_capture_untracked": [],
+    "after_done_failure_policy": "warn",
+    "max_total_tokens": 0,
+    "max_total_tokens_by_state": {},
+    "token_attention_threshold_by_state": {},
+    "budget_exhausted_state": "",
+    "stage_kinds": {},
+    "fallback_kinds": [],
+    "stage_contracts": "auto",
+    "stall_timeout_ms_by_state": {},
+    "profiles": {}
+  },
+  "codex": {
+    "command": "codex app-server",
+    "approval_policy": null,
+    "thread_sandbox": null,
+    "turn_sandbox_policy": null,
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "model": "",
+    "reasoning_effort": "high"
+  },
+  "claude": {
+    "command": "claude -p --output-format stream-json --include-partial-messages --verbose",
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "resume_across_turns": true
+  },
+  "gemini": {
+    "command": "gemini -p \"\"",
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "resume_across_turns": true
+  },
+  "pi": {
+    "command": "pi --mode json -p \"\"",
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "resume_across_turns": true
+  },
+  "server": {
+    "port": null
+  },
+  "agy": {
+    "command": "agy --print \"$(cat)\"",
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "resume_across_turns": false
+  },
+  "kiro": {
+    "command": "kiro-cli chat --no-interactive --trust-all-tools \"$(cat)\"",
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "resume_across_turns": true
+  },
+  "opencode": {
+    "command": "opencode run --format json --auto",
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "resume_across_turns": true
+  },
+  "tui": {
+    "language": "en",
+    "visible_lanes": 5
+  },
+  "progress": {
+    "enabled": true,
+    "path": "<project>/WORKFLOW-PROGRESS.md",
+    "max_transitions": 20
+  },
+  "system": {
+    "keep_awake": true
+  },
+  "prompts": {
+    "base_template": "",
+    "base_path": null,
+    "stage_templates": {},
+    "stage_paths": {}
+  },
+  "wiki": {
+    "sweep_every_n": 10,
+    "root": "<project>/docs/llm-wiki"
+  },
+  "notifications": {
+    "slack": null
+  },
+  "continuous_improvement": {
+    "enabled": false,
+    "interval_ms": 1800000,
+    "max_turns": 48,
+    "ticket_prefix": "CI",
+    "max_tickets_per_run": 5,
+    "require_idle_board": true,
+    "agent_kind": "",
+    "modes": [],
+    "mode_interval_hours": {},
+    "max_improvement_tickets_per_run": 3
+  },
+  "raw": {
+    "tracker": {
+      "kind": "file"
+    },
+    "workspace": {
+      "root": "./workspaces"
+    },
+    "hooks": {
+      "before_run": "echo custom"
+    }
+  },
+  "prompt_template": "Legacy body",
+  "workspace_reuse_policy": "preserve",
+  "prime_agent": {
+    "command": "prime-agent -p --mode json",
+    "turn_timeout_ms": 3600000,
+    "read_timeout_ms": 20000,
+    "stall_timeout_ms": 300000,
+    "resume_across_turns": true
+  },
+  "preview": {
+    "enabled": false,
+    "command": "",
+    "cwd": ".",
+    "health_path": "/",
+    "url_path": "/",
+    "startup_timeout_ms": 30000,
+    "release_ticket": "",
+    "acceptance": []
+  },
+  "artifacts": {
+    "enabled": true,
+    "dir": ".symphony-artifacts",
+    "max_file_mb": 25,
+    "max_ticket_mb": 200,
+    "ttl_days": 30,
+    "require_for_done": false
+  },
+  "pm": {
+    "authoring": false,
+    "exchange": false,
+    "assistance": false,
+    "handoff": false,
+    "openspec_executable": null,
+    "planning_workspace_root": "<project>/workspaces/pm-planning",
+    "max_encoded_upload_mb": 8,
+    "max_workbook_mb": 5,
+    "max_uncompressed_mb": 50,
+    "max_zip_entries": 1000,
+    "max_nodes": 5000,
+    "max_edges": 20000,
+    "max_text_chars": 16384,
+    "operation_timeout_ms": 30000,
+    "exchange_concurrency": 1,
+    "verification_procedures": {},
+    "manual_verification_procedures": {}
+  }
+}

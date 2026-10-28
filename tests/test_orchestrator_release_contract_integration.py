@@ -17,13 +17,14 @@ import pytest
 
 from symphony.errors import SymphonyError
 from symphony.issue import Issue
-from symphony.orchestrator.core import Orchestrator, _ReleaseCycleWriteResult
-from symphony.orchestrator.release_contracts import (
+from symphony.orchestrator.core import Orchestrator
+from symphony.release.contracts import (
     ReleaseValidationResult,
     validate_release_contract,
 )
-from symphony.orchestrator.release_cycle import (
+from symphony.release.cycle import (
     ReleaseCycleService,
+    ReleaseCycleWriteResult as _ReleaseCycleWriteResult,
     release_fingerprint_label,
     release_group_label,
     release_repair_description,
@@ -631,7 +632,7 @@ def test_concurrent_worker_and_reconcile_accept_one_exact_green_approval(
         observe_transition_lock,
     )
     monkeypatch.setattr(
-        "symphony.orchestrator.core.validate_release_contract",
+        "symphony.release.transition.validate_release_contract",
         blocking_validation,
     )
 
@@ -748,7 +749,7 @@ def test_concurrent_worker_and_reconcile_create_one_red_release_lifecycle(
         observe_transition_lock,
     )
     monkeypatch.setattr(
-        "symphony.orchestrator.core.validate_release_contract",
+        "symphony.release.transition.validate_release_contract",
         blocking_validation,
     )
     monkeypatch.setattr(

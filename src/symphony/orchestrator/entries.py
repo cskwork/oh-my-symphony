@@ -18,7 +18,7 @@ from ..backends import AgentBackend
 
 if TYPE_CHECKING:
     from .run_registry import ContinuationCheckpoint
-    from ..pm.models import DispatchPermit
+    from ..pm.models import DispatchPermit  # pyright: ignore[reportMissingImports]
 from ..issue import Issue
 
 

@@ -15,7 +15,7 @@ from symphony import _worktree_cleanup as cleanup_module
 from tests.test_worktree_cleanup import _git, _link, _prepare
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts/symphony-setup-worktree.sh"
+SCRIPT = ROOT / "src/symphony/templates/project/scripts/symphony-setup-worktree.sh"
 
 
 def _setup_env(tmp_path, monkeypatch, workspace):

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oh-my-symphony-chat"
+version = "0.29.0"
+description = "Optional operator chat for oh-my-symphony: chat sessions, intent cards and intent filing on the web board."
+readme = "README.md"
+requires-python = ">=3.12"
+# Same license as the core distribution; see LICENSE and NOTICE at the repository root.
+license = "Apache-2.0"
+authors = [{ name = "oh-my-symphony" }]
+dependencies = [
+    # The operator chat imports core internals, so the two ship in lockstep.
+    "oh-my-symphony==0.29.0",
+]
+
+[tool.setuptools]
+include-package-data = false
+# `symphony` belongs to the core distribution; this one contributes only
+# `symphony.chat` (merged at import time by `pkgutil.extend_path`).
+packages = ["symphony.chat"]
+package-dir = { "" = "src" }

@@ -479,7 +479,7 @@ def test_setup_worktree_script_supports_linked_workflow_dir(tmp_path, lock_backe
     # dozen git commands and a lock acquisition, and a loaded host (HANDOFF
     # 2026-09-05 item 7) blew the budget. Slow is not the failure mode here.
     subprocess.run(
-        [_BASH, str(repo_root / "scripts" / "symphony-setup-worktree.sh")],
+        [_BASH, str(repo_root / "src/symphony/templates/project" / "scripts" / "symphony-setup-worktree.sh")],
         cwd=str(workspace),
         env=env,
         capture_output=True,
@@ -538,7 +538,7 @@ def test_setup_worktree_script_refreshes_only_exact_local_target(
 
     workspace = tmp_path / "workspaces" / "DEMO-REFRESH"
     workspace.mkdir(parents=True)
-    script = Path(__file__).parents[1] / "scripts" / "symphony-setup-worktree.sh"
+    script = Path(__file__).parents[1] / "src/symphony/templates/project" / "scripts" / "symphony-setup-worktree.sh"
     result = subprocess.run(
         [_BASH, str(script)],
         cwd=str(workspace),
@@ -591,7 +591,7 @@ def test_setup_worktree_script_preserves_unmerged_branch_tip(tmp_path):
 
     workspace = tmp_path / "workspaces" / "DEMO-PRESERVE"
     workspace.mkdir(parents=True)
-    script = Path(__file__).parents[1] / "scripts" / "symphony-setup-worktree.sh"
+    script = Path(__file__).parents[1] / "src/symphony/templates/project" / "scripts" / "symphony-setup-worktree.sh"
     result = subprocess.run(
         [_BASH, str(script)],
         cwd=str(workspace),
@@ -620,7 +620,7 @@ def _preserve_worktree_manager(tmp_path: Path, host: Path, monkeypatch) -> Works
     test_path = _setup_script_test_path(tmp_path, include_flock=False)
     monkeypatch.setenv("PATH", test_path)
     monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parents[1] / "src"))
-    script = Path(__file__).parents[1] / "scripts" / "symphony-setup-worktree.sh"
+    script = Path(__file__).parents[1] / "src/symphony/templates/project" / "scripts" / "symphony-setup-worktree.sh"
     return WorkspaceManager(
         tmp_path / "managed-workspaces",
         # bash -lc can reset inherited PATH; keep venv/pip stubbed in the hook.
@@ -1109,7 +1109,7 @@ async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_
     repo_root = Path(__file__).parents[1]
     (host / "scripts").mkdir()
     _shutil.copy2(
-        repo_root / "scripts" / "symphony-setup-worktree.sh",
+        repo_root / "src/symphony/templates/project" / "scripts" / "symphony-setup-worktree.sh",
         host / "scripts" / "symphony-setup-worktree.sh",
     )
     (host / "scripts" / "symphony-setup-worktree.sh").chmod(0o755)
@@ -1159,7 +1159,7 @@ def test_setup_worktree_script_serializes_concurrent_git_admin_writes(tmp_path):
     repo_root = Path(__file__).parents[1]
     (host / "scripts").mkdir()
     _shutil.copy2(
-        repo_root / "scripts" / "symphony-setup-worktree.sh",
+        repo_root / "src/symphony/templates/project" / "scripts" / "symphony-setup-worktree.sh",
         host / "scripts" / "symphony-setup-worktree.sh",
     )
     script = host / "scripts" / "symphony-setup-worktree.sh"
@@ -2265,7 +2265,7 @@ def test_branch_hook_env_exports_board_root(tmp_path):
 
 def test_setup_worktree_script_links_configured_board_root():
     """F-04: the shipped hook must not hardcode `kanban`."""
-    script = Path("scripts/symphony-setup-worktree.sh").read_text(encoding="utf-8")
+    script = Path("src/symphony/templates/project/scripts/symphony-setup-worktree.sh").read_text(encoding="utf-8")
     assert "for dir in ${SYMPHONY_BOARD_ROOT_NAME:-kanban}; do" in script
     assert "for dir in kanban; do" not in script
 

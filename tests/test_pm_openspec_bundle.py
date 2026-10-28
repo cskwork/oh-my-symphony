@@ -14,8 +14,8 @@ from tests._pm_support import skip_or_fail
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILD = ROOT / "scripts/openspec-bundle"
-BUNDLE = ROOT / "src/symphony/pm/resources/openspec-cli"
+BUILD = ROOT / "packages/pm/scripts/openspec-bundle"
+BUNDLE = ROOT / "packages/pm/src/symphony/pm/resources/openspec-cli"
 CLI = BUNDLE / "lib/openspec/cli/openspec.mjs"
 REQUIRED = "SYMPHONY_PM_NODE_REQUIRED"
 
@@ -62,7 +62,7 @@ def node():
 @pytest.fixture
 def build_workspace(tmp_path, node):
     if not (BUILD / "node_modules/esbuild/package.json").is_file():
-        skip_or_fail("PM bundle rebuild tests need npm ci --prefix scripts/openspec-bundle", flag=REQUIRED)
+        skip_or_fail("PM bundle rebuild tests need npm ci --prefix packages/pm/scripts/openspec-bundle", flag=REQUIRED)
     copied = tmp_path / "repo/scripts/openspec-bundle"
     shutil.copytree(BUILD, copied)
     return copied
@@ -155,9 +155,9 @@ def test_r18_builtin_schema_file_layout():
 
 
 def test_r11_checkout_preserves_hashes_and_ignores_build_dependencies():
-    assert "scripts/openspec-bundle/node_modules/" in (ROOT / ".gitignore").read_text().splitlines()
+    assert "packages/pm/scripts/openspec-bundle/node_modules/" in (ROOT / ".gitignore").read_text().splitlines()
     assert (
-        "src/symphony/pm/resources/openspec-cli/** -text -whitespace linguist-generated"
+        "packages/pm/src/symphony/pm/resources/openspec-cli/** -text -whitespace linguist-generated"
         in (ROOT / ".gitattributes").read_text().splitlines()
     )
 
@@ -287,7 +287,7 @@ def test_bundled_braces_has_depth_guard():
 
 def test_braces_stub_refuses_deep_nesting_and_keeps_normal_expansion(node):
     if not (BUILD / "node_modules/braces/package.json").is_file():
-        skip_or_fail("braces stub test needs npm ci --prefix scripts/openspec-bundle", flag=REQUIRED)
+        skip_or_fail("braces stub test needs npm ci --prefix packages/pm/scripts/openspec-bundle", flag=REQUIRED)
     script = r"""
 const real = require('./node_modules/braces/index.js');
 const guarded = require('./stubs/braces.cjs');

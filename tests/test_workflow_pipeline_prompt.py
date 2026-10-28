@@ -154,7 +154,7 @@ def test_shipped_workflows_allow_registry_access_without_full_sandbox(
 
 def test_workflow_docs_explain_registry_network_policy() -> None:
     docs = (
-        REPO_ROOT / "skills" / "symphony-skill" / "reference" / "workflow-config.md"
+        REPO_ROOT / "src/symphony/templates/project" / "skills" / "symphony-skill" / "reference" / "workflow-config.md"
     ).read_text(encoding="utf-8")
     normalized_docs = " ".join(docs.split())
 
@@ -333,7 +333,7 @@ def test_document_stage_receives_board_health_only_when_present(workflow: str) -
 
 @pytest.mark.parametrize("flavor", ("file", "linear"))
 def test_base_prompt_declares_four_stage_pipeline_and_skip_document(flavor: str) -> None:
-    text = (REPO_ROOT / "docs" / "symphony-prompts" / flavor / "base.md").read_text(
+    text = ((REPO_ROOT / "src/symphony/templates/project" if flavor == "file" else REPO_ROOT) / "docs" / "symphony-prompts" / flavor / "base.md").read_text(
         encoding="utf-8"
     )
 
@@ -348,11 +348,12 @@ def test_base_prompt_declares_four_stage_pipeline_and_skip_document(flavor: str)
 
 
 def test_operator_skill_routes_ticket_registration_by_work_type() -> None:
-    skill = (REPO_ROOT / "skills" / "symphony-skill" / "SKILL.md").read_text(
+    skill = (REPO_ROOT / "src/symphony/templates/project" / "skills" / "symphony-skill" / "SKILL.md").read_text(
         encoding="utf-8"
     )
     delegation = (
         REPO_ROOT
+        / "src/symphony/templates/project"
         / "skills"
         / "symphony-skill"
         / "reference"
@@ -360,6 +361,7 @@ def test_operator_skill_routes_ticket_registration_by_work_type() -> None:
     ).read_text(encoding="utf-8")
     decomposition = (
         REPO_ROOT
+        / "src/symphony/templates/project"
         / "skills"
         / "symphony-skill"
         / "oneshot"

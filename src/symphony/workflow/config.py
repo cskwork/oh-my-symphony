@@ -109,8 +109,11 @@ class AgentProfileConfig:
 
     The built-in `agy` and `kiro` kinds are profiles too (see
     `ServiceConfig.agent_profile`); their `agy:` / `kiro:` blocks supply
-    `command`, timeouts and `resume_across_turns`. The CLI reads the prompt
-    on stdin and its stdout is taken as the final assistant message.
+    `command`, timeouts and `resume_across_turns`. With `format: text` the CLI
+    reads the prompt on stdin and its stdout is taken as the final assistant
+    message. With `format: acp` the command is one long-lived Agent Client
+    Protocol agent (`backends/acp.py`); the flag and continuation keys are
+    ignored because turns reuse the same ACP session.
     """
 
     name: str
@@ -352,6 +355,7 @@ class CodexConfig:
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
+    # Empty leaves model selection to the installed Codex CLI.
     model: str = DEFAULT_CODEX_MODEL
     reasoning_effort: str = DEFAULT_CODEX_REASONING_EFFORT
 

@@ -13,7 +13,6 @@ from urllib.parse import urlsplit
 
 from aiohttp import web
 
-from ..chat import ChatManager
 from ..errors import SymphonyError
 from ..logging import get_logger
 from ..service_identity import (
@@ -63,7 +62,6 @@ _HEALTH_PATH = "/api/v1/health"
 _PM_API_PREFIX = "/api/v1/pm/"
 _CI_EDITABLE_KEYS = {"enabled", "interval_ms", "max_turns", "agent_kind", "modes"}
 BIND_HOST_KEY: web.AppKey[str] = web.AppKey("symphony.bind_host", str)
-CHAT_MANAGER_KEY: web.AppKey[ChatManager] = web.AppKey("symphony.chat", ChatManager)
 SERVICE_INSTANCE_ID_KEY: web.AppKey[str | None] = web.AppKey(
     "symphony.service_instance_id"
 )

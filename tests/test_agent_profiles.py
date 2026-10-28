@@ -98,7 +98,7 @@ def test_stage_kinds_may_route_to_a_profile(tmp_path: Path) -> None:
     [
         (
             "{kind: mini, profiles: {mini: {command: mini-cli, format: ndjson}}}",
-            "agent.profiles.mini.format must be one of ['text']",
+            "agent.profiles.mini.format must be one of ['text', 'acp']",
         ),
         (
             "{kind: codex, profiles: {agy: {command: my-agy}}}",

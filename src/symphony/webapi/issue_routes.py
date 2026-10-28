@@ -9,6 +9,7 @@ from typing import Any
 
 from aiohttp import web
 
+from .. import installed_components, pm_installed
 from ..errors import SymphonyError
 from ..issue import Issue, registration_order_key
 from ..logging import get_logger
@@ -167,6 +168,11 @@ def _register_issue_routes(
                     "read_only": read_only,
                     "default_agent_kind": cfg.agent.kind,
                     "agent_kinds": sorted(selectable_agent_kinds(cfg.agent.profiles)),
+                    # The optional PM Workspace distribution backs the Artifacts page.
+                    "pm_available": pm_installed(),
+                    # Every optional distribution (`packages/*`), so the UI can
+                    # hide entry points whose component is not installed.
+                    "components": installed_components(),
                 },
                 "columns": _columns_payload(cfg),
                 "issues": issues,

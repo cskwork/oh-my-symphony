@@ -43,8 +43,11 @@ registration order, which aiohttp matching depends on.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from aiohttp import web
 
+from .. import component_installed, pm_installed
 from ..orchestrator import Orchestrator
 from ..service_identity import normalize_service_probe_credential
 
@@ -77,7 +80,6 @@ from .security import (
     _PM_API_PREFIX,
     _CI_EDITABLE_KEYS,
     BIND_HOST_KEY,
-    CHAT_MANAGER_KEY,
     SERVICE_INSTANCE_ID_KEY,
     _MAX_CHAT_MESSAGE,
     _json_error,
@@ -149,7 +151,6 @@ from .project_routes import (
     _project_mutation_error,
     _register_project_routes,
 )
-from .chat_routes import _register_chat_routes
 from .preview_routes import _register_preview_routes
 from .meta_routes import _register_meta_routes
 
@@ -163,10 +164,19 @@ def register_web_routes(app: web.Application, orchestrator: Orchestrator) -> Non
     _register_issue_routes(app, ctx, orchestrator)
     _register_workflow_routes(app, ctx, orchestrator)
     _register_git_routes(app, ctx, orchestrator)
-    _register_chat_routes(app, ctx, orchestrator)
-    _register_preview_routes(app, ctx, orchestrator)
-    from ..pm.routes import register_pm_routes
+    if component_installed("chat"):
+        from ..chat import routes as chat_routes  # pyright: ignore[reportMissingImports]
 
-    register_pm_routes(app, ctx, orchestrator)
+        chat_routes.register_chat_routes(app, ctx, orchestrator)
+    _register_preview_routes(app, ctx, orchestrator)
+    if pm_installed():
+        from ..pm import routes as pm_routes  # pyright: ignore[reportMissingImports]
+
+        pm_routes.register_pm_routes(app, ctx, orchestrator)
+        # PM browser assets ship with the optional PM distribution; register
+        # them ahead of the core `/static/` route that has no `pm/` directory.
+        pm_static = Path(pm_routes.__file__).parent / "static"
+        if pm_static.is_dir():
+            app.router.add_static("/static/pm/", pm_static, show_index=False)
     _register_project_routes(app, ctx)
     _register_meta_routes(app, ctx, orchestrator)

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oh-my-symphony-pm"
+version = "0.29.0"
+description = "Optional PM Workspace for oh-my-symphony: specs, WBS, workbook exchange, planning assistance and native handoff."
+readme = "README.md"
+requires-python = ">=3.12"
+# Same license as the core distribution; see LICENSE and NOTICE at the repository root.
+license = "Apache-2.0"
+authors = [{ name = "oh-my-symphony" }]
+dependencies = [
+    # The PM Workspace imports core internals, so the two ship in lockstep.
+    "oh-my-symphony==0.29.0",
+]
+
+[tool.setuptools]
+include-package-data = false
+# `symphony` belongs to the core distribution; this one contributes only
+# `symphony.pm` (merged at import time by `pkgutil.extend_path`).
+packages = ["symphony.pm"]
+package-dir = { "" = "src" }
+
+[tool.setuptools.package-data]
+"symphony.pm" = [
+    "resources/**/*",
+    "static/**/*",
+]
