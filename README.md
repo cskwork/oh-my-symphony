@@ -247,7 +247,16 @@ symphony-pyright
 
 ## Testing
 
-Results: pending CI on this branch.
+Last observed (2026-10-28, CI on ubuntu-latest, Python 3.12,
+[run 40613870510](https://github.com/cskwork/oh-my-symphony/actions/runs/40613870510)):
+
+| Command | Passed | Failed | Skipped |
+|---|---|---|---|
+| `python -m pytest -q -n auto -m "not timing"` | 3772 | 0 | 134 |
+| `python -m pytest -q -n0 -m timing` | 11 | 0 | 1 |
+
+Line coverage 85.52% (`--cov-fail-under=80`). The suite has 141 `test_*.py`
+files under `tests/`.
 
 CI ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs ruff,
 the i18n check, pyright, and the suite with an 80% coverage floor on Ubuntu,
