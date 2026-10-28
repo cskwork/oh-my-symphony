@@ -50,7 +50,7 @@ Layout (see ``AGENTS.md`` for full SPEC references):
 from importlib.util import find_spec as _find_spec
 from pkgutil import extend_path as _extend_path
 
-__version__ = "0.28.0"
+__version__ = "0.29.0"
 
 # Optional components ship as separate distributions under `packages/` and
 # contribute `symphony.<name>` subpackages from their own install location.

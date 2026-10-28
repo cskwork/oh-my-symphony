@@ -10,6 +10,50 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-28 - Lean and easy
+
+### Added
+- `defaults: standard` in `WORKFLOW.md` (opt-in): the package fills the four-lane tracker settings, stage prompts, worktree hooks, and every per-agent command block. Keys you write win, including partial `hooks:` and `prompts:` maps. Workflows without the key behave exactly as before; any other value is a config error.
+- `symphony eject [prompts|hooks|all] [WORKFLOW]` writes the package's prompts and/or `scripts/symphony-setup-worktree.sh` into the project and points `WORKFLOW.md` at them. It refuses to overwrite any existing file (or symlink) and rolls back on failure.
+- Verify gates: a top-level `verify:` block with `timeout_ms` (default 600000) and `commands:` keyed by the lane being left. A forward move out of that lane runs the command with bash in the ticket workspace, with `SYMPHONY_ISSUE_ID`, `SYMPHONY_ISSUE_IDENTIFIER`, `SYMPHONY_FROM_STATE`, `SYMPHONY_TO_STATE`, and the usual hook variables. A non-zero exit or a timeout appends `## Verify Failure` (command, exit code or timeout, duration, last 60 lines of output) and rewinds the ticket to that lane. When stage contracts also apply, both must pass. Each run appends one JSON line to `.symphony/traces/<ID>.jsonl`. Verify runs even when `agent.stage_contracts` is off.
+- `.symphony/needs.json` lists every ticket in a Blocked lane (and the budget-exhausted lane) with `state`, `since`, `reason`, and `action`, read from the last `## Verify Failure`, `## Environment Block`, `## Blocked`, or `## Contract Failure` section. Configured notifications go out once per reason group per UTC day. `symphony board show <ID>` prints the needs line.
+- `symphony doctor` checks that each verify command's executable is on `$PATH`, and WARNs when an active Claude stage runs with `--permission-mode acceptEdits` and neither `.claude/settings.json` nor `.claude/settings.local.json` has a `permissions.allow` entry starting with `Bash` (a v0.25 live run lost a ticket to exactly this). `symphony doctor --run-verify` runs each verify command once in a temporary detached worktree of `HEAD`, which is always removed.
+- `agent.profiles.<name>.format: acp` runs any Agent Client Protocol agent as one long-lived process and session per worker run (`backends/acp.py`), with no Python per agent. Verified live with `kiro-cli acp --trust-all-tools`. Permission requests are approved unattended except commands flagged dangerous.
+- `symphony project create|add --with-skill` copies the operator skill (`skills/symphony-skill` and the `.claude/skills/symphony-skill` link).
+- Optional in-repo distributions (not on PyPI): `oh-my-symphony-pm` (`packages/pm`), `oh-my-symphony-chat` (`packages/chat`), `oh-my-symphony-release` (`packages/release`). Import paths stay `symphony.pm`, `symphony.chat`, `symphony.release`. The board API payload reports them under `components`.
+
+### Changed
+- `symphony project create|add` writes 3 tracked files: `WORKFLOW.md` (about 20 lines, `defaults: standard`), `AGENTS.md`, and `kanban/.gitkeep`. Prompts, the setup script, and the operator skill are no longer copied (use `symphony eject` or `--with-skill`). `server.port` in the new `WORKFLOW.md` is the registry-allocated port, so `symphony doctor` no longer FAILs when 9999 is busy.
+- `symphony project create` works from a non-editable install (`uv tool install`); it used to require a Git checkout. Without an editable checkout, `--path` defaults to `./<id>` in the current directory.
+- The Codex `model` is no longer pinned (`gpt-5.5` before). When unset, the Codex CLI's own default applies.
+- Switching lane presets copies missing preset prompt files from the package instead of refusing.
+- The PM Workspace, operator chat (`symphony.chat`, `symphony.chat.intent`, `symphony.chat.routes`), and app release contracts (`symphony.release.*`, formerly `orchestrator/release_*.py`) moved out of the core wheel into `packages/`. Core reaches release code only through `orchestrator/release_seam.py`; chat mode helpers moved to `symphony/agent_modes.py`.
+- The operator skill and the project `AGENTS.md` now live only in `src/symphony/templates/project/` (`.claude/skills/symphony-skill` links there). The four-lane prompts and `scripts/symphony-setup-worktree.sh` stay at the repository root; `python -m symphony.templates.project._sync` keeps the package copies identical and a parity test checks them.
+- The PM browser bundle is built from `packages/pm` (`npm ci && npm run build:pm-assets` there); the root `package.json` moved with it.
+- Core wheel: 3,034,197 B / 477 files (v0.28.0) to 1,188,251 B / 360 files. Core `src/symphony` Python: 78,273 lines in 174 files to 60,490 lines in 153 files.
+
+### Removed
+- `examples/project/AGENTS.md` and the top-level `skills/` directory (moved to `src/symphony/templates/project/`).
+- PM, chat, and release code from the core wheel. Without their package: `symphony pm` and `symphony release` print an install hint and exit 2; the web UI hides the PM and chat entries; enabling `pm:` capabilities is a config error naming the install command; a ticket labelled `app-release`, `app-release-finalizer`, or `release-cycle-verifier` is parked in `Blocked` with the hint and never merged (fail closed); `symphony doctor` FAILs on a board that uses app release delivery. Release tables stay in `state.db`, so the database stays valid with or without the package.
+
+### Fixed
+- Claude workers can write their own ticket: the default `claude` command adds `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"`. Before this, a live run burned 30 turns unable to update the ticket file.
+
+### Upgrade notes
+- **PM Workspace, operator chat, and app release contracts now need their package.** From a checkout:
+  `git pull && python -m pip install -e . -e packages/pm -e packages/chat -e packages/release` (install only the ones you use). With uv, from the checkout: `uv tool install --force . --with ./packages/pm --with ./packages/chat --with ./packages/release`.
+- Boards with `app-release` tickets must install `packages/release` before upgrading the running service; otherwise those tickets are parked in `Blocked`. Move them back after installing.
+- Existing `WORKFLOW.md` files need no change. To slim one, add `defaults: standard` and delete the blocks that match the package defaults; keys you keep still win.
+- If you relied on the `gpt-5.5` default, set `codex.model: gpt-5.5` explicitly.
+- Claude boards: add a Bash allow rule to `.claude/settings.json`, for example `{"permissions":{"allow":["Bash(python -m pytest:*)","Bash(git merge-tree:*)"]}}`, then run `symphony doctor ./WORKFLOW.md`.
+- Links to `skills/symphony-skill/...` now resolve under `src/symphony/templates/project/skills/symphony-skill/`.
+
+### Known limitations
+- PRD LR-4 (one engine, thin clients) is not done: the TUI still runs its own orchestrator. That is why this is 0.29.0, not 1.0.
+- The optional packages are not on PyPI; install them from a checkout.
+- ACP: the agent CLI must already be logged in; per-turn token counts are not reported (the ACP usage field is still a draft), while context size and cost are passed through as events; not verified on Windows. `gemini --acp` (license error at `session/new`) and `opencode acp` (local plugin load failure) did not work on the test machine because of account and plugin problems outside Symphony.
+- The mock backend does not move cards.
+
 ## [0.28.0] - 2026-10-20 - Lean core
 
 ### Removed
