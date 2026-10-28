@@ -63,7 +63,7 @@ __path__ = _extend_path(__path__, __name__)
 # name -> (importable module that proves the install, human label, package dir)
 OPTIONAL_COMPONENTS: dict[str, tuple[str, str, str]] = {
     "pm": ("symphony.pm", "the PM Workspace", "packages/pm"),
-    "release": ("symphony.release", "app release contracts", "packages/release"),
+    "release": ("symphony.release", "the app release contracts package", "packages/release"),
     "chat": ("symphony.chat", "the operator chat", "packages/chat"),
 }
 

@@ -107,3 +107,26 @@ def test_command_spawn_error_is_failure(tmp_path: Path):
     result = run_verify("true", tmp_path / "missing", 1000)
     assert result.exit_code == 127
     assert not result.passed
+
+
+def test_crossed_commands_cover_every_lane_a_forward_move_leaves_or_skips() -> None:
+    from symphony.workflow.verify import crossed_commands, gates_from
+
+    lanes = ("Todo", "In Progress", "Verify", "Document")
+    commands = {"in progress": "unit", "verify": "integration"}
+
+    assert crossed_commands(commands, "In Progress", "Verify", lanes) == [("in progress", "unit")]
+    assert crossed_commands(commands, "In Progress", "Done", lanes) == [
+        ("in progress", "unit"),
+        ("verify", "integration"),
+    ]
+    assert crossed_commands(commands, "Todo", "Document", lanes) == [
+        ("in progress", "unit"),
+        ("verify", "integration"),
+    ]
+    assert crossed_commands(commands, "Verify", "In Progress", lanes) == []
+    assert crossed_commands(commands, "Document", "Done", lanes) == []
+    assert gates_from(commands, "Todo", lanes)
+    assert not gates_from(commands, "Document", lanes)
+    # A custom lane outside the active order is still gated by its own command.
+    assert crossed_commands({"triage": "lint"}, "Triage", "Done", lanes) == [("triage", "lint")]

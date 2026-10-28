@@ -37,7 +37,14 @@ from ..prompt import build_first_turn_prompt
 from ..stats import board_health_summary
 from ..workflow import ServiceConfig
 from ..workflow.presets import guess_lane_preset
-from ..workflow.verify import append_verify_trace, run_verify, verification_scope, verify_config
+from ..workflow.verify import (
+    append_verify_trace,
+    crossed_commands,
+    gates_from,
+    run_verify,
+    verification_scope,
+    verify_config,
+)
 from .constants import EMPTY_TURN_LOOP_THRESHOLD
 from .contracts import _build_result, contract_producing_states, evaluate_contract
 from .factory_contracts import (
@@ -163,7 +170,9 @@ async def _transition_agent_phase(
     if not is_rewind and (
         self._is_factory_profile(cfg)
         or cfg.agent.stage_contracts_enabled(cfg.tracker.active_states)
-        or producing_state in verify_config(cfg).commands
+        or gates_from(
+            verify_config(cfg).commands, producing_state, cfg.tracker.active_states
+        )
     ):
         outcome = await self._enforce_stage_contract(
             cfg=cfg,
@@ -286,7 +295,8 @@ async def _enforce_stage_contract(
     # remove a terminal workspace before its verification finishes.
     scope = (
         verification_scope(self, running_issue_id)
-        if producing_state in verify_config(cfg).commands else nullcontext()
+        if gates_from(verify_config(cfg).commands, producing_state, cfg.tracker.active_states)
+        else nullcontext()
     )
     with scope:
         return await _evaluate_stage_gates(
@@ -331,11 +341,13 @@ async def _evaluate_stage_gates(
         "factory" if factory else guess_lane_preset(cfg.tracker.active_states)
     )
     verification = verify_config(cfg)
-    command = verification.commands.get(producing_state)
+    gated = gates_from(
+        verification.commands, producing_state, cfg.tracker.active_states
+    )
     contract_enabled = (
         factory or cfg.agent.stage_contracts_enabled(cfg.tracker.active_states)
     ) and producing_state in contract_producing_states(lane_preset)
-    if not command and not contract_enabled:
+    if not gated and not contract_enabled:
         return _StageContractOutcome(
             issue=issue,
             current_state=current_state,
@@ -359,46 +371,55 @@ async def _evaluate_stage_gates(
         current_state = normalize_state(issue.state)
     # Refresh can observe an operator's concurrent rewind. Never execute a
     # forward gate against a ticket that is already back in its source lane.
-    if command and current_state != producing_state and not _is_rewind_transition(
+    if gated and current_state != producing_state and not _is_rewind_transition(
         producing_state, current_state, cfg.tracker.active_states
     ) and (
         current_state in {normalize_state(s) for s in cfg.tracker.active_states}
         or _is_successful_terminal_state(current_state)
     ):
-        result = await asyncio.to_thread(
-            run_verify, command, workspace_path, verification.timeout_ms,
-            {
-                **_branch_hook_env(cfg),
-                "SYMPHONY_WORKFLOW_DIR": str(cfg.workflow_path.parent),
-                "SYMPHONY_WORKSPACE_ROOT": str(cfg.workspace_root),
-                "SYMPHONY_PYTHON": sys.executable,
-                "SYMPHONY_ISSUE_ID": issue.id,
-                "SYMPHONY_ISSUE_IDENTIFIER": issue.identifier,
-                "SYMPHONY_FROM_STATE": producing_state_raw or producing_state,
-                "SYMPHONY_TO_STATE": issue.state,
-            },
-        )
-        try:
-            await asyncio.to_thread(
-                append_verify_trace, cfg, issue.identifier, producing_state,
-                current_state, command, result,
+        for lane, command in crossed_commands(
+            verification.commands, producing_state, current_state,
+            cfg.tracker.active_states,
+        ):
+            lane_label = _canonical_state_label(cfg, lane) or lane
+            result = await asyncio.to_thread(
+                run_verify, command, workspace_path, verification.timeout_ms,
+                {
+                    **_branch_hook_env(cfg),
+                    "SYMPHONY_WORKFLOW_DIR": str(cfg.workflow_path.parent),
+                    "SYMPHONY_WORKSPACE_ROOT": str(cfg.workspace_root),
+                    "SYMPHONY_PYTHON": sys.executable,
+                    "SYMPHONY_ISSUE_ID": issue.id,
+                    "SYMPHONY_ISSUE_IDENTIFIER": issue.identifier,
+                    "SYMPHONY_FROM_STATE": producing_state_raw or producing_state,
+                    "SYMPHONY_TO_STATE": issue.state,
+                    "SYMPHONY_GATE_LANE": lane_label,
+                },
             )
-        except OSError as exc:
-            # A trace write failure must not bypass the authoritative rewind.
-            log.warning("verify_trace_write_failed", identifier=issue.identifier, error=str(exc))
-        self._record_stats_gate(
-            issue.identifier, producing_state,
-            "verify_pass" if result.passed else "verify_failure", (command,),
-        )
-        if not result.passed:
-            return await _rewind_failed_gate(
-                self, cfg=cfg, running_issue_id=running_issue_id, issue=issue,
-                producing_state=producing_state,
-                producing_state_raw=producing_state_raw,
-                current_state=current_state, known_app_release=known_app_release,
-                heading="Verify Failure",
-                body=result.failure_note(command, verification.timeout_ms),
+            try:
+                await asyncio.to_thread(
+                    append_verify_trace, cfg, issue.identifier, producing_state,
+                    current_state, command, result,
+                )
+            except OSError as exc:
+                # A trace write failure must not bypass the authoritative rewind.
+                log.warning("verify_trace_write_failed", identifier=issue.identifier, error=str(exc))
+            self._record_stats_gate(
+                issue.identifier, lane,
+                "verify_pass" if result.passed else "verify_failure", (command,),
             )
+            if not result.passed:
+                note = result.failure_note(command, verification.timeout_ms)
+                if lane != producing_state:
+                    note = f"Gate of the skipped lane `{lane_label}`.\n\n{note}"
+                return await _rewind_failed_gate(
+                    self, cfg=cfg, running_issue_id=running_issue_id, issue=issue,
+                    producing_state=producing_state,
+                    producing_state_raw=producing_state_raw,
+                    current_state=current_state, known_app_release=known_app_release,
+                    heading="Verify Failure",
+                    body=note,
+                )
     if not contract_enabled:
         return _StageContractOutcome(issue, current_state, known_app_release, False)
     contract = evaluate_contract(

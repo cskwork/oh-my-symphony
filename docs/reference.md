@@ -567,7 +567,11 @@ agent:
 - `unattended_flags`, `continuation_flag`, and `continuation_position` are
   ignored, because turns reuse the session.
 - Per-turn token counts are not reported (the ACP usage field is still a
-  draft); context size and cost are passed through as events.
+  draft); context size and cost are passed through as events, and the
+  zero-token telemetry warning is not raised for ACP or plain-text profiles.
+- The command's stdout is the JSON-RPC channel. Anything else printed there
+  (for example a login-shell profile banner) is logged as a malformed line;
+  ten in a row fail the turn, so keep shell profiles quiet on stdout.
 - Not verified on Windows. `gemini --acp` (license error at `session/new`) and
   `opencode acp` (local plugin load failure) did not work on the test machine
   for account and plugin reasons outside Symphony.
@@ -1134,8 +1138,13 @@ verify:
 
 - When a worker moves a ticket forward out of a listed lane (to the next
   active lane or to a successful terminal state such as Done), Symphony runs
-  the command with `bash -c` in the ticket workspace. Rewinds and moves to
-  `Blocked` do not trigger it.
+  the command with `bash -c` in the ticket workspace. A move that jumps over
+  listed lanes (In Progress straight to Done) runs each skipped lane's command
+  too, in lane order, and a failure names the skipped lane. A worker that
+  crashes after a forward edit still faces the gate when its exit is handled;
+  only an operator or reconcile cancellation skips it. Rewinds and moves to
+  `Blocked` do not trigger it. `SYMPHONY_GATE_LANE` names the lane whose
+  command is running.
 - The environment adds `SYMPHONY_ISSUE_ID`, `SYMPHONY_ISSUE_IDENTIFIER`,
   `SYMPHONY_FROM_STATE`, `SYMPHONY_TO_STATE`, `SYMPHONY_WORKFLOW_DIR`,
   `SYMPHONY_WORKSPACE_ROOT`, and `SYMPHONY_PYTHON` to the hook branch

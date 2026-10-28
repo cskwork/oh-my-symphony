@@ -82,6 +82,39 @@ def verify_config(cfg: ServiceConfig) -> VerifyConfig:
     return VerifyConfig(timeout_ms=timeout, commands=normalized)
 
 
+def crossed_commands(
+    commands: dict[str, str],
+    producing_state: str,
+    current_state: str,
+    active_states: tuple[str, ...],
+) -> list[tuple[str, str]]:
+    """Commands of every lane a forward move leaves or jumps over, in lane order.
+
+    A worker that moves a ticket from In Progress straight to Done must still
+    pass the Verify lane's command; otherwise skipping a lane skips its gate.
+    A target outside the active lanes (Done) crosses every later lane.
+    """
+    order = [_normalize_state_key(state) for state in active_states]
+    producing = _normalize_state_key(producing_state)
+    if producing not in order:
+        command = commands.get(producing)
+        return [(producing, command)] if command else []
+    current = _normalize_state_key(current_state)
+    end = order.index(current) if current in order else len(order)
+    return [
+        (lane, commands[lane])
+        for lane in order[order.index(producing):end]
+        if lane in commands
+    ]
+
+
+def gates_from(
+    commands: dict[str, str], producing_state: str, active_states: tuple[str, ...]
+) -> bool:
+    """Whether a forward move out of *producing_state* can cross any gate."""
+    return bool(crossed_commands(commands, producing_state, "", active_states))
+
+
 @dataclass(frozen=True)
 class VerifyResult:
     exit_code: int | None

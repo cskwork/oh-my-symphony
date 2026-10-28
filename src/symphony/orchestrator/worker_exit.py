@@ -49,6 +49,7 @@ from ..errors import SymphonyError
 from ..issue import Issue, normalize_state
 from ..logging import get_logger
 from ..workflow import ServiceConfig
+from ..workflow.verify import verify_config
 from ..workspace import HISTORY_PUSH_FAILED, HistoryGateResult
 from .constants import CONTINUATION_RETRY_DELAY_MS, RETRY_BASE_MS
 from .entries import RunningEntry, _IssueDebug
@@ -98,7 +99,13 @@ async def handle_worker_exit(
         return
     terminal_cancelled = False
     cfg = orch._workflow_state.current()
-    if cfg is not None and reason == "normal" and not entry.workspace_cleanup_started:
+    # A worker that moved its ticket forward and then crashed must still face
+    # the verify gate; only an operator/reconcile cancellation skips it.
+    if (
+        cfg is not None
+        and not entry.workspace_cleanup_started
+        and (reason == "normal" or (reason != "cancelled" and verify_config(cfg).commands))
+    ):
         await orch._enforce_factory_exit_contract(cfg, entry)
     if reason == "cancelled" and cfg is not None:
         # Reconcile can cancel a worker after its card is archived/stopped.

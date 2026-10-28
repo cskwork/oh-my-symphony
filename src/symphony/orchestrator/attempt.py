@@ -75,7 +75,7 @@ from ..issue import Issue, normalize_state
 from ..logging import get_logger
 from ..prompt import build_continuation_prompt, build_first_turn_prompt
 from ..utils import git_inspect
-from ..workflow.verify import verify_config
+from ..workflow.verify import gates_from, verify_config
 from ..workflow import ServiceConfig
 from ..workspace import Workspace, WorkspaceManager
 from .entries import RunningEntry, _IssueDebug
@@ -1086,7 +1086,11 @@ async def _evaluate_turn_result(
         and (
             orch._is_factory_profile(st.cfg)
             or st.cfg.agent.stage_contracts_enabled(st.cfg.tracker.active_states)
-            or st.prev_phase_state in verify_config(st.cfg).commands
+            or gates_from(
+                verify_config(st.cfg).commands,
+                st.prev_phase_state,
+                st.cfg.tracker.active_states,
+            )
         )
     ):
         try:

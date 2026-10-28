@@ -23,7 +23,7 @@ from ..errors import SymphonyError
 from ..factory.wayfinder import factory_proof_commands
 from ..issue import BlockerRef, Issue, normalize_state
 from ..skills import render_skill_block, select_skills_for_stage
-from ..workflow.verify import verify_config
+from ..workflow.verify import gates_from, verify_config
 from ..workflow import ServiceConfig, selectable_agent_kinds
 from ..workspace import WorkspaceManager
 from .constants import ARCHIVE_SWEEP_INTERVAL_SEC, WAIT_AGE_BUMP_MIN, _TOKEN_EMA_ALPHA
@@ -1141,7 +1141,7 @@ async def _enforce_factory_exit_contract(
     producing = normalize_state(entry.state_at_turn_start)
     if not (
         (self._is_factory_profile(cfg) and producing in {"build", "verify"})
-        or producing in verify_config(cfg).commands
+        or gates_from(verify_config(cfg).commands, producing, cfg.tracker.active_states)
     ):
         return True
     latest = await self._refresh_issue_full(cfg, entry.issue.id)
@@ -1183,7 +1183,10 @@ def _record_token_attention_for_turn(
     entry.token_attention_total_tokens = entry.codex_total_tokens
     debug = self._issue_debug.setdefault(entry.issue.id, _IssueDebug())
     state = entry.state_at_turn_start or entry.issue.state
-    if entry.current_turn_message.strip() and turn_total == 0:
+    # Plain-text and ACP profiles cannot report per-turn tokens (ACP usage is
+    # still a draft), so zero there is expected, not suspect telemetry.
+    profile = cfg.agent_profile(entry.agent_kind or cfg.agent.kind) if cfg else None
+    if entry.current_turn_message.strip() and turn_total == 0 and profile is None:
         debug.token_attention = _attention_signal(
             "token_telemetry_suspect",
             "Token telemetry",

@@ -3305,6 +3305,31 @@ def test_token_totals_delta_cumulative_reports_without_double_counting():
     assert orch.snapshot()["codex_totals"]["total_tokens"] == 155
 
 
+def test_zero_token_turn_from_a_profile_backend_is_not_suspect(monkeypatch):
+    """Plain-text and ACP profiles cannot report per-turn tokens."""
+    cfg = _make_config(active_states=("In Progress",))
+    orch = _orch()
+    issue = _issue("TOK-PROFILE", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+    entry.agent_kind = "agy"
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _run() -> None:
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": EVENT_TURN_COMPLETED,
+                "timestamp": "2026-07-04T00:00:00Z",
+                "payload": {"message": "Implemented the migration."},
+                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            },
+        )
+
+    asyncio.run(_run())
+
+    assert orch.issue_attention(issue) is None
+
+
 def test_productive_zero_token_turn_reports_attention(monkeypatch):
     cfg = _make_config(active_states=("In Progress",))
     orch = _orch()
