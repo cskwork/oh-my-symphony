@@ -175,8 +175,6 @@ class _AttemptState:
     prev_phase_state_raw: str = ""
     known_app_release: bool = False
     current_state: str = ""
-    # Last gated lane persisted for this ticket (see `_remember_turn_lane`).
-    remembered_gate_lane: str = ""
 
 
 # ----------------------------------------------------------------------
@@ -284,10 +282,11 @@ async def _run_attempt(
 async def _remember_turn_lane(st: _AttemptState) -> None:
     """Persist the gated lane this turn starts in, so a shutdown cannot skip it."""
     commands = verify_config(st.cfg).commands
-    if (
-        not commands
-        or st.current_state == st.remembered_gate_lane
-        or not gates_from(commands, st.current_state, st.cfg.tracker.active_states)
+    # No in-memory cache: a passed gate clears the file mid-run, and a later
+    # turn in the same lane must write it again (`remember_gate_lane` skips
+    # unchanged writes itself).
+    if not commands or not gates_from(
+        commands, st.current_state, st.cfg.tracker.active_states
     ):
         return
     try:
@@ -297,8 +296,6 @@ async def _remember_turn_lane(st: _AttemptState) -> None:
     except OSError as exc:
         # Losing the record only weakens restart recovery; the in-run gates hold.
         log.warning("verify_gate_lane_write_failed", identifier=st.issue.identifier, error=str(exc))
-        return
-    st.remembered_gate_lane = st.current_state
 
 
 async def _gate_move_left_by_unhandled_exit(

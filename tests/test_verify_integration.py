@@ -503,3 +503,74 @@ def test_turns_record_their_gated_lane_and_handled_exits_forget_it(
     monkeypatch.setattr(orchestrator._workflow_state, "current", lambda: cfg)
     asyncio.run(worker_exit.handle_worker_exit(orchestrator, issue.id, "normal", None))
     assert gate_lane_of(cfg, "MT-1") is None
+
+
+def test_a_rewound_lane_is_recorded_again_after_an_in_run_pass(tmp_path: Path) -> None:
+    """A passed gate clears the record; a later turn back in the lane rewrites it."""
+    from types import SimpleNamespace
+
+    from symphony.orchestrator import attempt
+    from symphony.workflow.verify import gate_lane_of, remember_gate_lane
+
+    cfg, _, _ = _prepare(tmp_path, command="exit 3", contracts="off")
+    st = SimpleNamespace(
+        cfg=cfg,
+        issue=_make_issue_from_disk("In Progress", "x"),
+        current_state="in progress",
+    )
+    asyncio.run(attempt._remember_turn_lane(st))
+    assert gate_lane_of(cfg, "MT-1") == "in progress"
+    remember_gate_lane(cfg, "MT-1", None)  # the crossed gates passed
+    st.current_state = "verify"
+    asyncio.run(attempt._remember_turn_lane(st))
+    st.current_state = "in progress"  # rewound back into the gated lane
+    asyncio.run(attempt._remember_turn_lane(st))
+    assert gate_lane_of(cfg, "MT-1") == "in progress"
+
+
+def test_shutdown_after_a_move_to_done_returns_the_card_to_its_gated_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Done is never dispatched again, so the skipped gate needs the card back."""
+    from symphony.orchestrator import worker_exit
+    from symphony.workflow.verify import gate_lane_of
+
+    cfg, ticket, workspace, orchestrator, issue = _forward_edited_entry(
+        tmp_path, monkeypatch, "Done"
+    )
+    orchestrator._stopping = True
+
+    asyncio.run(
+        worker_exit.handle_worker_exit(orchestrator, issue.id, "shutdown_interrupted", None)
+    )
+
+    front, body = parse_ticket_file(ticket)
+    assert front["state"] == "In Progress"
+    assert "\n## Verify Pending\n" in body
+    assert gate_lane_of(cfg, "MT-1") == "in progress"
+    # The next forward move runs the gate it skipped.
+    _run_attempt(cfg, ticket, workspace, monkeypatch, [("Done", body)])
+    front, body = parse_ticket_file(ticket)
+    assert front["state"] == "In Progress"
+    assert "\n## Verify Failure\n" in body
+
+
+def test_startup_returns_a_crashed_done_move_to_its_gated_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host crash skips the exit handler; startup reads the record instead."""
+    from symphony.orchestrator import retry_reconcile
+    from symphony.workflow.verify import remember_gate_lane
+
+    cfg, ticket, workspace = _prepare(tmp_path, command="exit 3", contracts="off")
+    ticket.write_text(ticket.read_text().replace("state: In Progress", "state: Done", 1))
+    remember_gate_lane(cfg, "MT-1", "in progress")
+    orchestrator = _orch(workspace)
+    front, body = parse_ticket_file(ticket)
+    done = _make_issue_from_disk("Done", body)
+
+    assert asyncio.run(retry_reconcile._return_unverified_done(orchestrator, cfg, done))
+
+    front, body = parse_ticket_file(ticket)
+    assert front["state"] == "In Progress"
+    assert "\n## Verify Pending\n" in body

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, cast
 from ..errors import SymphonyError
 from ..issue import Issue, normalize_state
 from ..workflow import ServiceConfig, SYMPHONY_BRANCH_PREFIX
-from ..workflow.verify import verification_in_progress
+from ..workflow.verify import gate_lane_of, verification_in_progress, verify_config
 from ..utils.auto_merge import AutoMergeResult
 from ..workspace import COMMIT_FAILED, CommitOutcome
 from .constants import (
@@ -1114,6 +1114,21 @@ async def _reconcile_one(
                 entry.workspace_cleanup_finished.set()
 
 
+async def _return_unverified_done(self: Orchestrator, cfg: ServiceConfig, issue: Issue) -> bool:
+    """A recorded gated lane on a Done ticket means its exit was never handled."""
+    if not verify_config(cfg).commands:
+        return False
+    lane = await asyncio.to_thread(gate_lane_of, cfg, issue.identifier)
+    if not lane:
+        return False
+    try:
+        return await worker_exit.return_unverified_success_to_lane(self, cfg, issue, lane)
+    except Exception as exc:
+        log.warning("verify_pending_return_failed", identifier=issue.identifier, error=str(exc))
+        # Keep the workspace and the card for the operator rather than clean up.
+        return True
+
+
 async def _startup_terminal_cleanup(self: Orchestrator, cfg: ServiceConfig) -> None:
     try:
         terminals = await asyncio.to_thread(self._tracker_call_terminal_issues, cfg)
@@ -1131,6 +1146,8 @@ async def _startup_terminal_cleanup(self: Orchestrator, cfg: ServiceConfig) -> N
             release_stopped,
         ) = await self._startup_release_terminal_guard(cfg, issue)
         if release_stopped:
+            continue
+        if await _return_unverified_done(self, cfg, issue):
             continue
         path = self._workspace_manager.path_for(issue.identifier)
         if path.exists():

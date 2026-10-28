@@ -1146,7 +1146,10 @@ verify:
   in Done before it cancels the worker. A service shutdown runs no commands;
   instead each turn records its gated lane in `.symphony/verify-pending.json`,
   and the next dispatch gates any forward move made since (this also covers a
-  host crash). Rewinds and moves to
+  host crash). A ticket that reached Done that way is never dispatched again,
+  so the shutdown, or startup after a crash, returns it to the recorded lane
+  with a `## Verify Pending` note; nothing was merged, and the gate runs on its
+  next forward move. Rewinds and moves to
   `Blocked` do not trigger it. `SYMPHONY_GATE_LANE` names the lane whose
   command is running.
 - The environment adds `SYMPHONY_ISSUE_ID`, `SYMPHONY_ISSUE_IDENTIFIER`,
