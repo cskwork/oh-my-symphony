@@ -1588,7 +1588,7 @@ async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) ->
     for identifier, title, st, prio in (
         ("INBOX-REV1", "Review feedback target", "Human Review", 0),
         ("INBOX-REV2", "Approve and ship target", "Human Review", 1),
-        ("INBOX-WORK", "Active ticket", "Todo", 2),
+        ("INBOX-WORK", "Active running ticket", "In Progress", 2),
         ("INBOX-DONE", "Already done", "Done", 3),
     ):
         (kanban / f"{identifier}.md").write_text(
@@ -1596,6 +1596,38 @@ async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) ->
         )
 
     class _InboxStubOrchestrator(_StubOrchestrator):
+        def snapshot(self) -> dict[str, Any]:
+            base = super().snapshot()
+            base["counts"] = {"running": 1, "retrying": 0}
+            base["running"] = [
+                {
+                    "issue_id": "INBOX-WORK",
+                    "issue_identifier": "INBOX-WORK",
+                    "state": "In Progress",
+                    "status": "running",
+                    "turn_count": 2,
+                    "tokens": {"input_tokens": 1200, "output_tokens": 300, "total_tokens": 1500},
+                    "last_event": "turn_completed",
+                    "last_message": "Streaming live worker activity",
+                    "paused": False,
+                }
+            ]
+            return base
+
+        def iter_running_issues(self) -> tuple[Any, ...]:
+            return (
+                SimpleNamespace(
+                    issue_id="INBOX-WORK",
+                    identifier="INBOX-WORK",
+                    status="running",
+                    turn_count=2,
+                    tokens={"input_tokens": 1200, "output_tokens": 300, "total_tokens": 1500},
+                    last_event="turn_completed",
+                    last_message="Streaming live worker activity",
+                    paused=False,
+                ),
+            )
+
         async def confirm_done(self, identifier: str) -> dict[str, Any]:
             cfg = self._workflow_state.current()
             assert cfg is not None
@@ -1648,7 +1680,7 @@ async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) ->
                 created_id = await created_row.get_attribute("data-issue-id")
                 assert created_id and (kanban / f"{created_id}.md").exists()
 
-                # 3. Filter chips + lazy Diff disclosure
+                # 3. Filter chips + 'd' toggles Diff disclosure
                 chips = page.locator(".inbox-filter-chip")
                 await chips.nth(1).click()
                 assert await chips.nth(1).get_attribute("aria-pressed") == "true"
@@ -1658,11 +1690,12 @@ async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) ->
 
                 await page.locator('.inbox-row[data-issue-id="INBOX-REV1"]').click()
                 await page.locator(".inbox-canvas-title", has_text="Review feedback target").wait_for()
-                await page.locator('details.inbox-disclosure[data-key="diff"] > summary').click()
+                await page.evaluate("() => document.activeElement?.blur()")
+                await page.keyboard.press("d")
                 await page.locator('details.inbox-disclosure[data-key="diff"][open]').wait_for()
 
-                # 4. Request changes opens feedback form -> Escape closes -> submit appends note
-                await page.get_by_role("button", name="Request changes").click()
+                # 4. 'c' opens Request changes feedback form -> Escape closes -> submit appends note
+                await page.keyboard.press("c")
                 fb_input = page.locator("form.inbox-feedback .inbox-feedback-input")
                 await fb_input.wait_for()
                 assert await page.evaluate("() => document.activeElement?.classList.contains('inbox-feedback-input')")
@@ -1684,12 +1717,24 @@ async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) ->
                 assert "state: In Progress" in rev1_md
                 assert "## Review feedback\n\nPlease add regression coverage." in rev1_md
 
-                # 5. Approve & ship moves ticket to Done and respects toast cap <= 2
+                # 5. 'a' approves & ships INBOX-REV2 to Done + Live activity on INBOX-WORK + 'b' opens Board drawer
                 await page.locator('.inbox-row[data-issue-id="INBOX-REV2"]').click()
-                await page.get_by_role("button", name="Approve & ship").click()
+                await page.locator(".inbox-canvas-title", has_text="Approve and ship target").wait_for()
+                await page.evaluate("() => document.activeElement?.blur()")
+                await page.keyboard.press("a")
                 await page.wait_for_timeout(300)
                 assert "state: Done" in (kanban / "INBOX-REV2.md").read_text(encoding="utf-8")
                 assert await page.locator("#toast-container > .toast").count() <= 2
+
+                await page.locator('.inbox-row[data-issue-id="INBOX-WORK"]').click()
+                await page.locator('details.inbox-disclosure[data-key="activity"][open]').wait_for()
+                activity_text = await page.locator('details.inbox-disclosure[data-key="activity"]').inner_text()
+                assert "Streaming live worker activity" in activity_text
+                await page.evaluate("() => document.activeElement?.blur()")
+                await page.keyboard.press("b")
+                await page.locator('#drawer-panel.open .drawer-id', has_text="INBOX-WORK").wait_for()
+                await page.keyboard.press("Escape")
+                await page.wait_for_function("() => !document.getElementById('drawer-panel').classList.contains('open')")
 
                 # 6. Sidebar #cmd-open, Control+K execution, '0' Settings shortcut, Start page preference
                 await page.locator("#cmd-open").click()
@@ -1711,10 +1756,19 @@ async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) ->
                 await page.goto(f"{base_url}/", wait_until="networkidle")
                 await page.locator('.nav-item.active[data-route="board"]').wait_for()
 
-                # 7. Mobile 390x844 master-detail Inbox flow + >= 44px targets
+                # 7. Mobile 390x844 full-width bottom tab bar + More sheet + master-detail Inbox flow
                 await page.set_viewport_size({"width": 390, "height": 844})
                 await page.goto(f"{base_url}/#/inbox", wait_until="networkidle")
                 await page.locator('.inbox-view[data-mobile-pane="queue"]').wait_for()
+                await page.locator("#mobile-tabbar").wait_for()
+                layout = await page.evaluate(
+                    """() => ({
+                        sidebarDisplay: getComputedStyle(document.querySelector('.sidebar')).display,
+                        inboxW: document.querySelector('.inbox-view').getBoundingClientRect().width,
+                    })"""
+                )
+                assert layout["sidebarDisplay"] == "none", layout
+                assert layout["inboxW"] >= 380, layout
                 await _assert_no_document_overflow(page, "mobile inbox queue")
                 await page.locator('.inbox-row[data-issue-id="INBOX-WORK"]').click()
                 await page.locator('.inbox-view[data-mobile-pane="detail"]').wait_for()
@@ -1725,6 +1779,12 @@ async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) ->
                 await _assert_no_document_overflow(page, "mobile inbox detail")
                 await back_btn.click()
                 await page.locator('.inbox-view[data-mobile-pane="queue"]').wait_for()
+
+                await page.locator("#mobile-more-open").click()
+                await page.locator("#mobile-more-dialog[open]").wait_for()
+                await page.locator('.mobile-more-item[data-mobile-route="settings"]').click()
+                await page.wait_for_function("() => !document.getElementById('mobile-more-dialog').open")
+                await page.locator(".settings-card").first.wait_for()
                 assert errors == []
             finally:
                 await browser.close()
