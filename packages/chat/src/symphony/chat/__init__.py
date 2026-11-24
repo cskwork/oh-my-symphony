@@ -912,7 +912,11 @@ class ChatManager:
                     # The stopped backend cannot serve this live entry. Preserve its
                     # index/transcript so the explicit Resume flow can restore Q&A.
                     self._save_index()
-                    self._forget_live(session)
+                    try:
+                        if session.writer is not None:
+                            await asyncio.to_thread(session.writer.flush)
+                    finally:
+                        self._forget_live(session)
                     raise
                 self._broadcast(
                     session,
