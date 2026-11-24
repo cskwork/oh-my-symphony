@@ -7,7 +7,7 @@ guards and `symphony release check`. The core `oh-my-symphony` package runs
 without it.
 
 Not on PyPI. Install it next to core from a checkout of this repository; it
-pins the same core version (`oh-my-symphony==0.29.0`):
+pins the same core version (`oh-my-symphony==0.30.0`):
 
 ```bash
 python -m pip install ./packages/release
