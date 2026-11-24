@@ -1418,6 +1418,8 @@
       }, project.name));
     }
     selector.disabled = state.projects.length === 0;
+    const mobileProject = document.getElementById('mobile-project-name');
+    if (mobileProject) mobileProject.textContent = current ? current.name : '';
     if (current) {
       setProjectPath(pathEl, current.repo_path);
       setProjectPath(workflowPathEl, current.workflow_path);
@@ -1543,6 +1545,17 @@
       if (isActive) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     });
+    let inTabs = false;
+    document.querySelectorAll('.mobile-tab[data-mobile-route], .mobile-more-item[data-mobile-route]').forEach((a) => {
+      const isActive = a.dataset.mobileRoute === state.route;
+      if (isActive && a.classList.contains('mobile-tab')) inTabs = true;
+      a.classList.toggle('active', isActive);
+      if (isActive) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    });
+    // Pages listed in the More sheet light up the More tab instead.
+    const moreOpen = document.getElementById('mobile-more-open');
+    if (moreOpen) moreOpen.classList.toggle('active', !inTabs);
   }
 
   function updateDocumentTitle() {
@@ -1578,6 +1591,12 @@
     badge.textContent = needsYou ? String(needsYou) : '';
     const item = badge.closest('.nav-item');
     if (item) item.setAttribute('aria-label', needsYou ? t('nav.inboxCount', { n: needsYou }) : t('nav.inbox'));
+    const mobileBadge = document.getElementById('nav-mobile-inbox-count');
+    if (!mobileBadge) return;
+    mobileBadge.hidden = !needsYou;
+    mobileBadge.textContent = needsYou ? String(needsYou) : '';
+    const tab = mobileBadge.closest('.mobile-tab');
+    if (tab) tab.setAttribute('aria-label', needsYou ? t('nav.inboxCount', { n: needsYou }) : t('nav.inbox'));
   }
 
   function renderRoute() {
@@ -1667,7 +1686,7 @@
 
   function applyPmAvailability(board) {
     const available = pmAvailable(board);
-    document.querySelectorAll('.nav-item[data-route="artifacts"]').forEach((item) => {
+    document.querySelectorAll('.nav-item[data-route="artifacts"], [data-mobile-route="artifacts"]').forEach((item) => {
       // style.css gives .nav-item display:flex, which outranks the hidden attribute.
       item.style.display = available ? '' : 'none';
     });
@@ -1684,7 +1703,7 @@
 
   function applyChatAvailability(board) {
     const available = chatAvailable(board);
-    document.querySelectorAll('.nav-item[data-route="chat"]').forEach((item) => {
+    document.querySelectorAll('.nav-item[data-route="chat"], [data-mobile-route="chat"]').forEach((item) => {
       item.style.display = available ? '' : 'none';
     });
     syncNavShortcutBadges();
@@ -1785,17 +1804,26 @@
   const BOARD_STALE_MS = 15000;
 
   function updateConnectionIndicator() {
-    const dot = document.getElementById('conn-dot');
-    const text = document.getElementById('conn-text');
-    dot.classList.toggle('online', state.connected);
-    dot.classList.toggle('offline', !state.connected);
+    const text = connectionSummaryText();
+    // The sidebar footer and the phone More sheet show the same status.
+    for (const [dotId, textId] of [['conn-dot', 'conn-text'], ['mobile-conn-dot', 'mobile-conn-text']]) {
+      const dot = document.getElementById(dotId);
+      const label = document.getElementById(textId);
+      if (dot) {
+        dot.classList.toggle('online', state.connected);
+        dot.classList.toggle('offline', !state.connected);
+      }
+      if (label) label.textContent = text;
+    }
     updateBoardStaleness();
+  }
+
+  function connectionSummaryText() {
     if (!state.connected) {
       const age = secondsSinceLastPoll();
-      text.textContent = age == null
+      return age == null
         ? t('conn.unreachable')
         : `${t('conn.unreachable')} · ${t('conn.staleAgo', { n: age })}`;
-      return;
     }
     const live = (state.board && state.board.live) || {};
     let running = 0;
@@ -1804,7 +1832,7 @@
       if (live[key].status === 'running') running++;
       else if (live[key].status === 'retrying') retrying++;
     }
-    text.textContent = t('conn.summary', { running, retrying });
+    return t('conn.summary', { running, retrying });
   }
 
   function secondsSinceLastPoll() {
@@ -3623,6 +3651,7 @@
       const detail = await api.getIssue(identifier);
       if (inboxView !== view || token !== view.loadToken) return;
       const openKeys = [...canvas.querySelectorAll('details[open][data-key]')].map((node) => node.dataset.key);
+      const seenKeys = [...canvas.querySelectorAll('details[data-key]')].map((node) => node.dataset.key);
       const scrollTop = canvas.scrollTop;
       view.detail = detail;
       view.signature = inboxSignature(identifier);
@@ -3630,7 +3659,8 @@
       for (const node of buildInboxCanvasContent(detail)) canvas.appendChild(node);
       if (quiet) {
         for (const node of canvas.querySelectorAll('details[data-key]')) {
-          if (openKeys.includes(node.dataset.key)) node.open = true;
+          // A disclosure new to this render (live activity) keeps its default.
+          if (seenKeys.includes(node.dataset.key)) node.open = openKeys.includes(node.dataset.key);
         }
         canvas.scrollTop = scrollTop;
       }
@@ -3702,6 +3732,11 @@
     if (inboxView) inboxView.factsEl = facts;
     nodes.push(facts);
     nodes.push(...buildInboxActions(detail, col, liveEntry, readOnly));
+    if (liveEntry) {
+      const activity = inboxDisclosure('activity', t('inbox.liveActivity'), () => buildInboxLiveActivity(detail, liveEntry));
+      activity.open = true;
+      nodes.push(activity);
+    }
     if (hasMore) {
       nodes.push(inboxDisclosure('description', t('common.description'), () => renderMarkdown(detail.description)));
     }
@@ -3722,6 +3757,48 @@
     nodes.push(inboxDisclosure('artifacts', `${t('artifacts.heading')} (${artifactCount})`, () => buildArtifactsSection(detail, { heading: false })));
     nodes.push(inboxDisclosure('props', t('inbox.properties'), () => buildInboxPropsForm(detail, readOnly)));
     return nodes;
+  }
+
+  // Running tickets get a status strip now and the latest run's persisted
+  // event timeline once it loads.
+  function buildInboxLiveActivity(detail, liveEntry) {
+    const identifier = detail.identifier;
+    const tokens = liveEntry.tokens || {};
+    const strip = el('div', { class: 'inbox-live-strip' }, [
+      el('span', { class: 'inbox-live-status' }, [
+        liveEntry.paused ? null : el('span', { class: 'live-dot', 'aria-hidden': 'true' }),
+        el('span', null, liveEntry.status || t('common.unknown')),
+      ]),
+      liveEntry.paused ? el('span', { class: 'badge-paused' }, t('common.pausedBadge')) : null,
+      el('span', null, t('issue.turnCount', { n: liveEntry.turn_count ?? 0 })),
+      tokens.total_tokens != null ? el('span', null, t('issue.tokensShort', { n: formatCompactNumber(tokens.total_tokens) })) : null,
+      liveEntry.last_event ? el('code', null, liveEntry.last_event) : null,
+    ]);
+    const message = liveEntry.last_message
+      ? el('p', { class: 'inbox-live-message' }, truncate(liveEntry.last_message, 200))
+      : null;
+    const timeline = el('div', { class: 'inbox-live-timeline' }, [
+      el('div', { class: 'history-muted' }, t('common.loading')),
+    ]);
+    const isCurrent = () => Boolean(inboxView && inboxView.loadedId === identifier);
+    (async () => {
+      let events = null;
+      try {
+        const data = await api.getRuns({ issue: identifier, limit: 1 });
+        const run = data && Array.isArray(data.runs) ? data.runs[0] : null;
+        if (run && run.run_id) {
+          const runDetail = await api.getRunDetail(run.run_id);
+          events = (runDetail && runDetail.events) || [];
+        }
+      } catch (_) {
+        events = null;
+      }
+      if (!isCurrent()) return;
+      clearNode(timeline);
+      if (events && events.length) timeline.appendChild(buildRunTimeline(events));
+      else timeline.appendChild(el('p', { class: 'history-muted' }, t('inbox.liveNoEvents')));
+    })();
+    return el('div', { class: 'inbox-live' }, [strip, message, timeline]);
   }
 
   function inboxNextStep(detail, col, liveEntry) {
@@ -3801,7 +3878,14 @@
       box.appendChild(el('p', { class: 'history-muted' }, t('inbox.noDiff')));
       return;
     }
-    box.appendChild(el('pre', { class: 'inbox-diff' }, patch));
+    // Same per-line classes as the #/git diff panel, so +/-/@@ read alike.
+    const lines = String(patch).replace(/\n$/, '').split('\n');
+    box.appendChild(el('div', {
+      class: 'inbox-diff',
+      role: 'region',
+      tabindex: '0',
+      'aria-label': t('inbox.changesDiff'),
+    }, lines.map((line) => el('div', { class: `diff-line ${diffLineClass(line)}` }, line || ' '))));
     if (data.truncated) box.appendChild(el('div', { class: 'history-muted' }, t('git.diffTruncated')));
   }
 
@@ -3875,12 +3959,22 @@
         const shipState = inboxShipState(columns);
         const reworkState = inboxReworkState(columns);
         if (shipState && shipState !== detail.state) {
-          buttons.push(inboxActionButton(t('inbox.approveShip'), 'btn btn-primary', () => decideInboxIssue(
+          const approveButton = inboxActionButton(t('inbox.approveShip'), 'btn btn-primary', () => decideInboxIssue(
             identifier, { state: shipState }, t('inbox.movedTo', { id: identifier, state: shipState }),
-          ), 'check'));
+          ), 'check');
+          approveButton.dataset.inboxAction = 'approve';
+          approveButton.dataset.keys = 'a';
+          approveButton.setAttribute('aria-keyshortcuts', 'a');
+          buttons.push(approveButton);
         }
         if (reworkState && reworkState !== detail.state) {
-          const requestButton = el('button', { type: 'button', class: 'btn' }, t('inbox.requestChanges'));
+          const requestButton = el('button', {
+            type: 'button',
+            class: 'btn',
+            'data-inbox-action': 'request-changes',
+            'data-keys': 'c',
+            'aria-keyshortcuts': 'c',
+          }, t('inbox.requestChanges'));
           feedbackForm = buildInboxFeedbackForm(detail, reworkState, requestButton);
           buttons.push(requestButton);
         }
@@ -3897,7 +3991,11 @@
           : inboxActionButton(t('issue.pause'), 'btn', () => runControlAction(api.pause, identifier, t('common.paused'))));
       }
     }
-    buttons.push(inboxActionButton(t('inbox.openOnBoard'), 'btn btn-ghost', async () => openIssueOnBoard(identifier)));
+    const boardButton = inboxActionButton(t('inbox.openOnBoard'), 'btn btn-ghost', async () => openIssueOnBoard(identifier));
+    boardButton.dataset.inboxAction = 'open-board';
+    boardButton.dataset.keys = 'b';
+    boardButton.setAttribute('aria-keyshortcuts', 'b');
+    buttons.push(boardButton);
     const actions = el('div', { class: 'inbox-actions', role: 'group', 'aria-label': t('inbox.actionsLabel') }, buttons);
     return feedbackForm ? [actions, feedbackForm] : [actions];
   }
@@ -7224,6 +7322,10 @@
       ]],
       ['keys.groupInbox', [
         ['j k · ↑ ↓', 'keys.inboxNav'],
+        ['a', 'keys.inboxApprove'],
+        ['c', 'keys.inboxRequestChanges'],
+        ['d', 'keys.inboxToggleDiff'],
+        ['b', 'keys.inboxOpenBoard'],
       ]],
       ['keys.groupBoard', [
         ['/', 'keys.search'],
@@ -7368,6 +7470,48 @@
     return false;
   }
 
+  // Phone layout: the sidebar hides and its secondary pages, search,
+  // project switcher, status, and Keys move into this More sheet.
+  function initMobileMoreDialog() {
+    const dialog = document.getElementById('mobile-more-dialog');
+    const openButton = document.getElementById('mobile-more-open');
+    if (!dialog || !openButton) return;
+    installDialogLightDismissFallback(dialog);
+    dialog.addEventListener('cancel', (e) => {
+      if (!supportsTopLayerExit() && e.cancelable) {
+        e.preventDefault();
+        closeTopLayerDialog(dialog);
+      }
+    });
+    dialog.addEventListener('close', () => {
+      dialog.returnValue = '';
+      dialog.removeAttribute('data-closing');
+      openButton.setAttribute('aria-expanded', 'false');
+    });
+    openButton.addEventListener('click', () => {
+      if (dialog.open) return;
+      updateConnectionIndicator();
+      dialog.showModal();
+      openButton.setAttribute('aria-expanded', 'true');
+    });
+    // Close at once (no exit animation) before opening a second dialog, so
+    // two modals never stack.
+    const closeThen = (run) => () => {
+      if (dialog.open) dialog.close();
+      run();
+    };
+    const wire = (id, run) => {
+      const node = document.getElementById(id);
+      if (node) node.addEventListener('click', closeThen(run));
+    };
+    wire('mobile-cmd-open', openPalette);
+    wire('mobile-projects-open', openManageProjectsDialog);
+    wire('mobile-keys-open', openKeysDialog);
+    dialog.querySelectorAll('.mobile-more-item[data-mobile-route]').forEach((link) => {
+      link.addEventListener('click', () => closeTopLayerDialog(dialog));
+    });
+  }
+
   function wireGlobalShortcuts() {
     document.addEventListener('keydown', (e) => {
       if (e.isComposing || e.keyCode === 229) return;
@@ -7375,7 +7519,8 @@
       const keysHelp = document.getElementById('keys-help');
       const cmdDialog = document.getElementById('cmd-dialog');
       const paletteOpen = Boolean(cmdDialog && cmdDialog.open);
-      const otherDialogOpen = Boolean((keysHelp && keysHelp.open) || (state.openModalDialog && state.openModalDialog.open));
+      const moreDialog = document.getElementById('mobile-more-dialog');
+      const otherDialogOpen = Boolean((keysHelp && keysHelp.open) || (moreDialog && moreDialog.open) || (state.openModalDialog && state.openModalDialog.open));
       const anyDialogOpen = otherDialogOpen || paletteOpen;
 
       // Cmd/Ctrl+K works from any field (it is a chord, not a typed key), but
@@ -7471,6 +7616,26 @@
 
       if (state.route === 'inbox') {
         if (boardIsStale()) return;
+        const canvas = document.querySelector('.inbox-canvas');
+        const key = e.key.toLowerCase();
+        if (canvas && !e.shiftKey && ['a', 'c', 'b'].includes(key)) {
+          const action = { a: 'approve', c: 'request-changes', b: 'open-board' }[key];
+          const button = canvas.querySelector(`button[data-inbox-action="${action}"]`);
+          if (button && !button.disabled && button.getClientRects().length) {
+            e.preventDefault();
+            button.click();
+          }
+          return;
+        }
+        if (canvas && !e.shiftKey && key === 'd') {
+          const diff = canvas.querySelector('details.inbox-disclosure[data-key="diff"]');
+          if (diff && diff.getClientRects().length) {
+            e.preventDefault();
+            diff.open = !diff.open;
+            if (diff.open) diff.scrollIntoView({ block: 'nearest' });
+          }
+          return;
+        }
         // Arrow keys scroll the canvas when focus is there; j/k always step.
         const queue = document.querySelector('.inbox-queue');
         const inQueue = !active || active === document.body || Boolean(queue && queue.contains(active));
@@ -7548,6 +7713,7 @@
     if (keysOpen) keysOpen.addEventListener('click', openKeysDialog);
     const cmdOpen = document.getElementById('cmd-open');
     if (cmdOpen) cmdOpen.addEventListener('click', openPalette);
+    initMobileMoreDialog();
     syncNavShortcutBadges();
     initPalette();
     wireGlobalShortcuts();

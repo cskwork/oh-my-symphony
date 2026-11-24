@@ -10,6 +10,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.2] - 2026-11-25 - Mobile Bottom Bar, Inbox Triage Keys & Live Activity
+
+### Added
+- **Full-width mobile bottom bar (`<= 768px`) + `More` dialog:** Replaces the 72px phone rail with a 4-item bottom tab bar (`Inbox` with live badge, `Board`, `Chat`, `More`) paired with a `<dialog closedby="any">` `More` sheet holding Search (`⌘K`), project selector, secondary routes, connection status, and Keys.
+- **Single-key Inbox triage shortcuts:** Added `a` (Approve & ship), `c` (Request changes), `d` (toggle Diff disclosure), and `b` (Open on Board) when viewing `#/inbox` outside text fields, plus `Keys` reference documentation.
+- **Live activity timeline inside `#/inbox`:** Active (`In Progress`) tickets now render an expanded **Live activity** disclosure displaying status, turn/token progress, latest message, and run timeline events inline.
+- **Extended Playwright E2E regression tests:** Added assertions in `test_inbox_command_palette_and_mobile_drilldown_e2e` covering `a`/`c`/`d`/`b` shortcuts, Live activity rendering, full-width mobile bottom bar, and `More` sheet routing.
+
+### Fixed & Changed
+- **Inline diff containment & coloring:** Bounded `.inbox-disclosure` / `.inbox-disclosure-body` (`grid-template-columns: minmax(0, 1fr)`) so long lines scroll cleanly inside `.inbox-diff`, and reused `#/git` semantic `+`/`-`/`@@` line styling (`diffLineClass`).
+- **Release packaging lockstep:** Bumped `oh-my-symphony` and companion `symphony-pm`, `symphony-chat`, `symphony-release` packages from `0.30.1` to `0.30.2` (including `uv.lock`, companion READMEs, and `docs/index.html`).
+
 ## [0.30.1] - 2026-11-25 - Inbox Review Ergonomics & Command Discovery
 
 ### Added
