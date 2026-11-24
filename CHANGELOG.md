@@ -10,6 +10,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-25 - Design Baseline UI/UX & Inbox Workspace
+
+### Added
+- **`DESIGN.md` & `impeccable` Operate-mode UI/UX overhaul:** Established the `DESIGN.md` specification anchored to `cskwork/design-baseline` and refactored all 10 web workspace views (`Inbox`, `Board`, `Chat`, `Preview`, `Run history`, `Stats`, `Artifacts`, `Workflow`, `Git`, `Settings`) to use restrained flat hairline surfaces, `light dark` semantic tokens, inline SVG icons, and bilingual English/Korean localization.
+- **Dedicated `#/inbox` workspace (`Inbox`):** Added a linear-style two-pane decision queue (`Needs your decision`, `Agents working`, `Recently shipped`), quick request composer with Korean IME Enter composition guards, filter chips, keyboard navigation, and inline review/approve/rework/diff canvas with progressive disclosure.
+- **`Cmd/Ctrl+K` Command Palette (`#cmd-dialog`):** Native `<dialog closedby="any">` quick switcher and action runner across views, tickets, theme/language toggles, and refresh/create actions.
+
+### Changed
+- **Modern web platform ergonomics & mobile accessibility:** Standardized modal confirmations and dialogs on native `<dialog>` with `@starting-style` top-layer transitions, `overscroll-behavior: contain`, deferred `:user-invalid` validation with `aria-invalid`, dynamic `dvh` sizing, `1..9` primary workspace shortcuts, and `>= 44px` touch targets across mobile views (`390px`).
+- **Release packaging lockstep:** Bumped `oh-my-symphony` core and companion `symphony-pm`, `symphony-chat`, and `symphony-release` packages from `0.29.0` to `0.30.0` (including `uv.lock`, companion READMEs, and `docs/index.html` release badge).
+
 ## [0.29.0] - 2026-10-28 - Lean and easy
 
 ### Added
