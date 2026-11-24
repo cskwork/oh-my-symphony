@@ -12,11 +12,14 @@ AGY/Antigravity, Kiro, OpenCode, Pi, Prime Agent, 또는 Agent Client Protocol�
 쓰는 아무 에이전트)가 실행되며, 진행 상황은 터미널 TUI나 로컬 웹 보드에서
 확인합니다. 티켓은 기본적으로 저장소 안의 Markdown 파일이며 Linear와 Jira도 지원합니다.
 
+![Symphony 인박스 워크스페이스](docs/inbox-ui-screenshot.png)
+
 ![Symphony 웹 보드](docs/admin-ui-screenshot.png)
 
 [OpenAI의 Symphony 레퍼런스 구현](https://github.com/openai/symphony)을 포크했습니다.
-전체 설명: **[docs/reference.md](docs/reference.md)**(영문). 사이트:
-**[cskwork.github.io/oh-my-symphony](https://cskwork.github.io/oh-my-symphony/)**.
+전체 설명: **[docs/reference.md](docs/reference.md)**(영문).
+사이트: **[cskwork.github.io/oh-my-symphony](https://cskwork.github.io/oh-my-symphony/)** ·
+인터랙티브 데모: **[symphony-prototypes.vercel.app](https://symphony-prototypes.vercel.app/)**.
 
 ## 왜 필요한가
 
@@ -185,14 +188,13 @@ LLM 없이 턴과 토큰을 보여 주지만 카드는 움직이지 않습니다
 | `symphony pm demo` | PM Workspace 데모 (`packages/pm` 필요) |
 | `symphony release check` | 앱 릴리스 증거 검증 (`packages/release` 필요) |
 
-## 0.29의 새 기능
+## 0.30의 새 기능
 
-- `project create`가 파일 3개를 쓰고, 빈 포트를 고르며, `uv tool install`에서도 동작.
-- `defaults: standard`, `symphony eject`, `verify:` 게이트(완료는 스크립트가 판정).
-- `.symphony/needs.json`, `symphony doctor --run-verify`, ACP 에이전트 프로필.
-- PM, 채팅, 릴리스가 선택 패키지로 분리; 코어 wheel 3.0 MB → 1.2 MB.
+- **`DESIGN.md` 기반 Operate-mode 웹 UI:** 10개 전체 뷰(`Inbox`, `Board`, `Chat`, `Preview`, `Run history`, `Stats`, `Artifacts`, `Workflow`, `Git`, `Settings`)를 평면 헤어라인 서피스, `light dark` 시맨틱 토큰, 인라인 SVG 아이콘, 한/영 완전 대응으로 개편하고 [cskwork/design-baseline](https://github.com/cskwork/design-baseline)과 연결.
+- **기본 시작 화면 `#/inbox` 의사결정 워크스페이스:** 2단 트리아지 큐(`결정이 필요한 티켓`, `에이전트 작업 중`, `최근 완료`), 한국어 IME 안전한 빠른 요청 입력기, 색상 구분 **변경 사항 (diff)** 접이식 보기, **변경 요청** 인라인 피드백 폼, 실행 중 워커 **실시간 활동** 타임라인 추가.
+- **키보드 중심 탐색 및 모바일 하단 바:** 사이드바 `검색… ⌘K` 커맨드 팔레트 버튼, `1–9`/`0` 화면 단축키, 인박스 단일 키 트리아지(`a`/`c`/`d`/`b`), 상단 중앙 비간섭 토스트, 모바일 하단 4탭 바(`Inbox`, `Board`, `Chat`, `More`)와 `>= 44px` 터치 영역 적용.
 
-자세한 내용과 업그레이드 절차: [CHANGELOG.md](CHANGELOG.md#0290---2026-10-28---lean-and-easy).
+자세한 변경 내역: [CHANGELOG.md](CHANGELOG.md).
 
 ## 기능
 
@@ -207,7 +209,7 @@ LLM 없이 턴과 토큰을 보여 주지만 카드는 움직이지 않습니다
 ## 문서
 
 [레퍼런스](docs/reference.md)(설정, 명령, API, 주의사항),
-[아키텍처](docs/architecture.md), [v1.0 계획과 현황](docs/prd/v1.0-lean-core.md),
+[디자인 기준(영문)](DESIGN.md), [아키텍처](docs/architecture.md), [v1.0 계획과 현황](docs/prd/v1.0-lean-core.md),
 [운영자 skill](src/symphony/templates/project/skills/symphony-skill/),
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -219,17 +221,16 @@ PR은 `dev`를 대상으로 합니다. [CONTRIBUTING.md](CONTRIBUTING.md)에 설
 
 ## 테스트
 
-마지막 로컬 관측(2026-10-28, macOS, Python 3.12):
+최신 `main` CI 검증(2026-11-25, [GitHub Actions Tests run 45496133601](https://github.com/cskwork/oh-my-symphony/actions/runs/45496133601)):
+`Python 3.12`, `Core wheel without PM`, `Windows lifecycle` 작업이 모두 통과했습니다.
+`v0.30.3` UI 변경 이후 로컬 타깃 검증(macOS, Python 3.12):
 
-| 명령 | 통과 | 실패 | 건너뜀 |
-|---|---|---|---|
-| `python -m pytest -q -n auto -m "not timing"` | 3925 | 6 | 136 |
-| `python -m pytest -q -n0 -m timing` | 11 | 0 | 1 |
-
-전체 실행은 기계 부하가 큰 상태였습니다. 실패 6건 중 4건은 직렬로 다시 돌리면
-통과합니다. 나머지 2건(`test_workspace` 훅 출력 테스트)은 이 기계의 로그인 셸이
-Kiro 배너를 출력해서 v0.28.0 기준선에서도 실패합니다. CI 결과는 릴리스 PR에
-기록합니다.
+| 검사 | 결과 | 범위 |
+|---|---|---|
+| `node --test tests/pm_ui.test.mjs` | 242 passed, 0 failed | PM 프런트엔드 및 공유 `showToast` VM 테스트 |
+| `SYMPHONY_BROWSER_E2E=1 pytest tests/test_web_browser_e2e.py -q` | 9 passed | Playwright Chromium UI E2E (데스크톱 + 390px 모바일) |
+| `ruff check src tests packages/pm packages/chat packages/release` | 통과 | 코어 및 선택 패키지 린트 |
+| `pytest tests/test_landing_page_contract.py tests/test_cli_main_routing.py tests/test_i18n.py tests/test_web_static_contract.py -q` | 72 passed | 정적 UI, i18n, CLI 라우팅, 랜딩 페이지 계약 테스트 |
 
 ## 제한 사항
 
