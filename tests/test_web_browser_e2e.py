@@ -1572,3 +1572,161 @@ async def test_drawer_execution_diagnostics_desktop_mobile(
                 await page.close()
         finally:
             await browser.close()
+
+
+async def test_inbox_command_palette_and_mobile_drilldown_e2e(tmp_path: Path) -> None:
+    from symphony.trackers.file import FileBoardTracker
+
+    (tmp_path / "WORKFLOW.md").write_text(WORKFLOW_TEXT, encoding="utf-8")
+    stages = tmp_path / "prompts" / "stages"
+    stages.mkdir(parents=True)
+    for name in ("todo", "in-progress", "verify", "document"):
+        (stages / f"{name}.md").write_text(f"{name} prompt", encoding="utf-8")
+
+    kanban = tmp_path / "kanban"
+    kanban.mkdir()
+    for identifier, title, st, prio in (
+        ("INBOX-REV1", "Review feedback target", "Human Review", 0),
+        ("INBOX-REV2", "Approve and ship target", "Human Review", 1),
+        ("INBOX-WORK", "Active ticket", "Todo", 2),
+        ("INBOX-DONE", "Already done", "Done", 3),
+    ):
+        (kanban / f"{identifier}.md").write_text(
+            _ticket(identifier, title, st, prio), encoding="utf-8"
+        )
+
+    class _InboxStubOrchestrator(_StubOrchestrator):
+        async def confirm_done(self, identifier: str) -> dict[str, Any]:
+            cfg = self._workflow_state.current()
+            assert cfg is not None
+            FileBoardTracker(cfg.tracker).update_fields(identifier, state="Done")
+            return {"ok": True, "identifier": identifier, "state": "Done"}
+
+    wf_state = WorkflowState(tmp_path / "WORKFLOW.md")
+    cfg, err = wf_state.reload()
+    assert err is None and cfg is not None
+    app = build_app(cast(Orchestrator, _InboxStubOrchestrator(wf_state)))
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    base_url = str(client.make_url("/")).rstrip("/")
+
+    assert async_playwright is not None
+    try:
+        async with async_playwright() as p:
+            try:
+                browser = await p.chromium.launch()
+            except Exception as exc:
+                pytest.skip(f"Playwright Chromium unavailable: {exc}")
+            page = await browser.new_page(viewport={"width": 1440, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda exc: errors.append(str(exc)))
+            page.on(
+                "console",
+                lambda msg: errors.append(msg.text) if msg.type == "error" else None,
+            )
+            try:
+                # 1. Bare URL opens #/inbox by default
+                await page.goto(f"{base_url}/", wait_until="networkidle")
+                await page.locator('.nav-item.active[data-route="inbox"]').wait_for()
+                await page.locator(".inbox-row").first.wait_for()
+
+                # 2. Quick composer ignores Korean IME Enter and creates on submit
+                before_files = {p.name for p in kanban.glob("*.md")}
+                composer = page.locator(".inbox-composer-input")
+                await composer.focus()
+                await composer.fill("조합중")
+                await composer.evaluate(
+                    "(inp) => inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229, bubbles: true }))"
+                )
+                await page.wait_for_timeout(150)
+                assert {p.name for p in kanban.glob("*.md")} == before_files
+
+                await composer.fill("Inbox created ticket")
+                await page.locator('.inbox-composer button[type="submit"]').click()
+                created_row = page.locator(".inbox-row", has_text="Inbox created ticket").first
+                await created_row.wait_for()
+                created_id = await created_row.get_attribute("data-issue-id")
+                assert created_id and (kanban / f"{created_id}.md").exists()
+
+                # 3. Filter chips + lazy Diff disclosure
+                chips = page.locator(".inbox-filter-chip")
+                await chips.nth(1).click()
+                assert await chips.nth(1).get_attribute("aria-pressed") == "true"
+                assert await page.locator("section.inbox-group:not([hidden])").count() == 1
+                await chips.nth(0).click()
+                assert await page.locator("section.inbox-group:not([hidden])").count() == 3
+
+                await page.locator('.inbox-row[data-issue-id="INBOX-REV1"]').click()
+                await page.locator(".inbox-canvas-title", has_text="Review feedback target").wait_for()
+                await page.locator('details.inbox-disclosure[data-key="diff"] > summary').click()
+                await page.locator('details.inbox-disclosure[data-key="diff"][open]').wait_for()
+
+                # 4. Request changes opens feedback form -> Escape closes -> submit appends note
+                await page.get_by_role("button", name="Request changes").click()
+                fb_input = page.locator("form.inbox-feedback .inbox-feedback-input")
+                await fb_input.wait_for()
+                assert await page.evaluate("() => document.activeElement?.classList.contains('inbox-feedback-input')")
+                await fb_input.evaluate(
+                    "(inp) => inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229, bubbles: true }))"
+                )
+                await page.wait_for_timeout(120)
+                assert "state: Human Review" in (kanban / "INBOX-REV1.md").read_text(encoding="utf-8")
+                await fb_input.press("Escape")
+                assert await page.locator("form.inbox-feedback:not([hidden])").count() == 0
+
+                await page.get_by_role("button", name="Request changes").click()
+                await fb_input.fill("Please add regression coverage.")
+                await page.locator('form.inbox-feedback button[type="submit"]').click()
+                await page.wait_for_function(
+                    "() => !document.querySelector('.inbox-row[data-issue-id=\"INBOX-REV1\"] .inbox-row-meta')?.textContent.includes('Human Review')"
+                )
+                rev1_md = (kanban / "INBOX-REV1.md").read_text(encoding="utf-8")
+                assert "state: In Progress" in rev1_md
+                assert "## Review feedback\n\nPlease add regression coverage." in rev1_md
+
+                # 5. Approve & ship moves ticket to Done and respects toast cap <= 2
+                await page.locator('.inbox-row[data-issue-id="INBOX-REV2"]').click()
+                await page.get_by_role("button", name="Approve & ship").click()
+                await page.wait_for_timeout(300)
+                assert "state: Done" in (kanban / "INBOX-REV2.md").read_text(encoding="utf-8")
+                assert await page.locator("#toast-container > .toast").count() <= 2
+
+                # 6. Sidebar #cmd-open, Control+K execution, '0' Settings shortcut, Start page preference
+                await page.locator("#cmd-open").click()
+                await page.locator("#cmd-dialog[open]").wait_for()
+                await page.keyboard.press("Escape")
+                await page.wait_for_function("() => !document.getElementById('cmd-dialog').open")
+
+                await page.keyboard.press("Control+k")
+                await page.locator("#cmd-dialog[open]").wait_for()
+                await page.locator("#cmd-input").fill("Go to Workflow")
+                await page.wait_for_timeout(100)
+                await page.keyboard.press("Enter")
+                await page.locator('.nav-item.active[data-route="workflow"]').wait_for()
+
+                await page.keyboard.press("0")
+                await page.locator('.nav-item.active[data-route="settings"]').wait_for()
+                await page.locator(".settings-card").get_by_role("button", name="Board", exact=True).click()
+                assert await page.evaluate("() => localStorage.getItem('symphony.startPage')") == "board"
+                await page.goto(f"{base_url}/", wait_until="networkidle")
+                await page.locator('.nav-item.active[data-route="board"]').wait_for()
+
+                # 7. Mobile 390x844 master-detail Inbox flow + >= 44px targets
+                await page.set_viewport_size({"width": 390, "height": 844})
+                await page.goto(f"{base_url}/#/inbox", wait_until="networkidle")
+                await page.locator('.inbox-view[data-mobile-pane="queue"]').wait_for()
+                await _assert_no_document_overflow(page, "mobile inbox queue")
+                await page.locator('.inbox-row[data-issue-id="INBOX-WORK"]').click()
+                await page.locator('.inbox-view[data-mobile-pane="detail"]').wait_for()
+                back_btn = page.locator(".inbox-back-btn")
+                await back_btn.wait_for()
+                back_box = await back_btn.bounding_box()
+                assert back_box is not None and back_box["height"] >= 43.5, back_box
+                await _assert_no_document_overflow(page, "mobile inbox detail")
+                await back_btn.click()
+                await page.locator('.inbox-view[data-mobile-pane="queue"]').wait_for()
+                assert errors == []
+            finally:
+                await browser.close()
+    finally:
+        await client.close()
