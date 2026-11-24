@@ -13,11 +13,14 @@ Client Protocol agent), and you watch progress in a terminal TUI or a local web
 board. Tickets are Markdown files in your repo by default; Linear and Jira also
 work.
 
+![Symphony Inbox workspace](docs/inbox-ui-screenshot.png)
+
 ![Symphony web board](docs/admin-ui-screenshot.png)
 
 Forked from [OpenAI's Symphony reference implementation](https://github.com/openai/symphony).
-Full details: **[docs/reference.md](docs/reference.md)**. Live site:
-**[cskwork.github.io/oh-my-symphony](https://cskwork.github.io/oh-my-symphony/)**.
+Full details: **[docs/reference.md](docs/reference.md)**.
+Live site: **[cskwork.github.io/oh-my-symphony](https://cskwork.github.io/oh-my-symphony/)** ·
+Interactive demo: **[symphony-prototypes.vercel.app](https://symphony-prototypes.vercel.app/)**.
 
 ## Why
 
@@ -187,14 +190,13 @@ shows turns and tokens without an LLM, but cards do not move.
 | `symphony pm demo` | PM Workspace demo (needs `packages/pm`) |
 | `symphony release check` | Validate app release evidence (needs `packages/release`) |
 
-## What's new in 0.29
+## What's new in 0.30
 
-- `project create` writes 3 files, picks a free port, works from `uv tool install`.
-- `defaults: standard`, `symphony eject`, and `verify:` gates (scripts decide done).
-- `.symphony/needs.json`, `symphony doctor --run-verify`, and ACP agent profiles.
-- PM, chat, and release are optional packages; core wheel 3.0 MB → 1.2 MB.
+- **`DESIGN.md` & Operate-mode web UI:** Flat hairline surfaces, `light dark` semantic tokens, inline SVG iconography, and EN/KO bilingual parity across all 10 routes (`Inbox`, `Board`, `Chat`, `Preview`, `Run history`, `Stats`, `Artifacts`, `Workflow`, `Git`, `Settings`), paired with [cskwork/design-baseline](https://github.com/cskwork/design-baseline).
+- **Dedicated `#/inbox` decision workspace (default landing):** Two-pane triage queue (`Needs your decision`, `Agents working`, `Recently shipped`), Korean IME-safe quick request composer, colored inline **Changes (diff)** disclosure, inline feedback on **Request changes**, and expandable **Live activity** timelines for running workers.
+- **Keyboard-first navigation & mobile bottom bar:** Visible `Search… ⌘K` Command Palette trigger, `1–9`/`0` workspace shortcuts, `a`/`c`/`d`/`b` single-key Inbox triage actions, non-blocking top-center toasts, and a full-width mobile bottom tab bar (`Inbox`, `Board`, `Chat`, `More`) with `>= 44px` touch targets.
 
-Details and upgrade steps: [CHANGELOG.md](CHANGELOG.md#0290---2026-10-28---lean-and-easy).
+Details and release history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
@@ -210,7 +212,8 @@ see the [factory guide](src/symphony/templates/project/skills/symphony-skill/ref
 ## Documentation
 
 [Reference](docs/reference.md) (configuration, commands, API, caveats),
-[architecture](docs/architecture.md), [v1.0 plan and status](docs/prd/v1.0-lean-core.md),
+[design baseline](DESIGN.md), [architecture](docs/architecture.md),
+[v1.0 plan and status](docs/prd/v1.0-lean-core.md),
 [operator skill](src/symphony/templates/project/skills/symphony-skill/), and
 [CHANGELOG.md](CHANGELOG.md).
 
@@ -222,17 +225,16 @@ the three packages, `npm ci --prefix packages/pm`) and the required checks
 
 ## Testing
 
-Last observed locally (2026-10-28, macOS, Python 3.12):
+Latest CI verification on `main` (2026-11-25, [GitHub Actions Tests run 45496133601](https://github.com/cskwork/oh-my-symphony/actions/runs/45496133601)):
+`Python 3.12`, `Core wheel without PM`, and `Windows lifecycle` all passed.
+Targeted local verification after the `v0.30.3` UI changes (macOS, Python 3.12):
 
-| Command | Passed | Failed | Skipped |
-|---|---|---|---|
-| `python -m pytest -q -n auto -m "not timing"` | 3925 | 6 | 136 |
-| `python -m pytest -q -n0 -m timing` | 11 | 0 | 1 |
-
-The full run was under heavy machine load: 4 of the 6 failures pass when rerun
-serially. The other 2 (`test_workspace` hook-output tests) also fail on the
-v0.28.0 baseline on this machine because the login shell prints a Kiro banner.
-CI results will be recorded on the release PR.
+| Check | Result | Scope |
+|---|---|---|
+| `node --test tests/pm_ui.test.mjs` | 242 passed, 0 failed | PM frontend & shared `showToast` VM tests |
+| `SYMPHONY_BROWSER_E2E=1 pytest tests/test_web_browser_e2e.py -q` | 9 passed | Playwright Chromium UI E2E (Desktop + 390px mobile) |
+| `ruff check src tests packages/pm packages/chat packages/release` | Passed | Lint across core and optional packages |
+| `pytest tests/test_landing_page_contract.py tests/test_cli_main_routing.py tests/test_i18n.py tests/test_web_static_contract.py -q` | 72 passed | Static UI, i18n, CLI routing, and landing page contracts |
 
 ## Limitations
 

@@ -169,6 +169,7 @@
       <a href="#features" data-i18n="nav.features" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">features</a>
       <a href="#quickstart" data-i18n="nav.quickstart" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">quickstart</a>
       <a href="#agents" data-i18n="nav.agents" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">agents</a>
+      <a href="https://symphony-prototypes.vercel.app/" data-i18n="nav.demo" class="hidden md:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">live demo</a>
       <a href="https://github.com/cskwork/oh-my-symphony" class="hidden sm:inline font-mono text-[13px] text-on-surface-variant hover:text-primary">github</a>
       <button id="lang-toggle" type="button" aria-label="한국어로 전환" class="font-mono text-[13px] text-on-surface-variant hover:text-primary border border-outline rounded px-2 py-[5px]">한국어</button>
       <a href="#quickstart" data-i18n="nav.cta" class="font-mono text-[13px] bg-primary text-on-primary px-3 py-[7px] rounded font-semibold hover:bg-primary-dim">Get Started →</a>
@@ -221,6 +222,11 @@
           <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.42 7.42 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
           <span data-i18n="hero.cta2">View on GitHub</span>
         </a>
+        <a href="https://symphony-prototypes.vercel.app/"
+           class="inline-flex items-center gap-2 border border-outline text-on-surface font-mono text-[14px] font-semibold px-5 py-3 rounded hover:border-primary hover:text-primary">
+          <span class="running-dot" aria-hidden="true"></span>
+          <span data-i18n="hero.cta3">Live Web Demo</span>
+        </a>
       </div>
     </div>
 
@@ -245,6 +251,74 @@
     <p data-i18n="hero.caption" class="font-mono text-[12px] text-on-surface-variant mt-4 max-w-3xl">
       <span class="text-primary">›</span> columns are your tracker's states · cards show active agent, turn count, last event, accumulated tokens · ● running, ↻ retry queued, ✓ done.
     </p>
+  </div>
+</section>
+
+<!-- =========================================================
+  Web workspace showcase
+========================================================== -->
+<section id="web-ui" class="border-b border-outline bg-surface-container-low">
+  <div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-16 md:py-20 grid grid-cols-1 lg:grid-cols-5 gap-10 items-start">
+
+    <div class="lg:col-span-2">
+      <div class="border-l-2 border-primary pl-6 mb-8">
+        <h2 class="font-mono text-headline-lg text-on-surface flex items-center gap-3">
+          <span class="text-primary">&gt;</span> <span data-i18n="web.title">Web workspace</span>
+        </h2>
+        <p data-i18n="web.sub" class="font-sans text-body-md text-on-surface-variant mt-2">
+          The same board in your browser. Decide in the Inbox, operate in the Kanban, and keep the TUI for the terminal.
+        </p>
+      </div>
+
+      <ul class="space-y-4 font-sans text-body-md text-on-background">
+        <li class="flex gap-3">
+          <span class="font-mono text-secondary shrink-0">›</span>
+          <span data-i18n="web.b1">Dedicated <code class="font-mono text-primary text-[13px]">#/inbox</code> decision queue with colored inline diff and IME-safe review feedback.</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="font-mono text-secondary shrink-0">›</span>
+          <span data-i18n="web.b2"><code class="font-mono text-primary text-[13px]">Search… ⌘K</code> Command Palette plus <code class="font-mono text-primary text-[13px]">a</code>/<code class="font-mono text-primary text-[13px]">c</code>/<code class="font-mono text-primary text-[13px]">d</code>/<code class="font-mono text-primary text-[13px]">b</code> single-key triage shortcuts.</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="font-mono text-secondary shrink-0">›</span>
+          <span data-i18n="web.b3">Full-width mobile bottom bar and <code class="font-mono text-primary text-[13px]">More</code> sheet with 44px+ targets, light and dark themes, and EN/KO parity.</span>
+        </li>
+      </ul>
+
+      <a href="https://symphony-prototypes.vercel.app/" data-i18n="web.try"
+         class="inline-flex items-center gap-2 mt-8 font-mono text-[14px] font-semibold text-secondary hover:text-primary">
+        Try interactive web UI →
+      </a>
+    </div>
+
+    <div class="lg:col-span-3 terminal-card rounded">
+      <div class="terminal-bar flex flex-wrap items-center gap-3 px-4 py-2">
+        <span class="term-dot bg-[#FF6D6D]"></span>
+        <span class="term-dot bg-[#FFB454]"></span>
+        <span class="term-dot bg-[#7FD1B9]"></span>
+        <span id="web-ui-path" class="font-mono text-[12px] text-on-surface-variant ml-2">127.0.0.1:9999/#/inbox</span>
+        <div class="ml-auto flex gap-1" role="tablist" aria-label="Web workspace views">
+          <button type="button" role="tab" id="web-tab-inbox" aria-selected="true" aria-controls="web-ui-panel"
+                  data-shot="inbox-ui-screenshot.png" data-path="127.0.0.1:9999/#/inbox"
+                  data-alt="Symphony web Inbox at #/inbox: a decision queue beside a ticket with a colored inline diff and review feedback box."
+                  class="web-tab font-mono text-[12px] px-3 py-[5px] rounded border border-primary text-primary">
+            <span data-i18n="web.tab1">Inbox Workspace</span>
+          </button>
+          <button type="button" role="tab" id="web-tab-board" aria-selected="false" aria-controls="web-ui-panel"
+                  data-shot="admin-ui-screenshot.png" data-path="127.0.0.1:9999/#/board"
+                  data-alt="Symphony web Kanban at #/board in Operate mode, with lanes of ticket cards and running indicators."
+                  class="web-tab font-mono text-[12px] px-3 py-[5px] rounded border border-outline text-on-surface-variant hover:text-primary">
+            <span data-i18n="web.tab2">Kanban Board</span>
+          </button>
+        </div>
+      </div>
+      <div id="web-ui-panel" role="tabpanel" aria-labelledby="web-tab-inbox" class="p-3 md:p-4">
+        <img id="web-ui-shot" src="inbox-ui-screenshot.png"
+             alt="Symphony web Inbox at #/inbox: a decision queue beside a ticket with a colored inline diff and review feedback box."
+             class="w-full rounded-sm" loading="lazy" />
+      </div>
+    </div>
+
   </div>
 </section>
 
@@ -340,7 +414,7 @@
           <div>
             <h3 data-i18n="qs.s1.h" class="font-mono text-headline-md text-on-surface mb-1">Install</h3>
             <p data-i18n="qs.s1.b" class="font-sans text-body-md text-on-background">
-              Clone the repo, create a Python 3.12+ virtualenv, and install the package with dev extras.
+              Install the <code class="font-mono text-primary text-[13px]">symphony</code> CLI with <code class="font-mono text-primary text-[13px]">uv tool install</code> (Python 3.12+), then run <code class="font-mono text-primary text-[13px]">symphony project create</code> to get a <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>, <code class="font-mono text-primary text-[13px]">AGENTS.md</code>, and a file board.
             </p>
           </div>
         </li>
@@ -372,22 +446,16 @@
         <span class="term-dot bg-[#7FD1B9]"></span>
         <span class="font-mono text-[12px] text-on-surface-variant ml-2">~/code/your-project</span>
       </div>
-      <pre class="font-mono text-code-sm text-on-surface p-5 md:p-6 overflow-x-auto leading-relaxed"><span class="text-on-surface-variant"># 1. clone + install</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">git clone https://github.com/cskwork/oh-my-symphony.git</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">cd oh-my-symphony</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">python3 -m venv .venv &amp;&amp; source .venv/bin/activate</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">pip install -e ".[dev]"</span>
+      <pre class="font-mono text-code-sm text-on-surface p-5 md:p-6 overflow-x-auto leading-relaxed"><span class="text-on-surface-variant"># 1. install the CLI</span>
+<span class="text-secondary">$</span> <span class="text-on-surface">uv tool install git+https://github.com/cskwork/oh-my-symphony</span>
 
-<span class="text-on-surface-variant"># 2. create a local file-board workflow</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">cp WORKFLOW.file.example.md WORKFLOW.md</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">symphony board init ./kanban</span>
+<span class="text-on-surface-variant"># 2. create a project (WORKFLOW.md + AGENTS.md + kanban/)</span>
+<span class="text-secondary">$</span> <span class="text-on-surface">symphony project create</span> <span class="text-primary">"My App"</span>
+<span class="text-secondary">$</span> <span class="text-on-surface">cd my-app</span>
 
 <span class="text-on-surface-variant"># 3. preflight, then open the operator view</span>
 <span class="text-secondary">$</span> <span class="text-on-surface">symphony doctor</span> <span class="text-primary">./WORKFLOW.md</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">symphony tui</span> <span class="text-primary">./WORKFLOW.md</span>
-
-<span class="text-on-surface-variant"># or serve the web board + JSON API</span>
-<span class="text-secondary">$</span> <span class="text-on-surface">symphony</span> <span class="text-primary">./WORKFLOW.md</span> <span class="text-on-surface">--port 9999</span><span class="cursor-blink ml-1"></span></pre>
+<span class="text-secondary">$</span> <span class="text-on-surface">symphony tui</span> <span class="text-primary">./WORKFLOW.md</span>        <span class="text-on-surface-variant"># or symphony service start ./WORKFLOW.md</span><span class="cursor-blink ml-1"></span></pre>
     </div>
 
   </div>
@@ -543,7 +611,7 @@
       Stop juggling AI coding CLIs.
     </h2>
     <p data-i18n="cta.sub" class="font-sans text-body-lg text-on-background max-w-2xl mx-auto mb-8">
-      One terminal. One Kanban. Five agents working in parallel — visible, isolated, and yours.
+      One terminal. One Kanban. Eight agents working in parallel — visible, isolated, and yours.
     </p>
     <div class="flex flex-wrap gap-3 justify-center">
       <a href="#quickstart" data-i18n="cta.b1"
@@ -625,7 +693,17 @@
       "nav.features": `features`,
       "nav.quickstart": `quickstart`,
       "nav.agents": `agents`,
+      "nav.demo": `live demo`,
       "nav.cta": `Get Started →`,
+      "hero.cta3": `Live Web Demo`,
+      "web.title": `Web workspace`,
+      "web.sub": `The same board in your browser. Decide in the Inbox, operate in the Kanban, and keep the TUI for the terminal.`,
+      "web.b1": `Dedicated <code class="font-mono text-primary text-[13px]">#/inbox</code> decision queue with colored inline diff and IME-safe review feedback.`,
+      "web.b2": `<code class="font-mono text-primary text-[13px]">Search… ⌘K</code> Command Palette plus <code class="font-mono text-primary text-[13px]">a</code>/<code class="font-mono text-primary text-[13px]">c</code>/<code class="font-mono text-primary text-[13px]">d</code>/<code class="font-mono text-primary text-[13px]">b</code> single-key triage shortcuts.`,
+      "web.b3": `Full-width mobile bottom bar and <code class="font-mono text-primary text-[13px]">More</code> sheet with 44px+ targets, light and dark themes, and EN/KO parity.`,
+      "web.try": `Try interactive web UI →`,
+      "web.tab1": `Inbox Workspace`,
+      "web.tab2": `Kanban Board`,
       "hero.h1": `One terminal.<br/>One Kanban board.<br/><span class="text-primary">Eight AI coding agents.</span>`,
       "hero.sub": `<span class="font-mono text-secondary">Codex</span> · <span class="font-mono text-secondary">Claude&nbsp;Code</span> · <span class="font-mono text-secondary">Gemini</span> · <span class="font-mono text-secondary">AGY</span> · <span class="font-mono text-secondary">Kiro</span> · <span class="font-mono text-secondary">OpenCode</span> · <span class="font-mono text-secondary">Pi</span> · <span class="font-mono text-secondary">Prime&nbsp;Agent</span> — pick per ticket, run in parallel inside isolated <span class="font-mono text-primary">git&nbsp;worktree</span>s, watch live in a Jira-style TUI you never have to leave your terminal for.`,
       "hero.cta1": `Try it in 60 seconds <span>→</span>`,
@@ -649,7 +727,7 @@
       "qs.title": `Try it in 60 seconds`,
       "qs.sub": `Start with the file-board workflow, run doctor, then open the TUI or the web board. The README includes a no-agent mock backend walkthrough.`,
       "qs.s1.h": `Install`,
-      "qs.s1.b": `Clone the repo, create a Python 3.12+ virtualenv, and install the package with dev extras.`,
+      "qs.s1.b": `Install the <code class="font-mono text-primary text-[13px]">symphony</code> CLI with <code class="font-mono text-primary text-[13px]">uv tool install</code> (Python 3.12+), then run <code class="font-mono text-primary text-[13px]">symphony project create</code> to get a <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>, <code class="font-mono text-primary text-[13px]">AGENTS.md</code>, and a file board.`,
       "qs.s2.h": `Launch the TUI`,
       "qs.s2.b": `Point Symphony at any <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>. Columns become Kanban lanes, cards become tickets.`,
       "qs.s3.h": `Watch agents pick up tickets`,
@@ -681,7 +759,7 @@
       "who.c1.h": `Solo devs`,
       "who.c1.b": `Running unattended overnight refactors across dozens of tickets while you sleep. macOS keep-awake stops the lock screen from killing your pipeline.`,
       "who.c2.h": `Teams`,
-      "who.c2.b": `Parallelizing bug fixes, doc updates, or migration tickets across multiple coding agents simultaneously — without juggling five chat windows.`,
+      "who.c2.b": `Parallelizing bug fixes, doc updates, or migration tickets across multiple coding agents simultaneously — without juggling multiple chat windows.`,
       "who.c3.h": `Researchers & reviewers`,
       "who.c3.b": `Comparing how Codex, Claude Code, Gemini, AGY/Antigravity, Kiro, OpenCode, Pi, and Prime Agent tackle the same task side by side — identical prompts, identical workspaces.`,
       "cta.title": `Stop juggling AI coding CLIs.`,
@@ -699,7 +777,17 @@
       "nav.features": `기능`,
       "nav.quickstart": `빠른 시작`,
       "nav.agents": `에이전트`,
+      "nav.demo": `라이브 데모`,
       "nav.cta": `시작하기 →`,
+      "hero.cta3": `라이브 웹 데모`,
+      "web.title": `웹 워크스페이스`,
+      "web.sub": `같은 보드를 브라우저에서 연다. Inbox에서 결정하고, 칸반에서 운영하고, 터미널에서는 TUI를 그대로 쓴다.`,
+      "web.b1": `전용 <code class="font-mono text-primary text-[13px]">#/inbox</code> 결정 큐에서 색상 인라인 diff를 보고, 한글 입력(IME)에 안전한 리뷰 피드백을 남긴다.`,
+      "web.b2": `<code class="font-mono text-primary text-[13px]">Search… ⌘K</code> 커맨드 팔레트와 <code class="font-mono text-primary text-[13px]">a</code>/<code class="font-mono text-primary text-[13px]">c</code>/<code class="font-mono text-primary text-[13px]">d</code>/<code class="font-mono text-primary text-[13px]">b</code> 단일 키 트리아지 단축키.`,
+      "web.b3": `전체 폭 모바일 하단 바와 <code class="font-mono text-primary text-[13px]">More</code> 시트(44px 이상 터치 영역), 라이트·다크 테마, EN/KO 동등 지원.`,
+      "web.try": `인터랙티브 웹 UI 체험하기 →`,
+      "web.tab1": `Inbox 워크스페이스`,
+      "web.tab2": `칸반 보드`,
       "hero.h1": `터미널 하나.<br/>칸반 보드 하나.<br/><span class="text-primary">AI 코딩 에이전트 여덟.</span>`,
       "workflow.current": `기본 흐름은 채팅 의도 승인 후 Todo → In Progress → Verify → Document → Done으로 자동 진행됩니다. Human Review는 예외 상태입니다. Deep은 요청 티켓의 Review → Done 이후 별도 Build → QA → Verify → Document 티켓을 실행합니다. 설정된 병합은 오케스트레이터가 수행하며 릴리스 공개는 별도입니다.`,
       "hero.sub": `<span class="font-mono text-secondary">Codex</span> · <span class="font-mono text-secondary">Claude&nbsp;Code</span> · <span class="font-mono text-secondary">Gemini</span> · <span class="font-mono text-secondary">AGY</span> · <span class="font-mono text-secondary">Kiro</span> · <span class="font-mono text-secondary">OpenCode</span> · <span class="font-mono text-secondary">Pi</span> · <span class="font-mono text-secondary">Prime&nbsp;Agent</span> — 티켓마다 골라, 격리된 <span class="font-mono text-primary">git&nbsp;worktree</span> 안에서 병렬로 실행하고, 터미널을 벗어날 필요 없는 Jira 스타일 TUI에서 실시간으로 지켜본다.`,
@@ -723,7 +811,7 @@
       "qs.title": `60초 만에 체험하기`,
       "qs.sub": `파일 보드 워크플로로 시작해 doctor를 돌린 뒤 TUI나 웹 보드를 연다. AI CLI 없는 mock backend 워크스루는 README에 있다.`,
       "qs.s1.h": `설치`,
-      "qs.s1.b": `레포를 clone하고 Python 3.12+ virtualenv를 만든 뒤 dev extra로 패키지를 설치한다.`,
+      "qs.s1.b": `<code class="font-mono text-primary text-[13px]">uv tool install</code>로 <code class="font-mono text-primary text-[13px]">symphony</code> CLI를 설치한다(Python 3.12+). 그다음 <code class="font-mono text-primary text-[13px]">symphony project create</code>를 실행하면 <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>, <code class="font-mono text-primary text-[13px]">AGENTS.md</code>, 파일 보드가 생긴다.`,
       "qs.s2.h": `TUI 실행`,
       "qs.s2.b": `Symphony를 아무 <code class="font-mono text-primary text-[13px]">WORKFLOW.md</code>에 연결한다. 컬럼은 칸반 레인이 되고, 카드는 티켓이 된다.`,
       "qs.s3.h": `에이전트가 티켓을 집어가는 걸 지켜보기`,
@@ -810,6 +898,35 @@
       current = current === "ko" ? "en" : "ko";
       apply(current);
     });
+  }
+})();
+</script>
+
+<script id="web-ui-tabs">
+(function () {
+  const tabs = document.querySelectorAll(".web-tab");
+  const shot = document.getElementById("web-ui-shot");
+  const path = document.getElementById("web-ui-path");
+  const panel = document.getElementById("web-ui-panel");
+  if (!tabs.length || !shot) return;
+  const ON = ["border-primary", "text-primary"];
+  const OFF = ["border-outline", "text-on-surface-variant"];
+
+  function select(tab) {
+    for (let i = 0; i < tabs.length; i++) {
+      const active = tabs[i] === tab;
+      tabs[i].setAttribute("aria-selected", active ? "true" : "false");
+      tabs[i].classList.remove.apply(tabs[i].classList, active ? OFF : ON);
+      tabs[i].classList.add.apply(tabs[i].classList, active ? ON : OFF);
+    }
+    shot.src = tab.getAttribute("data-shot");
+    shot.alt = tab.getAttribute("data-alt");
+    if (path) path.textContent = tab.getAttribute("data-path");
+    if (panel) panel.setAttribute("aria-labelledby", tab.id);
+  }
+
+  for (let i = 0; i < tabs.length; i++) {
+    tabs[i].addEventListener("click", function () { select(tabs[i]); });
   }
 })();
 </script>
