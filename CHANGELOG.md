@@ -10,6 +10,19 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-11-25 - Inbox Review Ergonomics & Command Discovery
+
+### Added
+- **Default Inbox launch & Start page setting:** Bare root navigation now opens `#/inbox` by default and adds a persistent **Start page** (`Inbox` / `Board`) preference in **Settings -> Interface**.
+- **Inline diff & structured review feedback in `#/inbox`:** Added a lazy **Changes (diff)** disclosure inside the Inbox canvas and an inline Korean IME-safe feedback form on **Request changes** that appends `## Review feedback` notes before moving tickets back to active work.
+- **Visible `⌘K` search button & `0` Settings shortcut:** Added a responsive `#cmd-open` search trigger in the sidebar header and mapped `0` to navigate directly to **Settings**.
+- **Mobile `#/inbox` master-detail drill-down (`<= 768px`):** Mobile screens now toggle between the full-height queue and ticket detail canvas with a `>= 44px` `← Inbox` back control.
+- **Playwright regression coverage:** Added `test_inbox_command_palette_and_mobile_drilldown_e2e` covering Inbox creation/reviews, `Cmd/Ctrl+K`, toast capping, and mobile drill-down.
+
+### Changed
+- **Non-blocking toast placement & cap:** Moved `.toast-container` to top-center (`pointer-events: none` container) and capped stacked active toasts at 2 so bottom-right CTAs remain unobstructed.
+- **Visual consistency polish:** Updated `preview.eyebrow` to sentence case (`Release control · Live target`), replaced the Settings auto-save CSS `✓` glyph with an inline SVG check icon, and bumped all lockstep packages to `0.30.1`.
+
 ## [0.30.0] - 2026-11-25 - Design Baseline UI/UX & Inbox Workspace
 
 ### Added
