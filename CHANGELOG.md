@@ -10,6 +10,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.3] - 2026-11-25 - Fix showToast Node VM Guard
+
+### Fixed
+- **Toast cap guard on minimal DOM stubs:** Guarded `container.children` and `container.firstElementChild` inside `showToast()` ([app.js](src/symphony/web/static/app.js)) so Node VM harness tests (`tests/pm_ui.test.mjs`) without `Element.children` pass cleanly while preserving the 2-toast cap in browsers.
+- **Release packaging lockstep:** Bumped `oh-my-symphony` and companion `symphony-pm`, `symphony-chat`, `symphony-release` packages from `0.30.2` to `0.30.3` (including `uv.lock`, companion READMEs, and `docs/index.html`).
+
 ## [0.30.2] - 2026-11-25 - Mobile Bottom Bar, Inbox Triage Keys & Live Activity
 
 ### Added

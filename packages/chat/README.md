@@ -6,7 +6,7 @@ intent cards and intent filing. The core `oh-my-symphony` package runs
 without it; the board, TUI, CLI and orchestrator do not need it.
 
 Not on PyPI. Install it next to core from a checkout of this repository; it
-pins the same core version (`oh-my-symphony==0.30.2`):
+pins the same core version (`oh-my-symphony==0.30.3`):
 
 ```bash
 python -m pip install ./packages/chat
