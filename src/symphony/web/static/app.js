@@ -534,6 +534,8 @@
     pendingDrawerIssue: null,
     focusedCardId: null,
     inboxFilter: 'all',
+    // Phone layout (<= 768px) shows one Inbox pane at a time: 'queue' | 'detail'.
+    inboxMobilePane: 'queue',
     inboxSelected: null,
     workflowDraft: null,
     openModalBackdrop: null,
@@ -594,6 +596,7 @@
     chevronLeft: [['path', { d: 'M10 3.5 5.5 8l4.5 4.5' }]],
     chevronRight: [['path', { d: 'M6 3.5 10.5 8 6 12.5' }]],
     arrowRight: [['path', { d: 'M3 8h10M9 4l4 4-4 4' }]],
+    arrowLeft: [['path', { d: 'M13 8H3M7 4 3 8l4 4' }]],
     more: [
       ['circle', { cx: '3.5', cy: '8', r: '1.1', ...DOT }],
       ['circle', { cx: '8', cy: '8', r: '1.1', ...DOT }],
@@ -957,6 +960,8 @@
       clearTimeout(timer);
       dismiss();
     });
+    // Keep at most two toasts on screen so a burst never stacks over the page.
+    while (container.children.length >= 2) container.firstElementChild.remove();
     container.appendChild(toast);
     return toast;
   }
@@ -1497,9 +1502,33 @@
   // Router
   // ------------------------------------------------------------------
 
+  // The page a bare URL (no `#/route`) opens: Inbox by default, or Board when
+  // the person picks it in Settings -> Interface.
+  const START_PAGE_KEY = 'symphony.startPage';
+  const START_PAGES = ['inbox', 'board'];
+
+  function readStartPage() {
+    try {
+      const value = localStorage.getItem(START_PAGE_KEY);
+      return START_PAGES.includes(value) ? value : 'inbox';
+    } catch (_) {
+      return 'inbox';
+    }
+  }
+
+  function storeStartPage(value) {
+    try {
+      localStorage.setItem(START_PAGE_KEY, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function currentRoute() {
     // `#/inbox?id=X` carries the Inbox selection; only the path names a route.
     const hash = location.hash.replace(/^#\/?/, '').split('?')[0];
+    if (!hash) return readStartPage();
     return ALL_ROUTES.includes(hash) ? hash : 'board';
   }
 
@@ -3360,10 +3389,33 @@
       groups[key] = { section, count: groupCount, body };
     }
     const canvas = el('section', { class: 'inbox-canvas', 'aria-label': t('inbox.canvasLabel') }, state.board ? null : [buildSkeletonBlock()]);
-    const root = el('div', { class: 'inbox-view' }, [queue, canvas]);
+    state.inboxMobilePane = hashId ? 'detail' : 'queue';
+    const root = el('div', { class: 'inbox-view', 'data-mobile-pane': state.inboxMobilePane }, [queue, canvas]);
     container.appendChild(root);
     inboxView = { root, count, filters, groups, canvas, loadedId: null, loadToken: 0, signature: null, detail: null, factsEl: null };
     syncInboxWithBoard();
+  }
+
+  // Only the phone layout reads data-mobile-pane; wider layouts show both panes.
+  function setInboxMobilePane(pane) {
+    state.inboxMobilePane = pane === 'detail' ? 'detail' : 'queue';
+    if (inboxView) inboxView.root.dataset.mobilePane = state.inboxMobilePane;
+  }
+
+  function buildInboxBackButton() {
+    return el('button', {
+      type: 'button',
+      class: 'btn btn-ghost btn-sm inbox-back-btn',
+      onClick: () => {
+        setInboxMobilePane('queue');
+        if (!inboxView) return;
+        const row = [...inboxView.root.querySelectorAll('.inbox-row')].find((node) => node.dataset.issueId === state.inboxSelected);
+        if (row) {
+          row.focus({ preventScroll: true });
+          row.scrollIntoView({ block: 'nearest' });
+        }
+      },
+    }, [icon('arrowLeft', 14), el('span', null, t('nav.inbox'))]);
   }
 
   function buildInboxComposer() {
@@ -3389,6 +3441,7 @@
           input.value = '';
           showToast(t('board.issueCreated', { id: created.identifier }), 'success');
           rememberInboxSelection(created.identifier);
+          setInboxMobilePane('detail');
           await refreshBoard();
           if (inboxView) selectInboxIssue(created.identifier);
         } catch (err) {
@@ -3463,7 +3516,10 @@
       class: 'inbox-row',
       'data-issue-id': issue.identifier,
       'aria-current': state.inboxSelected === issue.identifier ? 'true' : null,
-      onClick: () => selectInboxIssue(issue.identifier),
+      onClick: () => {
+        setInboxMobilePane('detail');
+        selectInboxIssue(issue.identifier);
+      },
     }, [
       el('span', { class: 'inbox-row-top' }, [
         buildStatusGlyph(tone),
@@ -3581,6 +3637,7 @@
     } catch (err) {
       if (inboxView !== view || token !== view.loadToken) return;
       clearNode(canvas);
+      canvas.appendChild(buildInboxBackButton());
       canvas.appendChild(el('div', { class: 'inbox-canvas-empty', role: 'alert' }, [
         el('p', null, t('issue.loadFailed', { id: identifier, error: err.message })),
       ]));
@@ -3628,6 +3685,7 @@
     }
     meta.push(el('code', null, detail.identifier));
     const nodes = [
+      buildInboxBackButton(),
       el('header', { class: 'inbox-canvas-header' }, [
         el('div', { class: 'inbox-canvas-meta' }, meta),
         el('h1', { class: 'inbox-canvas-title' }, detail.title),
@@ -3643,10 +3701,15 @@
     fillInboxFacts(facts, detail, liveEntry);
     if (inboxView) inboxView.factsEl = facts;
     nodes.push(facts);
-    nodes.push(buildInboxActions(detail, col, liveEntry, readOnly));
+    nodes.push(...buildInboxActions(detail, col, liveEntry, readOnly));
     if (hasMore) {
       nodes.push(inboxDisclosure('description', t('common.description'), () => renderMarkdown(detail.description)));
     }
+    nodes.push(inboxDisclosure('diff', t('inbox.changesDiff'), () => {
+      const box = el('div', null, [el('div', { class: 'history-muted' }, t('common.loading'))]);
+      loadInboxDiff(detail.identifier, box);
+      return box;
+    }, { lazy: true }));
     nodes.push(inboxDisclosure('runs', t('issue.runHistory'), () => {
       const rows = el('div', { class: 'run-history-rows' }, [
         el('div', { class: 'history-muted' }, t('issue.loadingRunHistory')),
@@ -3720,9 +3783,92 @@
     return button;
   }
 
+  // The branch diff for the selected ticket, against the board's target
+  // branch. Non-git boards, missing branches, and errors all show one note.
+  async function loadInboxDiff(identifier, box) {
+    let data = null;
+    try {
+      const taskData = await api.getTaskBranches();
+      const match = ((taskData && taskData.branches) || []).find((row) => row.ticket && row.ticket.identifier === identifier);
+      if (match) data = await api.getGitDiff({ branch: match.branch, target: taskData.target_branch });
+    } catch (_) {
+      data = null;
+    }
+    if (!inboxView || inboxView.loadedId !== identifier) return;
+    clearNode(box);
+    const patch = data && data.patch;
+    if (!patch) {
+      box.appendChild(el('p', { class: 'history-muted' }, t('inbox.noDiff')));
+      return;
+    }
+    box.appendChild(el('pre', { class: 'inbox-diff' }, patch));
+    if (data.truncated) box.appendChild(el('div', { class: 'history-muted' }, t('git.diffTruncated')));
+  }
+
+  // "Request changes" opens a short note form instead of moving at once; the
+  // note (when given) is appended to the description for the next agent run.
+  function buildInboxFeedbackForm(detail, reworkState, toggleButton) {
+    const identifier = detail.identifier;
+    const input = el('input', {
+      class: 'input inbox-feedback-input',
+      type: 'text',
+      'aria-label': t('inbox.feedbackLabel'),
+      placeholder: t('inbox.feedbackPlaceholder'),
+      autocomplete: 'off',
+    });
+    const send = el('button', { type: 'submit', class: 'btn btn-primary btn-sm' }, t('inbox.sendBack'));
+    let form = null;
+    const close = () => {
+      form.hidden = true;
+      input.value = '';
+      toggleButton.setAttribute('aria-expanded', 'false');
+      toggleButton.focus();
+    };
+    const cancel = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', onClick: close }, t('common.cancel'));
+    let wasImeEnter = () => false;
+    form = el('form', {
+      class: 'inbox-feedback',
+      id: `inbox-feedback-${identifier}`,
+      hidden: true,
+      onSubmit: async (e) => {
+        e.preventDefault();
+        if (wasImeEnter()) return;
+        const note = input.value.trim();
+        const fields = { state: reworkState };
+        if (note) {
+          const base = String(detail.description || '').replace(/\s+$/, '');
+          fields.description = base ? `${base}\n\n## Review feedback\n\n${note}` : `## Review feedback\n\n${note}`;
+        }
+        send.disabled = true;
+        try {
+          await decideInboxIssue(identifier, fields, t('inbox.movedTo', { id: identifier, state: reworkState }));
+        } finally {
+          send.disabled = false;
+        }
+      },
+    }, [input, el('div', { class: 'inbox-feedback-actions' }, [send, cancel])]);
+    form.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || isImeEnter(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    });
+    wasImeEnter = guardImeImplicitSubmit(form);
+    toggleButton.setAttribute('aria-controls', form.id);
+    toggleButton.setAttribute('aria-expanded', 'false');
+    toggleButton.addEventListener('click', () => {
+      if (!form.hidden) { close(); return; }
+      form.hidden = false;
+      toggleButton.setAttribute('aria-expanded', 'true');
+      input.focus();
+    });
+    return form;
+  }
+
   function buildInboxActions(detail, col, liveEntry, readOnly) {
     const identifier = detail.identifier;
     const buttons = [];
+    let feedbackForm = null;
     if (!readOnly) {
       const columns = (state.board && state.board.columns) || [];
       if (isHumanReviewColumn(col)) {
@@ -3734,9 +3880,9 @@
           ), 'check'));
         }
         if (reworkState && reworkState !== detail.state) {
-          buttons.push(inboxActionButton(t('inbox.requestChanges'), 'btn', () => decideInboxIssue(
-            identifier, { state: reworkState }, t('inbox.movedTo', { id: identifier, state: reworkState }),
-          )));
+          const requestButton = el('button', { type: 'button', class: 'btn' }, t('inbox.requestChanges'));
+          feedbackForm = buildInboxFeedbackForm(detail, reworkState, requestButton);
+          buttons.push(requestButton);
         }
       }
       if (!liveEntry && isBlockedState(detail.state)) {
@@ -3752,7 +3898,8 @@
       }
     }
     buttons.push(inboxActionButton(t('inbox.openOnBoard'), 'btn btn-ghost', async () => openIssueOnBoard(identifier)));
-    return el('div', { class: 'inbox-actions', role: 'group', 'aria-label': t('inbox.actionsLabel') }, buttons);
+    const actions = el('div', { class: 'inbox-actions', role: 'group', 'aria-label': t('inbox.actionsLabel') }, buttons);
+    return feedbackForm ? [actions, feedbackForm] : [actions];
   }
 
   // A decision clears the ticket from "Needs your decision", so move the
@@ -6451,7 +6598,10 @@
     return el('div', { class: 'card-panel settings-card' }, [
       settingsCardHeader(t('workflow.branchPolicy'), t('settings.branchPolicyDescription')),
       fieldRow([field(t('workflow.featureBaseBranch'), featureSelect), field(t('workflow.mergeTargetBranch'), targetSelect)]),
-      el('div', { class: 'form-hint settings-auto-save' }, t('settings.savedAutomatically')),
+      el('div', { class: 'form-hint settings-auto-save' }, [
+        icon('check', 13, 'settings-auto-save-icon'),
+        el('span', null, t('settings.savedAutomatically')),
+      ]),
     ]);
   }
 
@@ -6679,6 +6829,26 @@
       }
     };
     renderThemeButtons();
+    const startGroup = el('div', { class: 'segmented', role: 'group', 'aria-label': t('settings.startPage') });
+    const renderStartButtons = () => {
+      clearNode(startGroup);
+      const current = readStartPage();
+      for (const [value, label] of [['inbox', t('nav.inbox')], ['board', t('nav.board')]]) {
+        const active = current === value;
+        startGroup.appendChild(el('button', {
+          type: 'button',
+          class: `segmented-btn${active ? ' active' : ''}`,
+          'aria-pressed': active ? 'true' : 'false',
+          onClick: () => {
+            if (readStartPage() === value) return;
+            if (!storeStartPage(value)) return;
+            renderStartButtons();
+            showToast(t('common.saved'), 'success');
+          },
+        }, label));
+      }
+    };
+    renderStartButtons();
     return el('div', { class: 'card-panel settings-card settings-card--utility' }, [
       settingsCardHeader(t('settings.interface'), t('settings.interfaceDescription')),
       el('div', { class: 'settings-interface-stack' }, [
@@ -6689,6 +6859,10 @@
         el('div', null, [
           field(t('settings.theme'), themeGroup),
           el('div', { class: 'form-hint' }, t('settings.themeHint')),
+        ]),
+        el('div', null, [
+          field(t('settings.startPage'), startGroup),
+          el('div', { class: 'form-hint' }, t('settings.startPageHint')),
         ]),
       ]),
     ]);
@@ -7043,6 +7217,7 @@
     const groups = [
       ['keys.groupNavigation', [
         ['1–9', 'keys.pages'],
+        ['0', 'keys.settingsShortcut'],
         ['⌘K · Ctrl K', 'keys.commandPalette'],
         ['?', 'keys.help'],
         ['Esc', 'keys.escape'],
@@ -7251,6 +7426,12 @@
         return;
       }
 
+      if (e.key === '0') {
+        e.preventDefault();
+        navigate('settings');
+        return;
+      }
+
       const drawerBackdrop = document.getElementById('drawer-backdrop');
       const drawerOpen = Boolean(drawerBackdrop && drawerBackdrop.classList.contains('open'));
       if (drawerOpen) {
@@ -7365,6 +7546,8 @@
     }
     const keysOpen = document.getElementById('keys-open');
     if (keysOpen) keysOpen.addEventListener('click', openKeysDialog);
+    const cmdOpen = document.getElementById('cmd-open');
+    if (cmdOpen) cmdOpen.addEventListener('click', openPalette);
     syncNavShortcutBadges();
     initPalette();
     wireGlobalShortcuts();

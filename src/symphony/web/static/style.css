@@ -657,6 +657,42 @@ input, textarea, [contenteditable="true"] {
   color: var(--text-primary);
 }
 
+.cmd-open {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  inline-size: 100%;
+  min-block-size: 2rem;
+  padding: 0.3125rem 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+.cmd-open:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.cmd-open .icon,
+.cmd-open svg { flex: 0 0 auto; }
+.cmd-open-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-open-kbd {
+  flex: 0 0 auto;
+  padding: 0 0.3125rem;
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
 .main {
   flex: 1;
   min-width: 0;
@@ -1932,12 +1968,17 @@ kbd {
 
 .toast-container {
   position: fixed;
-  bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
-  right: 1.25rem;
+  top: max(0.875rem, env(safe-area-inset-top, 0px));
+  left: 50%;
+  bottom: auto;
+  right: auto;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 0.5rem;
   z-index: 90;
+  pointer-events: none;
 }
 
 .toast {
@@ -1950,6 +1991,7 @@ kbd {
   box-shadow: var(--shadow-popover);
   max-width: min(24rem, calc(100vw - 2rem));
   cursor: pointer;
+  pointer-events: auto;
   animation: toast-in 180ms var(--ease-apple);
 }
 
@@ -1958,13 +2000,13 @@ kbd {
 .toast-success { background: var(--status-success); color: var(--text-on-accent); }
 
 @keyframes toast-in {
-  from { transform: translateY(8px); opacity: 0; }
+  from { transform: translateY(-8px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
 
 @keyframes toast-out {
   from { transform: translateY(0); opacity: 1; }
-  to { transform: translateY(6px); opacity: 0; }
+  to { transform: translateY(-6px); opacity: 0; }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -2246,11 +2288,14 @@ kbd {
   margin-top: auto;
   padding-top: 1rem;
 }
-.settings-auto-save::before {
-  content: "✓";
-  margin-right: 0.375rem;
+.settings-auto-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.settings-auto-save-icon {
+  flex: 0 0 auto;
   color: var(--status-success);
-  font-weight: 700;
 }
 
 .settings-interface-stack {
@@ -2319,6 +2364,8 @@ kbd {
   .project-manage-button { font-size: 0; text-align: center; }
   .project-manage-button::before { content: "+"; font-size: 1.25rem; }
   .sidebar-header { padding: 0.875rem 0.5rem; text-align: center; }
+  .cmd-open { justify-content: center; padding-inline: 0.25rem; }
+  .cmd-open-label, .cmd-open-kbd { display: none; }
   .nav-item { justify-content: center; }
   .nav-group-title { display: none; }
   .nav-group + .nav-group { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-subtle); }
@@ -3544,6 +3591,23 @@ svg.icon {
 .inbox-canvas-empty :is(h2, h3, strong) { margin: 0; color: var(--text-primary); font-size: 1rem; font-weight: 600; }
 .inbox-canvas-empty p { margin: 0; max-width: 40ch; }
 
+.inbox-feedback {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 36rem;
+}
+.inbox-feedback[hidden] { display: none; }
+.inbox-feedback-input { width: 100%; min-width: 0; }
+.inbox-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.inbox-canvas > .inbox-feedback { margin-top: 0.625rem; }
+
+.inbox-back-btn { display: none; }
+.inbox-canvas > .inbox-back-btn + * { margin-top: 0; }
+
 @media (max-width: 900px) {
   .inbox-view {
     grid-template-columns: minmax(0, 1fr);
@@ -3557,6 +3621,37 @@ svg.icon {
     max-height: 26rem;
   }
   .inbox-canvas { padding: 1.25rem 1rem 3rem; overflow: visible; }
+}
+
+/* Phone: master-detail drill-down. One pane fills the view at a time;
+   data-mobile-pane on .inbox-view picks it, the back button returns. */
+@media (max-width: 768px) {
+  .inbox-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+  .inbox-queue {
+    flex: 1 1 auto;
+    max-height: none;
+    border-bottom: 0;
+  }
+  .inbox-canvas {
+    flex: 1 1 auto;
+    overflow-y: auto;
+  }
+  .inbox-view[data-mobile-pane="queue"] .inbox-canvas,
+  .inbox-view[data-mobile-pane="detail"] .inbox-queue { display: none; }
+  .inbox-back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-block-size: 44px;
+    margin-inline-start: -0.5rem;
+  }
+  .inbox-canvas > .inbox-back-btn + * { margin-top: 0.5rem; }
+  .cmd-open { min-block-size: 44px; min-inline-size: 44px; }
 }
 
 /* ---------------------------------------------------------------------- */
