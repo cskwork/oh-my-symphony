@@ -961,7 +961,9 @@
       dismiss();
     });
     // Keep at most two toasts on screen so a burst never stacks over the page.
-    while (container.children.length >= 2) container.firstElementChild.remove();
+    while (container.children && container.children.length >= 2 && container.firstElementChild) {
+      container.firstElementChild.remove();
+    }
     container.appendChild(toast);
     return toast;
   }
