@@ -13,6 +13,176 @@
 
   const t = (key, params) => window.i18n.t(key, params);
 
+  // Guard Hangul / CJK IME composition Enter so confirming a syllable never
+  // triggers submit or blur prematurely (Safari reports keyCode 229 with
+  // isComposing already false).
+  function isImeEnter(e) {
+    return e && e.key === 'Enter' && (e.isComposing || e.keyCode === 229);
+  }
+
+  // ------------------------------------------------------------------
+  // Theme (light dark default + System / Light / Dark override)
+  // ------------------------------------------------------------------
+
+  const THEME_STORAGE_KEY = 'symphony.theme';
+  const themeMediaQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const themeListeners = new Set();
+
+  function readStoredTheme() {
+    try {
+      const value = localStorage.getItem(THEME_STORAGE_KEY);
+      return value === 'light' || value === 'dark' ? value : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function currentSystemTheme() {
+    return themeMediaQuery && themeMediaQuery.matches ? 'dark' : 'light';
+  }
+
+  function applyTheme(mode, { persist = false } = {}) {
+    const normalized = mode === 'light' || mode === 'dark' ? mode : null;
+    if (persist) {
+      try {
+        if (normalized) localStorage.setItem(THEME_STORAGE_KEY, normalized);
+        else localStorage.removeItem(THEME_STORAGE_KEY);
+      } catch (_err) { /* ignore storage errors */ }
+    }
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.setAttribute('content', normalized || 'light dark');
+    themeListeners.forEach((fn) => fn(normalized));
+  }
+
+  window.addEventListener('storage', (e) => {
+    if (e.key === THEME_STORAGE_KEY) applyTheme(readStoredTheme());
+  });
+  if (themeMediaQuery && themeMediaQuery.addEventListener) {
+    themeMediaQuery.addEventListener('change', () => {
+      // Never delete an explicit user override when the OS theme changes.
+      themeListeners.forEach((fn) => fn(readStoredTheme()));
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Centralized polite live region + non-hostile ARIA validation sync
+  // ------------------------------------------------------------------
+
+  let announceTimer = null;
+  function announceA11y(text) {
+    const box = document.getElementById('a11y-announcer');
+    if (!box) return;
+    box.textContent = '';
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => { box.textContent = text; }, 50);
+  }
+
+  const flaggedInvalidFields = new WeakSet();
+  const announcedInvalidFields = new WeakSet();
+  const fallbackDirtyState = new WeakMap();
+
+  function linkFieldError(fieldNode, shown) {
+    const errorId = fieldNode.dataset && fieldNode.dataset.error;
+    if (!errorId) return;
+    const ids = (fieldNode.getAttribute('aria-describedby') || '')
+      .split(/\s+/)
+      .filter((id) => id && id !== errorId);
+    if (shown) ids.push(errorId);
+    if (ids.length) fieldNode.setAttribute('aria-describedby', ids.join(' '));
+    else fieldNode.removeAttribute('aria-describedby');
+  }
+
+  function isFieldUserInvalid(fieldNode) {
+    if (window.CSS && CSS.supports && CSS.supports('selector(:user-invalid)')) {
+      return fieldNode.matches(':user-invalid');
+    }
+    return fieldNode.classList.contains('user-invalid-fallback');
+  }
+
+  function syncFieldAria(fieldNode, announce = false) {
+    if (!fieldNode || !fieldNode.matches || !fieldNode.matches('input, select, textarea')) return;
+    const invalid = isFieldUserInvalid(fieldNode);
+    if (invalid) {
+      fieldNode.setAttribute('aria-invalid', 'true');
+      linkFieldError(fieldNode, true);
+      flaggedInvalidFields.add(fieldNode);
+      if (announce && !announcedInvalidFields.has(fieldNode)) {
+        announcedInvalidFields.add(fieldNode);
+        const errorEl = fieldNode.dataset.error && document.getElementById(fieldNode.dataset.error);
+        const msg = (errorEl && errorEl.textContent.trim()) || fieldNode.validationMessage || t('validation.required');
+        announceA11y(`${t('validation.errorPrefix')}: ${msg}`);
+      }
+    } else if (flaggedInvalidFields.has(fieldNode) || fieldNode.getAttribute('aria-invalid') !== 'true') {
+      fieldNode.setAttribute('aria-invalid', 'false');
+      linkFieldError(fieldNode, false);
+      flaggedInvalidFields.delete(fieldNode);
+      announcedInvalidFields.delete(fieldNode);
+    }
+  }
+
+  function initValidationSync() {
+    const supportsNative = Boolean(window.CSS && CSS.supports && CSS.supports('selector(:user-invalid)'));
+    const updateFallback = (input) => {
+      const valid = input.validity.valid;
+      input.classList.toggle('user-invalid-fallback', !valid);
+      input.classList.toggle('user-valid-fallback', valid);
+      syncFieldAria(input, !valid);
+    };
+    document.addEventListener('blur', (e) => {
+      const target = e.target;
+      if (!supportsNative && target && target.checkValidity) {
+        const st = fallbackDirtyState.get(target) || { interacted: false, blurred: false };
+        st.blurred = true;
+        fallbackDirtyState.set(target, st);
+        if (st.interacted) updateFallback(target);
+        return;
+      }
+      syncFieldAria(target, true);
+    }, true);
+    document.addEventListener('input', (e) => {
+      const target = e.target;
+      if (!supportsNative && target && target.checkValidity) {
+        const st = fallbackDirtyState.get(target) || { interacted: false, blurred: false };
+        st.interacted = true;
+        fallbackDirtyState.set(target, st);
+        if (st.blurred) updateFallback(target);
+        return;
+      }
+      if (target && target.hasAttribute && target.hasAttribute('aria-invalid')) syncFieldAria(target);
+    });
+    document.addEventListener('change', (e) => {
+      const target = e.target;
+      if (!supportsNative && target && target.checkValidity) {
+        const st = fallbackDirtyState.get(target) || { interacted: false, blurred: false };
+        st.interacted = true;
+        fallbackDirtyState.set(target, st);
+        if (st.blurred) updateFallback(target);
+        return;
+      }
+      syncFieldAria(target, true);
+    }, true);
+    document.addEventListener('invalid', (e) => {
+      const target = e.target;
+      announcedInvalidFields.add(target);
+      if (!supportsNative && target && target.checkValidity) {
+        fallbackDirtyState.set(target, { interacted: true, blurred: true });
+        updateFallback(target);
+        return;
+      }
+      syncFieldAria(target, false);
+    }, true);
+    document.addEventListener('reset', (e) => {
+      const form = e.target;
+      setTimeout(() => {
+        for (const control of (form && form.elements) || []) {
+          fallbackDirtyState.delete(control);
+          control.classList.remove('user-invalid-fallback', 'user-valid-fallback');
+          syncFieldAria(control, false);
+        }
+      });
+    }, true);
+  }
+
   // ------------------------------------------------------------------
   // API layer
   // ------------------------------------------------------------------
@@ -104,6 +274,7 @@
       if (state.route === 'chat') renderRoute();
     });
     input.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
       if (e.key === 'Enter') save.click();
     });
     const dismiss = el('button', {
@@ -344,6 +515,7 @@
     // board-stale dimming, so a frozen snapshot never looks current.
     lastSuccessfulPollAt: null,
     search: '',
+    needsYouOnly: false,
     boardScope: 'active',
     boardView: 'lanes',
     requestCatalog: null,
@@ -355,8 +527,10 @@
     statsDays: 30,
     selectedRunId: null,
     drawerIssue: null,
+    focusedCardId: null,
     workflowDraft: null,
     openModalBackdrop: null,
+    openModalDialog: null,
     openMenu: null,
     wfRerender: null,
   };
@@ -721,27 +895,108 @@
   }
 
   // ------------------------------------------------------------------
-  // Overlays: modal, confirm dialog, popover menu, drawer
+  // Overlays: native <dialog> modal, confirm dialog, popover menu, drawer
   // ------------------------------------------------------------------
 
-  function openModal(contentNode, size) {
-    closeModal();
-    const backdrop = el('div', {
-      class: 'modal-backdrop',
-      onClick: (e) => { if (e.target === backdrop) closeModal(); },
+  let supportsDisplayTransitionCache;
+  function canTransitionDisplay() {
+    if (supportsDisplayTransitionCache !== undefined) return supportsDisplayTransitionCache;
+    if (!window.CSS || !CSS.supports || !CSS.supports('transition-behavior', 'allow-discrete') || !document.body) {
+      supportsDisplayTransitionCache = false;
+      return false;
+    }
+    const probe = document.createElement('div');
+    probe.style.cssText = 'transition: display 1s allow-discrete !important; display: block;';
+    document.body.appendChild(probe);
+    getComputedStyle(probe).display;
+    probe.style.display = 'none';
+    supportsDisplayTransitionCache = getComputedStyle(probe).display === 'block';
+    probe.remove();
+    return supportsDisplayTransitionCache;
+  }
+
+  function supportsTopLayerExit() {
+    return Boolean(window.CSS && CSS.supports && CSS.supports('overlay', 'auto') && canTransitionDisplay());
+  }
+
+  async function closeTopLayerDialog(dialog) {
+    if (!dialog || !dialog.open) return;
+    if (dialog.dataset.closing === '1') return;
+    dialog.dataset.closing = '1';
+    if (!supportsTopLayerExit()) {
+      dialog.setAttribute('data-closing', '');
+      const animations = dialog.getAnimations ? dialog.getAnimations({ subtree: true }) : [];
+      if (animations.length > 0) {
+        await Promise.race([
+          Promise.allSettled(animations.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 350)),
+        ]);
+      }
+      if (!dialog.hasAttribute('data-closing')) return;
+      dialog.removeAttribute('data-closing');
+    }
+    delete dialog.dataset.closing;
+    if (dialog.open) dialog.close();
+  }
+
+  function installDialogLightDismissFallback(dialog) {
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    const isOutside = (e) => {
+      const r = dialog.getBoundingClientRect();
+      return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    };
+    let pressedOutside = false;
+    dialog.addEventListener('pointerdown', (e) => { pressedOutside = isOutside(e); });
+    dialog.addEventListener('pointerup', (e) => {
+      if (pressedOutside && isOutside(e) && dialog.open) closeTopLayerDialog(dialog);
     });
-    const modal = el('div', { class: `modal${size === 'lg' ? ' modal-lg' : ''}`, role: 'dialog', 'aria-modal': 'true' }, [contentNode]);
-    backdrop.appendChild(modal);
-    document.getElementById('overlay-root').appendChild(backdrop);
-    requestAnimationFrame(() => backdrop.classList.add('open'));
-    state.openModalBackdrop = backdrop;
-    return modal;
+  }
+
+  function openModal(contentNode, size) {
+    closeModalImmediate();
+    const dialog = el('dialog', {
+      class: `modal-dialog modal${size === 'lg' ? ' modal-lg' : ''}`,
+      closedby: 'any',
+    }, [contentNode]);
+    installDialogLightDismissFallback(dialog);
+    dialog.addEventListener('cancel', (e) => {
+      if (!supportsTopLayerExit() && e.cancelable) {
+        e.preventDefault();
+        closeTopLayerDialog(dialog);
+      }
+    });
+    dialog.addEventListener('close', () => {
+      dialog.returnValue = '';
+      dialog.removeAttribute('data-closing');
+      if (state.openModalDialog === dialog) {
+        state.openModalDialog = null;
+        state.openModalBackdrop = null;
+      }
+      dialog.remove();
+    });
+    document.getElementById('overlay-root').appendChild(dialog);
+    dialog.showModal();
+    state.openModalDialog = dialog;
+    state.openModalBackdrop = dialog;
+    return dialog;
+  }
+
+  function closeModalImmediate() {
+    if (state.openModalDialog) {
+      const dialog = state.openModalDialog;
+      state.openModalDialog = null;
+      state.openModalBackdrop = null;
+      if (dialog.open) dialog.close();
+      dialog.remove();
+    }
   }
 
   function closeModal() {
-    if (state.openModalBackdrop) {
-      state.openModalBackdrop.remove();
+    if (state.openModalDialog) {
+      const dialog = state.openModalDialog;
+      state.openModalDialog = null;
       state.openModalBackdrop = null;
+      closeTopLayerDialog(dialog);
     }
   }
 
@@ -780,6 +1035,7 @@
         ]),
       ]
     );
+    form.querySelectorAll('input, select, textarea').forEach((control) => syncFieldAria(control, false));
     const modal = openModal(form, size);
     modal.setAttribute('aria-labelledby', titleId);
     const firstInput = form.querySelector('input, textarea, select');
@@ -795,18 +1051,22 @@
         closeModal();
         resolve(value);
       };
+      const titleId = 'confirm-modal-title';
       const content = el('div', { class: 'modal-form' }, [
         el('div', { class: 'modal-header' }, [
-          el('h2', null, t('common.areYouSure')),
-          el('button', { class: 'btn-icon modal-close', 'aria-label': t('common.close'), onClick: () => finish(false) }, '✕'),
+          el('h2', { id: titleId }, t('common.areYouSure')),
+          el('button', { class: 'btn-icon modal-close', type: 'button', 'aria-label': t('common.close'), onClick: () => finish(false) }, '✕'),
         ]),
         el('div', { class: 'modal-body' }, el('p', { class: 'confirm-message' }, message)),
         el('div', { class: 'modal-footer' }, [
-          el('button', { class: 'btn btn-ghost', onClick: () => finish(false) }, t('common.cancel')),
-          el('button', { class: 'btn btn-danger', onClick: () => finish(true) }, t('common.delete')),
+          // Safe action gets initial focus per modal dialog guidelines.
+          el('button', { class: 'btn btn-ghost', type: 'button', autofocus: true, onClick: () => finish(false) }, t('common.cancel')),
+          el('button', { class: 'btn btn-danger', type: 'button', onClick: () => finish(true) }, t('common.delete')),
         ]),
       ]);
-      openModal(content);
+      const modal = openModal(content);
+      modal.setAttribute('aria-labelledby', titleId);
+      modal.addEventListener('close', () => finish(false), { once: true });
     });
   }
 
@@ -854,6 +1114,7 @@
     let backdrop = document.getElementById('drawer-backdrop');
     if (!backdrop) {
       const drawer = el('div', { id: 'drawer-panel', class: 'drawer', role: 'dialog', 'aria-modal': 'true', onClick: (e) => e.stopPropagation() });
+      drawer.inert = true;
       backdrop = el('div', { id: 'drawer-backdrop', class: 'drawer-backdrop', onClick: closeDrawer }, [drawer]);
       document.getElementById('overlay-root').appendChild(backdrop);
     }
@@ -865,8 +1126,17 @@
     if (!backdrop) return;
     backdrop.classList.remove('open');
     const drawer = document.getElementById('drawer-panel');
-    if (drawer) drawer.classList.remove('open');
+    if (drawer) {
+      drawer.classList.remove('open');
+      drawer.inert = true;
+    }
+    const prevId = state.drawerIssue;
     state.drawerIssue = null;
+    if (prevId) {
+      document.querySelectorAll('.card[aria-current="true"]').forEach((c) => c.removeAttribute('aria-current'));
+      const card = document.querySelector(`.card[data-issue-id="${CSS.escape ? CSS.escape(prevId) : prevId}"]`);
+      if (card) card.focus({ preventScroll: true });
+    }
   }
 
   // ------------------------------------------------------------------
@@ -874,7 +1144,14 @@
   // ------------------------------------------------------------------
 
   function field(labelText, node) {
-    return el('label', { class: 'form-group' }, [el('span', { class: 'form-label' }, labelText), node]);
+    const group = el('label', { class: 'form-group' }, [el('span', { class: 'form-label' }, labelText), node]);
+    if (node && node.hasAttribute && node.hasAttribute('required')) {
+      const errId = node.id ? `${node.id}-error` : `field-err-${Math.random().toString(36).slice(2, 8)}`;
+      node.dataset.error = errId;
+      node.setAttribute('aria-invalid', 'false');
+      group.appendChild(el('span', { id: errId, class: 'field-validation-msg' }, t('validation.required')));
+    }
+    return group;
   }
 
   function fieldRow(children) {
@@ -1171,15 +1448,37 @@
     });
   }
 
+  function updateDocumentTitle() {
+    const routeTitles = {
+      board: t('nav.board'),
+      runs: t('nav.runs'),
+      stats: t('nav.stats'),
+      workflow: t('nav.workflow'),
+      git: t('nav.git'),
+      chat: t('nav.chat'),
+      preview: t('preview.title'),
+      artifacts: t('nav.artifacts'),
+      settings: t('nav.settings'),
+    };
+    const base = `${routeTitles[state.route] || t('nav.board')} — oh-my-symphony`;
+    if (state.board) {
+      const counts = computeFactoryCounts(state.board);
+      document.title = counts.needsYou > 0 ? `(${counts.needsYou}) ${base}` : base;
+    } else {
+      document.title = base;
+    }
+  }
+
   function renderRoute() {
     const view = document.getElementById('view');
     clearNode(view);
-    closeModal();
+    closeModalImmediate();
     closeAnyMenu();
     closeDrawer();
     closeChatSocket();
     cancelPreviewPoll();
     cancelRunsPoll();
+    updateDocumentTitle();
     if (pmMount) {
       pmMount.unmount();
       pmMount = null;
@@ -1225,12 +1524,34 @@
     return !(board && board.board && board.board.pm_available === false);
   }
 
+  function syncNavShortcutBadges() {
+    let idx = 1;
+    document.querySelectorAll('#sidebar-nav .nav-item').forEach((item) => {
+      const visible = item.style.display !== 'none';
+      let badge = item.querySelector('.nav-shortcut');
+      if (!visible || idx > 9) {
+        if (badge) badge.remove();
+        item.removeAttribute('aria-keyshortcuts');
+        return;
+      }
+      const key = String(idx++);
+      if (!badge) {
+        badge = el('span', { class: 'nav-shortcut', 'aria-hidden': 'true' }, key);
+        item.appendChild(badge);
+      } else {
+        badge.textContent = key;
+      }
+      item.setAttribute('aria-keyshortcuts', key);
+    });
+  }
+
   function applyPmAvailability(board) {
     const available = pmAvailable(board);
     document.querySelectorAll('.nav-item[data-route="artifacts"]').forEach((item) => {
       // style.css gives .nav-item display:flex, which outranks the hidden attribute.
       item.style.display = available ? '' : 'none';
     });
+    syncNavShortcutBadges();
     return available;
   }
 
@@ -1246,6 +1567,7 @@
     document.querySelectorAll('.nav-item[data-route="chat"]').forEach((item) => {
       item.style.display = available ? '' : 'none';
     });
+    syncNavShortcutBadges();
     return available;
   }
 
@@ -1416,12 +1738,77 @@
   // Page: Board
   // ------------------------------------------------------------------
 
+  function issueNeedsHuman(issue, col) {
+    if (!issue) return false;
+    if (issue.attention) return true;
+    if (isBlockedState(issue.state)) return true;
+    if (col && col.name && /human|review|approval/i.test(col.name)) return true;
+    return blockedByIds(issue).length > 0;
+  }
+
+  function computeFactoryCounts(board) {
+    const columns = (board && board.columns) || [];
+    const issues = (board && board.issues) || [];
+    const live = (board && board.live) || {};
+    const colByName = new Map(columns.map((c) => [c.name, c]));
+    let needsYou = 0;
+    let working = 0;
+    let active = 0;
+    let done = 0;
+    for (const issue of issues) {
+      const col = colByName.get(issue.state);
+      const isTerminal = Boolean(col && col.terminal);
+      if (isTerminal) done += 1;
+      else active += 1;
+      if (live[issue.identifier] && !live[issue.identifier].paused) working += 1;
+      if (issueNeedsHuman(issue, col)) needsYou += 1;
+    }
+    return { needsYou, working, active, done };
+  }
+
+  function renderFactoryStripHost() {
+    const host = document.getElementById('factory-strip-host');
+    if (!host) return;
+    clearNode(host);
+    if (!state.board || state.boardView !== 'lanes') return;
+    const counts = computeFactoryCounts(state.board);
+    const stat = (cls, label, val) => el('span', { class: `factory-stat ${cls}${val ? '' : ' is-zero'}` }, [
+      el('span', null, label),
+      el('strong', null, String(val)),
+    ]);
+    const toggleBtn = el('button', {
+      type: 'button',
+      class: 'needs-you-toggle',
+      id: 'needs-you-toggle',
+      'aria-pressed': state.needsYouOnly ? 'true' : 'false',
+      'aria-label': t('board.needsYouAria'),
+      'aria-keyshortcuts': 'u',
+      'data-keys': 'u',
+      onClick: () => {
+        state.needsYouOnly = !state.needsYouOnly;
+        renderFactoryStripHost();
+        renderBoardColumns(document.getElementById('board-scroll'));
+      },
+    }, t('board.needsYouFilterCount', { n: counts.needsYou }));
+    host.appendChild(el('div', { class: 'factory-strip', role: 'region', 'aria-label': t('board.focusGroupAria') }, [
+      el('div', { class: 'factory-counts' }, [
+        stat('is-needs-you', t('board.tallyNeedsYou'), counts.needsYou),
+        stat('is-working', t('board.tallyWorking'), counts.working),
+        stat('is-active', t('board.tallyActive'), counts.active),
+        stat('is-done', t('board.tallyDone'), counts.done),
+      ]),
+      toggleBtn,
+    ]));
+  }
+
   function renderBoardPage(container) {
     const page = el('div', { class: 'page page-board' });
     page.appendChild(buildBoardTopbar());
+    page.appendChild(el('div', { id: 'factory-strip-host' }));
     const scroll = el('div', { class: 'board-scroll', id: 'board-scroll' });
     page.appendChild(scroll);
     container.appendChild(page);
+    renderFactoryStripHost();
     if (!state.board) scroll.appendChild(buildBoardSkeleton());
     else renderBoardSurface(scroll);
   }
@@ -1457,6 +1844,8 @@
       id: 'board-search',
       class: 'input search-input',
       'aria-label': t('board.searchAria'),
+      'aria-keyshortcuts': '/',
+      'data-keys': '/',
       placeholder: t('board.searchPlaceholder'),
       value: state.search,
       oninput: (e) => {
@@ -1466,7 +1855,15 @@
     });
     const rightControls = [buildBoardViewToggle()];
     if (state.boardView === 'lanes' && hasTerminalColumns) rightControls.push(buildBoardScopeToggle());
-    if (!readOnly && state.boardView === 'lanes') rightControls.push(el('button', { class: 'btn btn-primary', onClick: () => openIssueModal() }, t('board.newIssueButton')));
+    if (!readOnly && state.boardView === 'lanes') {
+      rightControls.push(el('button', {
+        class: 'btn btn-primary',
+        type: 'button',
+        'aria-keyshortcuts': 'n',
+        'data-keys': 'n',
+        onClick: () => openIssueModal(),
+      }, t('board.newIssueButton')));
+    }
     const bar = el('div', { class: 'topbar' }, [
       el('div', { class: 'topbar-left' }, state.boardView === 'lanes' ? [search] : []),
       el('div', { class: 'topbar-right' }, rightControls),
@@ -1823,8 +2220,12 @@
       return;
     }
     const { columns, issues, live, board } = state.board;
+    const colByName = new Map(columns.map((c) => [c.name, c]));
     const query = state.search.trim().toLowerCase();
-    const filtered = query ? issues.filter((issue) => matchesSearch(issue, query)) : issues;
+    let filtered = query ? issues.filter((issue) => matchesSearch(issue, query)) : issues;
+    if (state.needsYouOnly) {
+      filtered = filtered.filter((issue) => issueNeedsHuman(issue, colByName.get(issue.state)));
+    }
     const byColumn = new Map(columns.map((c) => [c.name, []]));
     for (const issue of filtered) {
       const bucket = byColumn.get(issue.state);
@@ -1848,11 +2249,41 @@
         .filter((row) => row.issues.length > 0);
       if (terminalGroups.length) layout.appendChild(buildTerminalSectionEl(terminalGroups, live, board.read_only));
     }
-    // A first-ticket hint applies only to a genuinely empty board, not
-    // hidden terminal tickets or an empty mobile lane.
-    if (!query && !issues.length && columnsToRender.length) {
-      layout.appendChild(el('div', { class: 'board-empty-hint' },
-        board.read_only ? t('board.emptyBoardReadonly') : t('board.emptyBoardHint')));
+    if (state.needsYouOnly && !filtered.length) {
+      layout.appendChild(el('div', { class: 'board-empty-hint' }, [
+        el('span', null, t('board.needsYouEmpty')),
+        el('button', {
+          class: 'btn btn-primary btn-sm',
+          type: 'button',
+          onClick: () => {
+            state.needsYouOnly = false;
+            renderFactoryStripHost();
+            renderBoardColumns(document.getElementById('board-scroll'));
+          },
+        }, t('board.needsYouClear')),
+      ]));
+    } else if (query && !filtered.length) {
+      layout.appendChild(el('div', { class: 'board-empty-hint' }, [
+        el('span', null, t('board.searchEmpty', { query: state.search.trim() })),
+        el('button', {
+          class: 'btn btn-sm',
+          type: 'button',
+          onClick: () => {
+            state.search = '';
+            const searchInput = document.getElementById('board-search');
+            if (searchInput) searchInput.value = '';
+            renderBoardColumns(document.getElementById('board-scroll'));
+          },
+        }, t('board.searchClear')),
+      ]));
+    } else if (!query && !state.needsYouOnly && !issues.length && columnsToRender.length) {
+      // A first-ticket hint applies only to a genuinely empty board.
+      layout.appendChild(el('div', { class: 'board-empty-hint' }, [
+        el('span', null, board.read_only ? t('board.emptyBoardReadonly') : t('board.emptyBoardHint')),
+        !board.read_only
+          ? el('button', { class: 'btn btn-primary btn-sm', type: 'button', onClick: () => openIssueModal() }, t('board.newIssueButton'))
+          : null,
+      ].filter(Boolean)));
     }
     scrollEl.appendChild(layout);
   }
@@ -1955,16 +2386,34 @@
   }
 
   function buildCardEl(issue, liveEntry, readOnly) {
+    const colByName = state.board && state.board.columns
+      ? new Map(state.board.columns.map((c) => [c.name, c]))
+      : null;
+    const col = colByName ? colByName.get(issue.state) : null;
+    const isWorking = Boolean(liveEntry && !liveEntry.paused);
+    const isBlocked = isBlockedState(issue.state);
+    const needsHuman = issueNeedsHuman(issue, col);
+    const toneClass = isBlocked
+      ? ' card-blocked'
+      : isWorking
+        ? ' card-working'
+        : needsHuman
+          ? ' card-needs-you'
+          : '';
+    const isSelected = state.drawerIssue === issue.identifier || state.focusedCardId === issue.identifier;
     const card = el('div', {
-      class: `card${liveEntry && liveEntry.paused ? ' paused' : ''}`,
+      class: `card${liveEntry && liveEntry.paused ? ' paused' : ''}${toneClass}`,
       draggable: !readOnly,
+      'data-issue-id': issue.identifier,
       // Keyboard path to the drawer: the card is a real tab stop. The
       // whole card stays a div (it nests the skip/recover buttons, which
       // cannot live inside a <button>), so role+key handling stand in.
       tabindex: '0',
       role: 'button',
+      'aria-current': isSelected ? 'true' : null,
       'aria-label': t('board.openTicketAria', { id: issue.identifier, title: issue.title }),
       onClick: () => openDrawer(issue.identifier),
+      onFocus: () => { state.focusedCardId = issue.identifier; },
       onKeydown: (e) => {
         if (boardIsStale()) return;
         if (e.target !== card || (e.key !== 'Enter' && e.key !== ' ')) return;
@@ -2102,6 +2551,23 @@
     });
   }
 
+  function getVisibleBoardIdentifiers() {
+    const domCards = [...document.querySelectorAll('.board-scroll .card[data-issue-id]')];
+    if (domCards.length) return domCards.map((node) => node.dataset.issueId).filter(Boolean);
+    return ((state.board && state.board.issues) || []).map((i) => i.identifier);
+  }
+
+  function stepDrawerIssue(delta) {
+    if (!state.drawerIssue) return false;
+    const ids = getVisibleBoardIdentifiers();
+    const index = ids.indexOf(state.drawerIssue);
+    if (index < 0 || !ids.length) return false;
+    const nextIndex = index + delta;
+    if (nextIndex < 0 || nextIndex >= ids.length) return false;
+    openDrawer(ids[nextIndex]);
+    return true;
+  }
+
   async function openDrawer(identifier) {
     closeAnyMenu();
     const backdrop = ensureDrawerScaffold();
@@ -2109,8 +2575,14 @@
     clearNode(drawer);
     drawer.appendChild(el('div', { class: 'skeleton skeleton-block' }));
     backdrop.classList.add('open');
+    drawer.inert = false;
     drawer.classList.add('open');
     state.drawerIssue = identifier;
+    state.focusedCardId = identifier;
+    document.querySelectorAll('.card[data-issue-id]').forEach((node) => {
+      if (node.dataset.issueId === identifier) node.setAttribute('aria-current', 'true');
+      else node.removeAttribute('aria-current');
+    });
     try {
       const detail = await api.getIssue(identifier);
       if (state.drawerIssue !== identifier) return;
@@ -2217,12 +2689,54 @@
       if (value === detail.title) return;
       commitField(detail.identifier, 'title', value, () => { titleInput.value = detail.title; }, () => { detail.title = value; });
     });
-    titleInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') titleInput.blur(); });
+    titleInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') titleInput.blur();
+    });
+
+    const visibleIds = getVisibleBoardIdentifiers();
+    const posIndex = visibleIds.indexOf(detail.identifier);
+    const hasPrev = posIndex > 0;
+    const hasNext = posIndex >= 0 && posIndex < visibleIds.length - 1;
+    const prevBtn = el('button', {
+      class: 'btn-icon',
+      type: 'button',
+      id: 'drawer-prev-btn',
+      disabled: !hasPrev,
+      'aria-label': t('drawer.prevTicket'),
+      'aria-keyshortcuts': 'ArrowLeft K',
+      'data-keys': '← / k',
+      onClick: () => stepDrawerIssue(-1),
+    }, '‹');
+    const nextBtn = el('button', {
+      class: 'btn-icon',
+      type: 'button',
+      id: 'drawer-next-btn',
+      disabled: !hasNext,
+      'aria-label': t('drawer.nextTicket'),
+      'aria-keyshortcuts': 'ArrowRight J',
+      'data-keys': '→ / j',
+      onClick: () => stepDrawerIssue(1),
+    }, '›');
+    const closeBtn = el('button', {
+      class: 'btn-icon',
+      type: 'button',
+      'aria-label': t('common.close'),
+      'aria-keyshortcuts': 'Escape',
+      'data-keys': 'Esc',
+      onClick: closeDrawer,
+    }, '✕');
 
     const header = el('div', { class: 'drawer-header' }, [
       el('div', { class: 'drawer-id' }, detail.identifier),
-      el('button', { class: 'btn-icon', 'aria-label': t('common.close'), onClick: closeDrawer }, '✕'),
+      closeBtn,
     ]);
+    const navBar = posIndex >= 0
+      ? el('div', { class: 'drawer-nav-bar' }, [
+          el('span', { class: 'drawer-pos' }, t('drawer.position', { index: posIndex + 1, total: visibleIds.length })),
+          el('div', { class: 'drawer-nav' }, [prevBtn, nextBtn]),
+        ])
+      : null;
 
     // Every field passes a revert callback: a failed PATCH must snap the
     // control back to the last saved value, never keep showing the edit.
@@ -2257,7 +2771,10 @@
       commitField(detail.identifier, 'labels', labels, () => { labelsInput.value = detail.labels.join(', '); }, () => { detail.labels = labels; });
     };
     labelsInput.addEventListener('blur', commitLabels);
-    labelsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') labelsInput.blur(); });
+    labelsInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') labelsInput.blur();
+    });
 
     const blockedByInput = el('input', {
       class: 'input',
@@ -2276,7 +2793,10 @@
       );
     };
     blockedByInput.addEventListener('blur', commitBlockedBy);
-    blockedByInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') blockedByInput.blur(); });
+    blockedByInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') blockedByInput.blur();
+    });
 
     const requestInput = el('input', {
       class: 'input',
@@ -2294,7 +2814,10 @@
       );
     };
     requestInput.addEventListener('blur', commitRequest);
-    requestInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') requestInput.blur(); });
+    requestInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') requestInput.blur();
+    });
 
     const fieldsGrid = el('div', { class: 'drawer-fields' }, [
       field(t('common.state'), stateSelect),
@@ -2322,6 +2845,7 @@
     }, t('issue.deleteIssue'));
 
     container.appendChild(header);
+    if (navBar) container.appendChild(navBar);
     container.appendChild(titleInput);
     container.appendChild(fieldsGrid);
     container.appendChild(buildExecutionSection(detail));
@@ -2581,7 +3105,11 @@
       state.connected = true;
       state.lastSuccessfulPollAt = Date.now();
       updateConnectionIndicator();
-      if (state.route === 'board') renderBoardSurface(document.getElementById('board-scroll'));
+      updateDocumentTitle();
+      if (state.route === 'board') {
+        renderFactoryStripHost();
+        renderBoardSurface(document.getElementById('board-scroll'));
+      }
     } catch (_err) {
       // regular poll loop will surface connectivity issues
     }
@@ -3831,6 +4359,7 @@
     const sendBtn = el('button', { class: 'btn btn-primary', onClick: () => sendChatMessage(view) }, t('chat.send'));
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        if (isImeEnter(e)) return;
         e.preventDefault();
         sendChatMessage(view);
       }
@@ -5386,10 +5915,44 @@
         el('option', { value: lang.code, selected: lang.code === window.i18n.lang }, lang.label)
       )
     );
+    const themeGroup = el('div', { class: 'segmented', role: 'group', 'aria-label': t('settings.theme') });
+    const renderThemeButtons = () => {
+      clearNode(themeGroup);
+      const current = readStoredTheme();
+      const sysLabel = t('settings.themeSystemState', {
+        mode: currentSystemTheme() === 'dark' ? t('settings.themeDark') : t('settings.themeLight'),
+      });
+      const options = [
+        [null, sysLabel],
+        ['light', t('settings.themeLight')],
+        ['dark', t('settings.themeDark')],
+      ];
+      for (const [value, label] of options) {
+        const active = current === value;
+        themeGroup.appendChild(el('button', {
+          type: 'button',
+          class: `segmented-btn${active ? ' active' : ''}`,
+          'aria-pressed': active ? 'true' : 'false',
+          onClick: () => {
+            applyTheme(value, { persist: true });
+            renderThemeButtons();
+          },
+        }, label));
+      }
+    };
+    renderThemeButtons();
     return el('div', { class: 'card-panel settings-card settings-card--utility' }, [
       settingsCardHeader(t('settings.interface'), t('settings.interfaceDescription')),
-      field(t('settings.language'), select),
-      el('div', { class: 'form-hint' }, t('settings.languageHint')),
+      el('div', { class: 'settings-interface-stack' }, [
+        el('div', null, [
+          field(t('settings.language'), select),
+          el('div', { class: 'form-hint' }, t('settings.languageHint')),
+        ]),
+        el('div', null, [
+          field(t('settings.theme'), themeGroup),
+          el('div', { class: 'form-hint' }, t('settings.themeHint')),
+        ]),
+      ]),
     ]);
   }
 
@@ -5496,8 +6059,14 @@
           nameEl.removeAttribute('data-i18n');
         }
         if (state.route === 'board') {
+          updateDocumentTitle();
           if (firstLoad || !document.getElementById('board-scroll')) renderRoute();
-          else if (state.boardView === 'lanes') renderBoardColumns(document.getElementById('board-scroll'));
+          else if (state.boardView === 'lanes') {
+            renderFactoryStripHost();
+            renderBoardColumns(document.getElementById('board-scroll'));
+          }
+        } else {
+          updateDocumentTitle();
         }
       }
     } catch (_err) {
@@ -5509,44 +6078,312 @@
   }
 
   // ------------------------------------------------------------------
-  // Bootstrap
+  // Keyboard shortcuts, ? help dialog, and shared [popover="manual"] tips
   // ------------------------------------------------------------------
+
+  function openKeysDialog() {
+    const dialog = document.getElementById('keys-help');
+    const list = document.getElementById('keys-list');
+    if (!dialog || !list) return;
+    hideKeyTip();
+    clearNode(list);
+    const groups = [
+      ['keys.groupNavigation', [
+        ['1–9', 'keys.pages'],
+        ['?', 'keys.help'],
+        ['Esc', 'keys.escape'],
+      ]],
+      ['keys.groupBoard', [
+        ['/', 'keys.search'],
+        ['n', 'keys.newIssue'],
+        ['u', 'keys.needsYou'],
+        ['a', 'keys.scope'],
+        ['v', 'keys.viewMode'],
+        ['↑ ↓ · j k · ← → · h l', 'keys.moveCards'],
+        ['Enter', 'keys.openCard'],
+      ]],
+      ['keys.groupDrawer', [
+        ['← → · j k', 'keys.drawerNav'],
+        ['r', 'keys.focusReply'],
+      ]],
+    ];
+    for (const [groupKey, rows] of groups) {
+      list.appendChild(el('div', { class: 'keys-group-heading' }, t(groupKey)));
+      for (const [keys, labelKey] of rows) {
+        list.appendChild(el('dt', null, el('kbd', null, keys)));
+        list.appendChild(el('dd', null, t(labelKey)));
+      }
+    }
+    if (!dialog.open) dialog.showModal();
+  }
+
+  let hideKeyTip = () => {};
+  function initKeyTips() {
+    const tip = document.getElementById('key-tip');
+    if (!tip) return;
+    const hasPopover = typeof tip.showPopover === 'function';
+    if (!hasPopover) tip.hidden = true;
+    const selector = '[data-keys]';
+    let tipFor = null;
+    let tipTimer = null;
+
+    const tipLabel = (node) => {
+      const name = String(node.getAttribute('aria-label') || node.textContent || '').replace(/\s+/g, ' ').trim();
+      const keys = node.dataset.keys;
+      if (!keys) return name;
+      return name && !name.includes(keys) ? t('tip.withKeys', { name, keys }) : keys;
+    };
+
+    hideKeyTip = () => {
+      clearTimeout(tipTimer);
+      if (!tipFor) return;
+      if (tipFor._tipOwned) {
+        tipFor.removeAttribute('aria-describedby');
+        tipFor._tipOwned = false;
+      }
+      tipFor = null;
+      if (hasPopover) {
+        if (tip.matches(':popover-open')) tip.hidePopover();
+      } else {
+        tip.hidden = true;
+      }
+    };
+
+    const showTip = (node) => {
+      clearTimeout(tipTimer);
+      const text = tipLabel(node);
+      if (!text || !node.getClientRects().length) { hideKeyTip(); return; }
+      if (tipFor !== node) {
+        hideKeyTip();
+        tipFor = node;
+        if (!node.hasAttribute('aria-describedby')) {
+          node.setAttribute('aria-describedby', 'key-tip');
+          node._tipOwned = true;
+        }
+      }
+      tip.textContent = text;
+      if (hasPopover) {
+        if (!tip.matches(':popover-open')) tip.showPopover();
+      } else {
+        tip.hidden = false;
+      }
+      const r = node.getBoundingClientRect();
+      const w = tip.offsetWidth;
+      const h = tip.offsetHeight;
+      const gap = 6;
+      const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+      const top = (r.bottom + gap + h <= window.innerHeight - 8)
+        ? r.bottom + gap
+        : Math.max(8, r.top - gap - h);
+      tip.style.left = `${left}px`;
+      tip.style.top = `${top}px`;
+    };
+
+    document.addEventListener('pointerover', (e) => {
+      const node = e.target && e.target.closest ? e.target.closest(selector) : null;
+      if (!node || e.pointerType === 'touch') return;
+      clearTimeout(tipTimer);
+      if (node === tipFor) return;
+      tipTimer = setTimeout(() => showTip(node), tipFor ? 0 : 320);
+    });
+    document.addEventListener('pointerout', (e) => {
+      const node = e.target && e.target.closest ? e.target.closest(selector) : null;
+      if (!node || node.contains(e.relatedTarget) || tip.contains(e.relatedTarget)) return;
+      clearTimeout(tipTimer);
+      if (node === tipFor && !node.matches(':focus-visible')) tipTimer = setTimeout(hideKeyTip, 100);
+    });
+    document.addEventListener('focusin', (e) => {
+      const node = e.target && e.target.closest ? e.target.closest(selector) : null;
+      if (node && node.matches(':focus-visible')) showTip(node);
+      else hideKeyTip();
+    });
+    document.addEventListener('focusout', (e) => { if (e.target === tipFor) hideKeyTip(); });
+    for (const ev of ['pointerdown', 'input']) document.addEventListener(ev, () => hideKeyTip(), true);
+    document.addEventListener('scroll', () => { if (tipFor) hideKeyTip(); }, true);
+  }
+
+  function moveCardFocus(direction) {
+    const columns = [...document.querySelectorAll('.board-scroll .column')];
+    const cardsInCols = columns.map((col) => [...col.querySelectorAll('.card[data-issue-id]')]);
+    const allCards = [...document.querySelectorAll('.board-scroll .card[data-issue-id]')];
+    if (!allCards.length) return false;
+    const active = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.card[data-issue-id]') : null;
+    if (!active) {
+      allCards[0].focus();
+      return true;
+    }
+    if (direction === 'down' || direction === 'up') {
+      const col = active.closest('.column');
+      const list = col ? [...col.querySelectorAll('.card[data-issue-id]')] : allCards;
+      const idx = list.indexOf(active);
+      const nextIdx = direction === 'down' ? Math.min(list.length - 1, idx + 1) : Math.max(0, idx - 1);
+      list[nextIdx].focus();
+      return true;
+    }
+    const curCol = active.closest('.column');
+    const colIdx = columns.indexOf(curCol);
+    if (colIdx < 0) {
+      allCards[0].focus();
+      return true;
+    }
+    const step = direction === 'right' ? 1 : -1;
+    for (let i = colIdx + step; i >= 0 && i < cardsInCols.length; i += step) {
+      if (cardsInCols[i].length) {
+        cardsInCols[i][0].focus();
+        return true;
+      }
+    }
+    return false;
+  }
 
   function wireGlobalShortcuts() {
     document.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      hideKeyTip();
+      const keysHelp = document.getElementById('keys-help');
+      const anyDialogOpen = Boolean((keysHelp && keysHelp.open) || (state.openModalDialog && state.openModalDialog.open));
+
       if (e.key === 'Escape') {
-        if (state.openModalBackdrop) { closeModal(); return; }
+        if (anyDialogOpen) return;
         if (state.openMenu) { closeAnyMenu(); return; }
         const drawerBackdrop = document.getElementById('drawer-backdrop');
-        if (drawerBackdrop && drawerBackdrop.classList.contains('open')) closeDrawer();
+        if (drawerBackdrop && drawerBackdrop.classList.contains('open')) { closeDrawer(); return; }
+        const active = document.activeElement;
+        if (active && (active.id === 'board-search' || active.id === 'runs-search')) {
+          if (active.value) {
+            active.value = '';
+            active.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          active.blur();
+        }
         return;
       }
+
+      if (anyDialogOpen) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
       const active = document.activeElement;
-      const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+      const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable);
       if (typing) return;
+
+      if (e.key === '?') {
+        e.preventDefault();
+        openKeysDialog();
+        return;
+      }
+
+      if (/^[1-9]$/.test(e.key)) {
+        const visibleNavs = [...document.querySelectorAll('#sidebar-nav .nav-item')].filter((n) => n.style.display !== 'none');
+        const targetNav = visibleNavs[Number(e.key) - 1];
+        if (targetNav && targetNav.dataset.route) {
+          e.preventDefault();
+          navigate(targetNav.dataset.route);
+        }
+        return;
+      }
+
+      const drawerBackdrop = document.getElementById('drawer-backdrop');
+      const drawerOpen = Boolean(drawerBackdrop && drawerBackdrop.classList.contains('open'));
+      if (drawerOpen) {
+        if (e.key === 'ArrowLeft' || e.key === 'k' || e.key === 'K') {
+          if (stepDrawerIssue(-1)) e.preventDefault();
+          return;
+        }
+        if (e.key === 'ArrowRight' || e.key === 'j' || e.key === 'J') {
+          if (stepDrawerIssue(1)) e.preventDefault();
+          return;
+        }
+        if (e.key === 'r' || e.key === 'R') {
+          const titleInput = document.querySelector('#drawer-panel .drawer-title-input');
+          if (titleInput) { e.preventDefault(); titleInput.focus(); }
+          return;
+        }
+      }
+
       if (e.key === '/') {
-        if (state.route !== 'board') return;
-        const search = document.getElementById('board-search');
+        const searchId = state.route === 'runs' ? 'runs-search' : state.route === 'board' ? 'board-search' : null;
+        const search = searchId ? document.getElementById(searchId) : null;
         if (search) {
           e.preventDefault();
           search.focus();
         }
-      } else if (e.key === 'n' || e.key === 'N') {
-        if (state.route !== 'board' || !state.board || state.board.board.read_only) return;
+        return;
+      }
+
+      if (state.route === 'chat' && (e.key === 'r' || e.key === 'R')) {
+        const chatInput = document.querySelector('.chat-input');
+        if (chatInput && !chatInput.disabled) {
+          e.preventDefault();
+          chatInput.focus();
+        }
+        return;
+      }
+
+      if (state.route !== 'board') return;
+
+      if (e.key === 'n' || e.key === 'N') {
+        if (!state.board || state.board.board.read_only) return;
         e.preventDefault();
         openIssueModal();
+      } else if (e.key === 'u' || e.key === 'U') {
+        if (state.boardView !== 'lanes') return;
+        e.preventDefault();
+        state.needsYouOnly = !state.needsYouOnly;
+        renderFactoryStripHost();
+        renderBoardColumns(document.getElementById('board-scroll'));
+      } else if (e.key === 'a' || e.key === 'A') {
+        if (state.boardView !== 'lanes' || !state.board || !state.board.columns.some((c) => c.terminal)) return;
+        e.preventDefault();
+        state.boardScope = state.boardScope === 'all' ? 'active' : 'all';
+        state.mobileColumnIndex = 0;
+        renderRoute();
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        state.requestEpoch += 1;
+        state.boardView = state.boardView === 'lanes' ? 'request' : 'lanes';
+        renderRoute();
+        if (state.boardView === 'request') loadRequestCatalog();
+      } else if (!boardIsStale() && state.boardView === 'lanes') {
+        if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') {
+          if (moveCardFocus('down')) e.preventDefault();
+        } else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') {
+          if (moveCardFocus('up')) e.preventDefault();
+        } else if (e.key === 'l' || e.key === 'L' || e.key === 'ArrowRight') {
+          if (moveCardFocus('right')) e.preventDefault();
+        } else if (e.key === 'h' || e.key === 'H' || e.key === 'ArrowLeft') {
+          if (moveCardFocus('left')) e.preventDefault();
+        }
       }
     });
   }
 
   function boot() {
-    // Static markup in index.html is translated once here, then again on every
-    // language change; the SPA views are rebuilt wholesale by renderRoute().
+    applyTheme(readStoredTheme());
     window.i18n.applyStaticNodes();
     window.i18n.onChange(() => {
       renderRoute();
       updateConnectionIndicator();
+      updateDocumentTitle();
     });
+    initValidationSync();
+    initKeyTips();
+    const keysHelp = document.getElementById('keys-help');
+    if (keysHelp) {
+      installDialogLightDismissFallback(keysHelp);
+      keysHelp.addEventListener('cancel', (e) => {
+        if (!supportsTopLayerExit() && e.cancelable) {
+          e.preventDefault();
+          closeTopLayerDialog(keysHelp);
+        }
+      });
+      keysHelp.addEventListener('close', () => {
+        keysHelp.returnValue = '';
+        keysHelp.removeAttribute('data-closing');
+      });
+    }
+    const keysOpen = document.getElementById('keys-open');
+    if (keysOpen) keysOpen.addEventListener('click', openKeysDialog);
+    syncNavShortcutBadges();
     wireGlobalShortcuts();
     const selector = document.getElementById('project-selector');
     if (selector) selector.addEventListener('change', async () => { await switchProject(selector.value); });

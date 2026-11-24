@@ -85,6 +85,9 @@ Start-Process -FilePath ".venv\Scripts\python.exe" `
   browser artifacts.
 - Update README or `docs/` when the user-facing behavior or operator workflow
   changes.
+- Follow [`DESIGN.md`](DESIGN.md) (based on [cskwork/design-baseline](https://github.com/cskwork/design-baseline))
+  for any web UI/UX change under `src/symphony/web/static/`, and verify
+  rendered views in a real browser per `DESIGN.md §7`.
 
 ## PR checklist
 
