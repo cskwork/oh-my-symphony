@@ -58,5 +58,8 @@ rendered prompt for a given ticket state.
 - Read `WORKFLOW.md` and a couple of `kanban/*.md` files before any
   recommendation. Settings vary per fork.
 - Run `symphony doctor ./WORKFLOW.md` before launching anything.
+- Follow `DESIGN.md` (derived from `https://github.com/cskwork/design-baseline`)
+  for all web UI/UX changes, including `§0 Project Overrides` and `§7` browser
+  verification.
 - See the `BOOTSTRAP` route in `src/symphony/templates/project/skills/symphony-skill/SKILL.md` for the full
   file set required when copying Symphony into another project.

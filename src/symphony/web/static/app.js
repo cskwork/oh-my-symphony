@@ -13,6 +13,176 @@
 
   const t = (key, params) => window.i18n.t(key, params);
 
+  // Guard Hangul / CJK IME composition Enter so confirming a syllable never
+  // triggers submit or blur prematurely (Safari reports keyCode 229 with
+  // isComposing already false).
+  function isImeEnter(e) {
+    return e && e.key === 'Enter' && (e.isComposing || e.keyCode === 229);
+  }
+
+  // ------------------------------------------------------------------
+  // Theme (light dark default + System / Light / Dark override)
+  // ------------------------------------------------------------------
+
+  const THEME_STORAGE_KEY = 'symphony.theme';
+  const themeMediaQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const themeListeners = new Set();
+
+  function readStoredTheme() {
+    try {
+      const value = localStorage.getItem(THEME_STORAGE_KEY);
+      return value === 'light' || value === 'dark' ? value : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function currentSystemTheme() {
+    return themeMediaQuery && themeMediaQuery.matches ? 'dark' : 'light';
+  }
+
+  function applyTheme(mode, { persist = false } = {}) {
+    const normalized = mode === 'light' || mode === 'dark' ? mode : null;
+    if (persist) {
+      try {
+        if (normalized) localStorage.setItem(THEME_STORAGE_KEY, normalized);
+        else localStorage.removeItem(THEME_STORAGE_KEY);
+      } catch (_err) { /* ignore storage errors */ }
+    }
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.setAttribute('content', normalized || 'light dark');
+    themeListeners.forEach((fn) => fn(normalized));
+  }
+
+  window.addEventListener('storage', (e) => {
+    if (e.key === THEME_STORAGE_KEY) applyTheme(readStoredTheme());
+  });
+  if (themeMediaQuery && themeMediaQuery.addEventListener) {
+    themeMediaQuery.addEventListener('change', () => {
+      // Never delete an explicit user override when the OS theme changes.
+      themeListeners.forEach((fn) => fn(readStoredTheme()));
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Centralized polite live region + non-hostile ARIA validation sync
+  // ------------------------------------------------------------------
+
+  let announceTimer = null;
+  function announceA11y(text) {
+    const box = document.getElementById('a11y-announcer');
+    if (!box) return;
+    box.textContent = '';
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => { box.textContent = text; }, 50);
+  }
+
+  const flaggedInvalidFields = new WeakSet();
+  const announcedInvalidFields = new WeakSet();
+  const fallbackDirtyState = new WeakMap();
+
+  function linkFieldError(fieldNode, shown) {
+    const errorId = fieldNode.dataset && fieldNode.dataset.error;
+    if (!errorId) return;
+    const ids = (fieldNode.getAttribute('aria-describedby') || '')
+      .split(/\s+/)
+      .filter((id) => id && id !== errorId);
+    if (shown) ids.push(errorId);
+    if (ids.length) fieldNode.setAttribute('aria-describedby', ids.join(' '));
+    else fieldNode.removeAttribute('aria-describedby');
+  }
+
+  function isFieldUserInvalid(fieldNode) {
+    if (window.CSS && CSS.supports && CSS.supports('selector(:user-invalid)')) {
+      return fieldNode.matches(':user-invalid');
+    }
+    return fieldNode.classList.contains('user-invalid-fallback');
+  }
+
+  function syncFieldAria(fieldNode, announce = false) {
+    if (!fieldNode || !fieldNode.matches || !fieldNode.matches('input, select, textarea')) return;
+    const invalid = isFieldUserInvalid(fieldNode);
+    if (invalid) {
+      fieldNode.setAttribute('aria-invalid', 'true');
+      linkFieldError(fieldNode, true);
+      flaggedInvalidFields.add(fieldNode);
+      if (announce && !announcedInvalidFields.has(fieldNode)) {
+        announcedInvalidFields.add(fieldNode);
+        const errorEl = fieldNode.dataset.error && document.getElementById(fieldNode.dataset.error);
+        const msg = (errorEl && errorEl.textContent.trim()) || fieldNode.validationMessage || t('validation.required');
+        announceA11y(`${t('validation.errorPrefix')}: ${msg}`);
+      }
+    } else if (flaggedInvalidFields.has(fieldNode) || fieldNode.getAttribute('aria-invalid') !== 'true') {
+      fieldNode.setAttribute('aria-invalid', 'false');
+      linkFieldError(fieldNode, false);
+      flaggedInvalidFields.delete(fieldNode);
+      announcedInvalidFields.delete(fieldNode);
+    }
+  }
+
+  function initValidationSync() {
+    const supportsNative = Boolean(window.CSS && CSS.supports && CSS.supports('selector(:user-invalid)'));
+    const updateFallback = (input) => {
+      const valid = input.validity.valid;
+      input.classList.toggle('user-invalid-fallback', !valid);
+      input.classList.toggle('user-valid-fallback', valid);
+      syncFieldAria(input, !valid);
+    };
+    document.addEventListener('blur', (e) => {
+      const target = e.target;
+      if (!supportsNative && target && target.checkValidity) {
+        const st = fallbackDirtyState.get(target) || { interacted: false, blurred: false };
+        st.blurred = true;
+        fallbackDirtyState.set(target, st);
+        if (st.interacted) updateFallback(target);
+        return;
+      }
+      syncFieldAria(target, true);
+    }, true);
+    document.addEventListener('input', (e) => {
+      const target = e.target;
+      if (!supportsNative && target && target.checkValidity) {
+        const st = fallbackDirtyState.get(target) || { interacted: false, blurred: false };
+        st.interacted = true;
+        fallbackDirtyState.set(target, st);
+        if (st.blurred) updateFallback(target);
+        return;
+      }
+      if (target && target.hasAttribute && target.hasAttribute('aria-invalid')) syncFieldAria(target);
+    });
+    document.addEventListener('change', (e) => {
+      const target = e.target;
+      if (!supportsNative && target && target.checkValidity) {
+        const st = fallbackDirtyState.get(target) || { interacted: false, blurred: false };
+        st.interacted = true;
+        fallbackDirtyState.set(target, st);
+        if (st.blurred) updateFallback(target);
+        return;
+      }
+      syncFieldAria(target, true);
+    }, true);
+    document.addEventListener('invalid', (e) => {
+      const target = e.target;
+      announcedInvalidFields.add(target);
+      if (!supportsNative && target && target.checkValidity) {
+        fallbackDirtyState.set(target, { interacted: true, blurred: true });
+        updateFallback(target);
+        return;
+      }
+      syncFieldAria(target, false);
+    }, true);
+    document.addEventListener('reset', (e) => {
+      const form = e.target;
+      setTimeout(() => {
+        for (const control of (form && form.elements) || []) {
+          fallbackDirtyState.delete(control);
+          control.classList.remove('user-invalid-fallback', 'user-valid-fallback');
+          syncFieldAria(control, false);
+        }
+      });
+    }, true);
+  }
+
   // ------------------------------------------------------------------
   // API layer
   // ------------------------------------------------------------------
@@ -104,6 +274,7 @@
       if (state.route === 'chat') renderRoute();
     });
     input.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
       if (e.key === 'Enter') save.click();
     });
     const dismiss = el('button', {
@@ -114,7 +285,7 @@
         authBannerState.dismissed = true;
         hideApiTokenBanner();
       },
-    }, '✕');
+    }, icon('close', 14));
     root.appendChild(el('div', { class: 'banner banner-info api-token-banner', role: 'alert' }, [
       el('div', { class: 'api-token-banner-copy' }, [
         el('strong', null, t('auth.tokenBannerTitle')),
@@ -317,6 +488,9 @@
   // ------------------------------------------------------------------
 
   const ROUTES = ['board', 'runs', 'stats', 'workflow', 'git', 'chat', 'preview', 'artifacts', 'settings'];
+  // Inbox leads the sidebar, but an empty hash still lands on the Board, so
+  // it joins the routable set here instead of becoming the ROUTES default.
+  const ALL_ROUTES = ['inbox', ...ROUTES];
   let pmMount = null;
   let pmDirty = false;
 
@@ -344,6 +518,7 @@
     // board-stale dimming, so a frozen snapshot never looks current.
     lastSuccessfulPollAt: null,
     search: '',
+    needsYouOnly: false,
     boardScope: 'active',
     boardView: 'lanes',
     requestCatalog: null,
@@ -355,8 +530,14 @@
     statsDays: 30,
     selectedRunId: null,
     drawerIssue: null,
+    // Opened once the Board renders, for "Open on Board" from the Inbox.
+    pendingDrawerIssue: null,
+    focusedCardId: null,
+    inboxFilter: 'all',
+    inboxSelected: null,
     workflowDraft: null,
     openModalBackdrop: null,
+    openModalDialog: null,
     openMenu: null,
     wfRerender: null,
   };
@@ -402,6 +583,66 @@
     for (const [key, value] of Object.entries(attrs || {})) node.setAttribute(key, value);
     for (const child of children || []) node.appendChild(child);
     return node;
+  }
+
+  // Authored 16-unit line icons, built as DOM nodes (never innerHTML). Each
+  // entry lists [tag, attrs] shapes stroked in currentColor, so an icon takes
+  // the text colour of whatever control it sits in.
+  const DOT = { fill: 'currentColor', stroke: 'none' };
+  const ICON_SHAPES = {
+    close: [['path', { d: 'M4 4l8 8M12 4l-8 8' }]],
+    chevronLeft: [['path', { d: 'M10 3.5 5.5 8l4.5 4.5' }]],
+    chevronRight: [['path', { d: 'M6 3.5 10.5 8 6 12.5' }]],
+    arrowRight: [['path', { d: 'M3 8h10M9 4l4 4-4 4' }]],
+    more: [
+      ['circle', { cx: '3.5', cy: '8', r: '1.1', ...DOT }],
+      ['circle', { cx: '8', cy: '8', r: '1.1', ...DOT }],
+      ['circle', { cx: '12.5', cy: '8', r: '1.1', ...DOT }],
+    ],
+    link: [
+      ['path', { d: 'M6.6 9.4l2.8-2.8' }],
+      ['path', { d: 'M7.4 4.4l.9-.9a2.6 2.6 0 0 1 3.7 3.7l-.9.9' }],
+      ['path', { d: 'M8.6 11.6l-.9.9a2.6 2.6 0 0 1-3.7-3.7l.9-.9' }],
+    ],
+    retry: [['path', { d: 'M13 8a5 5 0 1 1-1.46-3.54' }], ['path', { d: 'M13 2.5v3h-3' }]],
+    check: [['path', { d: 'M3.2 8.4 6.4 11.5 12.8 4.8' }]],
+    alert: [
+      ['circle', { cx: '8', cy: '8', r: '5.5' }],
+      ['path', { d: 'M8 5.2v3.3' }],
+      ['circle', { cx: '8', cy: '11', r: '0.7', ...DOT }],
+    ],
+    blocked: [['circle', { cx: '8', cy: '8', r: '5.5' }], ['path', { d: 'M4.2 11.8l7.6-7.6' }]],
+    working: [
+      ['circle', { cx: '8', cy: '8', r: '5.5', 'stroke-opacity': '0.45' }],
+      ['circle', { cx: '8', cy: '8', r: '2.6', ...DOT }],
+    ],
+    idle: [['circle', { cx: '8', cy: '8', r: '5.5', 'stroke-dasharray': '2 2.3' }]],
+  };
+
+  function icon(name, size = 16, extraClass = '') {
+    const shapes = ICON_SHAPES[name] || [];
+    return svgEl('svg', {
+      class: extraClass ? `icon ${extraClass}` : 'icon',
+      viewBox: '0 0 16 16',
+      width: String(size),
+      height: String(size),
+      fill: 'none',
+      stroke: 'currentColor',
+      'stroke-width': '1.5',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+      'aria-hidden': 'true',
+      focusable: 'false',
+    }, shapes.map(([tag, attrs]) => svgEl(tag, attrs)));
+  }
+
+  // Ticket status as a glyph: attention (needs a human), working (agent
+  // running), done (terminal), blocked, idle (queued or paused).
+  const STATUS_GLYPH_ICONS = { attention: 'alert', working: 'working', done: 'check', blocked: 'blocked', idle: 'idle' };
+
+  function buildStatusGlyph(tone) {
+    const name = STATUS_GLYPH_ICONS[tone] ? tone : 'idle';
+    return el('span', { class: 'status-glyph', 'data-tone': name }, [icon(STATUS_GLYPH_ICONS[name], 14)]);
   }
 
   // ------------------------------------------------------------------
@@ -721,27 +962,108 @@
   }
 
   // ------------------------------------------------------------------
-  // Overlays: modal, confirm dialog, popover menu, drawer
+  // Overlays: native <dialog> modal, confirm dialog, popover menu, drawer
   // ------------------------------------------------------------------
 
-  function openModal(contentNode, size) {
-    closeModal();
-    const backdrop = el('div', {
-      class: 'modal-backdrop',
-      onClick: (e) => { if (e.target === backdrop) closeModal(); },
+  let supportsDisplayTransitionCache;
+  function canTransitionDisplay() {
+    if (supportsDisplayTransitionCache !== undefined) return supportsDisplayTransitionCache;
+    if (!window.CSS || !CSS.supports || !CSS.supports('transition-behavior', 'allow-discrete') || !document.body) {
+      supportsDisplayTransitionCache = false;
+      return false;
+    }
+    const probe = document.createElement('div');
+    probe.style.cssText = 'transition: display 1s allow-discrete !important; display: block;';
+    document.body.appendChild(probe);
+    getComputedStyle(probe).display;
+    probe.style.display = 'none';
+    supportsDisplayTransitionCache = getComputedStyle(probe).display === 'block';
+    probe.remove();
+    return supportsDisplayTransitionCache;
+  }
+
+  function supportsTopLayerExit() {
+    return Boolean(window.CSS && CSS.supports && CSS.supports('overlay', 'auto') && canTransitionDisplay());
+  }
+
+  async function closeTopLayerDialog(dialog) {
+    if (!dialog || !dialog.open) return;
+    if (dialog.dataset.closing === '1') return;
+    dialog.dataset.closing = '1';
+    if (!supportsTopLayerExit()) {
+      dialog.setAttribute('data-closing', '');
+      const animations = dialog.getAnimations ? dialog.getAnimations({ subtree: true }) : [];
+      if (animations.length > 0) {
+        await Promise.race([
+          Promise.allSettled(animations.map((a) => a.finished)),
+          new Promise((r) => setTimeout(r, 350)),
+        ]);
+      }
+      if (!dialog.hasAttribute('data-closing')) return;
+      dialog.removeAttribute('data-closing');
+    }
+    delete dialog.dataset.closing;
+    if (dialog.open) dialog.close();
+  }
+
+  function installDialogLightDismissFallback(dialog) {
+    if ('closedBy' in HTMLDialogElement.prototype) return;
+    const isOutside = (e) => {
+      const r = dialog.getBoundingClientRect();
+      return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    };
+    let pressedOutside = false;
+    dialog.addEventListener('pointerdown', (e) => { pressedOutside = isOutside(e); });
+    dialog.addEventListener('pointerup', (e) => {
+      if (pressedOutside && isOutside(e) && dialog.open) closeTopLayerDialog(dialog);
     });
-    const modal = el('div', { class: `modal${size === 'lg' ? ' modal-lg' : ''}`, role: 'dialog', 'aria-modal': 'true' }, [contentNode]);
-    backdrop.appendChild(modal);
-    document.getElementById('overlay-root').appendChild(backdrop);
-    requestAnimationFrame(() => backdrop.classList.add('open'));
-    state.openModalBackdrop = backdrop;
-    return modal;
+  }
+
+  function openModal(contentNode, size) {
+    closeModalImmediate();
+    const dialog = el('dialog', {
+      class: `modal-dialog modal${size === 'lg' ? ' modal-lg' : ''}`,
+      closedby: 'any',
+    }, [contentNode]);
+    installDialogLightDismissFallback(dialog);
+    dialog.addEventListener('cancel', (e) => {
+      if (!supportsTopLayerExit() && e.cancelable) {
+        e.preventDefault();
+        closeTopLayerDialog(dialog);
+      }
+    });
+    dialog.addEventListener('close', () => {
+      dialog.returnValue = '';
+      dialog.removeAttribute('data-closing');
+      if (state.openModalDialog === dialog) {
+        state.openModalDialog = null;
+        state.openModalBackdrop = null;
+      }
+      dialog.remove();
+    });
+    document.getElementById('overlay-root').appendChild(dialog);
+    dialog.showModal();
+    state.openModalDialog = dialog;
+    state.openModalBackdrop = dialog;
+    return dialog;
+  }
+
+  function closeModalImmediate() {
+    if (state.openModalDialog) {
+      const dialog = state.openModalDialog;
+      state.openModalDialog = null;
+      state.openModalBackdrop = null;
+      if (dialog.open) dialog.close();
+      dialog.remove();
+    }
   }
 
   function closeModal() {
-    if (state.openModalBackdrop) {
-      state.openModalBackdrop.remove();
+    if (state.openModalDialog) {
+      const dialog = state.openModalDialog;
+      state.openModalDialog = null;
       state.openModalBackdrop = null;
+      closeTopLayerDialog(dialog);
     }
   }
 
@@ -771,7 +1093,7 @@
       [
         el('div', { class: 'modal-header' }, [
           el('h2', { id: titleId }, title),
-          el('button', { class: 'btn-icon modal-close', type: 'button', 'aria-label': t('common.close'), onClick: closeModal }, '✕'),
+          el('button', { class: 'btn-icon modal-close', type: 'button', 'aria-label': t('common.close'), onClick: closeModal }, icon('close', 14)),
         ]),
         el('div', { class: 'modal-body' }, [body, errorBox]),
         el('div', { class: 'modal-footer' }, [
@@ -780,6 +1102,7 @@
         ]),
       ]
     );
+    form.querySelectorAll('input, select, textarea').forEach((control) => syncFieldAria(control, false));
     const modal = openModal(form, size);
     modal.setAttribute('aria-labelledby', titleId);
     const firstInput = form.querySelector('input, textarea, select');
@@ -795,18 +1118,22 @@
         closeModal();
         resolve(value);
       };
+      const titleId = 'confirm-modal-title';
       const content = el('div', { class: 'modal-form' }, [
         el('div', { class: 'modal-header' }, [
-          el('h2', null, t('common.areYouSure')),
-          el('button', { class: 'btn-icon modal-close', 'aria-label': t('common.close'), onClick: () => finish(false) }, '✕'),
+          el('h2', { id: titleId }, t('common.areYouSure')),
+          el('button', { class: 'btn-icon modal-close', type: 'button', 'aria-label': t('common.close'), onClick: () => finish(false) }, icon('close', 14)),
         ]),
         el('div', { class: 'modal-body' }, el('p', { class: 'confirm-message' }, message)),
         el('div', { class: 'modal-footer' }, [
-          el('button', { class: 'btn btn-ghost', onClick: () => finish(false) }, t('common.cancel')),
-          el('button', { class: 'btn btn-danger', onClick: () => finish(true) }, t('common.delete')),
+          // Safe action gets initial focus per modal dialog guidelines.
+          el('button', { class: 'btn btn-ghost', type: 'button', autofocus: true, onClick: () => finish(false) }, t('common.cancel')),
+          el('button', { class: 'btn btn-danger', type: 'button', onClick: () => finish(true) }, t('common.delete')),
         ]),
       ]);
-      openModal(content);
+      const modal = openModal(content);
+      modal.setAttribute('aria-labelledby', titleId);
+      modal.addEventListener('close', () => finish(false), { once: true });
     });
   }
 
@@ -854,6 +1181,7 @@
     let backdrop = document.getElementById('drawer-backdrop');
     if (!backdrop) {
       const drawer = el('div', { id: 'drawer-panel', class: 'drawer', role: 'dialog', 'aria-modal': 'true', onClick: (e) => e.stopPropagation() });
+      drawer.inert = true;
       backdrop = el('div', { id: 'drawer-backdrop', class: 'drawer-backdrop', onClick: closeDrawer }, [drawer]);
       document.getElementById('overlay-root').appendChild(backdrop);
     }
@@ -865,8 +1193,17 @@
     if (!backdrop) return;
     backdrop.classList.remove('open');
     const drawer = document.getElementById('drawer-panel');
-    if (drawer) drawer.classList.remove('open');
+    if (drawer) {
+      drawer.classList.remove('open');
+      drawer.inert = true;
+    }
+    const prevId = state.drawerIssue;
     state.drawerIssue = null;
+    if (prevId) {
+      document.querySelectorAll('.card[aria-current="true"]').forEach((c) => c.removeAttribute('aria-current'));
+      const card = document.querySelector(`.card[data-issue-id="${CSS.escape ? CSS.escape(prevId) : prevId}"]`);
+      if (card) card.focus({ preventScroll: true });
+    }
   }
 
   // ------------------------------------------------------------------
@@ -874,7 +1211,14 @@
   // ------------------------------------------------------------------
 
   function field(labelText, node) {
-    return el('label', { class: 'form-group' }, [el('span', { class: 'form-label' }, labelText), node]);
+    const group = el('label', { class: 'form-group' }, [el('span', { class: 'form-label' }, labelText), node]);
+    if (node && node.hasAttribute && node.hasAttribute('required')) {
+      const errId = node.id ? `${node.id}-error` : `field-err-${Math.random().toString(36).slice(2, 8)}`;
+      node.dataset.error = errId;
+      node.setAttribute('aria-invalid', 'false');
+      group.appendChild(el('span', { id: errId, class: 'field-validation-msg' }, t('validation.required')));
+    }
+    return group;
   }
 
   function fieldRow(children) {
@@ -994,7 +1338,7 @@
     const content = el('div', { class: 'modal-form prompt-modal-form' }, [
       el('div', { class: 'modal-header' }, [
         el('h2', null, t('board.editPromptTitle', { name: stateName })),
-        el('button', { class: 'btn-icon modal-close', 'aria-label': t('common.close'), onClick: closeModal }, '✕'),
+        el('button', { class: 'btn-icon modal-close', type: 'button', 'aria-label': t('common.close'), onClick: closeModal }, icon('close', 14)),
       ]),
       el('div', { class: 'modal-body prompt-modal-content' }, modalBody),
     ]);
@@ -1154,8 +1498,9 @@
   // ------------------------------------------------------------------
 
   function currentRoute() {
-    const hash = location.hash.replace(/^#\/?/, '');
-    return ROUTES.includes(hash) ? hash : 'board';
+    // `#/inbox?id=X` carries the Inbox selection; only the path names a route.
+    const hash = location.hash.replace(/^#\/?/, '').split('?')[0];
+    return ALL_ROUTES.includes(hash) ? hash : 'board';
   }
 
   function navigate(route) {
@@ -1171,23 +1516,68 @@
     });
   }
 
+  function updateDocumentTitle() {
+    const routeTitles = {
+      inbox: t('nav.inbox'),
+      board: t('nav.board'),
+      runs: t('nav.runs'),
+      stats: t('nav.stats'),
+      workflow: t('nav.workflow'),
+      git: t('nav.git'),
+      chat: t('nav.chat'),
+      preview: t('preview.title'),
+      artifacts: t('nav.artifacts'),
+      settings: t('nav.settings'),
+    };
+    const base = `${routeTitles[state.route] || t('nav.board')} — oh-my-symphony`;
+    if (state.board) {
+      const counts = computeFactoryCounts(state.board);
+      document.title = counts.needsYou > 0 ? `(${counts.needsYou}) ${base}` : base;
+      updateInboxNavCount(counts.needsYou);
+    } else {
+      document.title = base;
+      updateInboxNavCount(0);
+    }
+  }
+
+  // The sidebar Inbox badge shows the same needs-you count as the Board's
+  // #needs-you-toggle, so both always agree.
+  function updateInboxNavCount(needsYou) {
+    const badge = document.getElementById('nav-inbox-count');
+    if (!badge) return;
+    badge.hidden = !needsYou;
+    badge.textContent = needsYou ? String(needsYou) : '';
+    const item = badge.closest('.nav-item');
+    if (item) item.setAttribute('aria-label', needsYou ? t('nav.inboxCount', { n: needsYou }) : t('nav.inbox'));
+  }
+
   function renderRoute() {
     const view = document.getElementById('view');
     clearNode(view);
-    closeModal();
+    closeModalImmediate();
     closeAnyMenu();
     closeDrawer();
     closeChatSocket();
     cancelPreviewPoll();
     cancelRunsPoll();
+    inboxView = null;
+    updateDocumentTitle();
     if (pmMount) {
       pmMount.unmount();
       pmMount = null;
       pmDirty = false;
     }
     switch (state.route) {
+      case 'inbox':
+        renderInboxPage(view);
+        break;
       case 'board':
         renderBoardPage(view);
+        if (state.pendingDrawerIssue) {
+          const identifier = state.pendingDrawerIssue;
+          state.pendingDrawerIssue = null;
+          openDrawer(identifier);
+        }
         break;
       case 'runs':
         renderRunsPage(view);
@@ -1225,12 +1615,34 @@
     return !(board && board.board && board.board.pm_available === false);
   }
 
+  function syncNavShortcutBadges() {
+    let idx = 1;
+    document.querySelectorAll('#sidebar-nav .nav-item').forEach((item) => {
+      const visible = item.style.display !== 'none';
+      let badge = item.querySelector('.nav-shortcut');
+      if (!visible || idx > 9) {
+        if (badge) badge.remove();
+        item.removeAttribute('aria-keyshortcuts');
+        return;
+      }
+      const key = String(idx++);
+      if (!badge) {
+        badge = el('span', { class: 'nav-shortcut', 'aria-hidden': 'true' }, key);
+        item.appendChild(badge);
+      } else {
+        badge.textContent = key;
+      }
+      item.setAttribute('aria-keyshortcuts', key);
+    });
+  }
+
   function applyPmAvailability(board) {
     const available = pmAvailable(board);
     document.querySelectorAll('.nav-item[data-route="artifacts"]').forEach((item) => {
       // style.css gives .nav-item display:flex, which outranks the hidden attribute.
       item.style.display = available ? '' : 'none';
     });
+    syncNavShortcutBadges();
     return available;
   }
 
@@ -1246,6 +1658,7 @@
     document.querySelectorAll('.nav-item[data-route="chat"]').forEach((item) => {
       item.style.display = available ? '' : 'none';
     });
+    syncNavShortcutBadges();
     return available;
   }
 
@@ -1416,12 +1829,77 @@
   // Page: Board
   // ------------------------------------------------------------------
 
+  function issueNeedsHuman(issue, col) {
+    if (!issue) return false;
+    if (issue.attention) return true;
+    if (isBlockedState(issue.state)) return true;
+    if (col && col.name && /human|review|approval/i.test(col.name)) return true;
+    return blockedByIds(issue).length > 0;
+  }
+
+  function computeFactoryCounts(board) {
+    const columns = (board && board.columns) || [];
+    const issues = (board && board.issues) || [];
+    const live = (board && board.live) || {};
+    const colByName = new Map(columns.map((c) => [c.name, c]));
+    let needsYou = 0;
+    let working = 0;
+    let active = 0;
+    let done = 0;
+    for (const issue of issues) {
+      const col = colByName.get(issue.state);
+      const isTerminal = Boolean(col && col.terminal);
+      if (isTerminal) done += 1;
+      else active += 1;
+      if (live[issue.identifier] && !live[issue.identifier].paused) working += 1;
+      if (issueNeedsHuman(issue, col)) needsYou += 1;
+    }
+    return { needsYou, working, active, done };
+  }
+
+  function renderFactoryStripHost() {
+    const host = document.getElementById('factory-strip-host');
+    if (!host) return;
+    clearNode(host);
+    if (!state.board || state.boardView !== 'lanes') return;
+    const counts = computeFactoryCounts(state.board);
+    const stat = (cls, label, val) => el('span', { class: `factory-stat ${cls}${val ? '' : ' is-zero'}` }, [
+      el('span', null, label),
+      el('strong', null, String(val)),
+    ]);
+    const toggleBtn = el('button', {
+      type: 'button',
+      class: 'needs-you-toggle',
+      id: 'needs-you-toggle',
+      'aria-pressed': state.needsYouOnly ? 'true' : 'false',
+      'aria-label': t('board.needsYouAria'),
+      'aria-keyshortcuts': 'u',
+      'data-keys': 'u',
+      onClick: () => {
+        state.needsYouOnly = !state.needsYouOnly;
+        renderFactoryStripHost();
+        renderBoardColumns(document.getElementById('board-scroll'));
+      },
+    }, t('board.needsYouFilterCount', { n: counts.needsYou }));
+    host.appendChild(el('div', { class: 'factory-strip', role: 'region', 'aria-label': t('board.focusGroupAria') }, [
+      el('div', { class: 'factory-counts' }, [
+        stat('is-needs-you', t('board.tallyNeedsYou'), counts.needsYou),
+        stat('is-working', t('board.tallyWorking'), counts.working),
+        stat('is-active', t('board.tallyActive'), counts.active),
+        stat('is-done', t('board.tallyDone'), counts.done),
+      ]),
+      toggleBtn,
+    ]));
+  }
+
   function renderBoardPage(container) {
     const page = el('div', { class: 'page page-board' });
     page.appendChild(buildBoardTopbar());
+    page.appendChild(el('div', { id: 'factory-strip-host' }));
     const scroll = el('div', { class: 'board-scroll', id: 'board-scroll' });
     page.appendChild(scroll);
     container.appendChild(page);
+    renderFactoryStripHost();
     if (!state.board) scroll.appendChild(buildBoardSkeleton());
     else renderBoardSurface(scroll);
   }
@@ -1457,6 +1935,8 @@
       id: 'board-search',
       class: 'input search-input',
       'aria-label': t('board.searchAria'),
+      'aria-keyshortcuts': '/',
+      'data-keys': '/',
       placeholder: t('board.searchPlaceholder'),
       value: state.search,
       oninput: (e) => {
@@ -1466,7 +1946,15 @@
     });
     const rightControls = [buildBoardViewToggle()];
     if (state.boardView === 'lanes' && hasTerminalColumns) rightControls.push(buildBoardScopeToggle());
-    if (!readOnly && state.boardView === 'lanes') rightControls.push(el('button', { class: 'btn btn-primary', onClick: () => openIssueModal() }, t('board.newIssueButton')));
+    if (!readOnly && state.boardView === 'lanes') {
+      rightControls.push(el('button', {
+        class: 'btn btn-primary',
+        type: 'button',
+        'aria-keyshortcuts': 'n',
+        'data-keys': 'n',
+        onClick: () => openIssueModal(),
+      }, t('board.newIssueButton')));
+    }
     const bar = el('div', { class: 'topbar' }, [
       el('div', { class: 'topbar-left' }, state.boardView === 'lanes' ? [search] : []),
       el('div', { class: 'topbar-right' }, rightControls),
@@ -1823,8 +2311,12 @@
       return;
     }
     const { columns, issues, live, board } = state.board;
+    const colByName = new Map(columns.map((c) => [c.name, c]));
     const query = state.search.trim().toLowerCase();
-    const filtered = query ? issues.filter((issue) => matchesSearch(issue, query)) : issues;
+    let filtered = query ? issues.filter((issue) => matchesSearch(issue, query)) : issues;
+    if (state.needsYouOnly) {
+      filtered = filtered.filter((issue) => issueNeedsHuman(issue, colByName.get(issue.state)));
+    }
     const byColumn = new Map(columns.map((c) => [c.name, []]));
     for (const issue of filtered) {
       const bucket = byColumn.get(issue.state);
@@ -1848,11 +2340,41 @@
         .filter((row) => row.issues.length > 0);
       if (terminalGroups.length) layout.appendChild(buildTerminalSectionEl(terminalGroups, live, board.read_only));
     }
-    // A first-ticket hint applies only to a genuinely empty board, not
-    // hidden terminal tickets or an empty mobile lane.
-    if (!query && !issues.length && columnsToRender.length) {
-      layout.appendChild(el('div', { class: 'board-empty-hint' },
-        board.read_only ? t('board.emptyBoardReadonly') : t('board.emptyBoardHint')));
+    if (state.needsYouOnly && !filtered.length) {
+      layout.appendChild(el('div', { class: 'board-empty-hint' }, [
+        el('span', null, t('board.needsYouEmpty')),
+        el('button', {
+          class: 'btn btn-primary btn-sm',
+          type: 'button',
+          onClick: () => {
+            state.needsYouOnly = false;
+            renderFactoryStripHost();
+            renderBoardColumns(document.getElementById('board-scroll'));
+          },
+        }, t('board.needsYouClear')),
+      ]));
+    } else if (query && !filtered.length) {
+      layout.appendChild(el('div', { class: 'board-empty-hint' }, [
+        el('span', null, t('board.searchEmpty', { query: state.search.trim() })),
+        el('button', {
+          class: 'btn btn-sm',
+          type: 'button',
+          onClick: () => {
+            state.search = '';
+            const searchInput = document.getElementById('board-search');
+            if (searchInput) searchInput.value = '';
+            renderBoardColumns(document.getElementById('board-scroll'));
+          },
+        }, t('board.searchClear')),
+      ]));
+    } else if (!query && !state.needsYouOnly && !issues.length && columnsToRender.length) {
+      // A first-ticket hint applies only to a genuinely empty board.
+      layout.appendChild(el('div', { class: 'board-empty-hint' }, [
+        el('span', null, board.read_only ? t('board.emptyBoardReadonly') : t('board.emptyBoardHint')),
+        !board.read_only
+          ? el('button', { class: 'btn btn-primary btn-sm', type: 'button', onClick: () => openIssueModal() }, t('board.newIssueButton'))
+          : null,
+      ].filter(Boolean)));
     }
     scrollEl.appendChild(layout);
   }
@@ -1894,7 +2416,7 @@
     const actions = [];
     if (!readOnly) {
       actions.push(el('button', { class: 'btn-icon', title: t('board.newIssue'), 'aria-label': t('board.newIssueInColumn', { name: col.name }), onClick: () => openIssueModal({ state: col.name }) }, '+'));
-      actions.push(el('button', { class: 'btn-icon', title: t('board.columnMenu'), 'aria-label': t('board.columnMenuAria', { name: col.name }), onClick: (e) => { e.stopPropagation(); openColumnMenu(col, e.currentTarget); } }, '⋯'));
+      actions.push(el('button', { class: 'btn-icon', title: t('board.columnMenu'), 'aria-label': t('board.columnMenuAria', { name: col.name }), onClick: (e) => { e.stopPropagation(); openColumnMenu(col, e.currentTarget); } }, icon('more', 14)));
     }
     const header = el('div', { class: 'column-header' }, [
       el('div', { class: 'column-title-wrap' }, [dot, el('span', { class: 'column-title' }, col.name), el('span', { class: 'column-count' }, String(issues.length))]),
@@ -1955,16 +2477,34 @@
   }
 
   function buildCardEl(issue, liveEntry, readOnly) {
+    const colByName = state.board && state.board.columns
+      ? new Map(state.board.columns.map((c) => [c.name, c]))
+      : null;
+    const col = colByName ? colByName.get(issue.state) : null;
+    const isWorking = Boolean(liveEntry && !liveEntry.paused);
+    const isBlocked = isBlockedState(issue.state);
+    const needsHuman = issueNeedsHuman(issue, col);
+    const toneClass = isBlocked
+      ? ' card-blocked'
+      : isWorking
+        ? ' card-working'
+        : needsHuman
+          ? ' card-needs-you'
+          : '';
+    const isSelected = state.drawerIssue === issue.identifier || state.focusedCardId === issue.identifier;
     const card = el('div', {
-      class: `card${liveEntry && liveEntry.paused ? ' paused' : ''}`,
+      class: `card${liveEntry && liveEntry.paused ? ' paused' : ''}${toneClass}`,
       draggable: !readOnly,
+      'data-issue-id': issue.identifier,
       // Keyboard path to the drawer: the card is a real tab stop. The
       // whole card stays a div (it nests the skip/recover buttons, which
       // cannot live inside a <button>), so role+key handling stand in.
       tabindex: '0',
       role: 'button',
+      'aria-current': isSelected ? 'true' : null,
       'aria-label': t('board.openTicketAria', { id: issue.identifier, title: issue.title }),
       onClick: () => openDrawer(issue.identifier),
+      onFocus: () => { state.focusedCardId = issue.identifier; },
       onKeydown: (e) => {
         if (boardIsStale()) return;
         if (e.target !== card || (e.key !== 'Enter' && e.key !== ' ')) return;
@@ -2003,7 +2543,7 @@
       badges.appendChild(el('span', {
         class: 'chip-blocked',
         title: t('board.blockedByTitle', { ids: blockerIds.join(', ') }),
-      }, `⛓ ${blockerIds.join(', ')}`));
+      }, [icon('link', 13), ` ${blockerIds.join(', ')}`]));
     }
     if (issue.request) badges.appendChild(el('span', { class: 'chip-request' }, issue.request));
     const attentionBadge = buildAttentionBadge(issue.attention);
@@ -2034,8 +2574,8 @@
   function buildLiveRow(liveEntry) {
     const statusLine = el('div', { class: 'live-status-line' });
     if (liveEntry.status === 'retrying') {
-      statusLine.appendChild(el('span', { class: 'live-icon retry' }, '↻'));
-      // Say why it is retrying — the bare ↻ hid the error the API sends.
+      statusLine.appendChild(el('span', { class: 'live-icon retry' }, icon('retry', 13)));
+      // Say why it is retrying — the bare retry icon hid the error the API sends.
       statusLine.appendChild(el('span', null,
         liveEntry.attempt != null
           ? t('issue.retryingAttempt', { n: liveEntry.attempt })
@@ -2102,6 +2642,23 @@
     });
   }
 
+  function getVisibleBoardIdentifiers() {
+    const domCards = [...document.querySelectorAll('.board-scroll .card[data-issue-id]')];
+    if (domCards.length) return domCards.map((node) => node.dataset.issueId).filter(Boolean);
+    return ((state.board && state.board.issues) || []).map((i) => i.identifier);
+  }
+
+  function stepDrawerIssue(delta) {
+    if (!state.drawerIssue) return false;
+    const ids = getVisibleBoardIdentifiers();
+    const index = ids.indexOf(state.drawerIssue);
+    if (index < 0 || !ids.length) return false;
+    const nextIndex = index + delta;
+    if (nextIndex < 0 || nextIndex >= ids.length) return false;
+    openDrawer(ids[nextIndex]);
+    return true;
+  }
+
   async function openDrawer(identifier) {
     closeAnyMenu();
     const backdrop = ensureDrawerScaffold();
@@ -2109,8 +2666,14 @@
     clearNode(drawer);
     drawer.appendChild(el('div', { class: 'skeleton skeleton-block' }));
     backdrop.classList.add('open');
+    drawer.inert = false;
     drawer.classList.add('open');
     state.drawerIssue = identifier;
+    state.focusedCardId = identifier;
+    document.querySelectorAll('.card[data-issue-id]').forEach((node) => {
+      if (node.dataset.issueId === identifier) node.setAttribute('aria-current', 'true');
+      else node.removeAttribute('aria-current');
+    });
     try {
       const detail = await api.getIssue(identifier);
       if (state.drawerIssue !== identifier) return;
@@ -2217,12 +2780,54 @@
       if (value === detail.title) return;
       commitField(detail.identifier, 'title', value, () => { titleInput.value = detail.title; }, () => { detail.title = value; });
     });
-    titleInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') titleInput.blur(); });
+    titleInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') titleInput.blur();
+    });
+
+    const visibleIds = getVisibleBoardIdentifiers();
+    const posIndex = visibleIds.indexOf(detail.identifier);
+    const hasPrev = posIndex > 0;
+    const hasNext = posIndex >= 0 && posIndex < visibleIds.length - 1;
+    const prevBtn = el('button', {
+      class: 'btn-icon',
+      type: 'button',
+      id: 'drawer-prev-btn',
+      disabled: !hasPrev,
+      'aria-label': t('drawer.prevTicket'),
+      'aria-keyshortcuts': 'ArrowLeft K',
+      'data-keys': '← / k',
+      onClick: () => stepDrawerIssue(-1),
+    }, icon('chevronLeft', 14));
+    const nextBtn = el('button', {
+      class: 'btn-icon',
+      type: 'button',
+      id: 'drawer-next-btn',
+      disabled: !hasNext,
+      'aria-label': t('drawer.nextTicket'),
+      'aria-keyshortcuts': 'ArrowRight J',
+      'data-keys': '→ / j',
+      onClick: () => stepDrawerIssue(1),
+    }, icon('chevronRight', 14));
+    const closeBtn = el('button', {
+      class: 'btn-icon',
+      type: 'button',
+      'aria-label': t('common.close'),
+      'aria-keyshortcuts': 'Escape',
+      'data-keys': 'Esc',
+      onClick: closeDrawer,
+    }, icon('close', 14));
 
     const header = el('div', { class: 'drawer-header' }, [
       el('div', { class: 'drawer-id' }, detail.identifier),
-      el('button', { class: 'btn-icon', 'aria-label': t('common.close'), onClick: closeDrawer }, '✕'),
+      closeBtn,
     ]);
+    const navBar = posIndex >= 0
+      ? el('div', { class: 'drawer-nav-bar' }, [
+          el('span', { class: 'drawer-pos' }, t('drawer.position', { index: posIndex + 1, total: visibleIds.length })),
+          el('div', { class: 'drawer-nav' }, [prevBtn, nextBtn]),
+        ])
+      : null;
 
     // Every field passes a revert callback: a failed PATCH must snap the
     // control back to the last saved value, never keep showing the edit.
@@ -2257,7 +2862,10 @@
       commitField(detail.identifier, 'labels', labels, () => { labelsInput.value = detail.labels.join(', '); }, () => { detail.labels = labels; });
     };
     labelsInput.addEventListener('blur', commitLabels);
-    labelsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') labelsInput.blur(); });
+    labelsInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') labelsInput.blur();
+    });
 
     const blockedByInput = el('input', {
       class: 'input',
@@ -2276,7 +2884,10 @@
       );
     };
     blockedByInput.addEventListener('blur', commitBlockedBy);
-    blockedByInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') blockedByInput.blur(); });
+    blockedByInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') blockedByInput.blur();
+    });
 
     const requestInput = el('input', {
       class: 'input',
@@ -2294,7 +2905,10 @@
       );
     };
     requestInput.addEventListener('blur', commitRequest);
-    requestInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') requestInput.blur(); });
+    requestInput.addEventListener('keydown', (e) => {
+      if (isImeEnter(e)) return;
+      if (e.key === 'Enter') requestInput.blur();
+    });
 
     const fieldsGrid = el('div', { class: 'drawer-fields' }, [
       field(t('common.state'), stateSelect),
@@ -2322,6 +2936,7 @@
     }, t('issue.deleteIssue'));
 
     container.appendChild(header);
+    if (navBar) container.appendChild(navBar);
     container.appendChild(titleInput);
     container.appendChild(fieldsGrid);
     container.appendChild(buildExecutionSection(detail));
@@ -2371,10 +2986,12 @@
     return section;
   }
 
-  async function loadRunHistory(identifier, rows) {
+  // `isCurrent` lets the Inbox canvas reuse this loader: a late response for
+  // a ticket the reader has already left must not overwrite the new one.
+  async function loadRunHistory(identifier, rows, isCurrent = () => state.drawerIssue === identifier) {
     try {
       const data = await api.getRuns({ issue: identifier, limit: 10 });
-      if (state.drawerIssue !== identifier) return;
+      if (!isCurrent()) return;
       clearNode(rows);
       if (data.registry_error) {
         rows.appendChild(el('div', { class: 'history-muted' }, t('issue.historyUnavailable')));
@@ -2387,7 +3004,7 @@
       }
       for (const run of runs) rows.appendChild(buildRunHistoryRow(run));
     } catch (_err) {
-      if (state.drawerIssue !== identifier) return;
+      if (!isCurrent()) return;
       clearNode(rows);
       rows.appendChild(el('div', { class: 'history-muted' }, t('issue.historyUnavailable')));
     }
@@ -2430,12 +3047,14 @@
   // Worker deliverables collected off the workspace. Images preview inline;
   // everything else is a download link — the server already forces
   // `Content-Disposition: attachment` for types a browser could execute.
-  function buildArtifactsSection(detail) {
+  function buildArtifactsSection(detail, { heading = true } = {}) {
     const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
     const section = el('div', { class: 'drawer-artifacts' });
-    section.appendChild(el('div', { class: 'section-heading' }, [
-      el('span', null, `${t('artifacts.heading')} (${artifacts.length})`),
-    ]));
+    if (heading) {
+      section.appendChild(el('div', { class: 'section-heading' }, [
+        el('span', null, `${t('artifacts.heading')} (${artifacts.length})`),
+      ]));
+    }
     if (!artifacts.length) {
       section.appendChild(el('div', { class: 'form-hint' }, t('artifacts.empty')));
       section.appendChild(el('div', { class: 'form-hint' }, t('artifacts.hint')));
@@ -2565,8 +3184,10 @@
       showToast(successMessage, 'success');
       await refreshBoard();
       if (state.drawerIssue === identifier) openDrawer(identifier);
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
     }
   }
 
@@ -2581,12 +3202,657 @@
       state.connected = true;
       state.lastSuccessfulPollAt = Date.now();
       updateConnectionIndicator();
-      if (state.route === 'board') renderBoardSurface(document.getElementById('board-scroll'));
+      updateDocumentTitle();
+      if (state.route === 'board') {
+        renderFactoryStripHost();
+        renderBoardSurface(document.getElementById('board-scroll'));
+      } else if (state.route === 'inbox') {
+        syncInboxWithBoard();
+      }
     } catch (_err) {
       // regular poll loop will surface connectivity issues
     }
   }
 
+
+  // ------------------------------------------------------------------
+  // Page: Inbox — decision queue (left) and ticket canvas (right)
+  // ------------------------------------------------------------------
+
+  const INBOX_DONE_LIMIT = 10;
+  const INBOX_GROUPS = [
+    ['needs', 'inbox.groupNeeds', 'inbox.emptyNeeds'],
+    ['working', 'inbox.groupWorking', 'inbox.emptyWorking'],
+    ['done', 'inbox.groupDone', 'inbox.emptyDone'],
+  ];
+  const INBOX_FILTERS = [
+    ['all', 'common.all'],
+    ['needs', 'board.tallyNeedsYou'],
+    ['working', 'board.tallyWorking'],
+    ['done', 'board.tallyDone'],
+  ];
+
+  // Live handles for the mounted Inbox; renderRoute() drops it on every
+  // route change so a late poll never writes into a detached page.
+  let inboxView = null;
+
+  function inboxIdFromHash() {
+    const query = location.hash.split('?')[1];
+    return query ? new URLSearchParams(query).get('id') : null;
+  }
+
+  // The selection lives in the hash (`#/inbox?id=X`) so reload and back keep
+  // it. replaceState does not fire hashchange, so the page is not rebuilt.
+  function rememberInboxSelection(identifier) {
+    state.inboxSelected = identifier || null;
+    if (state.route !== 'inbox') return;
+    const target = identifier ? `#/inbox?id=${encodeURIComponent(identifier)}` : '#/inbox';
+    if (location.hash !== target) history.replaceState(null, '', target);
+  }
+
+  // A lane a person signs off in: "Human Review", "Approval", or a terminal
+  // "Review" lane. An active agent-run "Review" lane is not a human gate.
+  function isHumanReviewColumn(col) {
+    if (!col || !col.name) return false;
+    return /human|approval/i.test(col.name) || (Boolean(col.terminal) && /review/i.test(col.name));
+  }
+
+  // "Approve & ship" moves to the board's terminal success lane: a terminal
+  // column named Done/Shipped/Complete, else the first terminal column that is
+  // not a review, blocked, or archive lane.
+  function inboxShipState(columns) {
+    const terminal = columns.filter((c) => c.terminal);
+    const found = terminal.find((c) => /^(done|shipped|complete|completed)$/i.test(c.name))
+      || terminal.find((c) => !/human|review|approval|blocked|archive/i.test(c.name));
+    return found ? found.name : null;
+  }
+
+  // "Request changes" sends the ticket back to the active build lane.
+  function inboxReworkState(columns) {
+    const active = columns.filter((c) => !c.terminal);
+    const found = active.find((c) => /in[\s_-]*progress/i.test(c.name))
+      || active.find((c) => !/^(todo|triage|backlog|intake)$/i.test(c.name))
+      || active[0];
+    return found ? found.name : null;
+  }
+
+  // One classification for the queue group, the glyph, and the callout. The
+  // needs-you test is the Board's own (issueNeedsHuman), so the Inbox count,
+  // the sidebar badge, and #needs-you-toggle always agree.
+  function inboxClassify(issue, col, liveEntry) {
+    const needs = issueNeedsHuman(issue, col);
+    let group = 'done';
+    if (needs) group = 'needs';
+    else if (liveEntry || (col && !col.terminal)) group = 'working';
+    let tone = 'idle';
+    if (isBlockedState(issue.state)) tone = 'blocked';
+    else if (needs) tone = 'attention';
+    else if (liveEntry && !liveEntry.paused) tone = 'working';
+    else if (group === 'done') tone = 'done';
+    return { group, tone, needs };
+  }
+
+  function priorityRank(issue) {
+    return issue.priority == null ? 99 : Number(issue.priority);
+  }
+
+  function buildInboxModel() {
+    const board = state.board;
+    const columns = (board && board.columns) || [];
+    const colByName = new Map(columns.map((c) => [c.name, c]));
+    const live = (board && board.live) || {};
+    const groups = { needs: [], working: [], done: [] };
+    for (const issue of (board && board.issues) || []) {
+      const col = colByName.get(issue.state);
+      const liveEntry = live[issue.identifier] || null;
+      const info = inboxClassify(issue, col, liveEntry);
+      groups[info.group].push({ issue, liveEntry, ...info });
+    }
+    const byPriority = (a, b) => priorityRank(a.issue) - priorityRank(b.issue);
+    groups.needs.sort(byPriority);
+    groups.working.sort(byPriority);
+    groups.done.sort((a, b) => String(b.issue.updated_at || '').localeCompare(String(a.issue.updated_at || '')));
+    groups.done = groups.done.slice(0, INBOX_DONE_LIMIT);
+    return groups;
+  }
+
+  function inboxVisibleEntries(model) {
+    return INBOX_GROUPS
+      .filter(([key]) => state.inboxFilter === 'all' || state.inboxFilter === key)
+      .flatMap(([key]) => model[key]);
+  }
+
+  // Imperative Enter guard for a native form: a Hangul/CJK composition
+  // Enter can still trigger implicit submission in Safari, so remember it for
+  // the rest of the keydown task and let onSubmit ignore that submission.
+  function guardImeImplicitSubmit(form) {
+    let imeEnter = false;
+    form.addEventListener('keydown', (e) => {
+      if (!isImeEnter(e)) return;
+      imeEnter = true;
+      setTimeout(() => { imeEnter = false; }, 0);
+    }, true);
+    return () => imeEnter;
+  }
+
+  function renderInboxPage(container) {
+    const hashId = inboxIdFromHash();
+    if (hashId) state.inboxSelected = hashId;
+    const readOnly = Boolean(state.board && state.board.board.read_only);
+
+    const count = el('span', { class: 'inbox-queue-count' });
+    const filters = el('div', { class: 'inbox-filters', role: 'group', 'aria-label': t('inbox.filterLabel') });
+    const queue = el('section', { class: 'inbox-queue', 'aria-labelledby': 'inbox-title' }, [
+      el('div', { class: 'inbox-queue-head' }, [el('h1', { id: 'inbox-title' }, t('nav.inbox')), count]),
+      filters,
+    ]);
+    if (!readOnly) queue.appendChild(buildInboxComposer());
+    const groups = {};
+    for (const [key, labelKey] of INBOX_GROUPS) {
+      const headingId = `inbox-group-${key}`;
+      const groupCount = el('span', { class: 'inbox-group-count' });
+      const body = el('div');
+      const section = el('section', { class: 'inbox-group', 'aria-labelledby': headingId }, [
+        el('h2', { class: 'inbox-group-heading', id: headingId }, [el('span', null, t(labelKey)), groupCount]),
+        body,
+      ]);
+      queue.appendChild(section);
+      groups[key] = { section, count: groupCount, body };
+    }
+    const canvas = el('section', { class: 'inbox-canvas', 'aria-label': t('inbox.canvasLabel') }, state.board ? null : [buildSkeletonBlock()]);
+    const root = el('div', { class: 'inbox-view' }, [queue, canvas]);
+    container.appendChild(root);
+    inboxView = { root, count, filters, groups, canvas, loadedId: null, loadToken: 0, signature: null, detail: null, factsEl: null };
+    syncInboxWithBoard();
+  }
+
+  function buildInboxComposer() {
+    const input = el('input', {
+      class: 'inbox-composer-input',
+      type: 'text',
+      'aria-label': t('inbox.composerLabel'),
+      placeholder: t('inbox.composerPlaceholder'),
+      autocomplete: 'off',
+    });
+    const submit = el('button', { class: 'btn btn-primary btn-sm', type: 'submit' }, t('inbox.composerSubmit'));
+    let wasImeEnter = () => false;
+    const form = el('form', {
+      class: 'inbox-composer',
+      onSubmit: async (e) => {
+        e.preventDefault();
+        if (wasImeEnter()) return;
+        const title = input.value.trim();
+        if (!title) { input.focus(); return; }
+        submit.disabled = true;
+        try {
+          const created = await api.createIssue({ title });
+          input.value = '';
+          showToast(t('board.issueCreated', { id: created.identifier }), 'success');
+          rememberInboxSelection(created.identifier);
+          await refreshBoard();
+          if (inboxView) selectInboxIssue(created.identifier);
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          submit.disabled = false;
+        }
+      },
+    }, [input, submit]);
+    wasImeEnter = guardImeImplicitSubmit(form);
+    return form;
+  }
+
+  function renderInboxQueue(model) {
+    if (!inboxView) return;
+    const active = document.activeElement;
+    const focusedRow = active && active.closest ? active.closest('.inbox-row') : null;
+    const focusedId = focusedRow && inboxView.root.contains(focusedRow) ? focusedRow.dataset.issueId : null;
+
+    inboxView.count.textContent = state.board ? t('inbox.needsCount', { n: model.needs.length }) : '';
+    clearNode(inboxView.filters);
+    for (const [key, labelKey] of INBOX_FILTERS) {
+      const n = key === 'all' ? model.needs.length + model.working.length + model.done.length : model[key].length;
+      inboxView.filters.appendChild(el('button', {
+        type: 'button',
+        class: 'inbox-filter-chip',
+        'aria-pressed': state.inboxFilter === key ? 'true' : 'false',
+        onClick: () => {
+          state.inboxFilter = key;
+          syncInboxWithBoard();
+        },
+      }, `${t(labelKey)} ${n}`));
+    }
+    for (const [key, , emptyKey] of INBOX_GROUPS) {
+      const group = inboxView.groups[key];
+      const shown = state.inboxFilter === 'all' || state.inboxFilter === key;
+      group.section.hidden = !shown;
+      group.count.textContent = String(model[key].length);
+      clearNode(group.body);
+      if (!shown) continue;
+      if (!state.board) {
+        group.body.appendChild(el('p', { class: 'inbox-empty' }, t('common.loading')));
+      } else if (!model[key].length) {
+        group.body.appendChild(el('p', { class: 'inbox-empty' }, t(emptyKey)));
+      } else {
+        group.body.appendChild(el('ul', { class: 'inbox-list' }, model[key].map(buildInboxRow)));
+      }
+    }
+    if (focusedId) {
+      const row = [...inboxView.root.querySelectorAll('.inbox-row')].find((node) => node.dataset.issueId === focusedId);
+      if (row) row.focus({ preventScroll: true });
+    }
+  }
+
+  function buildInboxRow(entry) {
+    const { issue, liveEntry, tone } = entry;
+    const meta = [issue.state];
+    if (issue.priority != null && PRIORITY_META[issue.priority]) meta.push(PRIORITY_META[issue.priority].short);
+    const sub = [];
+    const agent = (liveEntry && liveEntry.agent_kind) || issue.agent_kind || issue.last_agent_kind;
+    if (agent) sub.push(agent);
+    if (liveEntry) {
+      sub.push(liveEntry.paused ? t('common.pausedBadge') : t('issue.turnCount', { n: liveEntry.turn_count ?? 0 }));
+      const total = liveEntry.tokens && liveEntry.tokens.total_tokens;
+      if (total != null) sub.push(t('issue.tokensShort', { n: formatCompactNumber(total) }));
+    } else if (issue.attention) {
+      sub.push(issue.attention.label || t('board.attention'));
+    }
+    if (issue.updated_at) sub.push(timeAgo(issue.updated_at));
+    return el('li', null, el('button', {
+      type: 'button',
+      class: 'inbox-row',
+      'data-issue-id': issue.identifier,
+      'aria-current': state.inboxSelected === issue.identifier ? 'true' : null,
+      onClick: () => selectInboxIssue(issue.identifier),
+    }, [
+      el('span', { class: 'inbox-row-top' }, [
+        buildStatusGlyph(tone),
+        el('span', { class: 'inbox-row-id' }, issue.identifier),
+        el('span', { class: 'inbox-row-meta' }, meta.join(' · ')),
+      ]),
+      el('span', { class: 'inbox-row-title' }, issue.title),
+      sub.length ? el('span', { class: 'inbox-row-sub' }, sub.join(' · ')) : null,
+    ]));
+  }
+
+  // Board-poll entry point: refresh the queue, keep the selection valid, and
+  // reload the canvas only when the selected ticket really changed. Live
+  // counters (turns, tokens) update in place so open disclosures and a
+  // half-edited properties form survive the 5s poll.
+  function syncInboxWithBoard() {
+    if (state.route !== 'inbox' || !inboxView) return;
+    const model = buildInboxModel();
+    renderInboxQueue(model);
+    if (!state.board) return;
+    const issues = state.board.issues || [];
+    let selected = state.inboxSelected;
+    if (!selected || !issues.some((issue) => issue.identifier === selected)) {
+      const first = inboxVisibleEntries(model)[0];
+      selected = first ? first.issue.identifier : null;
+    }
+    if (!selected) {
+      rememberInboxSelection(null);
+      inboxView.loadedId = null;
+      clearNode(inboxView.canvas);
+      inboxView.canvas.appendChild(buildInboxCanvasEmpty());
+      return;
+    }
+    if (selected !== inboxView.loadedId) {
+      selectInboxIssue(selected);
+      return;
+    }
+    if (inboxSignature(selected) === inboxView.signature) {
+      refreshInboxFacts();
+      return;
+    }
+    const activeEl = document.activeElement;
+    if (activeEl && inboxView.canvas.contains(activeEl) && activeEl.matches('input, select, textarea')) return;
+    loadInboxCanvas(selected, { quiet: true });
+  }
+
+  function selectInboxIssue(identifier, { focusRow = false } = {}) {
+    if (!identifier) return;
+    rememberInboxSelection(identifier);
+    if (!inboxView) return;
+    const rows = [...inboxView.root.querySelectorAll('.inbox-row')];
+    for (const row of rows) {
+      if (row.dataset.issueId === identifier) row.setAttribute('aria-current', 'true');
+      else row.removeAttribute('aria-current');
+    }
+    if (focusRow) {
+      const row = rows.find((node) => node.dataset.issueId === identifier);
+      if (row) {
+        row.focus({ preventScroll: true });
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    }
+    if (inboxView.loadedId !== identifier) loadInboxCanvas(identifier);
+  }
+
+  function stepInboxSelection(delta) {
+    if (!inboxView) return false;
+    const ids = [...inboxView.root.querySelectorAll('.inbox-row')].map((row) => row.dataset.issueId);
+    if (!ids.length) return false;
+    const index = ids.indexOf(state.inboxSelected);
+    const next = index < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, index + delta));
+    selectInboxIssue(ids[next], { focusRow: true });
+    return true;
+  }
+
+  function inboxSignature(identifier) {
+    const board = state.board;
+    if (!board) return '';
+    const issue = (board.issues || []).find((i) => i.identifier === identifier);
+    if (!issue) return 'missing';
+    const live = board.live && board.live[identifier];
+    return JSON.stringify([
+      issue.state, issue.title, issue.priority, issue.labels, issue.agent_kind, issue.request,
+      issue.blocked_by, issue.attention, issue.updated_at,
+      Boolean(live), live ? live.status : null, live ? Boolean(live.paused) : null,
+    ]);
+  }
+
+  async function loadInboxCanvas(identifier, { quiet = false } = {}) {
+    if (!inboxView) return;
+    const view = inboxView;
+    const canvas = view.canvas;
+    view.loadedId = identifier;
+    const token = ++view.loadToken;
+    if (!quiet) {
+      clearNode(canvas);
+      canvas.appendChild(buildSkeletonBlock());
+    }
+    canvas.setAttribute('aria-busy', 'true');
+    try {
+      const detail = await api.getIssue(identifier);
+      if (inboxView !== view || token !== view.loadToken) return;
+      const openKeys = [...canvas.querySelectorAll('details[open][data-key]')].map((node) => node.dataset.key);
+      const scrollTop = canvas.scrollTop;
+      view.detail = detail;
+      view.signature = inboxSignature(identifier);
+      clearNode(canvas);
+      for (const node of buildInboxCanvasContent(detail)) canvas.appendChild(node);
+      if (quiet) {
+        for (const node of canvas.querySelectorAll('details[data-key]')) {
+          if (openKeys.includes(node.dataset.key)) node.open = true;
+        }
+        canvas.scrollTop = scrollTop;
+      }
+    } catch (err) {
+      if (inboxView !== view || token !== view.loadToken) return;
+      clearNode(canvas);
+      canvas.appendChild(el('div', { class: 'inbox-canvas-empty', role: 'alert' }, [
+        el('p', null, t('issue.loadFailed', { id: identifier, error: err.message })),
+      ]));
+    } finally {
+      if (inboxView === view && token === view.loadToken) canvas.removeAttribute('aria-busy');
+    }
+  }
+
+  function buildInboxCanvasEmpty() {
+    return el('div', { class: 'inbox-canvas-empty' }, [
+      el('strong', null, t('inbox.emptyTitle')),
+      el('p', null, t('inbox.emptyBody')),
+    ]);
+  }
+
+  // The canvas summary is the ticket's opening paragraph; long agent-written
+  // bodies (tables, checklists, evidence) move into a Description disclosure
+  // so the decision buttons stay in view.
+  function splitDescriptionLead(description) {
+    const text = String(description || '').replace(/\r\n/g, '\n').trim();
+    if (!text) return { lead: '', hasMore: false };
+    const blocks = text.split(/\n\s*\n/);
+    const lead = blocks.find((block) => !/^\s*(#|\||```|[-*+] |\d+\. |>)/.test(block)) || '';
+    return { lead: truncate(lead.trim(), 600), hasMore: blocks.length > 1 || lead.trim() !== text || lead.length > 600 };
+  }
+
+  function boardColumnFor(stateName) {
+    return ((state.board && state.board.columns) || []).find((c) => c.name === stateName) || null;
+  }
+
+  function inboxLiveEntry(detail) {
+    const live = state.board && state.board.live;
+    return (live && live[detail.identifier]) || detail.live || null;
+  }
+
+  function buildInboxCanvasContent(detail) {
+    const readOnly = Boolean(state.board && state.board.board.read_only);
+    const col = boardColumnFor(detail.state);
+    const liveEntry = inboxLiveEntry(detail);
+    const info = inboxClassify(detail, col, liveEntry);
+    const meta = [buildStatusGlyph(info.tone), el('span', null, detail.state)];
+    if (detail.priority != null && PRIORITY_META[detail.priority]) {
+      const p = PRIORITY_META[detail.priority];
+      meta.push(el('span', null, `${p.short} ${p.label}`));
+    }
+    meta.push(el('code', null, detail.identifier));
+    const nodes = [
+      el('header', { class: 'inbox-canvas-header' }, [
+        el('div', { class: 'inbox-canvas-meta' }, meta),
+        el('h1', { class: 'inbox-canvas-title' }, detail.title),
+      ]),
+    ];
+    const { lead, hasMore } = splitDescriptionLead(detail.description);
+    nodes.push(el('div', { class: 'inbox-summary' }, lead ? renderMarkdown(lead) : el('p', null, t('board.noDescription'))));
+    nodes.push(el('div', { class: `inbox-callout${info.needs ? ' is-attention' : ''}` }, [
+      el('strong', null, info.needs ? t('inbox.calloutNeeds') : t('inbox.calloutNext')),
+      el('p', null, inboxNextStep(detail, col, liveEntry)),
+    ]));
+    const facts = el('dl', { class: 'inbox-facts' });
+    fillInboxFacts(facts, detail, liveEntry);
+    if (inboxView) inboxView.factsEl = facts;
+    nodes.push(facts);
+    nodes.push(buildInboxActions(detail, col, liveEntry, readOnly));
+    if (hasMore) {
+      nodes.push(inboxDisclosure('description', t('common.description'), () => renderMarkdown(detail.description)));
+    }
+    nodes.push(inboxDisclosure('runs', t('issue.runHistory'), () => {
+      const rows = el('div', { class: 'run-history-rows' }, [
+        el('div', { class: 'history-muted' }, t('issue.loadingRunHistory')),
+      ]);
+      const identifier = detail.identifier;
+      loadRunHistory(identifier, rows, () => Boolean(inboxView && inboxView.loadedId === identifier));
+      return rows;
+    }, { lazy: true }));
+    const artifactCount = Array.isArray(detail.artifacts) ? detail.artifacts.length : 0;
+    nodes.push(inboxDisclosure('artifacts', `${t('artifacts.heading')} (${artifactCount})`, () => buildArtifactsSection(detail, { heading: false })));
+    nodes.push(inboxDisclosure('props', t('inbox.properties'), () => buildInboxPropsForm(detail, readOnly)));
+    return nodes;
+  }
+
+  function inboxNextStep(detail, col, liveEntry) {
+    const attentionText = detail.attention && (detail.attention.message || detail.attention.label);
+    if (isBlockedState(detail.state)) {
+      return attentionText ? `${t('inbox.nextBlocked')} ${attentionText}` : t('inbox.nextBlocked');
+    }
+    if (isHumanReviewColumn(col)) return t('inbox.nextReview');
+    if (!liveEntry && isDocumentState(detail.state)) return t('inbox.nextDocument');
+    if (attentionText) return attentionText;
+    const blockers = blockedByIds(detail);
+    if (blockers.length && issueNeedsHuman(detail, col)) return t('inbox.nextDependencies', { ids: blockers.join(', ') });
+    if (liveEntry) return liveEntry.paused ? t('inbox.nextPaused') : t('inbox.nextWorking');
+    if (col && !col.terminal) {
+      const schedule = detail.scheduling;
+      return scheduleReasonLabel(scheduleDecision(schedule, schedule && schedule.node));
+    }
+    return t('inbox.nextDone');
+  }
+
+  function fillInboxFacts(dl, detail, liveEntry) {
+    clearNode(dl);
+    const add = (label, value) => {
+      if (value == null || value === '') return;
+      dl.appendChild(el('dt', null, label));
+      dl.appendChild(el('dd', null, String(value)));
+    };
+    if (liveEntry) {
+      const tokens = liveEntry.tokens || {};
+      add(t('common.status'), liveEntry.paused ? `${liveEntry.status || ''} · ${t('common.pausedBadge')}` : liveEntry.status);
+      add(t('common.agent'), liveEntry.agent_kind || detail.agent_kind || detail.last_agent_kind);
+      add(t('common.turns'), liveEntry.turn_count ?? 0);
+      if (tokens.total_tokens != null) add(t('stats.tokensTotal'), formatCompactNumber(tokens.total_tokens));
+      add(t('issue.lastEvent'), liveEntry.last_event);
+      if (liveEntry.last_event_at) add(t('inbox.lastActivity'), timeAgo(liveEntry.last_event_at));
+      if (liveEntry.last_message) add(t('inbox.lastMessage'), truncate(liveEntry.last_message, 200));
+      const error = liveEntry.error || liveEntry.last_error;
+      if (error) add(t('inbox.lastError'), truncate(error, 200));
+    } else {
+      add(t('common.agent'), detail.agent_kind || detail.last_agent_kind || (state.board && state.board.board.default_agent_kind));
+    }
+    add(t('common.labels'), (detail.labels || []).join(', '));
+    add(t('common.request'), detail.request);
+    add(t('common.blockedBy'), blockedByIds(detail).join(', '));
+    if (detail.updated_at) add(t('inbox.updated'), timeAgo(detail.updated_at));
+  }
+
+  function refreshInboxFacts() {
+    if (!inboxView || !inboxView.detail || !inboxView.factsEl) return;
+    fillInboxFacts(inboxView.factsEl, inboxView.detail, inboxLiveEntry(inboxView.detail));
+  }
+
+  function inboxActionButton(label, className, run, iconName) {
+    const button = el('button', { type: 'button', class: className }, iconName ? [icon(iconName, 14), el('span', null, label)] : label);
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try { await run(); } finally { button.disabled = false; }
+    });
+    return button;
+  }
+
+  function buildInboxActions(detail, col, liveEntry, readOnly) {
+    const identifier = detail.identifier;
+    const buttons = [];
+    if (!readOnly) {
+      const columns = (state.board && state.board.columns) || [];
+      if (isHumanReviewColumn(col)) {
+        const shipState = inboxShipState(columns);
+        const reworkState = inboxReworkState(columns);
+        if (shipState && shipState !== detail.state) {
+          buttons.push(inboxActionButton(t('inbox.approveShip'), 'btn btn-primary', () => decideInboxIssue(
+            identifier, { state: shipState }, t('inbox.movedTo', { id: identifier, state: shipState }),
+          ), 'check'));
+        }
+        if (reworkState && reworkState !== detail.state) {
+          buttons.push(inboxActionButton(t('inbox.requestChanges'), 'btn', () => decideInboxIssue(
+            identifier, { state: reworkState }, t('inbox.movedTo', { id: identifier, state: reworkState }),
+          )));
+        }
+      }
+      if (!liveEntry && isBlockedState(detail.state)) {
+        buttons.push(inboxActionButton(t('issue.openRca'), 'btn btn-primary', () => runControlAction(api.recoverBlocked, identifier, t('issue.rcaQueued'))));
+      }
+      if (!liveEntry && isDocumentState(detail.state)) {
+        buttons.push(inboxActionButton(t('issue.skipDocument'), 'btn', () => runControlAction(api.skipDocument, identifier, t('issue.skippedDocument'))));
+      }
+      if (liveEntry) {
+        buttons.push(liveEntry.paused
+          ? inboxActionButton(t('issue.resume'), 'btn', () => runControlAction(api.resume, identifier, t('issue.resumed')))
+          : inboxActionButton(t('issue.pause'), 'btn', () => runControlAction(api.pause, identifier, t('common.paused'))));
+      }
+    }
+    buttons.push(inboxActionButton(t('inbox.openOnBoard'), 'btn btn-ghost', async () => openIssueOnBoard(identifier)));
+    return el('div', { class: 'inbox-actions', role: 'group', 'aria-label': t('inbox.actionsLabel') }, buttons);
+  }
+
+  // A decision clears the ticket from "Needs your decision", so move the
+  // selection to the next ticket still waiting on a person.
+  async function decideInboxIssue(identifier, fields, successMessage) {
+    const ok = await runControlAction((id) => api.patchIssue(id, fields), identifier, successMessage);
+    if (!ok || !inboxView) return;
+    const next = buildInboxModel().needs.find((entry) => entry.issue.identifier !== identifier);
+    if (next) selectInboxIssue(next.issue.identifier);
+  }
+
+  function openIssueOnBoard(identifier) {
+    if (state.route === 'board') {
+      openDrawer(identifier);
+      return;
+    }
+    state.pendingDrawerIssue = identifier;
+    navigate('board');
+  }
+
+  function inboxDisclosure(key, label, buildBody, { lazy = false } = {}) {
+    const body = el('div', { class: 'inbox-disclosure-body' });
+    const details = el('details', { class: 'inbox-disclosure', 'data-key': key }, [
+      el('summary', null, [icon('chevronRight', 14, 'disclosure-chevron'), el('span', null, label)]),
+      body,
+    ]);
+    let built = false;
+    const build = () => {
+      if (built) return;
+      built = true;
+      const content = buildBody();
+      if (content) body.appendChild(content);
+    };
+    if (lazy) details.addEventListener('toggle', () => { if (details.open) build(); });
+    else build();
+    return details;
+  }
+
+  function buildInboxPropsForm(detail, readOnly) {
+    const stateSelect = buildStateSelect(detail.state);
+    const prioritySelect = buildPrioritySelect(detail.priority);
+    const agentSelect = buildAgentSelect(detail.agent_kind);
+    const labelsInput = el('input', { class: 'input', type: 'text', value: (detail.labels || []).join(', ') });
+    const blockedByInput = el('input', { class: 'input', type: 'text', value: blockedByIds(detail).join(', '), placeholder: t('board.blockedByPlaceholder') });
+    const requestInput = el('input', { class: 'input', type: 'text', value: detail.request || '', placeholder: t('board.requestPlaceholder') });
+    const controls = [stateSelect, prioritySelect, agentSelect, labelsInput, blockedByInput, requestInput];
+    if (readOnly) controls.forEach((control) => { control.disabled = true; });
+    const fieldOf = (label, control) => el('label', { class: 'inbox-field' }, [el('span', null, label), control]);
+    const errorBox = el('div', { class: 'modal-error', role: 'alert', hidden: true });
+    const saveBtn = readOnly ? null : el('button', { class: 'btn btn-primary btn-sm', type: 'submit' }, t('common.saveChanges'));
+    let wasImeEnter = () => false;
+    const form = el('form', {
+      class: 'inbox-props',
+      onSubmit: async (e) => {
+        e.preventDefault();
+        if (readOnly || wasImeEnter()) return;
+        const fields = {};
+        if (stateSelect.value !== detail.state) fields.state = stateSelect.value;
+        const priority = prioritySelect.value === '' ? null : Number(prioritySelect.value);
+        if (priority !== (detail.priority == null ? null : detail.priority)) fields.priority = priority;
+        if (agentSelect.value !== (detail.agent_kind || '')) fields.agent_kind = agentSelect.value;
+        const labels = parseLabels(labelsInput.value);
+        if (JSON.stringify(labels) !== JSON.stringify(detail.labels || [])) fields.labels = labels;
+        const ids = parseIdList(blockedByInput.value);
+        if (JSON.stringify(ids) !== JSON.stringify(blockedByIds(detail))) fields.blocked_by = ids;
+        const request = requestInput.value.trim();
+        if (request !== (detail.request || '')) fields.request = request;
+        if (!Object.keys(fields).length) {
+          showToast(t('inbox.noChanges'), 'info');
+          return;
+        }
+        saveBtn.disabled = true;
+        errorBox.hidden = true;
+        try {
+          await api.patchIssue(detail.identifier, fields);
+          showToast(t('common.saved'), 'success');
+          // Drop focus out of the form so the poll hold releases and the
+          // canvas reloads with the saved values.
+          if (form.contains(document.activeElement)) document.activeElement.blur();
+          await refreshBoard();
+        } catch (err) {
+          errorBox.textContent = t('issue.saveFailed', { field: Object.keys(fields).join(', '), error: err.message });
+          errorBox.hidden = false;
+        } finally {
+          saveBtn.disabled = false;
+        }
+      },
+    }, [
+      fieldOf(t('common.state'), stateSelect),
+      fieldOf(t('common.priority'), prioritySelect),
+      fieldOf(t('common.agent'), agentSelect),
+      fieldOf(t('common.labels'), labelsInput),
+      fieldOf(t('common.blockedBy'), blockedByInput),
+      fieldOf(t('common.request'), requestInput),
+      errorBox,
+      saveBtn ? el('div', { class: 'inbox-props-actions' }, [saveBtn]) : null,
+    ]);
+    wasImeEnter = guardImeImplicitSubmit(form);
+    return form;
+  }
 
   // ------------------------------------------------------------------
   // Page: Runs
@@ -3156,7 +4422,7 @@
         if (idx >= 0) state.workflowDraft.splice(idx, 1);
         state.wfRerender();
       },
-    }, '✕'));
+    }, icon('close', 14)));
 
     const rowEl = el('div', { class: 'wf-row', draggable: true }, rowChildren);
     rowEl.addEventListener('dragstart', (e) => {
@@ -3545,7 +4811,7 @@
         const cmp = await api.getGitCompare(params);
         clearNode(resultBox);
         resultBox.appendChild(el('div', { class: 'git-target-line' }, [
-          el('span', { class: 'git-mono' }, `${cmp.branch} → ${cmp.target}`),
+          el('span', { class: 'git-mono' }, [cmp.branch, ' ', icon('arrowRight', 13), ' ', cmp.target]),
           el('span', { class: 'ahead-behind' }, `↑${cmp.ahead == null ? '?' : cmp.ahead} ↓${cmp.behind == null ? '?' : cmp.behind}`),
           cmp.merged ? el('span', { class: 'badge-merged' }, t('git.badgeMerged')) : null,
         ]));
@@ -3609,8 +4875,8 @@
       bodyBox,
     ]);
 
-    function setLoading(label) {
-      subtitle.textContent = label;
+    function setLoading(...label) {
+      subtitle.replaceChildren(...label);
       clearNode(bodyBox);
       bodyBox.appendChild(el('div', { class: 'history-muted' }, t('git.loadingDiff')));
     }
@@ -3634,7 +4900,7 @@
     }
 
     async function showCompare(branch, target) {
-      setLoading(`${branch} → ${target}`);
+      setLoading(branch, ' ', icon('arrowRight', 13), ' ', target);
       try {
         const data = await api.getGitDiff({ branch, target });
         renderPatch(data.patch, data.truncated);
@@ -3831,6 +5097,7 @@
     const sendBtn = el('button', { class: 'btn btn-primary', onClick: () => sendChatMessage(view) }, t('chat.send'));
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        if (isImeEnter(e)) return;
         e.preventDefault();
         sendChatMessage(view);
       }
@@ -5386,10 +6653,44 @@
         el('option', { value: lang.code, selected: lang.code === window.i18n.lang }, lang.label)
       )
     );
+    const themeGroup = el('div', { class: 'segmented', role: 'group', 'aria-label': t('settings.theme') });
+    const renderThemeButtons = () => {
+      clearNode(themeGroup);
+      const current = readStoredTheme();
+      const sysLabel = t('settings.themeSystemState', {
+        mode: currentSystemTheme() === 'dark' ? t('settings.themeDark') : t('settings.themeLight'),
+      });
+      const options = [
+        [null, sysLabel],
+        ['light', t('settings.themeLight')],
+        ['dark', t('settings.themeDark')],
+      ];
+      for (const [value, label] of options) {
+        const active = current === value;
+        themeGroup.appendChild(el('button', {
+          type: 'button',
+          class: `segmented-btn${active ? ' active' : ''}`,
+          'aria-pressed': active ? 'true' : 'false',
+          onClick: () => {
+            applyTheme(value, { persist: true });
+            renderThemeButtons();
+          },
+        }, label));
+      }
+    };
+    renderThemeButtons();
     return el('div', { class: 'card-panel settings-card settings-card--utility' }, [
       settingsCardHeader(t('settings.interface'), t('settings.interfaceDescription')),
-      field(t('settings.language'), select),
-      el('div', { class: 'form-hint' }, t('settings.languageHint')),
+      el('div', { class: 'settings-interface-stack' }, [
+        el('div', null, [
+          field(t('settings.language'), select),
+          el('div', { class: 'form-hint' }, t('settings.languageHint')),
+        ]),
+        el('div', null, [
+          field(t('settings.theme'), themeGroup),
+          el('div', { class: 'form-hint' }, t('settings.themeHint')),
+        ]),
+      ]),
     ]);
   }
 
@@ -5496,8 +6797,15 @@
           nameEl.removeAttribute('data-i18n');
         }
         if (state.route === 'board') {
+          updateDocumentTitle();
           if (firstLoad || !document.getElementById('board-scroll')) renderRoute();
-          else if (state.boardView === 'lanes') renderBoardColumns(document.getElementById('board-scroll'));
+          else if (state.boardView === 'lanes') {
+            renderFactoryStripHost();
+            renderBoardColumns(document.getElementById('board-scroll'));
+          }
+        } else {
+          updateDocumentTitle();
+          if (state.route === 'inbox') syncInboxWithBoard();
         }
       }
     } catch (_err) {
@@ -5509,44 +6817,556 @@
   }
 
   // ------------------------------------------------------------------
-  // Bootstrap
+  // Keyboard shortcuts, ? help dialog, and shared [popover="manual"] tips
   // ------------------------------------------------------------------
+
+  // ------------------------------------------------------------------
+  // Command palette (Cmd/Ctrl+K): pages, actions, and ticket jump
+  // ------------------------------------------------------------------
+
+  const ROUTE_LABEL_KEYS = {
+    inbox: 'nav.inbox',
+    board: 'nav.board',
+    runs: 'nav.runs',
+    stats: 'nav.stats',
+    workflow: 'nav.workflow',
+    git: 'nav.git',
+    chat: 'nav.chat',
+    preview: 'nav.preview',
+    artifacts: 'nav.artifacts',
+    settings: 'nav.settings',
+  };
+  const PALETTE_TICKET_LIMIT = 50;
+  const paletteState = { all: [], items: [], active: 0 };
+
+  // Built on open, from what the sidebar shows right now: hidden pages (chat
+  // or PM not installed) never appear, and the hint is the page's 1-9 key.
+  function buildPaletteCommands() {
+    const commands = [];
+    const pages = t('cmd.groupPages');
+    document.querySelectorAll('#sidebar-nav .nav-item').forEach((item) => {
+      const route = item.dataset.route;
+      if (item.style.display === 'none' || !ROUTE_LABEL_KEYS[route]) return;
+      const shortcut = item.querySelector('.nav-shortcut');
+      commands.push({
+        group: pages,
+        label: t('cmd.goTo', { page: t(ROUTE_LABEL_KEYS[route]) }),
+        hint: shortcut ? shortcut.textContent : '',
+        run: () => navigate(route),
+      });
+    });
+    const actions = t('cmd.groupActions');
+    if (state.board && !state.board.board.read_only) {
+      commands.push({ group: actions, label: t('board.newIssue'), hint: '', run: () => openIssueModal() });
+    }
+    const storedTheme = readStoredTheme();
+    const systemLabel = t('settings.themeSystemState', {
+      mode: currentSystemTheme() === 'dark' ? t('settings.themeDark') : t('settings.themeLight'),
+    });
+    for (const [value, label] of [[null, systemLabel], ['light', t('settings.themeLight')], ['dark', t('settings.themeDark')]]) {
+      commands.push({
+        group: actions,
+        label: t('cmd.theme', { mode: label }),
+        hint: storedTheme === value ? t('cmd.current') : '',
+        run: () => {
+          applyTheme(value, { persist: true });
+          // The Settings theme switch renders its pressed state once; redraw it.
+          if (state.route === 'settings') renderRoute();
+        },
+      });
+    }
+    for (const lang of window.i18n.languages) {
+      commands.push({
+        group: actions,
+        label: t('cmd.language', { name: lang.label }),
+        hint: lang.code === window.i18n.lang ? t('cmd.current') : '',
+        run: () => window.i18n.setLang(lang.code),
+      });
+    }
+    const tickets = t('cmd.groupTickets');
+    for (const issue of (state.board && state.board.issues) || []) {
+      commands.push({
+        group: tickets,
+        ticket: true,
+        label: `${issue.identifier} · ${issue.title}`,
+        hint: issue.state,
+        keywords: (issue.labels || []).join(' '),
+        run: () => openTicketFromPalette(issue.identifier),
+      });
+    }
+    return commands;
+  }
+
+  // On the Board a ticket opens in the drawer; anywhere else it opens in the
+  // Inbox canvas, which shows the same detail with its decision actions.
+  function openTicketFromPalette(identifier) {
+    if (state.route === 'board') {
+      openDrawer(identifier);
+    } else if (state.route === 'inbox' && inboxView) {
+      selectInboxIssue(identifier, { focusRow: true });
+    } else {
+      state.inboxSelected = identifier;
+      navigate(`inbox?id=${encodeURIComponent(identifier)}`);
+    }
+  }
+
+  function paletteMatches(command, tokens) {
+    if (!tokens.length) return true;
+    const haystack = `${command.label} ${command.hint} ${command.keywords || ''} ${command.group}`.toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  }
+
+  function renderPalette() {
+    const list = document.getElementById('cmd-list');
+    const input = document.getElementById('cmd-input');
+    if (!list || !input) return;
+    const tokens = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let ticketCount = 0;
+    paletteState.items = paletteState.all.filter((command) => {
+      if (!paletteMatches(command, tokens)) return false;
+      return !command.ticket || ++ticketCount <= PALETTE_TICKET_LIMIT;
+    });
+    paletteState.active = Math.min(paletteState.active, Math.max(0, paletteState.items.length - 1));
+    clearNode(list);
+    if (!paletteState.items.length) {
+      list.appendChild(el('li', { class: 'cmd-empty', role: 'presentation' }, t('cmd.empty')));
+      input.removeAttribute('aria-activedescendant');
+      return;
+    }
+    let lastGroup = null;
+    paletteState.items.forEach((command, index) => {
+      if (command.group !== lastGroup) {
+        lastGroup = command.group;
+        list.appendChild(el('li', { class: 'cmd-group-label', role: 'presentation' }, command.group));
+      }
+      const active = index === paletteState.active;
+      list.appendChild(el('li', { role: 'presentation' }, el('button', {
+        type: 'button',
+        class: `cmd-item${active ? ' is-active' : ''}`,
+        id: `cmd-option-${index}`,
+        role: 'option',
+        'aria-selected': active ? 'true' : 'false',
+        tabindex: '-1',
+        onClick: () => runPaletteCommand(index),
+        onMousemove: () => { if (paletteState.active !== index) setPaletteActive(index); },
+      }, [
+        el('span', { class: 'cmd-item-label' }, command.label),
+        command.hint ? el('span', { class: 'cmd-item-hint' }, command.hint) : null,
+      ])));
+    });
+    input.setAttribute('aria-activedescendant', `cmd-option-${paletteState.active}`);
+  }
+
+  function setPaletteActive(index, { scroll = false } = {}) {
+    const list = document.getElementById('cmd-list');
+    const input = document.getElementById('cmd-input');
+    const buttons = list ? [...list.querySelectorAll('.cmd-item')] : [];
+    if (!buttons.length) return;
+    paletteState.active = (index + buttons.length) % buttons.length;
+    buttons.forEach((button, i) => {
+      const on = i === paletteState.active;
+      button.classList.toggle('is-active', on);
+      button.setAttribute('aria-selected', on ? 'true' : 'false');
+      if (on && scroll) button.scrollIntoView({ block: 'nearest' });
+    });
+    if (input) input.setAttribute('aria-activedescendant', `cmd-option-${paletteState.active}`);
+  }
+
+  function runPaletteCommand(index) {
+    const command = paletteState.items[index];
+    const dialog = document.getElementById('cmd-dialog');
+    if (!command) return;
+    // Close synchronously: the command may open its own modal dialog, and two
+    // top-layer dialogs must not overlap.
+    if (dialog && dialog.open) dialog.close();
+    command.run();
+  }
+
+  function openPalette() {
+    const dialog = document.getElementById('cmd-dialog');
+    const input = document.getElementById('cmd-input');
+    if (!dialog || !input) return;
+    if (dialog.open) {
+      closeTopLayerDialog(dialog);
+      return;
+    }
+    hideKeyTip();
+    closeAnyMenu();
+    paletteState.all = buildPaletteCommands();
+    paletteState.active = 0;
+    input.value = '';
+    renderPalette();
+    dialog.showModal();
+    input.focus();
+  }
+
+  function initPalette() {
+    const dialog = document.getElementById('cmd-dialog');
+    const input = document.getElementById('cmd-input');
+    if (!dialog || !input) return;
+    installDialogLightDismissFallback(dialog);
+    dialog.addEventListener('cancel', (e) => {
+      if (!supportsTopLayerExit() && e.cancelable) {
+        e.preventDefault();
+        closeTopLayerDialog(dialog);
+      }
+    });
+    dialog.addEventListener('close', () => {
+      dialog.returnValue = '';
+      dialog.removeAttribute('data-closing');
+    });
+    input.addEventListener('input', () => {
+      paletteState.active = 0;
+      renderPalette();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setPaletteActive(paletteState.active + 1, { scroll: true });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setPaletteActive(paletteState.active - 1, { scroll: true });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        runPaletteCommand(paletteState.active);
+      }
+    });
+  }
+
+  function openKeysDialog() {
+    const dialog = document.getElementById('keys-help');
+    const list = document.getElementById('keys-list');
+    if (!dialog || !list) return;
+    hideKeyTip();
+    clearNode(list);
+    const groups = [
+      ['keys.groupNavigation', [
+        ['1–9', 'keys.pages'],
+        ['⌘K · Ctrl K', 'keys.commandPalette'],
+        ['?', 'keys.help'],
+        ['Esc', 'keys.escape'],
+      ]],
+      ['keys.groupInbox', [
+        ['j k · ↑ ↓', 'keys.inboxNav'],
+      ]],
+      ['keys.groupBoard', [
+        ['/', 'keys.search'],
+        ['n', 'keys.newIssue'],
+        ['u', 'keys.needsYou'],
+        ['a', 'keys.scope'],
+        ['v', 'keys.viewMode'],
+        ['↑ ↓ · j k · ← → · h l', 'keys.moveCards'],
+        ['Enter', 'keys.openCard'],
+      ]],
+      ['keys.groupDrawer', [
+        ['← → · j k', 'keys.drawerNav'],
+        ['r', 'keys.focusReply'],
+      ]],
+    ];
+    for (const [groupKey, rows] of groups) {
+      list.appendChild(el('div', { class: 'keys-group-heading' }, t(groupKey)));
+      for (const [keys, labelKey] of rows) {
+        list.appendChild(el('dt', null, el('kbd', null, keys)));
+        list.appendChild(el('dd', null, t(labelKey)));
+      }
+    }
+    if (!dialog.open) dialog.showModal();
+  }
+
+  let hideKeyTip = () => {};
+  function initKeyTips() {
+    const tip = document.getElementById('key-tip');
+    if (!tip) return;
+    const hasPopover = typeof tip.showPopover === 'function';
+    if (!hasPopover) tip.hidden = true;
+    const selector = '[data-keys]';
+    let tipFor = null;
+    let tipTimer = null;
+
+    const tipLabel = (node) => {
+      const name = String(node.getAttribute('aria-label') || node.textContent || '').replace(/\s+/g, ' ').trim();
+      const keys = node.dataset.keys;
+      if (!keys) return name;
+      return name && !name.includes(keys) ? t('tip.withKeys', { name, keys }) : keys;
+    };
+
+    hideKeyTip = () => {
+      clearTimeout(tipTimer);
+      if (!tipFor) return;
+      if (tipFor._tipOwned) {
+        tipFor.removeAttribute('aria-describedby');
+        tipFor._tipOwned = false;
+      }
+      tipFor = null;
+      if (hasPopover) {
+        if (tip.matches(':popover-open')) tip.hidePopover();
+      } else {
+        tip.hidden = true;
+      }
+    };
+
+    const showTip = (node) => {
+      clearTimeout(tipTimer);
+      const text = tipLabel(node);
+      if (!text || !node.getClientRects().length) { hideKeyTip(); return; }
+      if (tipFor !== node) {
+        hideKeyTip();
+        tipFor = node;
+        if (!node.hasAttribute('aria-describedby')) {
+          node.setAttribute('aria-describedby', 'key-tip');
+          node._tipOwned = true;
+        }
+      }
+      tip.textContent = text;
+      if (hasPopover) {
+        if (!tip.matches(':popover-open')) tip.showPopover();
+      } else {
+        tip.hidden = false;
+      }
+      const r = node.getBoundingClientRect();
+      const w = tip.offsetWidth;
+      const h = tip.offsetHeight;
+      const gap = 6;
+      const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+      const top = (r.bottom + gap + h <= window.innerHeight - 8)
+        ? r.bottom + gap
+        : Math.max(8, r.top - gap - h);
+      tip.style.left = `${left}px`;
+      tip.style.top = `${top}px`;
+    };
+
+    document.addEventListener('pointerover', (e) => {
+      const node = e.target && e.target.closest ? e.target.closest(selector) : null;
+      if (!node || e.pointerType === 'touch') return;
+      clearTimeout(tipTimer);
+      if (node === tipFor) return;
+      tipTimer = setTimeout(() => showTip(node), tipFor ? 0 : 320);
+    });
+    document.addEventListener('pointerout', (e) => {
+      const node = e.target && e.target.closest ? e.target.closest(selector) : null;
+      if (!node || node.contains(e.relatedTarget) || tip.contains(e.relatedTarget)) return;
+      clearTimeout(tipTimer);
+      if (node === tipFor && !node.matches(':focus-visible')) tipTimer = setTimeout(hideKeyTip, 100);
+    });
+    document.addEventListener('focusin', (e) => {
+      const node = e.target && e.target.closest ? e.target.closest(selector) : null;
+      if (node && node.matches(':focus-visible')) showTip(node);
+      else hideKeyTip();
+    });
+    document.addEventListener('focusout', (e) => { if (e.target === tipFor) hideKeyTip(); });
+    for (const ev of ['pointerdown', 'input']) document.addEventListener(ev, () => hideKeyTip(), true);
+    document.addEventListener('scroll', () => { if (tipFor) hideKeyTip(); }, true);
+  }
+
+  function moveCardFocus(direction) {
+    const columns = [...document.querySelectorAll('.board-scroll .column')];
+    const cardsInCols = columns.map((col) => [...col.querySelectorAll('.card[data-issue-id]')]);
+    const allCards = [...document.querySelectorAll('.board-scroll .card[data-issue-id]')];
+    if (!allCards.length) return false;
+    const active = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.card[data-issue-id]') : null;
+    if (!active) {
+      allCards[0].focus();
+      return true;
+    }
+    if (direction === 'down' || direction === 'up') {
+      const col = active.closest('.column');
+      const list = col ? [...col.querySelectorAll('.card[data-issue-id]')] : allCards;
+      const idx = list.indexOf(active);
+      const nextIdx = direction === 'down' ? Math.min(list.length - 1, idx + 1) : Math.max(0, idx - 1);
+      list[nextIdx].focus();
+      return true;
+    }
+    const curCol = active.closest('.column');
+    const colIdx = columns.indexOf(curCol);
+    if (colIdx < 0) {
+      allCards[0].focus();
+      return true;
+    }
+    const step = direction === 'right' ? 1 : -1;
+    for (let i = colIdx + step; i >= 0 && i < cardsInCols.length; i += step) {
+      if (cardsInCols[i].length) {
+        cardsInCols[i][0].focus();
+        return true;
+      }
+    }
+    return false;
+  }
 
   function wireGlobalShortcuts() {
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        if (state.openModalBackdrop) { closeModal(); return; }
-        if (state.openMenu) { closeAnyMenu(); return; }
-        const drawerBackdrop = document.getElementById('drawer-backdrop');
-        if (drawerBackdrop && drawerBackdrop.classList.contains('open')) closeDrawer();
+      if (e.isComposing || e.keyCode === 229) return;
+      hideKeyTip();
+      const keysHelp = document.getElementById('keys-help');
+      const cmdDialog = document.getElementById('cmd-dialog');
+      const paletteOpen = Boolean(cmdDialog && cmdDialog.open);
+      const otherDialogOpen = Boolean((keysHelp && keysHelp.open) || (state.openModalDialog && state.openModalDialog.open));
+      const anyDialogOpen = otherDialogOpen || paletteOpen;
+
+      // Cmd/Ctrl+K works from any field (it is a chord, not a typed key), but
+      // never stacks the palette over another open dialog.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        if (otherDialogOpen && !paletteOpen) return;
+        e.preventDefault();
+        openPalette();
         return;
       }
+
+      if (e.key === 'Escape') {
+        if (anyDialogOpen) return;
+        if (state.openMenu) { closeAnyMenu(); return; }
+        const drawerBackdrop = document.getElementById('drawer-backdrop');
+        if (drawerBackdrop && drawerBackdrop.classList.contains('open')) { closeDrawer(); return; }
+        const active = document.activeElement;
+        if (active && (active.id === 'board-search' || active.id === 'runs-search')) {
+          if (active.value) {
+            active.value = '';
+            active.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          active.blur();
+        }
+        return;
+      }
+
+      if (anyDialogOpen) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
       const active = document.activeElement;
-      const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+      const typing = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable);
       if (typing) return;
+
+      if (e.key === '?') {
+        e.preventDefault();
+        openKeysDialog();
+        return;
+      }
+
+      if (/^[1-9]$/.test(e.key)) {
+        const visibleNavs = [...document.querySelectorAll('#sidebar-nav .nav-item')].filter((n) => n.style.display !== 'none');
+        const targetNav = visibleNavs[Number(e.key) - 1];
+        if (targetNav && targetNav.dataset.route) {
+          e.preventDefault();
+          navigate(targetNav.dataset.route);
+        }
+        return;
+      }
+
+      const drawerBackdrop = document.getElementById('drawer-backdrop');
+      const drawerOpen = Boolean(drawerBackdrop && drawerBackdrop.classList.contains('open'));
+      if (drawerOpen) {
+        if (e.key === 'ArrowLeft' || e.key === 'k' || e.key === 'K') {
+          if (stepDrawerIssue(-1)) e.preventDefault();
+          return;
+        }
+        if (e.key === 'ArrowRight' || e.key === 'j' || e.key === 'J') {
+          if (stepDrawerIssue(1)) e.preventDefault();
+          return;
+        }
+        if (e.key === 'r' || e.key === 'R') {
+          const titleInput = document.querySelector('#drawer-panel .drawer-title-input');
+          if (titleInput) { e.preventDefault(); titleInput.focus(); }
+          return;
+        }
+      }
+
       if (e.key === '/') {
-        if (state.route !== 'board') return;
-        const search = document.getElementById('board-search');
+        const searchId = state.route === 'runs' ? 'runs-search' : state.route === 'board' ? 'board-search' : null;
+        const search = searchId ? document.getElementById(searchId) : null;
         if (search) {
           e.preventDefault();
           search.focus();
         }
-      } else if (e.key === 'n' || e.key === 'N') {
-        if (state.route !== 'board' || !state.board || state.board.board.read_only) return;
+        return;
+      }
+
+      if (state.route === 'chat' && (e.key === 'r' || e.key === 'R')) {
+        const chatInput = document.querySelector('.chat-input');
+        if (chatInput && !chatInput.disabled) {
+          e.preventDefault();
+          chatInput.focus();
+        }
+        return;
+      }
+
+      if (state.route === 'inbox') {
+        if (boardIsStale()) return;
+        // Arrow keys scroll the canvas when focus is there; j/k always step.
+        const queue = document.querySelector('.inbox-queue');
+        const inQueue = !active || active === document.body || Boolean(queue && queue.contains(active));
+        if (e.key === 'j' || e.key === 'J' || (inQueue && e.key === 'ArrowDown')) {
+          if (stepInboxSelection(1)) e.preventDefault();
+        } else if (e.key === 'k' || e.key === 'K' || (inQueue && e.key === 'ArrowUp')) {
+          if (stepInboxSelection(-1)) e.preventDefault();
+        }
+        return;
+      }
+
+      if (state.route !== 'board') return;
+
+      if (e.key === 'n' || e.key === 'N') {
+        if (!state.board || state.board.board.read_only) return;
         e.preventDefault();
         openIssueModal();
+      } else if (e.key === 'u' || e.key === 'U') {
+        if (state.boardView !== 'lanes') return;
+        e.preventDefault();
+        state.needsYouOnly = !state.needsYouOnly;
+        renderFactoryStripHost();
+        renderBoardColumns(document.getElementById('board-scroll'));
+      } else if (e.key === 'a' || e.key === 'A') {
+        if (state.boardView !== 'lanes' || !state.board || !state.board.columns.some((c) => c.terminal)) return;
+        e.preventDefault();
+        state.boardScope = state.boardScope === 'all' ? 'active' : 'all';
+        state.mobileColumnIndex = 0;
+        renderRoute();
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        state.requestEpoch += 1;
+        state.boardView = state.boardView === 'lanes' ? 'request' : 'lanes';
+        renderRoute();
+        if (state.boardView === 'request') loadRequestCatalog();
+      } else if (!boardIsStale() && state.boardView === 'lanes') {
+        if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') {
+          if (moveCardFocus('down')) e.preventDefault();
+        } else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') {
+          if (moveCardFocus('up')) e.preventDefault();
+        } else if (e.key === 'l' || e.key === 'L' || e.key === 'ArrowRight') {
+          if (moveCardFocus('right')) e.preventDefault();
+        } else if (e.key === 'h' || e.key === 'H' || e.key === 'ArrowLeft') {
+          if (moveCardFocus('left')) e.preventDefault();
+        }
       }
     });
   }
 
   function boot() {
-    // Static markup in index.html is translated once here, then again on every
-    // language change; the SPA views are rebuilt wholesale by renderRoute().
+    applyTheme(readStoredTheme());
     window.i18n.applyStaticNodes();
     window.i18n.onChange(() => {
       renderRoute();
       updateConnectionIndicator();
+      updateDocumentTitle();
     });
+    initValidationSync();
+    initKeyTips();
+    const keysHelp = document.getElementById('keys-help');
+    if (keysHelp) {
+      installDialogLightDismissFallback(keysHelp);
+      keysHelp.addEventListener('cancel', (e) => {
+        if (!supportsTopLayerExit() && e.cancelable) {
+          e.preventDefault();
+          closeTopLayerDialog(keysHelp);
+        }
+      });
+      keysHelp.addEventListener('close', () => {
+        keysHelp.returnValue = '';
+        keysHelp.removeAttribute('data-closing');
+      });
+    }
+    const keysOpen = document.getElementById('keys-open');
+    if (keysOpen) keysOpen.addEventListener('click', openKeysDialog);
+    syncNavShortcutBadges();
+    initPalette();
     wireGlobalShortcuts();
     const selector = document.getElementById('project-selector');
     if (selector) selector.addEventListener('change', async () => { await switchProject(selector.value); });
