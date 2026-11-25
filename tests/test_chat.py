@@ -458,6 +458,51 @@ async def test_failed_mode_rebuild_moves_session_to_explicit_resume(
     await manager.stop_session()
 
 
+async def test_failed_mode_rebuild_flushes_pending_transcript_writes(
+    tmp_path: Path,
+    fake_backends: list[_FakeBackend],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    orig_write = chat_module._TranscriptWriter._write_line
+
+    def slow_write(self: chat_module._TranscriptWriter, line: str) -> None:
+        time.sleep(0.02)
+        orig_write(self, line)
+
+    monkeypatch.setattr(chat_module._TranscriptWriter, "_write_line", slow_write)
+
+    cfg = _cfg(tmp_path)
+    manager = ChatManager(lambda: cfg)
+    session_id = (await manager.start_session("qa"))["session_id"]
+    await manager.send_message("remember this")
+    await _wait_turn(manager)
+
+    def build_broken(init: BackendInit) -> _FakeBackend:
+        backend = _FakeBackend(init)
+        backend.initialize_error = RuntimeError("cannot initialize")
+        fake_backends.append(backend)
+        return backend
+
+    monkeypatch.setattr(chat_module, "build_backend", build_broken)
+    with pytest.raises(RuntimeError, match="cannot initialize"):
+        await manager.set_mode("edit", session_id)
+
+    def build_ready(init: BackendInit) -> _FakeBackend:
+        backend = _FakeBackend(init)
+        fake_backends.append(backend)
+        return backend
+
+    monkeypatch.setattr(chat_module, "build_backend", build_ready)
+    resumed = await manager.reattach(session_id)
+    assert any(
+        row["type"] == "agent_message" and row["text"] == "answer 1"
+        for row in resumed["transcript_tail"]
+    )
+    await manager.stop_session()
+
+
 async def test_turn_failure_is_broadcast(
     tmp_path: Path, fake_backends: list[_FakeBackend]
 ) -> None:
